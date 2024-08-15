@@ -47,7 +47,7 @@ class UJSONRenderer(BaseRenderer):
         if data is None:
             return bytes()
 
-        ret = json.dumps(data, indent=4, ensure_ascii=self.ensure_ascii, cls=DatetimeEncoder)
+        ret = json.dumps(data, ensure_ascii=self.ensure_ascii, cls=DatetimeEncoder)
 
         # force return value to unicode
         if isinstance(ret, str):
