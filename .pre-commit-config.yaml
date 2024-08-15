@@ -14,13 +14,13 @@ repos:
     hooks:
       - id: pyupgrade
 
-  # black
-  - repo: https://github.com/psf/black
-    rev: 23.10.1
-    hooks:
-    - id: black
-      language_version: python3
-      args: [--config=pyproject.toml]
+#  # black
+#  - repo: https://github.com/psf/black
+#    rev: 23.10.1
+#    hooks:
+#    - id: black
+#      language_version: python3
+#      args: [--config=pyproject.toml]
 
   # isort
   - repo: https://github.com/pycqa/isort
