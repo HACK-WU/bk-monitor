@@ -178,7 +178,8 @@ class Command(BaseCommand):
             if enable_field_blacklist:
                 if self.BLACKLIST_MUST_FIELD not in consul_data["option"]:
                     consul_ds_correct_flag = False
-                    print(f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]")
+                    print(
+                        f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]")
 
             consul_result += "\n" + self.description("resulttableoption 相关信息:")
             consul_rt_option_result, consul_rt_correct_flag = self.judge_option_data(

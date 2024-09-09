@@ -321,6 +321,29 @@ class DataAccessor(object):
 
 class PluginDataAccessor(DataAccessor):
     def __init__(self, plugin_version, operator):
+        f"""
+        初始化PluginDataAccessor类的实例。
+
+        生成一个数据访问器，主要需要将metric_json中各个table中的字段信息(name,monitor_type,type,description等)提取出来，
+        组成一个ResultTableField实例列表，该列表将作为ResultTable.field_instance_list的属性值。
+        每个ResultTable中包含这几个信息，table_name，fields(是一个List[Dict]类型)，description，field_instance_list。
+        这些ResultTable又组成一个列表table_list。
+        最后初始化DataAccessor类:
+            DataAccessor(
+                bk_biz_id=0,            # 固定值
+                db_name='%s_%s'(plugin_type,plugin_id),     # 由“插件类型”和“插件id”组成
+                tables=table_list,           # List[ResultTable]
+                etl_config= "bk_standard",   # 如果插件类型是"Script"或者"DataDog"那么值就是"bk_standard"，否则是"bk_exporter"
+                operator=operator,
+                type_label="time_series",   # 固定值
+                source_label="bk_monitor",  # 固定值
+                label=plugin_version.plugin.label   
+            )
+    
+
+        """
+
+        # 定义一个内嵌函数，用于将字段字典转换为ResultTableField实例
         def get_field_instance(field):
             # 将field字典转化为ResultTableField对象
             return ResultTableField(
@@ -339,10 +362,13 @@ class PluginDataAccessor(DataAccessor):
         tables = []
 
         add_fields = []
+        # 深拷贝插件反向维度字段名称
         add_fields_names = copy.deepcopy(PLUGIN_REVERSED_DIMENSION)
         plugin_type = plugin_version.plugin.plugin_type
+        # 根据插件类型添加特定维度字段
         if plugin_type == PluginType.SNMP:
             add_fields_names.append(("bk_target_device_ip", _("远程采集目标IP")))
+        # 获取插件参数配置信息
         config_json = plugin_version.config.config_json
         self.dms_field = []
 
@@ -353,11 +379,13 @@ class PluginDataAccessor(DataAccessor):
                     add_fields_names.append((dms_key, dms_key))
                     self.dms_field.append((dms_key, dms_key))
 
+        # 根据添加字段名称列表生成字段信息
         for name, description in add_fields_names:
             add_fields.append(
                 {"name": name, "description": force_str(description), "monitor_type": "group", "type": "string"}
             )
 
+        # 遍历指标信息，处理每个表格的字段
         for table in self.metric_json:
             # 获取字段信息
             fields = list(
@@ -366,11 +394,16 @@ class PluginDataAccessor(DataAccessor):
                     [i for i in table["fields"] if i["monitor_type"] == "dimension" or i.get("is_active")],
                 )
             )
+            # 将额外字段信息合并到字段列表中
             fields.extend(list(map(get_field_instance, add_fields)))
+            # 将表格信息添加到表格列表
             tables.append(ResultTable(table_name=table["table_name"], description=table["table_desc"], fields=fields))
 
+        # 根据插件类型和ID生成数据库名称
         db_name = "{}_{}".format(plugin_type, plugin_version.plugin.plugin_id)
+        # 根据插件类型确定ETL配置
         etl_config = "bk_standard" if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG] else "bk_exporter"
+        # 调用父类初始化方法，创建PluginDataAccessor实例
         super(PluginDataAccessor, self).__init__(
             bk_biz_id=0,
             db_name=db_name,

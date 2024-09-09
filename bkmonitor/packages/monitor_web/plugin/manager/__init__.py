@@ -13,7 +13,6 @@ specific language governing permissions and limitations under the License.
 插件管理
 """
 
-
 import os
 
 from django.utils.translation import ugettext as _
@@ -68,9 +67,11 @@ class PluginManagerFactory(object):
         :param tmp_path: 临时路径
         :rtype: PluginManager
         """
+        # 检查临时路径是否存在，若提供且不存在则抛出异常
         if tmp_path and not os.path.exists(tmp_path):
             raise IOError(_("文件夹不存在：%s") % tmp_path)
 
+        # 若plugin不是CollectorPluginMeta实例，则尝试通过id获取或创建新的实例
         if not isinstance(plugin, CollectorPluginMeta):
             plugin_id = plugin
             try:
@@ -78,14 +79,19 @@ class PluginManagerFactory(object):
             except CollectorPluginMeta.DoesNotExist:
                 plugin = CollectorPluginMeta(plugin_id=plugin_id, plugin_type=plugin_type)
 
+        # 确保插件类型受支持，否则抛出异常
         plugin_type = plugin.plugin_type
         if plugin_type not in SUPPORTED_PLUGINS:
             raise KeyError("Unsupported plugin type: %s" % plugin_type)
+
+        # 根据插件类型获取对应的插件管理器类
         plugin_manager_cls = SUPPORTED_PLUGINS[plugin_type]
 
+        # 若未提供操作者，则使用全局用户作为操作者
         if not operator:
             operator = get_global_user()
 
+        # 返回对应插件类型的新插件管理对象
         return plugin_manager_cls(plugin, operator, tmp_path)
 
 

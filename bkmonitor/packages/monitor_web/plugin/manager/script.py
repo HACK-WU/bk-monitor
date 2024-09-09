@@ -30,6 +30,7 @@ class ScriptPluginManager(PluginManager):
     templates_dirname = "script_templates"
     serializer_class = ScriptSerializer
 
+    # 获取采集脚本文件
     def fetch_collector_file(self):
         file_dict = {}
         for os_type, script_info in list(self.version.config.file_config.items()):
