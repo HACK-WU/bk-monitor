@@ -9,7 +9,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 import itertools
-from typing import Optional, Set
+from typing import Optional, Set, Dict
 
 from bkmonitor.models import StrategyModel
 from bkmonitor.utils.time_tools import localtime, now
@@ -40,9 +40,9 @@ class FrontendShieldListResource(Resource):
         if shield["category"] in [ShieldCategory.STRATEGY, ShieldCategory.EVENT, ShieldCategory.ALERT]:
             return {
                 "id": (
-                    shield["dimension_config"].get("strategy_id")
-                    or shield["dimension_config"].get("_event_id")
-                    or shield["dimension_config"].get("_alert_id")
+                        shield["dimension_config"].get("strategy_id")
+                        or shield["dimension_config"].get("_event_id")
+                        or shield["dimension_config"].get("_alert_id")
                 )
             }
         return {}
@@ -52,20 +52,28 @@ class FrontendShieldListResource(Resource):
         return SHIELD_STATUS_NAME_MAPPING.get(status)
 
     def perform_request(self, data):
+        # 从data中获取分页相关参数
         page = data.get("page", 0)
         page_size = data.get("page_size", 0)
+        # 获取业务ID，允许未提供
         bk_biz_id: Optional[int] = data.get("bk_biz_id")
+        # 获取激活状态，必须提供
         is_active: bool = data["is_active"]
+        # 初始化搜索关键词集合
         search_terms = set()
+        # 初始化查询条件列表
         conditions = []
+        # 遍历查询条件，区分处理“query”关键词和其他条件
         for condition in data.get("conditions", []):
             if condition["key"] == "query":
                 search_terms.add(condition["value"])
             else:
                 conditions.append(condition)
+        # 如果提供了额外的搜索关键词，则添加到搜索集合中
         if data.get("search"):
             search_terms.add(data["search"])
 
+        # 构建请求参数字典
         params = {
             "bk_biz_id": bk_biz_id,
             "is_active": is_active,
@@ -74,20 +82,24 @@ class FrontendShieldListResource(Resource):
             "conditions": conditions,
             "time_range": data.get("time_range"),
         }
-        # 如果不执行模糊搜索，则由后端分页，避免后续多余处理
+        # 如果未执行模糊搜索，则添加分页参数，以便后端进行分页处理
         if not search_terms:
             params.update({"page": page, "page_size": page_size})
 
-        # 获取屏蔽列表
-        result = resource.shield.shield_list(**params)
+        # 调用后端接口获取屏蔽列表数据
+        result: Dict = resource.shield.shield_list(**params)
+        # 丰富屏蔽列表数据
         shields = self.enrich_shields(bk_biz_id, result["shield_list"])
 
-        # 模糊搜索和分页处理
+        # 如果执行了模糊搜索
         if search_terms:
+            # 在丰富后的屏蔽列表中进行搜索
             shields = self.search(search_terms, shields, is_active)
+            # 如果同时提供了分页参数，则执行分页
             if page and page_size:
-                shields = shields[(page - 1) * page_size : page * page_size]
+                shields = shields[(page - 1) * page_size: page * page_size]
 
+        # 返回查询结果，包括总数和屏蔽列表
         return {"count": result["count"], "shield_list": shields}
 
     @staticmethod
@@ -113,6 +125,7 @@ class FrontendShieldListResource(Resource):
         manager = ShieldDisplayManager(bk_biz_id)
         # 获取关联策略名
         strategy_ids = {strategy_id for shield in shields for strategy_id in manager.get_strategy_ids(shield)}
+        # 获取关联策略名
         strategy_id_to_name = {
             strategy.id: strategy.name for strategy in StrategyModel.objects.filter(id__in=strategy_ids).only("name")
         }
@@ -127,7 +140,8 @@ class FrontendShieldListResource(Resource):
                     "category_name": manager.get_category_name(shield),
                     "status": shield["status"],
                     "status_name": self.get_status_name(shield["status"]),
-                    "dimension_config": self.get_dimension_config(shield),
+                    "dimension_config": self.get_dimension_config(shield),  # 获取维度配置，但是只拿了id字段的值
+                    # 获取屏蔽内容
                     "content": shield["content"] or manager.get_shield_content(shield, strategy_id_to_name),
                     "begin_time": shield["begin_time"],
                     "failure_time": shield["failure_time"],

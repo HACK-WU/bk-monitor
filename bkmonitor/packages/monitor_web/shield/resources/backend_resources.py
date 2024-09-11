@@ -13,7 +13,7 @@ import operator
 import time
 from collections import defaultdict
 from functools import reduce
-from typing import Dict, OrderedDict
+from typing import Dict, OrderedDict, List
 
 from django.db.models import Q
 from django.utils.translation import ugettext as _
@@ -87,30 +87,35 @@ class ShieldListResource(Resource):
         time_range = data.get("time_range")
         page = data.get("page", 0)
         page_size = data.get("page_size", 0)
-        conditions = data.get("conditions", [])
+        conditions: List[Dict] = data.get("conditions", [])
 
+        # 初始化查询条件列表
         q_list = []
 
+        # 如果提供了bk_biz_id，则直接添加到查询条件中
         if bk_biz_id:
             q_list.append(Q(bk_biz_id=bk_biz_id))
         else:
+            # 否则，根据用户获取业务ID列表，并添加到查询条件中
             q_list.append(Q(bk_biz_id__in=resource.space.get_bk_biz_ids_by_user(get_request().user)))
 
         # 过滤条件
         if categories:
+            # 兼容event查询的场景
             if "event" in categories:
-                # 兼容event查询的场景
                 categories.append("alert")
-
             q_list.append(Q(category__in=categories))
 
-        # 屏蔽来源
+        # 如果提供了来源，则添加到查询条件中
         if source:
             q_list.append(Q(source=source))
         shields = Shield.objects.filter(reduce(operator.and_, q_list))
 
+        # 初始化过滤字典
         filter_dict = defaultdict(list)
+        # 获取所有启用的字段
         enabled_fields = [field for field, value in Shield.__dict__.items() if isinstance(value, DeferredAttribute)]
+        # 构建用于过滤字段的过滤字典
         for condition in conditions:
             # 支持多条件匹配
             key = condition['key'].lower()
@@ -128,7 +133,7 @@ class ShieldListResource(Resource):
                 shields = shields.none()
         shields = shields.order_by(order)
 
-        # 筛选屏蔽中，根据范围进行筛选
+        # 根据激活状态和时间范围筛选屏蔽信息
         if is_active:
             shields = [shield for shield in shields if shield.status == ShieldStatus.SHIELDED]
             if time_range:
@@ -144,11 +149,10 @@ class ShieldListResource(Resource):
         count = len(shields)
 
         # 分页
-        # fmt: off
         if all([page, page_size]):
             shields = shields[(page - 1) * page_size: page * page_size]
-        # fmt: on
         shield_list = []
+        # 生成屏蔽信息列表
         for shield in shields:
             shield_list.append(
                 {
@@ -412,13 +416,18 @@ class AddShieldResource(Resource, EventDimensionMixin):
 
     @staticmethod
     def handle_alert(data):
+        # 从数据中提取告警ID
         alert_id = data["dimension_config"]["id"]
+        # 根据ID获取告警详情
         alert = AlertDocument.get(alert_id)
-
+    
+        # 初始化维度配置字典
         dimension_config = {}
+        # 遍历告警的维度，将每个维度的键值对添加到维度配置字典中
         for dimension in alert.dimensions:
             dimension_data = dimension.to_dict()
             dimension_config[dimension_data["key"]] = dimension_data["value"]
+        # 更新维度配置字典，添加告警ID、策略ID、严重性、告警消息和维度字符串表示
         dimension_config.update(
             {
                 "_alert_id": alert.id,
@@ -428,12 +437,13 @@ class AddShieldResource(Resource, EventDimensionMixin):
                 "_dimensions": AlertDimensionFormatter.get_dimensions_str(alert.dimensions),
             }
         )
-
-        # 更新alerts的屏蔽状态
+    
+        # 创建告警文档实例，更新告警的屏蔽状态和更新时间
         alert_document = AlertDocument(id=alert_id, is_shielded=True, update_time=int(time.time()))
+        # 执行批量更新操作，更新数据库中的告警状态
         AlertDocument.bulk_create([alert_document], action=BulkActionType.UPDATE)
+        # 返回维度配置字典
         return dimension_config
-
     @staticmethod
     def handle_dimension(data):
         dimension_config = data["dimension_config"]
@@ -456,6 +466,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
         return dimension_string
 
     def perform_request(self, data: ShieldConfig) -> Dict:
+        # 兼容event和alert的屏蔽类型，如果是event也当做alert告警事件屏蔽，进行处理
         data["category"] = ShieldCategory.ALERT if data["category"] == ShieldCategory.EVENT else data["category"]
 
         shield_handler = {
