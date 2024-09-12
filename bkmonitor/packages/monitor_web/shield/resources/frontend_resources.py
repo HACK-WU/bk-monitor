@@ -168,6 +168,9 @@ class FrontendShieldDetailResource(Resource):
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
 
     def handle_notice_config(self, notice_config):
+        """
+        重新创建新的notice_receivers
+        """
         from monitor_web.notice_group.resources.front import NoticeGroupDetailResource
 
         notice_receivers = []
@@ -197,14 +200,21 @@ class FrontendShieldDetailResource(Resource):
         return notice_config
 
     def handle_dimension_config(self, shield):
+        """
+        重新创建新的维度配置。
+        如果基于策略的屏蔽，则新的dimension_config，包含这些信息：scope_type,target,level,dimension_conditions,strategies.
+        """
         dimension_config = {}
         shield_display_manager = ShieldDisplayManager(self.bk_biz_id)
+    
+        # 根据屏蔽的范围类型获取目标target信息
         if shield.get("scope_type"):
             if shield["scope_type"] == ScopeType.INSTANCE:
                 target = shield_display_manager.get_service_name_list(
                     self.bk_biz_id, shield["dimension_config"].get("service_instance_id")
                 )
             elif shield["scope_type"] == ScopeType.IP:
+                # 将target改为存放IP的列表
                 target = [ip["bk_target_ip"] for ip in shield["dimension_config"].get("bk_target_ip")]
             elif shield["scope_type"] == ScopeType.NODE:
                 target = shield_display_manager.get_node_path_list(
@@ -218,9 +228,10 @@ class FrontendShieldDetailResource(Resource):
             else:
                 business = shield_display_manager.get_business_name(shield["bk_biz_id"])
                 target = [business]
-
+    
             dimension_config.update({"scope_type": shield["scope_type"], "target": target})
-
+    
+        # 处理策略ID相关信息
         if "strategy_id" in shield["dimension_config"]:
             strategy_ids = shield["dimension_config"]["strategy_id"]
             if not isinstance(strategy_ids, list):
@@ -228,13 +239,16 @@ class FrontendShieldDetailResource(Resource):
             strategy_ids = StrategyModel.objects.filter(id__in=strategy_ids, bk_biz_id=self.bk_biz_id).values_list(
                 "id", flat=True
             )
-
+    
             strategies = []
             for strategy_id in strategy_ids:
+                # 获取告警策略信息
                 strategy_info = resource.strategies.strategy_info(id=strategy_id, bk_biz_id=self.bk_biz_id)
                 strategies.append(strategy_info)
+            # 将告警策略信息更新到维度配置中
             dimension_config.update({"strategies": strategies})
-
+    
+        # 根据屏蔽的类别更新维度配置
         if shield["category"] == ShieldCategory.STRATEGY:
             dimension_config.update(
                 {
