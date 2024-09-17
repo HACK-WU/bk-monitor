@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 import json
 import logging
 import traceback
+from typing import Dict, Tuple
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
@@ -60,7 +61,7 @@ class Command(BaseCommand):
     def fail(msg):
         return msg + "\nScript escape"
 
-    def judge_option_data(self, data, template_data, enable_field_blacklist=False):
+    def judge_option_data(self, data: Dict, template_data, enable_field_blacklist=False) -> Tuple[str, bool]:
         correct_flag = True
         result = ""
         for option_key, option_value in template_data.items():
@@ -178,7 +179,8 @@ class Command(BaseCommand):
             if enable_field_blacklist:
                 if self.BLACKLIST_MUST_FIELD not in consul_data["option"]:
                     consul_ds_correct_flag = False
-                    print(f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]")
+                    print(
+                        f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]")
 
             consul_result += "\n" + self.description("resulttableoption 相关信息:")
             consul_rt_option_result, consul_rt_correct_flag = self.judge_option_data(

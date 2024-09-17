@@ -13,8 +13,8 @@ specific language governing permissions and limitations under the License.
 插件管理
 """
 
-
 import os
+from typing import Union
 
 from django.utils.translation import ugettext as _
 
@@ -30,7 +30,7 @@ from monitor_web.plugin.manager.snmp_trap import SNMPTrapPluginManager
 from monitor_web.plugin.manager.snmp import SNMPPluginManager
 from monitor_web.plugin.manager.process import ProcessPluginManager
 from monitor_web.plugin.manager.pushgateway import PushgatewayPluginManager
-from monitor_web.plugin.manager.script import ScriptPluginManager
+from monitor_web.plugin.manager.script import ScriptPluginManager, PluginManager
 
 # 当前支持的插件类型
 SUPPORTED_PLUGINS = {
@@ -59,7 +59,8 @@ FILE_PLUGINS_FACTORY = {
 
 class PluginManagerFactory(object):
     @classmethod
-    def get_manager(cls, plugin=None, plugin_type=None, operator="", tmp_path=None):
+    def get_manager(cls, plugin: Union[int, CollectorPluginMeta] = None, plugin_type: str = None, operator="",
+                    tmp_path=None) -> PluginManager:
         """
         根据插件ID和插件类型获取对应的插件管理对象
         :param plugin: CollectorPluginMeta对象或id
@@ -68,9 +69,11 @@ class PluginManagerFactory(object):
         :param tmp_path: 临时路径
         :rtype: PluginManager
         """
+        # 检查临时路径是否存在，若提供且不存在则抛出异常
         if tmp_path and not os.path.exists(tmp_path):
             raise IOError(_("文件夹不存在：%s") % tmp_path)
 
+        # 若plugin不是CollectorPluginMeta实例，则尝试通过id获取或创建新的实例
         if not isinstance(plugin, CollectorPluginMeta):
             plugin_id = plugin
             try:
@@ -78,14 +81,19 @@ class PluginManagerFactory(object):
             except CollectorPluginMeta.DoesNotExist:
                 plugin = CollectorPluginMeta(plugin_id=plugin_id, plugin_type=plugin_type)
 
+        # 确保插件类型受支持，否则抛出异常
         plugin_type = plugin.plugin_type
         if plugin_type not in SUPPORTED_PLUGINS:
             raise KeyError("Unsupported plugin type: %s" % plugin_type)
+
+        # 根据插件类型获取对应的插件管理器类
         plugin_manager_cls = SUPPORTED_PLUGINS[plugin_type]
 
+        # 若未提供操作者，则使用全局用户作为操作者
         if not operator:
             operator = get_global_user()
 
+        # 返回对应插件类型的新插件管理对象
         return plugin_manager_cls(plugin, operator, tmp_path)
 
 

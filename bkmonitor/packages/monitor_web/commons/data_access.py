@@ -9,6 +9,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 import copy
+from typing import List
 
 from django.conf import settings
 from django.utils.encoding import force_str
@@ -18,6 +19,7 @@ from six.moves import map
 from bkmonitor.utils.common_utils import safe_int
 from core.drf_resource import api
 from core.errors.api import BKAPIError
+from monitor_web.models.plugin import PluginVersionHistory
 from monitor_web.plugin.constant import (
     ORIGIN_PLUGIN_EXCLUDE_DIMENSION,
     PLUGIN_REVERSED_DIMENSION,
@@ -57,7 +59,7 @@ class ResultTableField(object):
 
 
 class ResultTable(object):
-    def __init__(self, table_name, description, fields):
+    def __init__(self, table_name, description, fields: List[ResultTableField]):
         self.table_name = table_name.lower()
         self.description = description
         self.fields = [field.__dict__ for field in fields]
@@ -320,7 +322,8 @@ class DataAccessor(object):
 
 
 class PluginDataAccessor(DataAccessor):
-    def __init__(self, plugin_version, operator):
+    def __init__(self, plugin_version: PluginVersionHistory, operator):
+        # 定义一个内嵌函数，用于将字段字典转换为ResultTableField实例
         def get_field_instance(field):
             # 将field字典转化为ResultTableField对象
             return ResultTableField(
@@ -339,10 +342,13 @@ class PluginDataAccessor(DataAccessor):
         tables = []
 
         add_fields = []
+        # 深拷贝插件反向维度字段名称
         add_fields_names = copy.deepcopy(PLUGIN_REVERSED_DIMENSION)
         plugin_type = plugin_version.plugin.plugin_type
+        # 根据插件类型添加特定维度字段
         if plugin_type == PluginType.SNMP:
             add_fields_names.append(("bk_target_device_ip", _("远程采集目标IP")))
+        # 获取插件参数配置信息
         config_json = plugin_version.config.config_json
         self.dms_field = []
 
@@ -353,11 +359,13 @@ class PluginDataAccessor(DataAccessor):
                     add_fields_names.append((dms_key, dms_key))
                     self.dms_field.append((dms_key, dms_key))
 
+        # 根据添加字段名称列表生成字段信息
         for name, description in add_fields_names:
             add_fields.append(
                 {"name": name, "description": force_str(description), "monitor_type": "group", "type": "string"}
             )
 
+        # 遍历指标信息，处理每个表格的字段
         for table in self.metric_json:
             # 获取字段信息
             fields = list(
@@ -366,11 +374,16 @@ class PluginDataAccessor(DataAccessor):
                     [i for i in table["fields"] if i["monitor_type"] == "dimension" or i.get("is_active")],
                 )
             )
+            # 将额外字段信息合并到字段列表中
             fields.extend(list(map(get_field_instance, add_fields)))
+            # 将表格信息添加到表格列表
             tables.append(ResultTable(table_name=table["table_name"], description=table["table_desc"], fields=fields))
 
+        # 根据插件类型和ID生成数据库名称
         db_name = "{}_{}".format(plugin_type, plugin_version.plugin.plugin_id)
+        # 根据插件类型确定ETL配置
         etl_config = "bk_standard" if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG] else "bk_exporter"
+        # 调用父类初始化方法，创建PluginDataAccessor实例
         super(PluginDataAccessor, self).__init__(
             bk_biz_id=0,
             db_name=db_name,

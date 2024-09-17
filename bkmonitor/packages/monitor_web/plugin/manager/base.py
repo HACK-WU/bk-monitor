@@ -50,6 +50,7 @@ from monitor_web.models.plugin import (
     CollectorPluginConfig,
     CollectorPluginInfo,
     PluginVersionHistory,
+    CollectorPluginMeta,
 )
 from monitor_web.plugin.constant import (
     BEAT_ERR,
@@ -87,7 +88,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
     # 插件数据校验类
     serializer_class = None
 
-    def __init__(self, plugin, operator, tmp_path=None):
+    def __init__(self, plugin: CollectorPluginMeta, operator: str, tmp_path=None):
         """
         :param plugin: CollectorPluginMeta Instance
         """
@@ -373,7 +374,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         }
         api.node_man.release_config(param)
 
-    def release(self, config_version, info_version, token, debug=True):
+    def release(self, config_version: int, info_version: int, token: str, debug=True):
         """
         发布插件包
 
@@ -446,8 +447,8 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         is_change = False
         # metric_json 存在变更或者 切换了黑名单的开启，生成新的 version
         if (
-            old_metric_md5 != new_metric_md5
-            or current_version.info.enable_field_blacklist != data["enable_field_blacklist"]
+                old_metric_md5 != new_metric_md5
+                or current_version.info.enable_field_blacklist != data["enable_field_blacklist"]
         ):
             is_change = True
             current_info_version = current_info_version + 1
@@ -693,26 +694,32 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         :return:
         """
         try:
+            # 创建临时目录
             if not os.path.exists(self.tmp_path):
                 os.makedirs(self.tmp_path)
-
+    
+            # 设置插件包顶层目录路径
             top_dir = os.path.join(self.tmp_path, self.plugin.plugin_id)
-
+    
+            # 获取模板路径和前缀长度
             templates_path = os.path.join(PLUGIN_TEMPLATES_PATH, self.templates_dirname)
             prefix_length = len(templates_path) + 1
-
+    
+            # 获取插件上下文信息
             context = self.get_context()
+            # 遍历模板文件夹
             for root, dirs, files in os.walk(templates_path):
                 path_rest = root[prefix_length:]
                 real_path_rest = path_rest.replace("plugin_name", self.plugin.plugin_id)
                 target_dir = os.path.join(top_dir, real_path_rest)
                 os.makedirs(target_dir)
-
+    
                 for filename in files:
                     old_path = os.path.join(root, filename)
                     new_path = os.path.join(target_dir, filename)
-
+    
                     try:
+                        # 渲染模板文件
                         with open(old_path, "r", encoding="utf-8") as template_file:
                             content = template_file.read()
                         template = engines["django"].from_string(content)
@@ -723,32 +730,33 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                     except Exception:
                         # 非文本类文件无需渲染，直接拷贝
                         shutil.copyfile(old_path, new_path)
+    
+            # 删除不需要的操作系统目录
             template_dir = set(os.listdir(top_dir))
             need_package_dir = {OS_TYPE_TO_DIRNAME[os_type] for os_type in self.version.os_type_list}
             rm_dir = template_dir - need_package_dir
             for dir_name in rm_dir:
                 shutil.rmtree(os.path.join(top_dir, dir_name))
-
+    
+            # 添加额外文件
             if add_files:
-                # 追加文件
                 for os_type, file_list in list(add_files.items()):
                     dest_dir = os.path.join(top_dir, OS_TYPE_TO_DIRNAME[os_type], self.plugin.plugin_id)
-
-                    # 如果存在文件配置，追加到etc文件夹下
                     file_index = 1
                     for index, config in enumerate(context["config_json"]):
                         if config.get("type") == "file":
                             with open(
-                                os.path.join(dest_dir, "etc", "{{file" + str(file_index) + "}}.tpl"), "w"
+                                    os.path.join(dest_dir, "etc", "{{file" + str(file_index) + "}}.tpl"), "w"
                             ) as template_file:
                                 template_file.write("{{file" + str(file_index) + "_content}}")
                                 file_index += 1
-
+    
                     for file_info in file_list:
                         file_path = os.path.join(dest_dir, file_info["file_name"])
                         with open(file_path, "wb+") as fd:
                             fd.write(file_info["file_content"])
-
+    
+            # 添加额外目录
             if add_dirs:
                 for os_type, dir_list in list(add_dirs.items()):
                     for dir_info in dir_list:
@@ -756,7 +764,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                             top_dir, OS_TYPE_TO_DIRNAME[os_type], self.plugin.plugin_id, dir_info["dir_name"]
                         )
                         shutil.copytree(dir_info["dir_path"], dest_dir)
-
+    
             # 插入logo.png
             if self.version.info.logo:
                 for dirs in os.listdir(top_dir):
@@ -764,16 +772,16 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                     with open(logo_path, "wb") as logo_fd:
                         self.version.info.logo.file.seek(0)
                         logo_fd.write(self.version.info.logo.file.read())
-                    # shutil.copyfile(self.version.info.logo.path, logo_path)
-
-            # 添加可执行权限
+    
+            # 设置文件权限
             for root, dirs, files in os.walk(top_dir):
                 if not root.endswith(self.plugin.plugin_id):
                     continue
-
+    
                 for filename in files:
                     os.chmod(os.path.join(root, filename), stat.S_IRWXU)
-
+    
+            # 打包插件
             if need_tar:
                 tar_name = self.tar_gz_file(top_dir)
                 return tar_name
