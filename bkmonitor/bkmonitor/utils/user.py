@@ -9,7 +9,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 from django.conf import settings
 from django.utils.translation import ugettext as _
 
@@ -52,7 +51,7 @@ def set_local_username(username):
     local.username = username
 
 
-def get_global_user(peaceful=True):
+def get_global_user(peaceful=True) -> str:
     # 1. 用户信息： 获取顺序：
     # 1.1 用户访问的request对象中的用户凭证
     # 1.2 local获取用户名

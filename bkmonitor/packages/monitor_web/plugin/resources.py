@@ -258,42 +258,76 @@ class PluginRegisterResource(Resource):
         return self.apply_async(request_data)
 
     def perform_request(self, validated_request_data):
+        """
+        执行请求处理。
+
+        该方法根据验证过的请求数据处理插件请求，包括检索插件信息、版本信息，
+        以及执行打包、上传、注册等操作。
+
+        参数:
+        - validated_request_data: 包含验证过的请求数据的字典，包括'plugin_id'，
+          'config_version', 'info_version'等键。
+
+        返回:
+        - 字典，包含'token'键，其值为一个列表，列出了按插件信息的MD5值排序的token。
+
+        异常:
+        - PluginIDNotExist: 如果插件ID不存在，则抛出此异常。
+        - PluginVersionNotExist: 如果插件版本不存在，则抛出此异常。
+        - RegisterPackageError: 如果注册包过程中发生异常，则抛出此异常。
+        """
+        # 从请求数据中提取插件ID，并尝试获取插件信息
         self.plugin_id = validated_request_data["plugin_id"]
         plugin = CollectorPluginMeta.objects.filter(plugin_id=self.plugin_id).first()
         if plugin is None:
-            raise PluginIDNotExist
+            raise PluginIDNotExist  # 如果插件不存在，则抛出异常
+
+        # 从请求数据中提取版本信息
         config_version = validated_request_data["config_version"]
         info_version = validated_request_data["info_version"]
+        # 尝试获取特定插件ID和版本信息的插件版本
         version = PluginVersionHistory.objects.filter(
             plugin_id=self.plugin_id, config_version=config_version, info_version=info_version
         ).first()
         if version is None:
-            raise PluginVersionNotExist
+            raise PluginVersionNotExist  # 如果版本不存在，则抛出异常
 
+        # 初始化插件管理器，并设置版本信息
         self.plugin_manager = PluginManagerFactory.get_manager(plugin=plugin, operator=self.operator)
         self.plugin_manager.version = version
+
+        # 尝试进行打包、上传和注册操作
         try:
-            tar_name = self.mack_package()
-            file_name = self.upload_file(tar_name)
-            self.register_package(file_name)
+            tar_name = self.mack_package()  # 打包插件
+            file_name = self.upload_file(tar_name)  # 上传打包文件
+            self.register_package(file_name)  # 注册插件包
+
+            # 获取插件信息并处理token列表
             plugin_info = api.node_man.plugin_info(name=self.plugin_id, version=version.version)
             token_list = [i["md5"] for i in plugin_info]
             token_list.sort()
+
+            # 根据插件的发布版本决定是否需要注册模板
             release_version = self.plugin_manager.plugin.release_version
             if release_version is None or release_version.config_version != config_version:
                 self.register_template(tar_name)
 
+            # 更新版本信息
             version.stage = "debug"
             version.is_packaged = True
             version.save()
         except Exception as e:
+            # 异常处理：记录日志并抛出自定义异常
             logger.exception(e)
             raise RegisterPackageError({"msg": str(e)})
         finally:
+            # 清理临时文件夹
             if os.path.exists(self.plugin_manager.tmp_path):
                 shutil.rmtree(self.plugin_manager.tmp_path)
 
+        # 返回token列表
         return {"token": token_list}
+
 
     @step(state="MAKE_PACKAGE", message=_lazy("文件正在打包中..."))
     def mack_package(self):

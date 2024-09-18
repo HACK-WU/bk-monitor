@@ -29,9 +29,9 @@ SCOPE_TYPE_NAME_MAPPING = {
 
 
 class ShieldStatus(object):
-    SHIELDED = 1
-    EXPIRED = 2
-    REMOVED = 3
+    SHIELDED = 1    # 屏蔽中
+    EXPIRED = 2     # 已过期
+    REMOVED = 3     # 被解除
 
 
 SHIELD_STATUS_NAME_MAPPING = {

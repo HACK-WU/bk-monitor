@@ -139,6 +139,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
         version_infos: List[Dict[str, Union[int, str]]] = PluginVersionHistory.objects.filter(plugin_id__in=ids).values(
             "plugin_id", "id", "stage"
         )
+
         # 排序规则：Release > DEBUG/UNREGISTER
 
         def _version_comparator(_left: Dict[str, Union[int, str]], _right: Dict[str, Union[int, str]]) -> int:
@@ -161,7 +162,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
 
         return id__current_version_id_map
 
-    def get_version(self, config_version, info_version):
+    def get_version(self, config_version, info_version) -> "PluginVersionHistory":
         """
         获取特定版本
         """

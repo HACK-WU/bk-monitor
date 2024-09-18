@@ -39,16 +39,25 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
     def get_shield_content(self, shield, strategy_id_to_name=None):
         """
         获取屏蔽的内容
+
+        根据屏蔽配置的类别和维度配置，组装并返回屏蔽内容的字符串描述。
+        支持的屏蔽类别包括事件屏蔽、告警策略屏蔽、维度屏蔽和策略屏蔽。
+        对于每种屏蔽类别，根据其配置的不同，处理逻辑也有所不同。
         """
+        # 提取屏蔽配置中的基本信息
         bk_biz_id = shield["bk_biz_id"]
         category = shield["category"]
         dimension_config = shield["dimension_config"]
         scope_type = shield["scope_type"]
 
+        # 对于事件和告警屏蔽，直接返回维度配置中的维度信息
         if category in [ShieldCategory.EVENT, ShieldCategory.ALERT]:
             return dimension_config["_dimensions"]
 
+        # 初始化内容字符串，用于拼接最终的屏蔽内容描述
         content = ""
+
+        # 对于维度屏蔽，将维度条件拼接成字符串
         if category == ShieldCategory.DIMENSION:
             method_dict = {"eq": "=", "gte": "≥", "gt": ">", "lt": "<", "lte": "≤", "neq": "!="}
             for index, condition in enumerate(dimension_config.get("dimension_conditions", [])):
@@ -64,6 +73,7 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
                 content += " {} {}".format(condition.get("condition", "and"), condition_content)
             return content
 
+        # 对于策略屏蔽，获取策略ID列表并尝试解析策略名称
         if category == ShieldCategory.STRATEGY:
             strategy_ids = self.get_strategy_ids(shield)
             # 目前仅在前端屏蔽列表会传入 strategy_id_to_name
@@ -78,6 +88,7 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
             else:
                 return STRATEGY_ALREADY_DELETED_MESSAGE
 
+        # 根据屏蔽范围类型，拼接具体的屏蔽范围内容
         if scope_type == ScopeType.INSTANCE:
             service_list = self.get_service_name_list(bk_biz_id, dimension_config.get("service_instance_id"))
             content += ",".join(service_list)
@@ -95,6 +106,7 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
             content += self.get_business_name(bk_biz_id)
 
         return content
+
 
     @staticmethod
     def get_strategy_ids(shield):
