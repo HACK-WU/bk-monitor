@@ -196,7 +196,9 @@ class CollectorPluginMeta(OperateRecordModelBase):
             ).last()
         return version
 
-    def generate_version(self, config_version, info_version, config=None, info=None):
+    def generate_version(self, config_version, info_version=None,
+                         config: "CollectorPluginConfig" = None,
+                         info: "CollectorPluginInfo" = None) -> "PluginVersionHistory":
         """
         生成特定版本
         """

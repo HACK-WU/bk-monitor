@@ -76,6 +76,7 @@ class DataDogPluginViewSet(PermissionMixin, ResourceViewSet):
 
 
 class MetricPluginViewSet(PermissionMixin, ResourceViewSet):
+    # 定义资源路由，这里仅定义了一个POST请求的路由
     resource_routes = [ResourceRoute("POST", resource.plugin.save_metric, endpoint="save")]
 
 

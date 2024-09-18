@@ -21,6 +21,7 @@ import tarfile
 import time
 from functools import partial
 from uuid import uuid4
+from typing import Tuple
 
 import six
 import yaml
@@ -436,51 +437,92 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             logger.error("[update_plugin_metric_cache] error, msg is {}".format(err))
 
     def update_metric(self, data):
-        current_version = self.plugin.get_version(data["config_version"], data["info_version"])
+        """
+        更新度量配置。
+
+        该方法用于检查和更新插件的度量配置。它首先获取当前版本信息，然后比较传入的度量配置（metric_json）
+        与现有配置是否有差异。如果有差异或启用了不同的字段黑名单，它会生成一个新的版本号，并更新插件的
+        配置和信息数据。如果配置发生变化，还会要求重新打包配置。
+
+        返回:
+        - current_config_version: 当前配置版本号。
+        - current_info_version: 当前信息版本号。
+        - is_change: 布尔值，表示度量配置是否发生了变化。
+        - need_make_package: 布尔值，表示是否需要重新打包配置。
+        """
+        # 获取当前版本信息
+        current_version: PluginVersionHistory = self.plugin.get_version(data["config_version"], data["info_version"])
+        # 提取度量配置JSON
         metric_json = data["metric_json"]
+        # 获取当前版本的信息对象
         info_obj = current_version.info
+        # 将当前信息数据转换为字典格式
         now_info_data = info_obj.info2dict()
+        # 提取当前配置版本号和信息版本号
         current_config_version = current_version.config_version
         current_info_version = current_version.info_version
+        # 计算当前和新的度量配置的MD5值
         old_metric_md5, new_metric_md5 = list(map(count_md5, [info_obj.metric_json, metric_json]))
+        # 初始化是否需要重新打包和是否发生变更的标志
         need_make_package = False
         is_change = False
-        # metric_json 存在变更或者 切换了黑名单的开启，生成新的 version
+
+        # 如果度量配置发生变化或切换了字段黑名单的启用状态，则生成新的版本号
         if (
                 old_metric_md5 != new_metric_md5
                 or current_version.info.enable_field_blacklist != data["enable_field_blacklist"]
         ):
             is_change = True
             current_info_version = current_info_version + 1
-            update_info_data = copy.deepcopy(now_info_data)
+            # 创建新的信息对象字典
+            new_info_data = copy.deepcopy(now_info_data)
             # 白名单模式下，清除 tag_list 内的值
             if not data["enable_field_blacklist"]:
                 for metric_data in metric_json:
                     for field_data in metric_data["fields"]:
                         field_data["tag_list"] = []
-            update_info_data["metric_json"] = metric_json
-            update_info_data["enable_field_blacklist"] = data["enable_field_blacklist"]
-            config_obj = current_version.config
+
+            # 更新信息数据中的度量配置和字段黑名单启用状态
+            new_info_data["metric_json"] = metric_json
+            new_info_data["enable_field_blacklist"] = data["enable_field_blacklist"]
+
+            # 获取当前版本的配置对象
+            current_config_obj = current_version.config
+            # 生成度量配置变更的差异字段
             diff_value = PluginVersionHistory.gen_diff_fields(metric_json)
-            old_collector_json = config_obj.collector_json
+            # 获取旧的和新的collector_json配置的MD5值
+            old_collector_json = current_config_obj.collector_json
             new_collector_json = self.get_new_collector_json(old_collector_json, diff_value)
             old_collector_md5, new_collector_md5 = list(map(count_md5, [old_collector_json, new_collector_json]))
+
+            # 如果collector配置发生变化，则更新配置版本号，并设置需要重新打包
             if old_collector_md5 != new_collector_md5:
                 current_config_version = current_config_version + 1
                 need_make_package = True
-            version = self.get_verison(current_config_version, current_info_version)
-            update_config_data = config_obj.config2dict()
-            update_config_data["collector_json"] = new_collector_json
-            self.update_config(update_config_data, version)
-            self.update_info(update_info_data, now_info_data, current_version, version)
-            version.stage = "unregister" if need_make_package else "release"
-            version.is_packaged = False
-            version.signature = current_version.signature
-            version.version_log = "update_metric"
-            version.save()
+
+            # 生成新的版本对象
+            new_version = self.get_verison(current_config_version, current_info_version)
+            # 创建新配置数据
+            new_config_data = current_config_obj.config2dict()
+            new_config_data["collector_json"] = new_collector_json
+            self.update_config(new_config_data, new_version)
+            # 更新信息数据
+            self.update_info(new_info_data, now_info_data, current_version, new_version)
+
+            # 设置版本状态和标志
+            new_version.stage = "unregister" if need_make_package else "release"
+            # 是否已上传到节点管理
+            new_version.is_packaged = False
+            new_version.signature = current_version.signature
+            new_version.version_log = "update_metric"
+            new_version.save()
+
+            # 如果当前版本的度量配置为空，则更新为新的度量配置
             if not current_version.info.metric_json:
                 current_version.info.metric_json = metric_json
                 current_version.info.save()
+
+        # 返回当前配置版本号、信息版本号、是否发生变更和是否需要重新打包
         return current_config_version, current_info_version, is_change, need_make_package
 
     @staticmethod
@@ -504,20 +546,30 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         version.is_packaged = False
         version.save()
 
-    def create_version(self, data):
-        version = self.plugin.generate_version(data["config_version"], data["info_version"])
-        version.version_log = data.get("version_log", "")
-        version.save()
+    def create_version(self, data) -> Tuple[PluginVersionHistory, bool]:
+        """
+        创建插件版本记录。
+    
+        根据提供的配置和信息版本数据生成一个新的插件版本记录，并保存至数据库。
+        同时更新配置数据和插件信息数据，如果提供签名数据，则验证安全性。
+        最后返回版本对象和是否需要调试的布尔值。
+        """
+        # 生成并保存插件版本记录
+        version_obj: PluginVersionHistory = self.plugin.generate_version(data["config_version"], data["info_version"])
+        version_obj.version_log = data.get("version_log", "")  # 记录版本日志
+        version_obj.save()
 
+        # 配置插件功能信息
         config_data = {
             "config_json": data.get("config_json", []),
             "collector_json": data.get("collector_json", []),
             "is_support_remote": data.get("is_support_remote", False),
         }
         for attr, value in list(config_data.items()):
-            setattr(version.config, attr, value)
-        version.config.save()
+            setattr(version_obj.config, attr, value)  # 更新配置属性
+        version_obj.config.save()
 
+        # 更新插件基本信息
         info_data = {
             "plugin_display_name": (
                 data["plugin_display_name"] if data["plugin_display_name"] else self.plugin.plugin_id
@@ -527,26 +579,31 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             "metric_json": data["metric_json"],
         }
         for attr, value in list(info_data.items()):
-            setattr(version.info, attr, value)
-        version.info.save()
+            setattr(version_obj.info, attr, value)  # 更新信息属性
+        version_obj.info.save()
 
+        # 保存logo文件，如果提供
         if len(data["logo"]) > 1:
-            self.save_logo_file(version.info, data["logo"])
+            self.save_logo_file(version_obj.info, data["logo"])
 
+        # 初始化调试需求标志
         need_debug = True
-        if data.get("signature"):
-            version.signature = Signature().load_from_yaml(data["signature"]).dumps2python()
-            if version.is_safety:
-                need_debug = False
-            else:
-                sig_manager = load_plugin_signature_manager(version)
-                version.signature = sig_manager.signature().dumps2python()
-        else:
-            sig_manager = load_plugin_signature_manager(version)
-            version.signature = sig_manager.signature().dumps2python()
-        version.save()
 
-        return version, need_debug
+        # 处理签名数据，如果提供
+        if data.get("signature"):
+            version_obj.signature = Signature().load_from_yaml(data["signature"]).dumps2python()
+            if version_obj.is_safety:  # 如果版本是安全的
+                need_debug = False  # 不需要调试
+            else:
+                sig_manager = load_plugin_signature_manager(version_obj)
+                version_obj.signature = sig_manager.signature().dumps2python()
+        else:
+            sig_manager = load_plugin_signature_manager(version_obj)
+            version_obj.signature = sig_manager.signature().dumps2python()
+
+        version_obj.save()  # 保存签名数据
+
+        return version_obj, need_debug
 
     def update_version(self, data, target_config_version=None, target_info_version=None):
         need_debug = True
@@ -605,7 +662,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
 
         return version, need_debug
 
-    def get_verison(self, config_version, info_version):
+    def get_verison(self, config_version, info_version) -> PluginVersionHistory:
         version = self.plugin.generate_version(config_version, info_version)
         version.stage = "unregister"
         return version
@@ -633,23 +690,23 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             version.stage = stag
         version.save()
 
-    def update_info(self, update_info_data, now_info_data, current_version, version):
+    def update_info(self, update_info_data, now_info_data, current_version, new_version):
         update_logo = update_info_data.pop("logo", "")
         for attr, value in list(update_info_data.items()):
-            setattr(version.info, attr, value)
-        version.info.save()
+            setattr(new_version.info, attr, value)
+        new_version.info.save()
 
         if not update_logo:
-            version.info.logo = ""
-            version.info.save()
+            new_version.info.logo = ""
+            new_version.info.save()
         elif update_logo != now_info_data["logo"] and update_logo:
-            self.save_logo_file(version.info, update_logo)
+            self.save_logo_file(new_version.info, update_logo)
         else:
-            version.info.logo = current_version.info.logo
-            version.info.save()
+            new_version.info.logo = current_version.info.logo
+            new_version.info.save()
 
-    def update_config(self, update_config_data, version):
-        for attr, value in list(update_config_data.items()):
+    def update_config(self, new_config_data, version):
+        for attr, value in list(new_config_data.items()):
             setattr(version.config, attr, value)
         version.config.save()
 
