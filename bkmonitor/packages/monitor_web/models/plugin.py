@@ -201,19 +201,30 @@ class CollectorPluginMeta(OperateRecordModelBase):
                          info: "CollectorPluginInfo" = None) -> "PluginVersionHistory":
         """
         生成特定版本
+
+        该方法旨在为插件生成并返回一个特定版本的记录。它可以通过提供配置和信息版本号，
+        并选择性地提供配置和信息的详细内容来创建或更新版本记录。
         """
         try:
+            # 尝试获取已存在的版本记录
             version = self.get_version(config_version, info_version)
+            # 如果提供了配置对象，则更新版本记录的配置信息
             if config:
                 version.config = config
+            # 如果提供了信息对象，则更新版本记录的信息内容
             if info:
                 version.info = info
+            # 保存更新后的版本记录
             version.save()
         except PluginVersionHistory.DoesNotExist:
+            # 如果版本记录不存在，则根据提供的版本号和配置、信息对象创建新的版本记录
             if config is None:
+                # 如果没有提供配置对象，则创建新的配置对象
                 config = CollectorPluginConfig.objects.create()
             if info is None:
+                # 如果没有提供信息对象，则创建新的信息对象
                 info = CollectorPluginInfo.objects.create()
+            # 创建新的版本记录
             version = self.versions.create(
                 config_version=config_version,
                 info_version=info_version,
@@ -221,6 +232,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
                 info=info,
             )
         return version
+
 
     def get_plugin_detail(self):
         current_version = self.current_version
@@ -316,7 +328,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
                 map_of_metric_and_tag: 指标和维度的映射关系
         """
         # metric_json 中有的指标集合
-        metric_from_plugin_set = self.current_version.info.metric_set
+        metric_set = self.current_version.info.metric_set
         # 表名和分组规则映射
         table_rule_map = self.current_version.info.table_rule_map
         # 将发现的新的指标分配到对应的规则在的表中：TSMetric -> table-field
@@ -333,7 +345,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
             metric = metric_info_list[0]
             map_of_metric_and_tag[metric["field_name"]] = metric["tag_list"]
             # 如果该指标已存在 metric_json，则略过
-            if metric["field_name"] in metric_from_plugin_set:
+            if metric["field_name"] in metric_set:
                 continue
             for table_name, rule_list in table_rule_map.items():
                 for rule in rule_list:

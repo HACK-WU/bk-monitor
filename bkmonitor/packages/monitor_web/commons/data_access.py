@@ -19,7 +19,6 @@ from six.moves import map
 from bkmonitor.utils.common_utils import safe_int
 from core.drf_resource import api
 from core.errors.api import BKAPIError
-from monitor_web.models.plugin import PluginVersionHistory
 from monitor_web.plugin.constant import (
     ORIGIN_PLUGIN_EXCLUDE_DIMENSION,
     PLUGIN_REVERSED_DIMENSION,
@@ -322,7 +321,29 @@ class DataAccessor(object):
 
 
 class PluginDataAccessor(DataAccessor):
-    def __init__(self, plugin_version: PluginVersionHistory, operator):
+    def __init__(self, plugin_version, operator):
+        f"""
+        初始化PluginDataAccessor类的实例。
+
+        生成一个数据访问器，主要需要将metric_json中各个table中的字段信息(name,monitor_type,type,description等)提取出来，
+        组成一个ResultTableField实例列表，该列表将作为ResultTable.field_instance_list的属性值。
+        每个ResultTable中包含这几个信息，table_name，fields(是一个List[Dict]类型)，description，field_instance_list。
+        这些ResultTable又组成一个列表table_list。
+        最后初始化DataAccessor类:
+            DataAccessor(
+                bk_biz_id=0,            # 固定值
+                db_name='%s_%s'(plugin_type,plugin_id),     # 由“插件类型”和“插件id”组成
+                tables=table_list,           # List[ResultTable]
+                etl_config= "bk_standard",   # 如果插件类型是"Script"或者"DataDog"那么值就是"bk_standard"，否则是"bk_exporter"
+                operator=operator,
+                type_label="time_series",   # 固定值
+                source_label="bk_monitor",  # 固定值
+                label=plugin_version.plugin.label   
+            )
+    
+
+        """
+
         # 定义一个内嵌函数，用于将字段字典转换为ResultTableField实例
         def get_field_instance(field):
             # 将field字典转化为ResultTableField对象
@@ -368,7 +389,7 @@ class PluginDataAccessor(DataAccessor):
         # 遍历指标信息，处理每个表格的字段
         for table in self.metric_json:
             # 获取字段信息
-            fields = list(
+            fields: List[ResultTableField] = list(
                 map(
                     get_field_instance,
                     [i for i in table["fields"] if i["monitor_type"] == "dimension" or i.get("is_active")],
@@ -472,7 +493,7 @@ class PluginDataAccessor(DataAccessor):
             # 没开自动发现，且非新增插件
             try:
                 result_table_info = api.metadata.get_result_table(table_id=f"{self.db_name}.__default__")
-                # 对于白名单模式，如果resulttableoption 的 is_split_measurement 为 True，则说明开启过单指标单表
+                # 对于白名单模式，如果resulttable.option 的 is_split_measurement 为 True，则说明开启过单指标单表
                 if result_table_info["option"].get("is_split_measurement"):
                     is_split_measurement = True
             except Exception:

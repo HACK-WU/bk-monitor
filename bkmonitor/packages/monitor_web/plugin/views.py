@@ -437,13 +437,19 @@ class CollectorPluginViewSet(PermissionMixin, viewsets.ModelViewSet):
     def release(self, request, *args, **kwargs):
         serializer = ReleaseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # 尝试获取插件元数据
         try:
             plugin = CollectorPluginMeta.objects.get(plugin_id=kwargs.get("pk"))
         except CollectorPluginMeta.DoesNotExist:
+            # 如果插件不存在，抛出异常
             raise PluginIDNotExist
 
+        # 获取插件管理器
         plugin_manager = PluginManagerFactory.get_manager(plugin=plugin)
+        # 通过插件管理器发布新版本
         release_version = plugin_manager.release(**serializer.validated_data)
+        # 更新插件版本并返回响应
         return Response(resource.plugin.update_collect_plugin_version(release_version=release_version))
 
     @action(methods=["POST"], detail=False)
@@ -458,6 +464,8 @@ class CollectorPluginViewSet(PermissionMixin, viewsets.ModelViewSet):
 
 class RegisterPluginViewSet(PermissionMixin, ResourceViewSet):
     resource_routes = [ResourceRoute("POST", resource.plugin.plugin_register)]
+
+
 
 
 class SaveAndReleasePluginViewSet(PermissionMixin, ResourceViewSet):

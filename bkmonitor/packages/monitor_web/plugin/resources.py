@@ -283,22 +283,12 @@ class PluginRegisterResource(Resource):
 
     def perform_request(self, validated_request_data):
         """
-        执行请求处理。
+        注册插件包
+        1、首先插件打包->上传插件包->注册插件包
+        2、基于最开始的版本版本version,获取到token_list
+        3、如果最新版发布版本与最开始版本不一致，或者最新发布版本的config_version与传入的config_version不一致，则需要创建配置模板
+        4、返回token_list
 
-        该方法根据验证过的请求数据处理插件请求，包括检索插件信息、版本信息，
-        以及执行打包、上传、注册等操作。
-
-        参数:
-        - validated_request_data: 包含验证过的请求数据的字典，包括'plugin_id'，
-          'config_version', 'info_version'等键。
-
-        返回:
-        - 字典，包含'token'键，其值为一个列表，列出了按插件信息的MD5值排序的token。
-
-        异常:
-        - PluginIDNotExist: 如果插件ID不存在，则抛出此异常。
-        - PluginVersionNotExist: 如果插件版本不存在，则抛出此异常。
-        - RegisterPackageError: 如果注册包过程中发生异常，则抛出此异常。
         """
         # 从请求数据中提取插件ID，并尝试获取插件信息
         self.plugin_id = validated_request_data["plugin_id"]

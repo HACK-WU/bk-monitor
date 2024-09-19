@@ -378,13 +378,21 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
     def release(self, config_version: int, info_version: int, token: str, debug=True):
         """
         发布插件包
+        发布流程：接入数据源->发布配置文件->发布插件包
 
+        :param config_version: 配置版本号
+        :param info_version: 信息版本号
+        :param token: 包含MD5列表的令牌，用于发布插件包
+        :param debug: 是否为调试模式，默认为True
+        :return: 返回发布的当前版本对象
         """
         try:
+            # 获取当前插件版本
             current_version = self.plugin.get_version(config_version, info_version)
             # 接入数据源
             PluginDataAccessor(current_version, self.operator).access()
 
+            # 根据调试模式选择发布版本
             if debug:
                 release_version = self.plugin.get_debug_version(config_version)
             else:
@@ -405,14 +413,17 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             release_version.stage = "release"
             release_version.save()
 
+            # 如果是调试模式，将当前版本状态也置为release
             if debug:
                 current_version.stage = "release"
                 current_version.save()
         except Exception as err:
+            # 异常处理：记录日志、回滚版本状态并抛出异常
             logger.error("[plugin] release plugin {} error, msg is {}".format(self.plugin.plugin_id, str(err)))
             self.plugin.rollback_version_status(config_version)
             raise err
         return current_version
+
 
     def data_access(self, config_version, info_version):
         current_version = self.plugin.get_version(config_version, info_version)
@@ -440,9 +451,14 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         """
         更新度量配置。
 
-        该方法用于检查和更新插件的度量配置。它首先获取当前版本信息，然后比较传入的度量配置（metric_json）
-        与现有配置是否有差异。如果有差异或启用了不同的字段黑名单，它会生成一个新的版本号，并更新插件的
-        配置和信息数据。如果配置发生变化，还会要求重新打包配置。
+        该方法用于检查和更新插件的metric_json配置。
+        1、首先检查度量配置"metric_json"和"enable_field_blacklist"和当前版本中的值是否一致(通过MD5进行对比)，一致，直接返回当前信息即可。
+        2、如果不一致：
+            -如果为白名单模式，将清除tag_list内的值
+            -对比PluginConfig是否一致，不一致则更新PluginConfig，config_version+=1,并标记需要重新打包，版本状态改为“unregister”。
+            -获取新版本new_version,并更新PluginInfo,info_version+=1。
+            -更新new_version.signature为新传入signature的值。
+            -更新new_version.version_log="update metric",new_version.is_packaged=False。
 
         返回:
         - current_config_version: 当前配置版本号。
@@ -452,51 +468,52 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
         """
         # 获取当前版本信息
         current_version: PluginVersionHistory = self.plugin.get_version(data["config_version"], data["info_version"])
-        # 提取度量配置JSON
-        metric_json = data["metric_json"]
+        # 提取新的metric_json
+        new_metric_json = data["metric_json"]
         # 获取当前版本的信息对象
-        info_obj = current_version.info
+        current_info_obj = current_version.info
         # 将当前信息数据转换为字典格式
-        now_info_data = info_obj.info2dict()
+        current_info_data = current_info_obj.info2dict()
         # 提取当前配置版本号和信息版本号
         current_config_version = current_version.config_version
         current_info_version = current_version.info_version
         # 计算当前和新的度量配置的MD5值
-        old_metric_md5, new_metric_md5 = list(map(count_md5, [info_obj.metric_json, metric_json]))
+        current_metric_md5, new_metric_md5 = list(map(count_md5, [current_info_obj.metric_json, new_metric_json]))
         # 初始化是否需要重新打包和是否发生变更的标志
         need_make_package = False
         is_change = False
 
         # 如果度量配置发生变化或切换了字段黑名单的启用状态，则生成新的版本号
         if (
-                old_metric_md5 != new_metric_md5
+                current_metric_md5 != new_metric_md5
                 or current_version.info.enable_field_blacklist != data["enable_field_blacklist"]
         ):
             is_change = True
             current_info_version = current_info_version + 1
             # 创建新的信息对象字典
-            new_info_data = copy.deepcopy(now_info_data)
+            new_info_data = copy.deepcopy(current_info_data)
             # 白名单模式下，清除 tag_list 内的值
             if not data["enable_field_blacklist"]:
-                for metric_data in metric_json:
+                for metric_data in new_metric_json:
                     for field_data in metric_data["fields"]:
                         field_data["tag_list"] = []
 
             # 更新信息数据中的度量配置和字段黑名单启用状态
-            new_info_data["metric_json"] = metric_json
+            new_info_data["metric_json"] = new_metric_json
             new_info_data["enable_field_blacklist"] = data["enable_field_blacklist"]
 
             # 获取当前版本的配置对象
             current_config_obj = current_version.config
             # 生成度量配置变更的差异字段
-            diff_value = PluginVersionHistory.gen_diff_fields(metric_json)
+            diff_value = PluginVersionHistory.gen_diff_fields(new_metric_json)
             # 获取旧的和新的collector_json配置的MD5值
-            old_collector_json = current_config_obj.collector_json
-            new_collector_json = self.get_new_collector_json(old_collector_json, diff_value)
-            old_collector_md5, new_collector_md5 = list(map(count_md5, [old_collector_json, new_collector_json]))
+            current_collector_json = current_config_obj.collector_json
+            new_collector_json = self.get_new_collector_json(current_collector_json, diff_value)
+            current_collector_md5, new_collector_md5 = list(
+                map(count_md5, [current_collector_json, new_collector_json]))
 
             # 如果collector配置发生变化，则更新配置版本号，并设置需要重新打包
-            if old_collector_md5 != new_collector_md5:
+            if current_collector_md5 != new_collector_md5:
                 current_config_version = current_config_version + 1
                 need_make_package = True
 
@@ -505,11 +522,12 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             # 创建新配置数据
             new_config_data = current_config_obj.config2dict()
             new_config_data["collector_json"] = new_collector_json
+            # 更新采集插件配置数据
             self.update_config(new_config_data, new_version)
-            # 更新信息数据
-            self.update_info(new_info_data, now_info_data, current_version, new_version)
+            # 更新采集插件信息数据
+            self.update_info(new_info_data, current_info_data, current_version, new_version)
 
-            # 设置版本状态和标志
+            # 如果需要重新打包，则将新版本设置为unregister状态
             new_version.stage = "unregister" if need_make_package else "release"
             # 是否已上传到节点管理
             new_version.is_packaged = False
@@ -519,7 +537,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
 
             # 如果当前版本的度量配置为空，则更新为新的度量配置
             if not current_version.info.metric_json:
-                current_version.info.metric_json = metric_json
+                current_version.info.metric_json = new_metric_json
                 current_version.info.save()
 
         # 返回当前配置版本号、信息版本号、是否发生变更和是否需要重新打包
@@ -754,14 +772,14 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
             # 创建临时目录
             if not os.path.exists(self.tmp_path):
                 os.makedirs(self.tmp_path)
-    
+
             # 设置插件包顶层目录路径
             top_dir = os.path.join(self.tmp_path, self.plugin.plugin_id)
-    
+
             # 获取模板路径和前缀长度
             templates_path = os.path.join(PLUGIN_TEMPLATES_PATH, self.templates_dirname)
             prefix_length = len(templates_path) + 1
-    
+
             # 获取插件上下文信息
             context = self.get_context()
             # 遍历模板文件夹
@@ -770,11 +788,11 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                 real_path_rest = path_rest.replace("plugin_name", self.plugin.plugin_id)
                 target_dir = os.path.join(top_dir, real_path_rest)
                 os.makedirs(target_dir)
-    
+
                 for filename in files:
                     old_path = os.path.join(root, filename)
                     new_path = os.path.join(target_dir, filename)
-    
+
                     try:
                         # 渲染模板文件
                         with open(old_path, "r", encoding="utf-8") as template_file:
@@ -787,14 +805,14 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                     except Exception:
                         # 非文本类文件无需渲染，直接拷贝
                         shutil.copyfile(old_path, new_path)
-    
+
             # 删除不需要的操作系统目录
             template_dir = set(os.listdir(top_dir))
             need_package_dir = {OS_TYPE_TO_DIRNAME[os_type] for os_type in self.version.os_type_list}
             rm_dir = template_dir - need_package_dir
             for dir_name in rm_dir:
                 shutil.rmtree(os.path.join(top_dir, dir_name))
-    
+
             # 添加额外文件
             if add_files:
                 for os_type, file_list in list(add_files.items()):
@@ -807,12 +825,12 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                             ) as template_file:
                                 template_file.write("{{file" + str(file_index) + "_content}}")
                                 file_index += 1
-    
+
                     for file_info in file_list:
                         file_path = os.path.join(dest_dir, file_info["file_name"])
                         with open(file_path, "wb+") as fd:
                             fd.write(file_info["file_content"])
-    
+
             # 添加额外目录
             if add_dirs:
                 for os_type, dir_list in list(add_dirs.items()):
@@ -821,7 +839,7 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                             top_dir, OS_TYPE_TO_DIRNAME[os_type], self.plugin.plugin_id, dir_info["dir_name"]
                         )
                         shutil.copytree(dir_info["dir_path"], dest_dir)
-    
+
             # 插入logo.png
             if self.version.info.logo:
                 for dirs in os.listdir(top_dir):
@@ -829,15 +847,15 @@ class PluginManager(six.with_metaclass(abc.ABCMeta, object)):
                     with open(logo_path, "wb") as logo_fd:
                         self.version.info.logo.file.seek(0)
                         logo_fd.write(self.version.info.logo.file.read())
-    
+
             # 设置文件权限
             for root, dirs, files in os.walk(top_dir):
                 if not root.endswith(self.plugin.plugin_id):
                     continue
-    
+
                 for filename in files:
                     os.chmod(os.path.join(root, filename), stat.S_IRWXU)
-    
+
             # 打包插件
             if need_tar:
                 tar_name = self.tar_gz_file(top_dir)
