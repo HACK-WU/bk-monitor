@@ -151,7 +151,7 @@ class SaveMetricResource(Resource):
         config_version = serializers.IntegerField(required=True, label="插件版本")
         info_version = serializers.IntegerField(required=True, label="插件信息版本")
         need_upgrade = serializers.BooleanField(required=False, label="是否升级", default=False)
-        enable_field_blacklist = serializers.BooleanField(label="是否开启黑名单", default=False)
+        enable_field_blacklist = serializers.BooleanField(label="是否开启黑名单", default=True)
 
     def delay(self, request_data=None, **kwargs):
         request_data = request_data or kwargs
@@ -186,6 +186,16 @@ class SaveMetricResource(Resource):
 
         # 获取相应插件类型的插件管理器
         plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=plugin_type)
+
+        if validated_request_data["enable_field_blacklist"]:
+            # 前端没有传入enable_field_blacklist参数
+            if get_request().data.get("enable_field_blacklist", None) is None:
+                current_version = plugin_manager.plugin.get_version(validated_request_data["config_version"],
+                                                                    validated_request_data["info_version"])
+                # 如果metric_json为空 则判断为新建插件
+                if not current_version.info.metric_json and current_version.config_version == 1 and current_version.info_version == 1:
+                    validated_request_data["enable_field_blacklist"] = False
+
         # 更新指标，获取配置版本和信息版本
         config_version, info_version, is_change, need_make = plugin_manager.update_metric(validated_request_data)
 
