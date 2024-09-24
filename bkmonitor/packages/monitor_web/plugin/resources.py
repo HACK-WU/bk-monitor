@@ -30,6 +30,7 @@ from django.db import IntegrityError, transaction
 from django.utils.translation import ugettext as _
 from django.utils.translation import ugettext_lazy as _lazy
 from rest_framework import serializers
+from six.moves import map
 
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.request import get_request
@@ -161,10 +162,13 @@ class SaveMetricResource(Resource):
         token_list = None
         plugin_id = validated_request_data["plugin_id"]
         plugin_type = validated_request_data["plugin_type"]
+
+        # 对SNMP类型插件进行特殊处理，限制分组数量
         if plugin_type == CollectorPluginMeta.PluginType.SNMP:
             if len(validated_request_data["metric_json"]) > SNMP_MAX_METRIC_NUM:
                 raise SNMPMetricNumberError(snmp_max_metric_num=SNMP_MAX_METRIC_NUM)
         else:
+            # 计算非SNMP类型插件的指标数量
             metric_num = len(
                 [
                     field
@@ -173,6 +177,7 @@ class SaveMetricResource(Resource):
                     if field["monitor_type"] == "metric"
                 ]
             )
+            # 限制指标数量,不能超过MAX_METRIC_NUM(2000)
             if metric_num > MAX_METRIC_NUM:
                 # 超限制之后，将配置写入GlobalConfig，提供更改能力
                 config, _ = GlobalConfig.objects.get_or_create(key="MAX_METRIC_NUM", defaults={"value": MAX_METRIC_NUM})
@@ -274,6 +279,8 @@ class PluginRegisterResource(Resource):
 
         self.plugin_manager = PluginManagerFactory.get_manager(plugin=plugin, operator=self.operator)
         self.plugin_manager.version = version
+
+        # 尝试进行打包、上传和注册操作
         try:
             tar_name = self.make_package()
             file_name = self.upload_file(tar_name)
@@ -285,6 +292,7 @@ class PluginRegisterResource(Resource):
             if release_version is None or release_version.config_version != config_version:
                 self.register_template(tar_name)
 
+            # 更新版本信息
             version.stage = "debug"
             version.is_packaged = True
             version.save()
@@ -292,6 +300,7 @@ class PluginRegisterResource(Resource):
             logger.exception(e)
             raise RegisterPackageError({"msg": str(e)})
         finally:
+            # 清理临时文件夹
             if os.path.exists(self.plugin_manager.tmp_path):
                 shutil.rmtree(self.plugin_manager.tmp_path)
 
