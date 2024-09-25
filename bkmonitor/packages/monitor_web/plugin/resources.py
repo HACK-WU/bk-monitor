@@ -30,7 +30,6 @@ from django.db import IntegrityError, transaction
 from django.utils.translation import ugettext as _
 from django.utils.translation import ugettext_lazy as _lazy
 from rest_framework import serializers
-from six.moves import map
 
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.request import get_request
@@ -77,6 +76,7 @@ from monitor_web.plugin.serializers import (
     DataDogSerializer,
     ExporterSerializer,
     JmxSerializer,
+    K8sSerializer,
     LogSerializer,
     PluginRegisterRequestSerializer,
     ProcessSerializer,
@@ -89,8 +89,6 @@ from monitor_web.plugin.signature import Signature
 from utils import count_md5
 
 logger = logging.getLogger(__name__)
-
-from monitor_web.plugin.manager.script import ScriptPluginManager
 
 
 class PluginFileUploadResource(Resource):
@@ -145,8 +143,7 @@ class DataDogPluginUploadResource(Resource):
 
 class SaveMetricResource(Resource):
     class RequestSerializer(MetricJsonBaseSerializer):
-        plugin_id = serializers.RegexField(required=True, regex=r"^[a-zA-Z][a-zA-Z0-9_]*$", max_length=30,
-                                           label="插件ID")
+        plugin_id = serializers.RegexField(required=True, regex=r"^[a-zA-Z][a-zA-Z0-9_]*$", max_length=30, label="插件ID")
         plugin_type = serializers.ChoiceField(
             required=True, choices=[choice[0] for choice in CollectorPluginMeta.PLUGIN_TYPE_CHOICES], label="插件类型"
         )
@@ -160,21 +157,21 @@ class SaveMetricResource(Resource):
         self.validate_request_data(request_data)
         return self.apply_async(request_data)
 
-    def perform_request(self, validated_data):
+    def perform_request(self, validated_request_data):
         token_list = None
-        plugin_id = validated_data["plugin_id"]
-        plugin_type = validated_data["plugin_type"]
+        plugin_id = validated_request_data["plugin_id"]
+        plugin_type = validated_request_data["plugin_type"]
 
         # 对SNMP类型插件进行特殊处理，限制分组数量
         if plugin_type == CollectorPluginMeta.PluginType.SNMP:
-            if len(validated_data["metric_json"]) > SNMP_MAX_METRIC_NUM:
+            if len(validated_request_data["metric_json"]) > SNMP_MAX_METRIC_NUM:
                 raise SNMPMetricNumberError(snmp_max_metric_num=SNMP_MAX_METRIC_NUM)
         else:
             # 计算非SNMP类型插件的指标数量
             metric_num = len(
                 [
                     field
-                    for metric_json in validated_data["metric_json"]
+                    for metric_json in validated_request_data["metric_json"]
                     for field in metric_json["fields"]
                     if field["monitor_type"] == "metric"
                 ]
@@ -185,15 +182,9 @@ class SaveMetricResource(Resource):
                 config, _ = GlobalConfig.objects.get_or_create(key="MAX_METRIC_NUM", defaults={"value": MAX_METRIC_NUM})
                 if metric_num > safe_int(config.value, dft=MAX_METRIC_NUM):
                     raise MetricNumberError(max_metric_num=safe_int(config.value, dft=MAX_METRIC_NUM))
-
-        # 获取相应插件类型的插件管理器
         plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=plugin_type)
-        # 更新指标，获取配置版本和信息版本
-        config_version, info_version, is_change, need_make_package = plugin_manager.update_metric(
-            validated_data)
-
-        # 如果需要生成注册信息，则执行注册请求以获取令牌列表
-        if need_make_package:
+        config_version, info_version, is_change, need_make = plugin_manager.update_metric(validated_request_data)
+        if need_make:
             register_info = {"plugin_id": plugin_id, "config_version": config_version, "info_version": info_version}
             token_list = PluginRegisterResource().request(register_info)["token"]
 
@@ -219,6 +210,7 @@ class CreatePluginResource(Resource):
         CollectorPluginMeta.PluginType.PROCESS: ProcessSerializer,
         CollectorPluginMeta.PluginType.SNMP_TRAP: SNMPTrapSerializer,
         CollectorPluginMeta.PluginType.SNMP: SNMPSerializer,
+        CollectorPluginMeta.PluginType.K8S: K8sSerializer,
     }
 
     def validate_request_data(self, request_data):
@@ -228,40 +220,36 @@ class CreatePluginResource(Resource):
             raise UnsupportedPluginTypeError({"plugin_type", request_data.get("plugin_type")})
         return super(CreatePluginResource, self).validate_request_data(request_data)
 
-    def perform_request(self, validated_request_data):
-        plugin_id = validated_request_data["plugin_id"]
-        plugin_type = validated_request_data["plugin_type"]
-        # 尝试获取插件的metric_json，如果存在则用于新导入的插件
-        import_plugin_metric_json = validated_request_data.get("import_plugin_metric_json")
-
-        # 在数据库事务中执行操作，确保数据的一致性
+    def perform_request(self, params):
+        # 新建插件默认开启自动发现
+        params["enable_field_blacklist"] = True
+        plugin_id = params["plugin_id"]
+        plugin_type = params["plugin_type"]
+        import_plugin_metric_json = params.get("import_plugin_metric_json")
         with transaction.atomic():
-            # 根据插件ID和类型获取插件管理器
             plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=plugin_type)
-            # 验证插件的配置信息
-            plugin_manager.validate_config_info(
-                validated_request_data["collector_json"], validated_request_data["config_json"]
-            )
+            plugin_manager.validate_config_info(params["collector_json"], params["config_json"])
+
             try:
-                # 保存插件元信息(CollectorPluginMeta)
-                self.request_serializer.save()
+                plugin = self.request_serializer.save()
             except IntegrityError:
                 raise PluginIDExist({"msg": plugin_id})
-            # 获取历史版本对象同时保存插件配置信息，包括脚本参数，内容等
-            version_obj, need_debug = plugin_manager.create_version(validated_request_data)
+
+            plugin_manager = PluginManagerFactory.get_manager(plugin=plugin)
+            version, need_debug = plugin_manager.create_version(params)
 
             # 如果是新导入的插件，则需要保存其metric_json
             if import_plugin_metric_json:
-                version_obj.info.metric_json = import_plugin_metric_json
-                version_obj.info.save()
+                version.info.metric_json = import_plugin_metric_json
+                version.info.save()
 
-        validated_request_data["config_version"] = version_obj.config_version
-        validated_request_data["info_version"] = version_obj.info_version
-        validated_request_data["os_type_list"] = version_obj.os_type_list
-        validated_request_data["need_debug"] = check_skip_debug(need_debug)
-        validated_request_data["signature"] = Signature(
-            version_obj.signature).dumps2yaml() if version_obj.signature else ""
-        return validated_request_data
+        params["config_version"] = version.config_version
+        params["info_version"] = version.info_version
+        params["os_type_list"] = version.os_type_list
+        params["need_debug"] = check_skip_debug(need_debug)
+        params["signature"] = Signature(version.signature).dumps2yaml() if version.signature else ""
+        params["enable_field_blacklist"] = True
+        return params
 
 
 class PluginRegisterResource(Resource):
@@ -271,10 +259,10 @@ class PluginRegisterResource(Resource):
         self.RequestSerializer = PluginRegisterRequestSerializer
         self.plugin_id = None
         self.operator = ""
-        try:
-            self.operator = get_request().user.username
-        except Exception:
-            pass
+
+        request = get_request(peaceful=True)
+        if request:
+            self.operator = request.user.username
 
     def delay(self, request_data=None, **kwargs):
         request_data = request_data or kwargs
@@ -294,9 +282,7 @@ class PluginRegisterResource(Resource):
         self.plugin_id = validated_request_data["plugin_id"]
         plugin = CollectorPluginMeta.objects.filter(plugin_id=self.plugin_id).first()
         if plugin is None:
-            raise PluginIDNotExist  # 如果插件不存在，则抛出异常
-
-        # 从请求数据中提取版本信息
+            raise PluginIDNotExist
         config_version = validated_request_data["config_version"]
         info_version = validated_request_data["info_version"]
         # 尝试获取特定插件ID和版本信息的插件版本
@@ -304,19 +290,16 @@ class PluginRegisterResource(Resource):
             plugin_id=self.plugin_id, config_version=config_version, info_version=info_version
         ).first()
         if version is None:
-            raise PluginVersionNotExist  # 如果版本不存在，则抛出异常
+            raise PluginVersionNotExist
 
-        # 初始化插件管理器，并设置版本信息
         self.plugin_manager = PluginManagerFactory.get_manager(plugin=plugin, operator=self.operator)
         self.plugin_manager.version = version
 
         # 尝试进行打包、上传和注册操作
         try:
-            tar_name = self.mack_package()  # 打包插件
-            file_name = self.upload_file(tar_name)  # 上传打包文件
-            self.register_package(file_name)  # 注册插件包
-
-            # 获取插件信息并处理token列表
+            tar_name = self.make_package()
+            file_name = self.upload_file(tar_name)
+            self.register_package(file_name)
             plugin_info = api.node_man.plugin_info(name=self.plugin_id, version=version.version)
             token_list = [i["md5"] for i in plugin_info]
             token_list.sort()
@@ -326,12 +309,10 @@ class PluginRegisterResource(Resource):
             if release_version is None or release_version.config_version != config_version:
                 self.register_template(tar_name)
 
-            # 更新版本信息
             version.stage = "debug"
             version.is_packaged = True
             version.save()
         except Exception as e:
-            # 异常处理：记录日志并抛出自定义异常
             logger.exception(e)
             raise RegisterPackageError({"msg": str(e)})
         finally:
@@ -339,12 +320,10 @@ class PluginRegisterResource(Resource):
             if os.path.exists(self.plugin_manager.tmp_path):
                 shutil.rmtree(self.plugin_manager.tmp_path)
 
-        # 返回token列表
         return {"token": token_list}
 
-
     @step(state="MAKE_PACKAGE", message=_lazy("文件正在打包中..."))
-    def mack_package(self):
+    def make_package(self):
         return self.plugin_manager.make_package()
 
     def get_file_md5(self, file_name):
@@ -364,8 +343,8 @@ class PluginRegisterResource(Resource):
         with open(tar_name, "rb") as tf:
             md5 = self.get_file_md5(tar_name)
             if (
-                    settings.USE_CEPH
-                    and os.getenv("UPLOAD_PLUGIN_VIA_COS", os.getenv("BKAPP_UPLOAD_PLUGIN_VIA_COS", "")) == "true"
+                settings.USE_CEPH
+                and os.getenv("UPLOAD_PLUGIN_VIA_COS", os.getenv("BKAPP_UPLOAD_PLUGIN_VIA_COS", "")) == "true"
             ):
                 default_storage.save(tar_name, tf)
                 result = api.node_man.upload_cos(
@@ -474,10 +453,10 @@ class PluginImportResource(Resource):
         for filename in self.filename_list:
             path = filename.split("/")
             if (
-                    len(path) >= 4
-                    and path[-1] == "meta.yaml"
-                    and path[-2] == "info"
-                    and path[-4] in list(OS_TYPE_TO_DIRNAME.values())
+                len(path) >= 4
+                and path[-1] == "meta.yaml"
+                and path[-2] == "info"
+                and path[-4] in list(OS_TYPE_TO_DIRNAME.values())
             ):
                 self.plugin_id = path[-3]
                 meta_yaml_path = os.path.join(self.tmp_path, filename)
@@ -505,8 +484,7 @@ class PluginImportResource(Resource):
     def check_conflict_mes(self):
         self.create_params["conflict_ids"] = []
         if not self.current_version:
-            self.create_params["conflict_detail"] = """已经存在重名的插件, 上传的插件版本为: {}""".format(
-                self.tmp_version.version)
+            self.create_params["conflict_detail"] = """已经存在重名的插件, 上传的插件版本为: {}""".format(self.tmp_version.version)
             return
         if self.current_version.is_official:
             if self.tmp_version.is_official:
@@ -518,15 +496,13 @@ class PluginImportResource(Resource):
                     self.create_params["conflict_detail"] = ""
                     self.create_params["duplicate_type"] = None
             else:
-                self.create_params[
-                    "conflict_detail"] = """导入插件包为非官方插件, 版本为: {}；当前插件为官方插件，版本为：{}""".format(
+                self.create_params["conflict_detail"] = """导入插件包为非官方插件, 版本为: {}；当前插件为官方插件，版本为：{}""".format(
                     self.tmp_version.version, self.current_version.version
                 )
                 self.check_conflict_title()
         else:
             if self.tmp_version.is_official:
-                self.create_params[
-                    "conflict_detail"] = """导入插件包为官方插件，版本为：{}；当前插件为非官方插件，版本为：{}""".format(
+                self.create_params["conflict_detail"] = """导入插件包为官方插件，版本为：{}；当前插件为非官方插件，版本为：{}""".format(
                     self.tmp_version.version, self.current_version.version
                 )
             else:
@@ -556,14 +532,14 @@ class PluginImportResource(Resource):
                 conflict_ids.append(ConflictMap.VersionBelow.id)
         else:
             if (
-                    self.current_version.plugin.plugin_type != self.tmp_version.plugin.plugin_type
-                    and self.current_version.is_release
+                self.current_version.plugin.plugin_type != self.tmp_version.plugin.plugin_type
+                and self.current_version.is_release
             ):
                 conflict_list.append(_(ConflictMap.PluginType.info))
                 conflict_ids.append(ConflictMap.PluginType.id)
             if (
-                    self.current_version.config.is_support_remote != self.tmp_version.config.is_support_remote
-                    and self.current_version.is_release
+                self.current_version.config.is_support_remote != self.tmp_version.config.is_support_remote
+                and self.current_version.is_release
             ):
                 conflict_list.append(_(ConflictMap.RemoteCollectorConfig.info))
                 conflict_ids.append(ConflictMap.RemoteCollectorConfig.id)
@@ -585,9 +561,9 @@ class PluginImportResource(Resource):
             map(count_md5, [old_config_data, tmp_config_data, old_info_data, tmp_info_data])
         )
         if (
-                old_config_md5 == new_config_md5
-                and old_info_md5 == new_info_md5
-                and (self.tmp_version.plugin.tag == self.current_version.plugin.tag)
+            old_config_md5 == new_config_md5
+            and old_info_md5 == new_info_md5
+            and (self.tmp_version.plugin.tag == self.current_version.plugin.tag)
         ):
             conflict_list.append(_(ConflictMap.DuplicatedPlugin.info))
             conflict_ids.append(ConflictMap.DuplicatedPlugin.id)
@@ -829,8 +805,8 @@ def update_collect_plugin_version(release_version):
     )
     for config in config_list:
         if (
-                config.deployment_config.plugin_version.config_version == release_version.config_version
-                and config.deployment_config.plugin_version.info_version < release_version.info_version
+            config.deployment_config.plugin_version.config_version == release_version.config_version
+            and config.deployment_config.plugin_version.info_version < release_version.info_version
         ):
             config.deployment_config.plugin_version = release_version
             config.deployment_config.save()
@@ -888,8 +864,7 @@ class PluginImportWithoutFrontendResource(PluginImportResource):
 
         # 1.首次导入
         # 2.数据库不存在，节点管理存在时
-        if not self.create_params["duplicate_type"] or "已经存在重名的插件, 上传的插件版本为" in self.create_params[
-            "conflict_detail"]:
+        if not self.create_params["duplicate_type"] or "已经存在重名的插件, 上传的插件版本为" in self.create_params["conflict_detail"]:
             return save_resource.request(self.create_params)
         else:
             # 导入与原有插件完全一致
@@ -897,8 +872,8 @@ class PluginImportWithoutFrontendResource(PluginImportResource):
                 return True
             # 只有数据库不存在，节点管理存在时conflict_title才会提示不同类型冲突，需要额外判断上传的包里插件类型与数据库中类型是否一致
             if (
-                    str(ConflictMap.DuplicatedPlugin.info) in self.create_params["conflict_title"]
-                    or self.current_version.plugin.plugin_type != self.plugin_type
+                str(ConflictMap.DuplicatedPlugin.info) in self.create_params["conflict_title"]
+                or self.current_version.plugin.plugin_type != self.plugin_type
             ):
                 raise ExportImportError({"msg": "导入插件类型冲突"})
             if str(ConflictMap.RemoteCollectorConfig.info) in self.create_params["conflict_title"]:

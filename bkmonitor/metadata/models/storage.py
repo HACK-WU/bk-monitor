@@ -34,6 +34,7 @@ from django.db.transaction import atomic
 from django.utils.functional import cached_property
 from django.utils.translation import ugettext as _
 from pytz import timezone
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 from bkmonitor.dataflow import auth
 from bkmonitor.dataflow.task.cmdblevel import CMDBPrepareAggregateTask
@@ -103,6 +104,7 @@ class ClusterInfo(models.Model):
     # 默认注册系统名
     DEFAULT_REGISTERED_SYSTEM = "_default"
     LOG_PLATFORM_REGISTERED_SYSTEM = "log-search-4"
+    BKDATA_REGISTERED_SYSTEM = "bkdata"
 
     cluster_id = models.AutoField("集群ID", primary_key=True)
     # 集群中文名，便于管理员维护
@@ -124,7 +126,7 @@ class ClusterInfo(models.Model):
     custom_option = models.TextField("自定义标签", default="")
     # 供部分http协议连接方案的存储使用，配置可以为http或者https等
     schema = models.CharField("访问协议", max_length=32, default=None, null=True)
-    # ssl/tls 校验参数相关
+    # ssl/tls 校验参数相关，Kafka场景下，使用了schema和ssl_verification_mode两个字段
     is_ssl_verify = models.BooleanField("SSL验证是否强验证", default=False)
     ssl_verification_mode = models.CharField("CA 校验模式", max_length=16, null=True, default="none")
     ssl_certificate_authorities = models.TextField("CA 内容", null=True, default="")
@@ -2193,6 +2195,7 @@ class ESStorage(models.Model, StorageResultTable):
         """
         return self._get_index_infos(ESNamespacedClientType.INDICES.value)
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def current_index_info(self):
         """
         返回当前使用的最新index相关的信息
@@ -2282,6 +2285,7 @@ class ESStorage(models.Model, StorageResultTable):
             return f"v2_{self.index_name}_{datetime_object.strftime(self.date_format)}_{index}"
         return f"{self.index_name}_{datetime_object.strftime(self.date_format)}_{index}"
 
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     def get_client(self):
         """获取该结果表的客户端句柄"""
         return es_tools.get_client(self.storage_cluster_id)
@@ -2428,8 +2432,8 @@ class ESStorage(models.Model, StorageResultTable):
 
                 # 创建索引需要增加一个请求超时的防御
                 logger.info("index->[{}] trying to create, index_body->[{}]".format(index_name, self.index_body))
-                es_client.indices.create(index=current_index, body=self.index_body, params={"request_timeout": 30})
-                logger.info("index->[{}] now is created.".format(current_index))
+                response = self._create_index_with_retry(es_client, current_index)
+                logger.info("index->[{}] now is created, response->[{}]".format(index_name, response))
 
                 # 需要将对应的别名指向这个新建的index
                 # 新旧类型的alias都会创建，防止transfer未更新导致异常
@@ -2483,6 +2487,18 @@ class ESStorage(models.Model, StorageResultTable):
             try:
                 round_alias_name = f"write_{round_time_str}_{index_name}"
                 round_read_alias_name = f"{index_name}_{round_time_str}_read"
+
+                # 检查即将指向的索引是否存在
+                try:
+                    es_client.indices.get(index=last_index_name)
+                except (elasticsearch5.NotFoundError, elasticsearch.NotFoundError, elasticsearch6.NotFoundError):
+                    logger.warning(
+                        "table_id->[%s] index->[%s] does not exist, will skip alias creation.",
+                        self.table_id,
+                        last_index_name,
+                    )
+                    now_gap += self.slice_gap
+                    continue
 
                 # 3.1 判断这个别名是否有指向旧的index，如果存在则需要解除
                 try:
@@ -2565,8 +2581,10 @@ class ESStorage(models.Model, StorageResultTable):
         es_client = self.get_client()
         new_index_name = self.make_index_name(now_datetime_object, 0, "v2")
         # 创建index
-        es_client.indices.create(index=new_index_name, body=self.index_body, params={"request_timeout": 30})
-        logger.info("table_id->[%s] has created new index->[%s]", self.table_id, new_index_name)
+        response = self._create_index_with_retry(es_client, new_index_name)
+        logger.info(
+            "table_id->[%s] has created new index->[%s],response->[%s]", self.table_id, new_index_name, response
+        )
         return True
 
     def update_index_v2(self):
@@ -2685,10 +2703,23 @@ class ESStorage(models.Model, StorageResultTable):
         new_index_name = self.make_index_name(now_datetime_object, new_index, "v2")
         logger.info("table_id->[%s] will create new index->[%s]", self.table_id, new_index_name)
 
-        # 2.1 创建新的index
-        response = es_client.indices.create(index=new_index_name, body=self.index_body, params={"request_timeout": 30})
+        # 2.1 创建新的index,添加重试机制
+        response = self._create_index_with_retry(es_client, new_index_name)
         logger.info("table_id->[%s] create new index_name->[%s] response [%s]", self.table_id, new_index_name, response)
         return True
+
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    def _create_index_with_retry(self, es_client, new_index_name):
+        logger.info("Attempting to create index: %s", new_index_name)
+        try:
+            response = es_client.indices.create(
+                index=new_index_name, body=self.index_body, params={"request_timeout": 30}
+            )
+            logger.info("Successfully created index: %s with response: %s", new_index_name, response)
+            return response
+        except Exception as e:
+            logger.error("Failed to create index: %s with error: %s", new_index_name, str(e))
+            raise
 
     def clean_index(self):
         """
@@ -3479,6 +3510,15 @@ class BkDataStorage(models.Model, StorageResultTable):
         """
         return {}
 
+    @property
+    def data_source(self):
+        """
+        对应的监控平台数据源ID
+        """
+        from metadata.models import DataSourceResultTable
+
+        return DataSourceResultTable.objects.filter(table_id=self.table_id).first().bk_data_id
+
     @classmethod
     def create_table(cls, table_id, is_sync_db=False, is_access_now=False, **kwargs):
         try:
@@ -3739,12 +3779,17 @@ class BkDataStorage(models.Model, StorageResultTable):
 
     def generate_bk_data_etl_config(self):
         from metadata.models.result_table import ResultTableField
+        from metadata.models.vm.constants import TimestampLen
+        from metadata.models.vm.utils import get_timestamp_len
 
         qs = ResultTableField.objects.filter(table_id=self.table_id)
         etl_dimension_assign = []
         etl_metric_assign = []
         etl_time_assign = []
         time_field_name = "time"
+
+        timestamp_len = get_timestamp_len(self.data_source)
+        time_format = TimestampLen.get_choice_value(timestamp_len)
 
         fields = []
         i = 1
@@ -3849,7 +3894,7 @@ class BkDataStorage(models.Model, StorageResultTable):
                 "conf": {
                     "timezone": 8,
                     "output_field_name": "timestamp",
-                    "time_format": "Unix Time Stamp(seconds)",
+                    "time_format": time_format,
                     "time_field_name": time_field_name,
                     "timestamp_len": 10,
                     "encoding": "UTF-8",

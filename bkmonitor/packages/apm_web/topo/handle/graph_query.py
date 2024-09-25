@@ -25,6 +25,7 @@ from apm_web.topo.handle import NodeDisplayType as Display
 from apm_web.topo.handle.graph_plugin import PluginProvider, ViewConverter
 from apm_web.utils import merge_dicts
 from bkmonitor.utils.thread_backend import ThreadPool
+from bkmonitor.utils.time_tools import get_datetime_range
 
 logger = logging.getLogger("apm")
 
@@ -280,23 +281,37 @@ class Graph:
         other_node_mapping = {k: v for k, v in other.nodes}
         other_edge_mapping = {(f, t): a for f, t, a in other.edges}
 
+        # [!] 不能直接对 graph 进行更新 因为会有残留数据
+        remove_nodes = []
+        update_nodes = {}
         for base_node, attrs in self.nodes:
             if base_node in other_node_mapping:
-                self._graph.add_node(base_node, **other_node_mapping[base_node])
+                update_nodes[base_node] = other_node_mapping[base_node]
             else:
-                self._graph.add_node(base_node, **{"data": attrs["data"]})
+                # 如果 node 不在 other_node 说明在 other_graph 中此 node 已经无数据
+                remove_nodes.append(base_node)
+        for k, v in update_nodes.items():
+            self._graph.remove_node(k)
+            self._graph.add_node(k, **v)
+        for i in remove_nodes:
+            self._graph.remove_node(i)
+            self._graph.add_node(i, **{"data": {}})
 
         remove_edges = []
-
+        update_edges = {}
         for from_node, to_node, attrs in self.edges:
             key = (from_node, to_node)
             if key in other_edge_mapping:
-                self._graph.add_edge(*key, **other_edge_mapping[key])
+                update_edges[key] = other_edge_mapping[key]
             else:
+                # 如果 edge 不在 other_edge 说明在 other_graph 中此 edge 已经无数据
                 remove_edges.append(key)
-
-        for key in remove_edges:
-            self._graph.remove_edge(*key)
+        for k, v in update_edges.items():
+            self._graph.remove_edge(*k)
+            self._graph.add_edge(*k, **v)
+        for i in remove_edges:
+            self._graph.remove_edge(*i)
+            self._graph.add_edge(*i)
 
         return self
 
@@ -331,11 +346,14 @@ class GraphQuery(BaseQuery):
         )
 
     def execute(self, edge_data_type, converter):
+        converter_plugin_runtime = self.common_params()
+        if converter.filter_params:
+            converter_plugin_runtime.update(converter.filter_params)
         return self.create_graph(
             with_data_type_plugin=True,
             edge_data_type=edge_data_type,
-            extra_plugins=converter.extra_pre_plugins(self.common_params()),
-            extra_converter_plugins=converter.extra_pre_convert_plugins(self.common_params()),
+            extra_plugins=converter.extra_pre_plugins(converter_plugin_runtime),
+            extra_converter_plugins=converter.extra_pre_convert_plugins(converter_plugin_runtime),
         )
 
     def create_graph(
@@ -349,7 +367,7 @@ class GraphQuery(BaseQuery):
         flow_nodes, flow_edges = self._list_nodes_and_edges_from_flow()
 
         plugins = PluginProvider.Container()
-        if with_data_type_plugin:
+        if with_data_type_plugin and self.data_type:
             plugins += PluginProvider.node_plugins(self.data_type, self.common_params())
         if edge_data_type:
             plugins += PluginProvider.edge_plugins(edge_data_type, self.common_params())
@@ -410,10 +428,20 @@ class GraphQuery(BaseQuery):
         return nodes
 
     def _list_nodes_and_edges_from_flow(self) -> [NodeContainer, EdgeContainer]:
+        """
+        从 flow 指标中获取节点和边
+        数据需要为完整数据 查询周期为应用存储周期
+        """
+        retention = self.application.es_retention
+        start_time, end_time = get_datetime_range(period="day", distance=retention, rounding=False)
         nodes = NodeContainer()
         edges = EdgeContainer()
         dimension_mapping = self.get_metric(
             ServiceFlowCount,
+            params=self.common_params(
+                start_time=int(start_time.timestamp()),
+                end_time=int(end_time.timestamp()),
+            ),
             group_by=[
                 "from_apm_service_name",
                 "from_apm_service_category",

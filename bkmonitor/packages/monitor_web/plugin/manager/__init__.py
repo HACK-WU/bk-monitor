@@ -13,6 +13,7 @@ specific language governing permissions and limitations under the License.
 插件管理
 """
 
+
 import os
 from typing import Union
 
@@ -21,16 +22,24 @@ from django.utils.translation import ugettext as _
 from bkmonitor.utils.user import get_global_user
 from monitor_web.commons.file_manager import PluginFileManager
 from monitor_web.models.plugin import CollectorPluginMeta
+from monitor_web.plugin.manager.base import PluginManager
 from monitor_web.plugin.manager.built_in import BuiltInPluginManager
-from monitor_web.plugin.manager.datadog import DataDogPluginFileManager, DataDogPluginManager
-from monitor_web.plugin.manager.exporter import ExporterPluginFileManager, ExporterPluginManager
+from monitor_web.plugin.manager.datadog import (
+    DataDogPluginFileManager,
+    DataDogPluginManager,
+)
+from monitor_web.plugin.manager.exporter import (
+    ExporterPluginFileManager,
+    ExporterPluginManager,
+)
 from monitor_web.plugin.manager.jmx import JMXPluginManager
+from monitor_web.plugin.manager.k8s import K8sPluginManager
 from monitor_web.plugin.manager.log import LogPluginManager
-from monitor_web.plugin.manager.snmp_trap import SNMPTrapPluginManager
-from monitor_web.plugin.manager.snmp import SNMPPluginManager
 from monitor_web.plugin.manager.process import ProcessPluginManager
 from monitor_web.plugin.manager.pushgateway import PushgatewayPluginManager
-from monitor_web.plugin.manager.script import ScriptPluginManager, PluginManager
+from monitor_web.plugin.manager.script import ScriptPluginManager
+from monitor_web.plugin.manager.snmp import SNMPPluginManager
+from monitor_web.plugin.manager.snmp_trap import SNMPTrapPluginManager
 
 # 当前支持的插件类型
 SUPPORTED_PLUGINS = {
@@ -44,6 +53,7 @@ SUPPORTED_PLUGINS = {
     CollectorPluginMeta.PluginType.SNMP_TRAP: SNMPTrapPluginManager,
     CollectorPluginMeta.PluginType.PROCESS: ProcessPluginManager,
     CollectorPluginMeta.PluginType.SNMP: SNMPPluginManager,
+    CollectorPluginMeta.PluginType.K8S: K8sPluginManager,
 }
 
 FILE_PLUGINS_FACTORY = {

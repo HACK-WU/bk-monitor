@@ -54,9 +54,10 @@ class CollectorPluginMeta(OperateRecordModelBase):
         (PluginType.PROCESS, "Process"),
         (PluginType.SNMP_TRAP, PluginType.SNMP_TRAP),
         (PluginType.SNMP, PluginType.SNMP),
+        (PluginType.K8S, PluginType.K8S),
     )
 
-    VIRTUAL_PLUGIN_TYPE = [PluginType.LOG, PluginType.PROCESS, PluginType.SNMP_TRAP]
+    VIRTUAL_PLUGIN_TYPE = [PluginType.LOG, PluginType.PROCESS, PluginType.SNMP_TRAP, PluginType.K8S]
 
     plugin_id = models.CharField("插件ID", max_length=64, primary_key=True)
     bk_biz_id = models.IntegerField("业务ID", default=0, blank=True, db_index=True)
@@ -93,7 +94,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
         return True
 
     @cached_property
-    def release_version(self):
+    def release_version(self) -> Optional["PluginVersionHistory"]:
         """
         最新的发布版本
         """
@@ -139,7 +140,6 @@ class CollectorPluginMeta(OperateRecordModelBase):
         version_infos: List[Dict[str, Union[int, str]]] = PluginVersionHistory.objects.filter(plugin_id__in=ids).values(
             "plugin_id", "id", "stage"
         )
-
         # 排序规则：Release > DEBUG/UNREGISTER
 
         def _version_comparator(_left: Dict[str, Union[int, str]], _right: Dict[str, Union[int, str]]) -> int:
@@ -196,35 +196,22 @@ class CollectorPluginMeta(OperateRecordModelBase):
             ).last()
         return version
 
-    def generate_version(self, config_version, info_version=None,
-                         config: "CollectorPluginConfig" = None,
-                         info: "CollectorPluginInfo" = None) -> "PluginVersionHistory":
+    def generate_version(self, config_version, info_version, config=None, info=None):
         """
         生成特定版本
-
-        该方法旨在为插件生成并返回一个特定版本的记录。它可以通过提供配置和信息版本号，
-        并选择性地提供配置和信息的详细内容来创建或更新版本记录。
         """
         try:
-            # 尝试获取已存在的版本记录
             version = self.get_version(config_version, info_version)
-            # 如果提供了配置对象，则更新版本记录的配置信息
             if config:
                 version.config = config
-            # 如果提供了信息对象，则更新版本记录的信息内容
             if info:
                 version.info = info
-            # 保存更新后的版本记录
             version.save()
         except PluginVersionHistory.DoesNotExist:
-            # 如果版本记录不存在，则根据提供的版本号和配置、信息对象创建新的版本记录
             if config is None:
-                # 如果没有提供配置对象，则创建新的配置对象
                 config = CollectorPluginConfig.objects.create()
             if info is None:
-                # 如果没有提供信息对象，则创建新的信息对象
-                info = CollectorPluginInfo.objects.create()
-            # 创建新的版本记录
+                info: CollectorPluginInfo = CollectorPluginInfo.objects.create()
             version = self.versions.create(
                 config_version=config_version,
                 info_version=info_version,
@@ -232,7 +219,6 @@ class CollectorPluginMeta(OperateRecordModelBase):
                 info=info,
             )
         return version
-
 
     def get_plugin_detail(self):
         current_version = self.current_version

@@ -24,7 +24,7 @@
  * IN THE SOFTWARE.
  */
 
-import { Component, Prop, ProvideReactive, Watch } from 'vue-property-decorator';
+import { Component, InjectReactive, Prop, ProvideReactive, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
 import { topoLink } from 'monitor-api/modules/apm_topo';
@@ -41,6 +41,8 @@ import { alarmBarChartDataTransform, EDataType } from './utils';
 import type { TimeRangeType } from 'monitor-pc/components/time-range/time-range';
 
 import './service-overview.scss';
+
+const customMenuList = ['more', 'fullscreen', 'explore', 'set', 'area', 'drill-down', 'relate-alert', 'strategy'];
 
 type TNodeTipsMap = Map<
   string,
@@ -61,6 +63,7 @@ type ServiceOverviewProps = {
   detailIcon?: string;
   nodeTipsMap?: TNodeTipsMap;
   sliceTimeRange?: number[];
+  dashboardId?: string;
   onSliceTimeRangeChange?: (timeRange: [number, number]) => void;
 };
 
@@ -82,6 +85,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
   @Prop({ type: String, default: '' }) detailIcon: string;
   @Prop({ type: Map, default: () => new Map() }) nodeTipsMap: TNodeTipsMap;
   @Prop({ type: Array, default: () => [] }) sliceTimeRange: number[];
+  @Prop({ type: String, default: random(8) }) dashboardId: string;
 
   tabActive = 'service';
   panels = {};
@@ -101,7 +105,6 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
   serviceTabData = {
     getApdexData: null,
     panels: [],
-    dashboardId: random(8),
   };
   /* 日志tab栏数据 */
   logTabData = {
@@ -118,6 +121,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
     service_name: '',
     endpoint_name: '',
   };
+  @InjectReactive('refleshImmediate') readonly refleshImmediate: string;
 
   get tabs() {
     if (this.curType === 'endpoint') {
@@ -155,12 +159,19 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
       this.curType = this.endpoint ? 'endpoint' : 'service';
       this.initPanel();
     } else {
-      echartsDisconnect(this.serviceTabData.dashboardId);
+      echartsDisconnect(this.dashboardId);
       this.moreLink = '';
     }
   }
+  @Watch('refleshImmediate')
+  // 立刻刷新
+  handleRefleshImmediateChange(v: string) {
+    if (v && this.serviceName && this.appName) this.initPanel();
+  }
+
   @Debounce(200)
   initPanel() {
+    if (!this.serviceName || !this.appName) return;
     if (this.curType === 'endpoint') {
       this.tabActive = 'service';
     }
@@ -184,11 +195,14 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
       this.detailLoading = true;
       const typeKey = this.curType === 'endpoint' ? 'endpoint_detail' : 'service_detail';
       const apiItem = apiFn(this.data[typeKey].targets[0].api);
+      const [startTime, endTime] = handleTransformToTimestamp(this.timeRange);
       const result = await (this as any).$api[apiItem.apiModule]
         [apiItem.apiFunc]({
           app_name: this.appName,
           service_name: this.serviceName,
           endpoint_name: this.curType === 'endpoint' ? this.endpoint : undefined,
+          start_time: startTime,
+          end_time: endTime,
         })
         .catch(() => []);
       this.overviewDetail.others = result;
@@ -230,7 +244,6 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
    */
   async getServiceTabData() {
     try {
-      this.serviceTabData.dashboardId = random(8);
       const typeKey = this.curType === 'endpoint' ? 'endpoint_tabs_service' : 'service_tabs_service';
       const apdexPanel = this.data[typeKey].panels.find(item => item.type === 'apdex-chart');
       if (apdexPanel) {
@@ -267,10 +280,9 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
                   ...(panel?.options?.apm_time_series || {}),
                   xAxisSplitNumber: 3,
                   disableZoom: true,
-                  sceneType: 'overview',
                 },
               },
-              dashboardId: this.serviceTabData.dashboardId,
+              dashboardId: this.dashboardId,
               type: 'apm-timeseries-chart',
               targets: panel.targets.map(t => {
                 const queryConfigs = t?.data?.unify_query_param?.query_configs;
@@ -287,7 +299,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
               }),
             })
         );
-      echartsConnect(this.serviceTabData.dashboardId);
+      echartsConnect(this.dashboardId);
     } catch (e) {
       console.error(e);
     }
@@ -303,6 +315,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
           panel =>
             new PanelModel({
               ...panel,
+              dashboardId: this.dashboardId,
               options: {
                 ...(panel?.options || {}),
                 related_log_chart: {
@@ -354,8 +367,11 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
   }
 
   handleServiceConfig() {
-    const url = `/service-config?app_name=${this.appName}&service_name=${this.serviceName}`;
-    window.open(`${location.origin}${location.pathname}${location.search}#/apm${url}`);
+    const url = `service-config?app_name=${this.appName}&service_name=${this.serviceName}`;
+    window.open(
+      `${location.origin}${location.pathname}${location.search}#/${window.__POWERED_BY_BK_WEWEB__ ? 'apm/' : ''}${url}`,
+      '_blank'
+    );
   }
 
   handleMoreLinkClick() {
@@ -390,6 +406,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
             activeItemHeight={32}
             dataType={EDataType.Apdex}
             getData={this.serviceTabData.getApdexData}
+            groupId={this.dashboardId}
             isAdaption={true}
             itemHeight={24}
             showHeader={true}
@@ -422,7 +439,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
                 class={['chart-item', `${this.tabActive}-type`]}
               >
                 <ChartWrapper
-                  customMenuList={['more', 'fullscreen', 'explore', 'set', 'area', 'drill-down', 'relate-alert']}
+                  customMenuList={customMenuList}
                   panel={panel}
                   onChartCheck={v => this.handleChartCheck(v, panel)}
                   onCollectChart={() => this.handleCollectChart(panel)}
@@ -455,7 +472,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
               class={['chart-item', `${this.tabActive}-type`]}
             >
               <ChartWrapper
-                customMenuList={['more', 'fullscreen', 'explore', 'set', 'area', 'drill-down', 'relate-alert']}
+                customMenuList={customMenuList}
                 panel={panel}
                 onChartCheck={v => this.handleChartCheck(v, panel)}
                 onCollectChart={() => this.handleCollectChart(panel)}
@@ -522,6 +539,7 @@ export default class ServiceOverview extends tsc<ServiceOverviewProps> {
             dataType={EDataType.Alert}
             enableSelect={true}
             getData={this.serviceAlert.getData}
+            groupId={this.dashboardId}
             isAdaption={true}
             itemHeight={24}
             showHeader={true}

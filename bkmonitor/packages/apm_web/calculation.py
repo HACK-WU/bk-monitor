@@ -96,7 +96,9 @@ class ApdexCalculation(Calculation):
                 datapoint_map[point[1]][apdex_type] += point[0]
 
         res = []
-        for timestamp, info in datapoint_map.items():
+        for timestamp in sorted(datapoint_map.keys()):
+            info = datapoint_map[timestamp]
+
             satisfied_count = info["satisfied"]
             tolerating_count = info["tolerating"]
             frustrated_count = info["frustrated"]
@@ -138,6 +140,8 @@ class ApdexCalculation(Calculation):
     @classmethod
     def calculate(cls, *data):
         satisfied_count, tolerating_count, frustrated_count, error_count, total_count = data
+        if not total_count:
+            return None
 
         apdex_rate = (satisfied_count * 1 + tolerating_count * 0.5 + (tolerating_count + error_count) * 0) / total_count
         if apdex_rate > cls.SATISFIED_RATE:
@@ -164,7 +168,7 @@ class FlowMetricErrorRateCalculation(Calculation):
         此方法会忽略掉除 from_span_error / to_span_error 以外的维度
         所以如果查询中有其他维度不要使用此 Calculation
         """
-        normal_ts = defaultdict(int)
+        total_ts = defaultdict(int)
         error_ts = defaultdict(int)
 
         series = metric_result.get("series", [])
@@ -184,14 +188,12 @@ class FlowMetricErrorRateCalculation(Calculation):
             from_span_error, to_span_error = self.str_to_bool(dimensions["from_span_error"]), self.str_to_bool(
                 dimensions["to_span_error"]
             )
-            is_normal = not from_span_error and not to_span_error
 
             for value, timestamp in item["datapoints"]:
                 if not value:
                     continue
 
-                if is_normal:
-                    normal_ts[timestamp] = value
+                total_ts[timestamp] += value
 
                 if (
                     (self.calculate_type == "callee" and to_span_error)
@@ -205,11 +207,9 @@ class FlowMetricErrorRateCalculation(Calculation):
             "series": [
                 {
                     "datapoints": [
-                        (round(error_ts.get(t, 0) / (normal_ts.get(t, 0) + error_ts.get(t, 0)), 2), t)
-                        for t in all_ts
-                        if (normal_ts.get(t, 0) + error_ts.get(t, 0))
+                        (round(error_ts.get(t, 0) / total_ts.get(t), 6), t) for t in all_ts if total_ts.get(t)
                     ]
-                    if normal_ts or error_ts
+                    if total_ts
                     else [],
                     "dimensions": {},
                     "target": "flow",
