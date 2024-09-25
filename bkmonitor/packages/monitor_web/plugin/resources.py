@@ -158,6 +158,12 @@ class SaveMetricResource(Resource):
         return self.apply_async(request_data)
 
     def perform_request(self, validated_request_data):
+        """
+        1、限制SNMP类型插件中分组(table)数量，不能超过SNMP_MAX_METRIC_NUM
+        2、限制非SNMP类型插件指标(metric)数量，不能超过MAX_METRIC_NUM
+        3、更新指标维度信息(metric_json)
+        4、接入数据链路
+        """
         token_list = None
         plugin_id = validated_request_data["plugin_id"]
         plugin_type = validated_request_data["plugin_type"]

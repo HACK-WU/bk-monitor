@@ -213,53 +213,87 @@ class BasePluginManager:
     def update_metric(self, data: Dict[str, Any]) -> Tuple[int, int, bool, bool]:
         """
         更新插件指标维度信息
+
+        本函数通过比较传入的指标信息与当前插件配置的指标信息的哈希值，
+        判断是否需要更新插件的配置或信息，并根据需要生成新的配置或信息版本。
+        同时，它还处理插件黑白名单模式的切换，确保插件的配置准确反映传入的指标信息。
+
+        参数:
+        - data: 字典类型，包含待更新的指标信息、配置版本、信息版本和启用的字段黑名单状态。
+
+        返回值:
+        - Tuple[int, int, bool, bool]: 包含当前配置版本、信息版本、指标信息是否变更和是否需要重新打包的元组。
         """
+        # 获取当前插件版本
         current_version = self.plugin.get_version(data["config_version"], data["info_version"])
+        # 从传入数据中提取指标信息JSON
         metric_json = data["metric_json"]
-        info_obj = current_version.info
-        now_info_data = info_obj.info2dict()
+        # 获取当前版本的信息对象
+        current_info_obj = current_version.info
+        # 将当前版本的信息对象转换为字典
+        current_info_data = current_info_obj.info2dict()
+        # 提取当前版本的配置版本号和信息版本号
         current_config_version = current_version.config_version
         current_info_version = current_version.info_version
-        old_metric_md5, new_metric_md5 = list(map(count_md5, [info_obj.metric_json, metric_json]))
+        # 计算当前指标信息和新指标信息的MD5值
+        current_metric_md5, new_metric_md5 = list(map(count_md5, [current_info_obj.metric_json, metric_json]))
+        # 初始化是否需要重新打包和指标信息是否变更的标志
         need_make_package = False
-        is_change = False
+        is_changed = False
         # metric_json 存在变更或者 切换了黑名单的开启，生成新的 version
         if (
-            old_metric_md5 != new_metric_md5
+            current_metric_md5 != new_metric_md5
             or current_version.info.enable_field_blacklist != data["enable_field_blacklist"]
         ):
-            is_change = True
+            is_changed = True
             current_info_version = current_info_version + 1
-            update_info_data = copy.deepcopy(now_info_data)
+            updated_info_data = copy.deepcopy(current_info_data)
             # 白名单模式下，清除 tag_list 内的值
             if not data["enable_field_blacklist"]:
                 for metric_data in metric_json:
                     for field_data in metric_data["fields"]:
                         field_data["tag_list"] = []
-            update_info_data["metric_json"] = metric_json
-            update_info_data["enable_field_blacklist"] = data["enable_field_blacklist"]
-            config_obj = current_version.config
+            updated_info_data["metric_json"] = metric_json
+            updated_info_data["enable_field_blacklist"] = data["enable_field_blacklist"]
+            # 获取当前版本的配置对象
+            current_config_obj = current_version.config
+            # 生成变更字段的差异值
             diff_value = PluginVersionHistory.gen_diff_fields(metric_json)
-            old_collector_json = config_obj.collector_json
-            new_collector_json = self._get_new_collector_json(old_collector_json, diff_value)
-            old_collector_md5, new_collector_md5 = list(map(count_md5, [old_collector_json, new_collector_json]))
-            if old_collector_md5 != new_collector_md5:
+            # 获取当前采集器配置JSON
+            current_collector_json = current_config_obj.collector_json
+            # 生成新的采集器配置JSON
+            new_collector_json = self._get_new_collector_json(current_collector_json, diff_value)
+            # 计算当前和新的采集器配置的MD5值
+            current_collector_md5, new_collector_md5 = list(map(count_md5, [current_collector_json, new_collector_json]))
+            # 检查采集器配置是否变更，以决定是否需要重新打包
+            if current_collector_md5 != new_collector_md5:
                 current_config_version = current_config_version + 1
                 need_make_package = True
+            # 获取或创建新的版本实例
             version = self._get_version(current_config_version, current_info_version)
-            update_config_data = config_obj.config2dict()
-            update_config_data["collector_json"] = new_collector_json
-            self._update_config(update_config_data, version)
-            self._update_info(update_info_data, now_info_data, current_version, version)
+            # 深拷贝当前版本的配置数据，并更新采集器配置
+            updated_config_data = current_config_obj.config2dict()
+            updated_config_data["collector_json"] = new_collector_json
+            # 更新配置数据
+            self._update_config(updated_config_data, version)
+            # 更新信息数据
+            self._update_info(updated_info_data, current_info_data, current_version, version)
+            # 根据是否需要重新打包，设置版本状态
             version.stage = "unregister" if need_make_package else "release"
             version.is_packaged = False
+            # 保持签名一致性
             version.signature = current_version.signature
+            # 设置版本日志
             version.version_log = "update_metric"
+            # 保存版本信息
             version.save()
+            # 如果当前版本没有指标信息，则将其设置为传入的指标信息
             if not current_version.info.metric_json:
                 current_version.info.metric_json = metric_json
                 current_version.info.save()
-        return current_config_version, current_info_version, is_change, need_make_package
+        # 返回当前配置版本、信息版本、指标信息变更状态和是否需要重新打包
+        return current_config_version, current_info_version, is_changed, need_make_package
+
 
     @abc.abstractmethod
     def release(
