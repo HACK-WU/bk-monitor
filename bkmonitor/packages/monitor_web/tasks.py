@@ -18,10 +18,12 @@ import traceback
 from typing import Any, Dict
 
 import arrow
+from celery.signals import task_postrun
 from celery.task import task
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
+from django.dispatch import receiver as celery_receiver
 from django.forms import model_to_dict
 from django.utils.translation import ugettext as _
 
@@ -539,12 +541,7 @@ def polling_aiops_strategy_status(flow_id: int, task_id: int, base_labels: Dict,
     deploy_task_data = {item["id"]: item for item in deploy_data}
     current_deploy_data = deploy_task_data.get(task_id, deploy_data[0])
 
-    if current_deploy_data["status"] in ("running", "pending"):
-        # 如果任务启动流程还在执行中，则下一个周期再继续检
-        polling_aiops_strategy_status.apply_async(
-            args=(flow_id, task_id, base_labels, query_config), countdown=AIOPS_ACCESS_STATUS_POLLING_INTERVAL
-        )
-    elif current_deploy_data["status"] == "success":
+    if current_deploy_data["status"] == "success":
         # 如果任务启动流程已经完成且成功，则认为任务正常启动（内部失败需要在巡检任务通过其他指标检测到）
         report_aiops_access_metrics(base_labels, AccessStatus.SUCCESS)
         query_config.intelligent_detect["status"] = AccessStatus.SUCCESS
@@ -581,6 +578,11 @@ def polling_aiops_strategy_status(flow_id: int, task_id: int, base_labels: Dict,
             query_config.save()
 
         report_aiops_access_metrics(base_labels, AccessStatus.FAILED, err_msg, AccessErrorType.START_FLOW)
+    else:
+        # 如果任务启动流程还在执行中，则下一个周期再继续检
+        polling_aiops_strategy_status.apply_async(
+            args=(flow_id, task_id, base_labels, query_config), countdown=AIOPS_ACCESS_STATUS_POLLING_INTERVAL
+        )
 
 
 def report_aiops_access_metrics(base_labels: Dict, result: str, exception: str = "", exc_type: str = ""):
@@ -1312,49 +1314,9 @@ def access_host_anomaly_detect_by_strategy_id(strategy_id):
     rt_query_config.save()
 
 
-@task(ignore_result=True)
-def update_metric_json_from_ts_group():
-    """
-    对开启了自动发现的插件指标进行保存
-    """
-    # 排除掉plugin_id为"snmp_v1"，"snmp_v2c"，"snmp_v3"]的插件数据
-    queryset = CollectorPluginMeta.objects.exclude(plugin_id__in=["snmp_v1", "snmp_v2c", "snmp_v3"])
+@celery_receiver(task_postrun)
+def task_postrun_handler(sender=None, headers=None, body=None, **kwargs):
+    # 清理celery任务的线程变量
+    from bkmonitor.utils.local import local
 
-    for instance in queryset:
-        # 如果未开启黑名单或没有超过刷新周期（默认五分钟），直接返回
-        if not instance.current_version.info.enable_field_blacklist or not instance.should_refresh_metric_json(
-                timeout=5 * 60):
-            continue
-
-        plugin_data_info = PluginDataAccessor(instance.current_version, get_global_user())
-        # 查询TSGroup
-        group_list = api.metadata.query_time_series_group(
-            time_series_group_name=plugin_data_info.db_name, label=plugin_data_info.label
-        )
-
-        # 仅对有数据做处理
-        if len(group_list) == 0:
-            return
-        instance.reserved_dimension_list = [
-            field_name for field_name, _ in PLUGIN_REVERSED_DIMENSION + plugin_data_info.dms_field
-        ]
-        instance.update_metric_json_from_ts_group(group_list)
-
-
-@task(ignore_result=True)
-def update_target_detail():
-    """
-    对启用了缓存的业务ID，更新监控目标详情缓存
-    """
-    for bk_biz_id in settings.ENABLED_TARGET_CACHE_BK_BIZ_IDS:
-        strategy_ids = StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("id", flat=True)
-        items = ItemModel.objects.filter(strategy_id__in=strategy_ids)
-
-        strategy_target_mapping = {item.strategy_id: (bk_biz_id, item.target) for item in items}
-        resource.strategies.get_target_detail_with_cache.set_mapping(strategy_target_mapping)
-
-        for strategy_id in strategy_ids:
-            try:
-                resource.strategies.get_target_detail_cache.request.refresh(strategy_id)
-            except Exception as e:
-                logger.exception(f"Update targe detail cache failed for strategy id [{strategy_id}]: {e}")
+    local.clear()
