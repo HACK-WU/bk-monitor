@@ -9,12 +9,12 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import functools
 import json
 import logging
 import time
 import zlib
+from typing import Callable, Optional
 
 from django.conf import settings
 from django.core.cache import cache, caches
@@ -26,7 +26,6 @@ from bkmonitor.utils.local import local
 from bkmonitor.utils.request import get_request
 
 logger = logging.getLogger(__name__)
-
 
 try:
     mem_cache = caches["locmem"]
@@ -40,13 +39,13 @@ class UsingCache(object):
     key_prefix = "web_cache"
 
     def __init__(
-        self,
-        cache_type,
-        backend_cache_type=None,
-        user_related=None,
-        compress=True,
-        is_cache_func=lambda res: True,
-        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+            self,
+            cache_type,
+            backend_cache_type=None,
+            user_related=None,
+            compress=True,
+            is_cache_func=lambda res: True,
+            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型
@@ -83,26 +82,36 @@ class UsingCache(object):
         return username
 
     def _get_using_cache_type(self):
+        """
+        根据当前用户获取适当的缓存类型。
+
+        首先检查当前用户是否为'backend'，如果是，则根据backend_cache_type或cache_type属性确定缓存类型。
+        确保返回的缓存类型是CacheTypeItem的实例，否则抛出TypeError。
+
+        Returns:
+            CacheTypeItem: 适当的缓存类型，如果未设置则为None。
+        """
+        # 初始缓存类型默认为实例的cache_type属性
         using_cache_type = self.cache_type
+
+        # 如果当前用户是'backend'，根据backend_cache_type和cache_type确定使用哪种缓存类型
         if self._get_username() == "backend":
             using_cache_type = self.backend_cache_type or self.cache_type
+
+        # 检查using_cache_type是否为有效的缓存类型，如果不是则抛出异常
         if using_cache_type:
             if not isinstance(using_cache_type, CacheTypeItem):
                 raise TypeError("param 'cache_type' must be an" "instance of <utils.cache.CacheTypeItem>")
+
+        # 返回确定的缓存类型
         return using_cache_type
 
-    def _cache_key(self, task_definition, args, kwargs):
+    def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
         # 新增根据用户openid设置缓存key
         if self.using_cache_type:
-            return "{}:{}:{}:{},{}[{}]{}".format(
-                self.key_prefix,
-                self.using_cache_type.key,
-                self.func_key_generator(task_definition),
-                count_md5(args),
-                count_md5(kwargs),
-                self._get_username(),
-                translation.get_language(),
-            )
+            return (f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
+                    f":{count_md5(args)}:{count_md5(kwargs)}:{self._get_username()}")
+
         return None
 
     def get_value(self, cache_key, default=None):
@@ -114,25 +123,38 @@ class UsingCache(object):
         local (miss), cache(miss): cache <- result
         local (miss), cache(hit): local <- result
         """
+        # 尝试从一级内存缓存中获取值
         if self.local_cache_enable:
             value = getattr(local, cache_key, None)
             if value:
+                # 一级缓存命中，返回解析后的值
                 return json.loads(value)
 
+        # 一级缓存未命中，尝试从二级缓存中获取值
         value = mem_cache.get(cache_key, default=None) or cache.get(cache_key, default=None)
         if value is None:
+            # 二级缓存也未命中，返回默认值
             return default
+
+        # 如果启用了压缩，尝试解压缩值
         if self.compress:
             try:
                 value = zlib.decompress(value)
             except Exception:
+                # 解压缩失败，继续处理
                 pass
             try:
+                # 将解压后的值解析为JSON
                 value = json.loads(force_bytes(value))
             except Exception:
+                # 解析失败，返回默认值
                 value = default
-        if value and self.local_cache_enable:
+
+        # 更新一级缓存
+        if self.local_cache_enable:
             setattr(local, cache_key, json.dumps(value))
+
+        # 返回最终值
         return value
 
     def set_value(self, key, value, timeout=60):
@@ -147,6 +169,7 @@ class UsingCache(object):
                 value = zlib.compress(value.encode("utf-8"))
 
         try:
+            # 如果配置了内存缓存，则优先使用内存缓存
             if mem_cache is not cache:
                 mem_cache.set(key, value, 60)
             cache.set(key, value, timeout)
@@ -158,7 +181,7 @@ class UsingCache(object):
             # 缓存出错不影响主流程
             logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
 
-    def _cached(self, task_definition, args, kwargs):
+    def _cached(self, task_definition: Callable, args, kwargs):
         """
         【默认缓存模式】
         先检查是否缓存是否存在
@@ -178,7 +201,7 @@ class UsingCache(object):
             return_value = self._cacheless(task_definition, args, kwargs)
         return return_value
 
-    def _refresh(self, task_definition, args, kwargs):
+    def _refresh(self, task_definition: Callable, args, kwargs):
         """
         【强制刷新模式】
         不使用缓存的数据，将函数执行返回结果回写缓存
@@ -203,7 +226,12 @@ class UsingCache(object):
         # 执行真实函数
         return task_definition(*args, **kwargs)
 
-    def __call__(self, task_definition):
+    def __call__(self, task_definition: Callable) -> Callable:
+        """
+        返回经过缓存装饰的函数。
+        后面
+        """
+
         @functools.wraps(task_definition)
         def cached_wrapper(*args, **kwargs):
             return_value = self._cached(task_definition, args, kwargs)

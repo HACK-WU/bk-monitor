@@ -39,16 +39,39 @@ class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
         super(CacheResource, self).__init__(*args, **kwargs)
 
     def _need_cache_wrap(self):
+        """
+        判断是否需要缓存装饰器包装的函数。
+
+        该方法用于确定当前实例是否需要使用缓存装饰器包装的函数。
+        它通过检查两个条件来决定：一是当前实例的cache_type属性是否被设置，
+        二是backend_cache_type属性是否被设置。如果这两个属性中的任意一个被设置且是CacheTypeItem的实例，
+        则表明需要缓存装饰器包装的函数。如果设置的属性不是CacheTypeItem的实例，则抛出TypeError。
+
+        Returns:
+            bool: 表明是否需要缓存装饰器包装的函数。如果需要，返回True，否则返回False。
+        """
+        # 初始化need_cache标志为False
         need_cache = False
+
+        # 检查self.cache_type是否被设置
         if self.cache_type is not None:
+            # 检查cache_type是否为CacheTypeItem的实例，如果不是则抛出TypeError
             if not isinstance(self.cache_type, CacheTypeItem):
                 raise TypeError("param 'cache_type' must be an" "instance of <utils.cache.CacheTypeItem>")
+            # 如果cache_type符合条件，设置need_cache为True
             need_cache = True
+
+        # 检查self.backend_cache_type是否被设置
         if self.backend_cache_type is not None:
+            # 检查backend_cache_type是否为CacheTypeItem的实例，如果不是则抛出TypeError
             if not isinstance(self.backend_cache_type, CacheTypeItem):
                 raise TypeError("param 'cache_type' must be an" "instance of <utils.cache.CacheTypeItem>")
+            # 如果backend_cache_type符合条件，设置need_cache为True
             need_cache = True
+
+        # 返回是否需要缓存装饰器包装的函数的判断结果
         return need_cache
+
 
     def _wrap_request(self):
         """
