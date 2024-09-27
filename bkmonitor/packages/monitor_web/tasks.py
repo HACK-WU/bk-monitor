@@ -44,7 +44,7 @@ from bkmonitor.dataflow.task.intelligent_detect import (
     MultivariateAnomalyIntelligentModelDetectTask,
     StrategyIntelligentModelDetectTask,
 )
-from bkmonitor.models import ActionConfig, AlgorithmModel
+from bkmonitor.models import ActionConfig, AlgorithmModel, StrategyModel, ItemModel
 from bkmonitor.models.external_iam import ExternalPermissionApplyRecord
 from bkmonitor.strategy.new_strategy import QueryConfig, get_metric_id
 from bkmonitor.strategy.serializers import MultivariateAnomalyDetectionSerializer
@@ -127,9 +127,9 @@ def run_init_builtin(bk_biz_id):
         run_build_in(int(bk_biz_id), mode="k8s")
 
         if (
-            settings.ENABLE_DEFAULT_STRATEGY
-            and int(bk_biz_id) > 0
-            and not ActionConfig.origin_objects.filter(bk_biz_id=bk_biz_id, is_builtin=True).exists()
+                settings.ENABLE_DEFAULT_STRATEGY
+                and int(bk_biz_id) > 0
+                and not ActionConfig.origin_objects.filter(bk_biz_id=bk_biz_id, is_builtin=True).exists()
         ):
             logger.warning("[run_init_builtin] home run_init_builtin_action_config: bk_biz_id -> %s", bk_biz_id)
             # 如果当前页面没有出现内置套餐，则会进行快捷套餐的初始化
@@ -395,13 +395,13 @@ def update_failure_shield_content():
 
 @task(ignore_result=True, queue="celery_resource")
 def import_config(
-    username,
-    bk_biz_id,
-    history_instance,
-    collect_config_list,
-    strategy_config_list,
-    view_config_list,
-    is_overwrite_mode=False,
+        username,
+        bk_biz_id,
+        history_instance,
+        collect_config_list,
+        strategy_config_list,
+        view_config_list,
+        is_overwrite_mode=False,
 ):
     """
     批量导入采集配置、策略配置、视图配置
@@ -426,8 +426,9 @@ def import_config(
     import_strategy(bk_biz_id, history_instance, strategy_config_list, is_overwrite_mode)
     import_view(bk_biz_id, view_config_list, is_overwrite_mode)
     if (
-        ImportDetail.objects.filter(history_id=history_instance.id, import_status=ImportDetailStatus.IMPORTING).count()
-        == 0
+            ImportDetail.objects.filter(history_id=history_instance.id,
+                                        import_status=ImportDetailStatus.IMPORTING).count()
+            == 0
     ):
         history_instance.status = ImportHistoryStatus.IMPORTED
         history_instance.save()
@@ -1338,3 +1339,18 @@ def update_metric_json_from_ts_group():
             field_name for field_name, _ in PLUGIN_REVERSED_DIMENSION + plugin_data_info.dms_field
         ]
         instance.update_metric_json_from_ts_group(group_list)
+
+
+@task(ignore_result=True)
+def update_target_detail():
+    """
+    对启用了缓存的业务ID，更新监控目标详情缓存
+    """
+    for bk_biz_id in settings.ENABLED_TARGET_CACHE_BK_BIZ_IDS:
+        strategy_ids = StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("id", flat=True)
+        items = ItemModel.objects.filter(strategy_id__in=strategy_ids)
+        for item in items:
+            try:
+                resource.strategies.get_target_detail_cache.request.refresh(bk_biz_id, item.target)
+            except Exception as e:
+                logger.exception(f"Update targe detail cache failed for strategy id [{item.strategy_id}]: {e}")
