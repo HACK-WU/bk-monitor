@@ -134,7 +134,7 @@ class ShieldListResource(Resource):
                 shields = shields.none()
         shields = shields.order_by(order)
 
-        # 根据激活状态和时间范围筛选屏蔽信息
+        # 筛选屏蔽中，根据范围进行筛选
         if is_active:
             shields = [shield for shield in shields if shield.status == ShieldStatus.SHIELDED]
             if time_range:
@@ -150,8 +150,10 @@ class ShieldListResource(Resource):
         count = len(shields)
 
         # 分页
+        # fmt: off
         if all([page, page_size]):
             shields = shields[(page - 1) * page_size: page * page_size]
+        # fmt: on
         shield_list = []
         # 生成屏蔽信息列表
         for shield in shields:
@@ -421,7 +423,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
         alert_id = data["dimension_config"]["id"]
         # 根据ID获取告警详情
         alert = AlertDocument.get(alert_id)
-    
+
         # 初始化维度配置字典
         dimension_config = {}
         # 遍历告警的维度，将每个维度的键值对添加到维度配置字典中
@@ -542,18 +544,19 @@ class BulkAddAlertShieldResource(AddShieldResource):
         target_dimension_config = data["dimension_config"].get("dimensions", {})
         alerts = AlertDocument.mget(ids=alert_ids)
         dimension_configs = []
-    
+
         alert_documents = []
         now_time = int(time.time())
-    
+
         for alert in alerts:
             # 未标记编辑维度， 则 dimension_config.dimensions没有对应告警的信息
             target_dimensions = None
             if str(alert.id) in target_dimension_config:
                 # 取需要匹配的维度列表
                 target_dimensions = target_dimension_config[str(alert.id)]
-    
+
             dimension_config = {}
+            shield_dimensions = []
             for dimension in alert.dimensions:
                 dimension_data = dimension.to_dict()
                 # 未标记编辑维度， 则所有维度都配置， 编辑了维度， 仅配置保留的维度。
@@ -561,13 +564,14 @@ class BulkAddAlertShieldResource(AddShieldResource):
                     # 注意，这里仅仅只是删除了dimension_config中维度配置，但_dimensions中维度配置保留,没有发生变化。
                     dimension_config[dimension_data["key"]] = dimension_data["value"]
             # 添加与屏蔽逻辑无关的配置项
+                    shield_dimensions.append(dimension)
             dimension_config.update(
                 {
                     "_alert_id": alert.id,
                     "strategy_id": alert.strategy_id,
                     "_severity": alert.severity,
                     "_alert_message": getattr(alert.event, "description", ""),
-                    "_dimensions": AlertDimensionFormatter.get_dimensions_str(alert.dimensions),
+                    "_dimensions": AlertDimensionFormatter.get_dimensions_str(shield_dimensions),
                 }
             )
             # 准备更新告警文档，设置屏蔽状态
@@ -576,7 +580,7 @@ class BulkAddAlertShieldResource(AddShieldResource):
 
         # 更新ES中的alerts的屏蔽状态
         AlertDocument.bulk_create(alert_documents, action=BulkActionType.UPDATE)
-    
+
         return dimension_configs
 
     def perform_request(self, data):

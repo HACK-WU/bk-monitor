@@ -52,7 +52,15 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
 
         # 对于事件和告警屏蔽，直接返回维度配置中的维度信息
         if category in [ShieldCategory.EVENT, ShieldCategory.ALERT]:
-            return dimension_config["_dimensions"]
+            content = dimension_config["_dimensions"]
+            strategy_ids = self.get_strategy_ids(shield)
+            strategy_name = ""
+            if strategy_ids:
+                strategy_name = strategy_id_to_name.get(strategy_ids[0], "")
+            pre_fix = STRATEGY_NAME_TEMPLATE.format(strategy_name.strip()) + " " + _("维度") + ": "
+            if pre_fix:
+                content = pre_fix + content
+            return content
 
         # 初始化内容字符串，用于拼接最终的屏蔽内容描述
         content = ""
@@ -110,7 +118,7 @@ class BaseShieldDisplayManager(six.with_metaclass(abc.ABCMeta, object)):
 
     @staticmethod
     def get_strategy_ids(shield):
-        if shield["category"] != ShieldCategory.STRATEGY:
+        if shield["category"] not in [ShieldCategory.STRATEGY, ShieldCategory.EVENT, ShieldCategory.ALERT]:
             return []
 
         strategy_ids = shield["dimension_config"]["strategy_id"]
