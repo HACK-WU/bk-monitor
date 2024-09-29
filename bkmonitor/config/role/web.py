@@ -373,7 +373,7 @@ CELERYBEAT_SCHEDULE = {
     },
     "monitor_web.tasks.update_target_detail": {
         "task": "monitor_web.tasks.update_target_detail",
-        "schedule": crontab(minute="*/20"),
+        "schedule": crontab(minute="*/15"),
         "enabled": True
     },
 }

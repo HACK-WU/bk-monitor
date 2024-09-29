@@ -1349,8 +1349,12 @@ def update_target_detail():
     for bk_biz_id in settings.ENABLED_TARGET_CACHE_BK_BIZ_IDS:
         strategy_ids = StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("id", flat=True)
         items = ItemModel.objects.filter(strategy_id__in=strategy_ids)
-        for item in items:
+
+        strategy_target_mapping = {item.strategy_id: (bk_biz_id, item.target) for item in items}
+        resource.strategies.get_target_detail_with_cache.set_mapping(strategy_target_mapping)
+
+        for strategy_id in strategy_ids:
             try:
-                resource.strategies.get_target_detail_cache.request.refresh(bk_biz_id, item.target)
+                resource.strategies.get_target_detail_cache.request.refresh(strategy_id)
             except Exception as e:
-                logger.exception(f"Update targe detail cache failed for strategy id [{item.strategy_id}]: {e}")
+                logger.exception(f"Update targe detail cache failed for strategy id [{strategy_id}]: {e}")

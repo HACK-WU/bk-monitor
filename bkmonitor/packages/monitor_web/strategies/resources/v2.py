@@ -9,7 +9,7 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import reduce
 from itertools import chain, product, zip_longest
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import arrow
 import pytz
@@ -2329,16 +2329,22 @@ class GetPlainStrategyListV2Resource(Resource):
         }
 
 
-class GetTargetDetailCacheResource(CacheResource):
+class GetTargetDetailWithCache(CacheResource):
     backend_cache_type = CacheType.CC_CACHE_ALWAYS
     cache_compress = False
 
     class RequestSerializer(serializers.Serializer):
-        bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
-        target = serializers.JSONField(required=True, label="监控目标")
+        strategy_id = serializers.IntegerField(required=True, label="策略ID")
 
     def perform_request(self, validate_data):
-        return self.get_target_detail(**validate_data)
+        strategy_id = validate_data["strategy_id"]
+        bk_biz_id = self.strategy_target_mapping[strategy_id][0]
+        target = self.strategy_target_mapping[strategy_id][1]
+        return self.get_target_detail(bk_biz_id, target)
+
+    def set_mapping(self, mapping: Dict[int, Tuple]):
+        """设置策略与监控目标的映射关系"""
+        self.strategy_target_mapping = mapping
 
     def cache_write_trigger(self, target_info):
         """获取到监控目标信息不为None，则进行缓存"""
@@ -2474,11 +2480,14 @@ class GetTargetDetail(Resource):
         strategy_ids = [strategy.id for strategy in strategies]
         items = ItemModel.objects.filter(strategy_id__in=strategy_ids)
 
+        strategy_target_mapping = {item.strategy_id: (bk_biz_id, item.target) for item in items}
+        get_target_detail_with_cache = GetTargetDetailWithCache()
+        get_target_detail_with_cache.set_mapping(strategy_target_mapping)
+
         empty_strategy_ids = []
         result = {}
         for item in items:
-            # info = self.get_target_detail(bk_biz_id, item.target)
-            info = resource.strategies.get_target_detail_cache(bk_biz_id, item.target)
+            info = get_target_detail_with_cache(item.strategy_id)
 
             if info:
                 result[item.strategy_id] = info
