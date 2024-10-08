@@ -29,7 +29,6 @@ thread-local/greenlet-local object and use its attributes:
   from threading import local
 """
 
-
 from contextlib import contextmanager
 
 try:
@@ -44,7 +43,6 @@ __all__ = ["local", "Local", "get_ident"]
 
 
 class Localbase(object):
-
     __slots__ = ("__storage__", "__ident_func__")
 
     def __new__(cls, *args, **kwargs):
@@ -55,50 +53,61 @@ class Localbase(object):
 
 
 class Local(Localbase):
+    """
+    内部封装了一个嵌套字典：{ ident: {key: value, ...}, ... }
+    ident是线程的标识符，key-value就是当前线程中保存的数据
+    """
+    # 定义迭代器方法，返回当前线程/进程的存储项的迭代器
     def __iter__(self):
-        ident = self.__ident_func__()
+        ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         try:
-            return iter(list(self.__storage__[ident].items()))
+            return iter(list(self.__storage__[ident].items()))  # 尝试返回存储项的迭代器
         except KeyError:
-            return iter([])
+            return iter([])  # 如果没有找到对应的存储项，则返回空迭代器
 
+    # 定义释放本地存储的方法
     def __release_local__(self):
-        self.__storage__.pop(self.__ident_func__(), None)
+        self.__storage__.pop(self.__ident_func__(), None)  # 移除当前线程/进程的存储项
 
+    # 定义获取属性的方法
     def __getattr__(self, name):
-        ident = self.__ident_func__()
+        ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         try:
-            return self.__storage__[ident][name]
+            return self.__storage__[ident][name]  # 尝试返回指定名称的存储值
         except KeyError:
-            raise AttributeError(name)
+            raise AttributeError(name)  # 如果没有找到指定的属性，则抛出AttributeError异常
 
+    # 定义设置属性的方法
     def __setattr__(self, name, value):
         if name in ("__storage__", "__ident_func__"):
-            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))
+            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))  # 如果设置的属性是只读的，则抛出AttributeError异常
 
-        ident = self.__ident_func__()
+        ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         storage = self.__storage__
-        if ident not in storage:
+        if ident not in storage:  # 如果当前线程/进程还没有存储项，则创建一个新的存储字典
             storage[ident] = dict()
-        storage[ident][name] = value
+        storage[ident][name] = value  # 设置指定名称的存储值
 
+    # 定义删除属性的方法
     def __delattr__(self, name):
         if name in ("__storage__", "__ident_func__"):
-            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))
+            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))  # 如果删除的属性是只读的，则抛出AttributeError异常
 
-        ident = self.__ident_func__()
+        ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         try:
-            del self.__storage__[ident][name]
-            if len(self.__storage__[ident]) == 0:
+            del self.__storage__[ident][name]  # 尝试删除指定名称的存储项
+            if len(self.__storage__[ident]) == 0:  # 如果当前线程/进程的存储字典为空，则释放存储
                 self.__release_local__()
         except KeyError:
-            raise AttributeError(name)
+            raise AttributeError(name)  # 如果没有找到指定的属性，则抛出AttributeError异常
 
+    # 定义清空存储的方法
     def clear(self):
-        self.__release_local__()
+        self.__release_local__()  # 调用释放本地存储的方法清空存储
 
 
-local = Local()
+local = Local()  # 创建Local类的实例
+
 
 
 @contextmanager

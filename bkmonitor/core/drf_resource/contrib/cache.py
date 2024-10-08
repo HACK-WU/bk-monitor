@@ -9,7 +9,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import abc
 
 import six
@@ -20,14 +19,14 @@ from core.drf_resource.base import Resource
 
 class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
     """
-    支持缓存的resource
+    支持缓存的resource，开发环境下缓存默认不生效。
     """
 
-    # 缓存类型
+    # 缓存类型，启用缓存需要设置cache_type或backend_cache_type属性
     cache_type = None
-    # 后台缓存类型
+    # 后台缓存类型，当username=="backend"时，缓存类型优先使用backend_cache_type。
     backend_cache_type = None
-    # 缓存是否与用户关联
+    # 缓存是否与用户关联，cache_user_related=False时，默认username="backend"
     cache_user_related = None
     # 是否使用压缩
     cache_compress = True
@@ -71,7 +70,6 @@ class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
 
         # 返回是否需要缓存装饰器包装的函数的判断结果
         return need_cache
-
 
     def _wrap_request(self):
         """
