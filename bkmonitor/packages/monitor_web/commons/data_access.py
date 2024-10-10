@@ -466,6 +466,12 @@ class PluginDataAccessor(DataAccessor):
         # 根据插件类型确定ETL配置
         etl_config = "bk_standard" if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG] else "bk_exporter"
         # 调用父类初始化方法，创建PluginDataAccessor实例
+        if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG]:
+            etl_config = "bk_standard"
+        elif plugin_type == PluginType.K8S:
+            etl_config = "bk_standard_v2_time_series"
+        else:
+            etl_config = "bk_exporter"
         super(PluginDataAccessor, self).__init__(
             bk_biz_id=0,
             db_name=db_name,
