@@ -48,7 +48,6 @@ for _setting in dir(_module):
 
 ROOT_URLCONF = "urls"
 
-
 INSTALLED_APPS = locals().get("INSTALLED_APPS", tuple())
 INSTALLED_APPS += (
     "django_elasticsearch_dsl",
@@ -372,6 +371,11 @@ CELERYBEAT_SCHEDULE = {
         "schedule": crontab(),
         "enabled": True,
     },
+    "monitor_web.tasks.update_metric_json_from_ts_group": {
+        "task": "monitor_web.tasks.update_metric_json_from_ts_group",
+        "schedule": crontab(minute="*/50"),
+        "enabled": True,
+    }
     "monitor_web.tasks.update_target_detail": {
         "task": "monitor_web.tasks.update_target_detail",
         "schedule": crontab(minute="*/15"),
