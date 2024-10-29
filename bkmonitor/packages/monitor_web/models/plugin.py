@@ -887,7 +887,7 @@ class PluginVersionHistory(OperateRecordModelBase):
             return ""
 
     @classmethod
-    def get_result_table_id(cls, plugin: CollectorPluginMeta, table_name: str):
+    def get_result_table_id(cls, plugin: CollectorPluginMeta, table_name: str) -> str:
         """
         根据插件生成结果表名
         """
