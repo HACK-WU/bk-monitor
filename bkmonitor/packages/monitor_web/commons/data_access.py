@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from django.conf import settings
 from django.utils.encoding import force_str
@@ -19,6 +19,7 @@ from django.utils.translation import ugettext as _
 from bkmonitor.utils.common_utils import safe_int
 from core.drf_resource import api
 from core.errors.api import BKAPIError
+from monitor.constants import UptimeCheckProtocol
 from monitor_web.plugin.constant import (
     ORIGIN_PLUGIN_EXCLUDE_DIMENSION,
     PLUGIN_REVERSED_DIMENSION,
@@ -398,12 +399,12 @@ class DataAccessor(object):
 class PluginDataAccessor(DataAccessor):
     def __init__(self, plugin_version, operator: str, data_label: str = None):
         """
-       初始化PluginDataAccessor类的实例。
+        初始化PluginDataAccessor类的实例。
 
-       生成一个数据访问器，主要需要将metric_json中各个table中的字段信息(name,monitor_type,type,description等)提取出来，
-       组成一个ResultTableField实例列表，该列表将作为ResultTable.field_instance_list的属性值。
-       每个ResultTable中包含这几个信息，table_name，fields(是一个List[Dict]类型)，description，field_instance_list。
-       这些ResultTable又组成一个列表table_list。
+        生成一个数据访问器，主要需要将metric_json中各个table中的字段信息(name,monitor_type,type,description等)提取出来，
+        组成一个ResultTableField实例列表，该列表将作为ResultTable.field_instance_list的属性值。
+        每个ResultTable中包含这几个信息，table_name，fields(是一个List[Dict]类型)，description，field_instance_list。
+        这些ResultTable又组成一个列表table_list。
         """
 
         def get_field_instance(field):
@@ -676,3 +677,106 @@ class EventDataAccessor(object):
             event_group_id = event_groups[0]["event_group_id"]
             api.metadata.delete_event_group(event_group_id=event_group_id, operator=self.operator)
             return event_group_id
+
+
+class UptimecheckDataAccessor:
+    """
+    拨测数据接入
+    """
+
+    version = "v1"
+
+    DATAID_MAP = {
+        UptimeCheckProtocol.HTTP: settings.UPTIMECHECK_HTTP_DATAID,
+        UptimeCheckProtocol.TCP: settings.UPTIMECHECK_TCP_DATAID,
+        UptimeCheckProtocol.UDP: settings.UPTIMECHECK_UDP_DATAID,
+        UptimeCheckProtocol.ICMP: settings.UPTIMECHECK_ICMP_DATAID,
+    }
+
+    def __init__(self, task) -> None:
+        self.task = task
+        self.bk_biz_id = task.bk_biz_id
+
+    def get_data_id(self) -> Tuple[bool, str]:
+        """
+        TODO: 获取拨测数据链路ID
+        :return: 是否是自定义上报，数据链路ID
+        """
+        if not self.use_custom_report():
+            return False, self.DATAID_MAP[self.task.protocol.upper()]
+
+        data_id_info = api.metadata.get_data_id({"data_name": self.data_name, "with_rt_info": False})
+        return True, safe_int(data_id_info["bk_data_id"])
+
+    def use_custom_report(self) -> bool:
+        """
+        是否使用自定义上报
+        """
+        return bool(self.task.indepentent_dataid or self.task.labels)
+
+    @property
+    def data_label(self) -> str:
+        return f"uptimcheck_{self.task.protocol.lower()}"
+
+    @property
+    def db_name(self) -> str:
+        """
+        获取数据库名
+        """
+        return f"uptimecheck_{self.task.protocol.lower()}_{self.bk_biz_id}"
+
+    @property
+    def data_name(self) -> str:
+        return self.db_name
+
+    def create_data_id(self) -> None:
+        """
+        创建数据ID
+        """
+        try:
+            data_id_info = api.metadata.get_data_id({"data_name": self.data_name, "with_rt_info": False})
+            return safe_int(data_id_info["bk_data_id"])
+        except BKAPIError:
+            pass
+
+        params = {
+            "data_name": self.data_name,
+            "etl_config": "bk_standard_v2_time_series",
+            "operator": "admin",
+            "data_description": self.data_name,
+            "type_label": "time_series",
+            "source_label": "bk_monitor",
+            "option": {
+                "inject_local_time": True,
+                "allow_dimensions_missing": True,
+                "is_split_measurement": True,
+            },
+        }
+        return safe_int(api.metadata.create_data_id(params)["bk_data_id"])
+
+    def access(self):
+        """
+        接入数据链路
+        """
+        if not self.use_custom_report():
+            return
+
+        # 创建数据ID
+        data_id = self.create_data_id()
+
+        # 创建自定义上报
+        params = {
+            "operator": "admin",
+            "bk_data_id": data_id,
+            "bk_biz_id": self.bk_biz_id,
+            "time_series_group_name": self.db_name,
+            "label": "uptimecheck",
+            "is_split_measurement": True,
+            "metric_info_list": [],
+            "data_label": self.data_label,
+            "additional_options": {
+                "enable_field_black_list": True,
+                "enable_default_value": False,
+            },
+        }
+        api.metadata.create_time_series_group(params)
