@@ -318,7 +318,9 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
 
     def to_representation(self, instance):
         data = super(DutyArrangeSlz, self).to_representation(instance)
+        # 添加直接通知的用户
         data["users"] = self.users_representation(data["users"])
+        # 添加轮值用户
         data["duty_users"] = self.duty_users_representation(data.get("duty_users", []))
         return data
 
@@ -329,6 +331,7 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
     def to_internal_value(self, data):
         self.initial_data = data
         ret = super(DutyArrangeSlz, self).to_internal_value(data)
+        # 添加hash字段
         ret = self.calc_hash(ret)
         return ret
 
@@ -438,9 +441,12 @@ class DutyRuleSlz(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super(DutyRuleSlz, self).to_representation(instance)
+        # 获取到user_groups
         data["user_groups"] = list(set(self.rule_group_dict.get(instance.id, [])))
         data["user_groups_count"] = len(data["user_groups"])
+        # 如果关联的用户组为空，则允许删除
         data["delete_allowed"] = data["user_groups_count"] == 0
+        # 如果业务ID不为0，则允许编辑
         data["edit_allowed"] = instance.bk_biz_id != 0
         return data
 
@@ -482,11 +488,16 @@ class DutyRuleDetailSlz(DutyRuleSlz):
         )
 
     def save(self, **kwargs):
+        # 获取到轮值安排
         duty_arranges = self.validated_data.pop("duty_arranges", [])
+        # DutyRule Model保存的仅仅是元数据信息，轮值安排需要单独保存
+        # 这一步就是保存元数据信息
         super(DutyRuleDetailSlz, self).save(**kwargs)
 
+        # 批量创建轮值安排
         DutyArrange.bulk_create(duty_arranges, self.instance)
 
+        # 如果是开启状态，则需要创建快照和计划管理
         if self.instance.enabled:
             # 快照和计划管理，以便预览能看到即时变化
             user_groups = UserGroup.objects.filter(duty_rules__contains=self.instance.id).only(
@@ -508,6 +519,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
 
     def to_internal_value(self, data):
         ret = super(DutyRuleDetailSlz, self).to_internal_value(data)
+        # 生成hash字段
         ret = self.calc_hash(ret)
         return ret
 
@@ -526,11 +538,15 @@ class DutyRuleDetailSlz(DutyRuleSlz):
 
     def to_representation(self, instance):
         data = super(DutyRuleDetailSlz, self).to_representation(instance)
+        # 获取到关联的告警组ID
         data["user_groups"] = list(
             set(DutyRuleRelation.objects.filter(duty_rule_id=instance.id).values_list("user_group_id", flat=True))
         )
+        # 获取关联的告警组数量
         data["user_groups_count"] = len(data["user_groups"])
+        # 如果关联的告警组数量等于0，则表示可以删除
         data["delete_allowed"] = data["user_groups_count"] == 0
+        # 如果业务ID不为O，则表示可以编辑
         data["edit_allowed"] = instance.bk_biz_id != 0
         # 将对应的duty_arranges加上
         data["duty_arranges"] = DutyArrangeSlz(
@@ -931,32 +947,42 @@ class UserGroupDetailSlz(UserGroupSlz):
         """
         拆分为三个部分部分
         """
+        # 从验证后的数据中取出'duty_arranges'字段，并将其从原字典中移除
         duty_arranges = self.validated_data.pop("duty_arranges")
+
+        # 将'hash'和'snippet'字段设置为空字符串
         self.validated_data["hash"] = ""
         self.validated_data["snippet"] = ""
-        # 只要编辑过，这里都默认是1
+
+        # 默认设置'mention_type'字段为1，表示只要编辑过就设置为1
         self.validated_data["mention_type"] = 1
 
-        # step 1 save user group
+        # step 1: 调用父类的save方法保存用户组信息
         super(UserGroupDetailSlz, self).save(**kwargs)
 
-        # step 3 save duty arranges and delete old relation
+        # step 3: 如果'duty_arranges'字段有内容（即直接通知），则创建并更新轮值记录
+        # 注意：如果是轮值，传的直接是duty_id,轮值规则ID
         if duty_arranges:
+            # 创建并更新并删除旧的轮值记录
             DutyArrange.bulk_create(duty_arranges, self.instance)
 
-        # step 3 save duty arranges and delete old relation
+        # step 3: 轮值情况下，需要构建告警组与轮值组的关联
         self.save_duty_rule_relations()
 
+        # 管理职责快照和计划
         self.manage_duty_snap_and_plan()
 
+        # 返回保存后的实例
         return self.instance
 
     def save_duty_rule_relations(self):
         # step 1: delete old relations
         DutyRuleRelation.objects.filter(user_group_id=self.instance.id).delete()
+        # 如果不是轮值，则直接返回
         if not self.instance.duty_rules:
             return
         # step 1: create new relations
+        # 构建关联
         rules = [
             DutyRuleRelation(
                 user_group_id=self.instance.id, duty_rule_id=rule_id, order=index, bk_biz_id=self.instance.bk_biz_id
@@ -969,7 +995,6 @@ class UserGroupDetailSlz(UserGroupSlz):
         """
         调整duty_snap 和 排班计划
         """
-        # TODO 需要改造的
 
         duty_rules = DutyRuleDetailSlz(
             instance=DutyRule.objects.filter(id__in=self.instance.duty_rules), many=True

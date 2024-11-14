@@ -78,10 +78,12 @@ class DutyType:
 
 
 class DutyGroupType:
-    """ """
+    """
+    轮值组类型
+    """
 
-    SPECIFIED = "specified"
-    AUTO = "auto"
+    SPECIFIED = "specified"  # 手动分组
+    AUTO = "auto"  # 自动分组
 
     DISPLAY_DICT = {SPECIFIED: _lazy("手动指定"), AUTO: _lazy("自动")}
 

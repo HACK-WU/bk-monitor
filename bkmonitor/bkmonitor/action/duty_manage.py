@@ -160,7 +160,9 @@ class DutyRuleManager:
         if not self.enabled:
             return []
         if self.category == "regular":
+            # 固定轮值
             return self.get_regular_duty_plan()
+        # 交替轮值
         return self.get_rotation_duty_plan()
 
     def get_duty_dates(self, duty_time, special_rotation=False, period_interval=0):
@@ -541,7 +543,9 @@ class DutyRuleManager:
         :param begin_time:
         :return:
         """
+        # 判断是否是交替轮值
         is_handoff: bool = duty_rule.get("category") == "handoff"
+        # 如果是交替轮值并且当前创建时间大于生效时间，说明需要重新排班
         if begin_time > duty_rule["effective_time"] and is_handoff:
             duty_manager = cls(duty_rule, end_time=begin_time)
             # 排班会刷新 rule_snap 中 duty_time["begin_time"] 和 duty_arrange["last_user_index"]
@@ -561,16 +565,18 @@ class GroupDutyRuleManager:
 
     def manage_duty_rule_snap(self, task_time):
         """
-        :param task_time:
+        管理值班规则的快照，包括创建新的快照、更新旧的快照和删除过期的快照。
+        :param task_time: 任务时间，用于计算快照的有效时间
         :return:
         """
         # task_time需要提前定义, 这个可以是七天以后的一个时间
 
         logger.info("[manage_duty_rule_snap] begin to manage duty snap for current_time(%s)", task_time)
-
+        # 获取到当前告警组关联的值班规则快照
         snaps = DutyRuleSnap.objects.filter(
             duty_rule_id__in=self.user_group.duty_rules, user_group_id=self.user_group.id, enabled=True
         ).order_by("duty_rule_id")
+        # 以值班规则 id 为分组键，获取到同一个值班规则的所有快照
         rule_id_to_snaps = {rule_id: list(snaps) for rule_id, snaps in groupby(snaps, key=attrgetter("duty_rule_id"))}
 
         rules_for_snap_creation = []
@@ -582,6 +588,7 @@ class GroupDutyRuleManager:
 
             # 规则为新关联的，创建快照
             rule_id = duty_rule["id"]
+            # 如果没有快照，创建快照，并跳过
             if rule_id not in rule_id_to_snaps:
                 rules_for_snap_creation.append(duty_rule)
                 continue
@@ -616,6 +623,7 @@ class GroupDutyRuleManager:
         # step1 先创建一波新的snap
         new_group_rule_snaps = []
         for duty_rule in rules_for_snap_creation:
+            # 获取到首次生效时间
             first_effective_time = max(duty_rule["effective_time"], task_time)
             new_group_rule_snaps.append(
                 DutyRuleSnap(
