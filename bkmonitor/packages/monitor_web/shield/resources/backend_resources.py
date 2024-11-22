@@ -390,6 +390,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
 
         # 初始化屏蔽管理器并检查策略是否被屏蔽
         shield_manager = ShieldDetectManager(data["bk_biz_id"], "strategy")
+        # 检查策略是否被屏蔽
         match_result = shield_manager.check_shield_status(match_info)
         if match_result["is_shielded"]:
             raise DuplicateQuickShieldError({"category": _("策略")})
@@ -482,7 +483,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
         }
         # 处理维度配置,获取到新的维度配置
         dimension_config = shield_handler[data["category"]](data)
-        # 处理notice_config
+        # 处理notice_config，格式化notice_receiver
         if data["shield_notice"]:
             data["notice_config"]["notice_receiver"] = [
                 "{}#{}".format(item["type"], item["id"]) for item in data["notice_config"]["notice_receiver"]

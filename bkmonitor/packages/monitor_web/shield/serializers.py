@@ -41,8 +41,11 @@ class BaseSerializer(serializers.Serializer):
 
 
 class ScopeSerializer(BaseSerializer):
+    """
+    根据范围屏蔽
+    """
     class DimensionConfig(serializers.Serializer):
-        scope_type = serializers.CharField(required=True)
+        scope_type = serializers.CharField(required=True) # 范围类型： 实例|物理主机|CMDB拓扑|动态分组
         target = serializers.ListField(required=False)
         metric_id = serializers.ListField(required=False)
 
@@ -50,6 +53,9 @@ class ScopeSerializer(BaseSerializer):
 
 
 class StrategySerializer(BaseSerializer):
+    """
+    根据策略屏蔽
+    """
     class DimensionConfig(serializers.Serializer):
         class DimensionCondition(serializers.Serializer):
             key = serializers.CharField(required=True)
@@ -58,8 +64,8 @@ class StrategySerializer(BaseSerializer):
             condition = serializers.ChoiceField(choices=SUPPORT_COMPOSITE_METHODS, default="and")
             name = serializers.CharField(required=False)
 
-        id = serializers.ListField(required=True)
-        level = serializers.ListField(required=False)
+        id = serializers.ListField(required=True)   # 策略id
+        level = serializers.ListField(required=False) # 级别
         scope_type = serializers.CharField(required=False)
         target = serializers.ListField(required=False)
         dimension_conditions = serializers.ListField(required=False, child=DimensionCondition(required=True))
@@ -68,6 +74,9 @@ class StrategySerializer(BaseSerializer):
 
 
 class EventSerializer(BaseSerializer):
+    """
+    根据事件屏蔽
+    """
     class DimensionConfig(serializers.Serializer):
         id = serializers.CharField(required=True)
 
@@ -75,6 +84,9 @@ class EventSerializer(BaseSerializer):
 
 
 class AlertSerializer(BaseSerializer):
+    """
+    根据告警屏蔽
+    """
     class DimensionConfig(serializers.Serializer):
         alert_ids = serializers.ListField(required=True, child=serializers.CharField(allow_blank=False))
         dimensions = serializers.DictField(required=False)
@@ -83,6 +95,9 @@ class AlertSerializer(BaseSerializer):
 
 
 class DimensionSerializer(BaseSerializer):
+    """
+   根据维度屏蔽
+    """
     class DimensionConfig(serializers.Serializer):
         class DimensionCondition(serializers.Serializer):
             key = serializers.CharField(required=True)
@@ -97,9 +112,9 @@ class DimensionSerializer(BaseSerializer):
 
 
 SHIELD_SERIALIZER = {
-    ShieldCategory.SCOPE: ScopeSerializer,
-    ShieldCategory.STRATEGY: StrategySerializer,
-    ShieldCategory.EVENT: EventSerializer,
-    ShieldCategory.ALERT: AlertSerializer,
-    ShieldCategory.DIMENSION: DimensionSerializer,
+    ShieldCategory.SCOPE: ScopeSerializer,  # 根据范围屏蔽
+    ShieldCategory.STRATEGY: StrategySerializer,  #更具策略屏蔽
+    ShieldCategory.EVENT: EventSerializer,  # 根据事件屏蔽
+    ShieldCategory.ALERT: AlertSerializer,  # 根据告警屏蔽
+    ShieldCategory.DIMENSION: DimensionSerializer,  # 根据维度屏蔽
 }

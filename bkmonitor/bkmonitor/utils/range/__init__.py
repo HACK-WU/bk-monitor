@@ -24,6 +24,7 @@ __all__ = [
 SUPPORT_SIMPLE_METHODS = ("include", "exclude", "gt", "gte", "lt", "lte", "eq", "neq", "reg", "nreg")
 SUPPORT_COMPOSITE_METHODS = ("or", "and")
 
+# 条件表达式与类的映射
 CONDITION_CLASS_MAP = {
     "eq": conditions.EqualCondition,
     "neq": conditions.NotEqualCondition,
@@ -38,7 +39,9 @@ CONDITION_CLASS_MAP = {
     "issuperset": conditions.IsSuperSetCondition,
 }
 
+# 默认的维度字段类
 DEFAULT_DIMENSION_FIELD_CLASS = fields.DimensionField
+# 维度字段名称与类的映射
 DIMENSION_FIELD_CLASS_MAP = {
     "ip": fields.IpDimensionField,
     "bk_target_ip": fields.BkTargetIpDimensionField,

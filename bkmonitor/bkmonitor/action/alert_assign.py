@@ -267,7 +267,7 @@ class AlertAssignMatchManager:
     ):
         """
         :param alert: 告警
-        :param notice_users: 通知人员
+        :param notice_users: 通知人员（告警负责人）
         :param group_rules: 指定的分派规则, 以优先级
         """
         self.alert = alert
@@ -278,7 +278,9 @@ class AlertAssignMatchManager:
         # 针对存量的数据，默认为通知+分派规则
         self.assign_mode = assign_mode or [AssignMode.ONLY_NOTICE, AssignMode.BY_RULE]
         self.notice_type = notice_type
+        # 获取CMDB相关的维度信息
         self.cmdb_dimensions = self.get_match_cmdb_dimensions(cmdb_attrs)
+        # 获取当前告警的维度
         self.dimensions = self.get_match_dimensions()
         extra_info = self.alert.extra_info.to_dict() if self.alert.extra_info else {}
         self.rule_snaps = extra_info.get("rule_snaps") or {}

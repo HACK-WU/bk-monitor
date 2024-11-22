@@ -49,6 +49,7 @@ class ShieldObj(object):
         self.time_check = None
         self.notice_lock_key = NOTICE_SHIELD_KEY_LOCK.get_key(shield_id=self.config["id"])
         self.display_manager = DisplayManager()
+        # 解析维度配置，并将匹配条件添加到dimension_check
         self._parse_dimension_config()
         self._parse_cycle_config()
 
@@ -74,21 +75,42 @@ class ShieldObj(object):
     def _parse_dimension_conditions(self, clean_dimension):
         """
         根据维度信息配置屏蔽条件
-        :param clean_dimension:
-        :return:
+        假设dimension_conditions为:'A and B or c and d or e',
+        那么处理后的结果为：'(A and B) or (c and d) or (e)'
+
+        :param clean_dimension: 清洗后的维度信息字典
+        :return: None
         """
+        # 从清洗后的维度信息中获取维度条件列表，若不存在则默认为空列表
         dimension_conditions = clean_dimension.pop("dimension_conditions", [])
+
+        # 初始化一个OrCondition对象，用于存储最终的或条件
         or_condition = OrCondition()
+
+        # 初始化一个AndCondition对象，用于存储当前的与条件
         and_condition = AndCondition()
+
+        # 遍历维度条件列表
         for condition in dimension_conditions:
+            # 根据条件中的key和value加载对应的字段实例
             field = load_field_instance(condition["key"], condition["value"])
+
+            # 根据条件中的方法获取对应的条件类，若不存在则默认为EqualCondition
             condition_class = CONDITION_CLASS_MAP.get(condition.get("method"), EqualCondition)
+
+            # 如果当前条件的条件类型为"or"且当前存在与条件，则将当前的与条件添加到或条件中，并重新初始化一个与条件对象
             if condition.get("condition") == "or" and and_condition.conditions:
                 or_condition.add(and_condition)
                 and_condition = AndCondition()
+
+            # 将当前条件类的实例添加到与条件中
             and_condition.add(condition_class(field))
+
+        # 如果当前的与条件中存在条件，则将其添加到或条件中
         if and_condition.conditions:
             or_condition.add(and_condition)
+
+        # 如果最终的或条件中存在条件，则将其添加到维度检查对象中
         if or_condition.conditions:
             self.dimension_check.add(or_condition)
 
@@ -98,11 +120,12 @@ class ShieldObj(object):
         :return: list[condition]
         """
 
+        # 获取到一个AND条件匹配器
         self.dimension_check = AndCondition()
-
+        # 清晰维度，并获取到新的维度配置
         clean_dimension = self._clean_dimension()
         if self.is_dimension_scope:
-            # 如果是按维度屏蔽，直接获取维度信息
+            # 解析维度匹配条件，并添加到dimension_check中
             self._parse_dimension_conditions(clean_dimension)
             return
         if self.config["category"] == ShieldCategory.STRATEGY:
@@ -140,13 +163,15 @@ class ShieldObj(object):
 
     def _clean_dimension(self):
         """
-        对配置中的维度进行初始化，删除下划线开头的，包含all的等
+        清洗维度配置，删除无效的维度配置。
+        当分类中有all，或者以"_"下划线开头的key,或者value中包含000的维度都需要删除。
         :return:
         """
 
         def is_contains_00(para):
             """
-            判断是否包含00
+            判断是否包含00，
+            包含则需要删除该维度
             :param : str|list
             :return: bool
             """
@@ -159,6 +184,7 @@ class ShieldObj(object):
         def is_start_with__(parm):
             """
             判断key是否以“_”开头
+            是则需要删除该维度
             :param parm:str
             :return: bool
             """
@@ -168,7 +194,8 @@ class ShieldObj(object):
 
         def is_contains_all(parm):
             """
-            判断当key等于category是value是否是all
+            判断分类这个维度是否是aLL,或者分类中是否包含all。
+            如果是，后面需要删除这个维度。不然匹配所有分类，是无效的。
             :param parm: dict
             :return: bool
             """
@@ -323,7 +350,8 @@ class ShieldObj(object):
                 ),
                 context=context,
             )
-            logger.debug("[屏蔽通知] shield({}) 通知方式：{}, 内容：{}".format(self.config["id"], notice_way, sender.content))
+            logger.debug(
+                "[屏蔽通知] shield({}) 通知方式：{}, 内容：{}".format(self.config["id"], notice_way, sender.content))
             notice_result = sender.send(notice_way, notice_receivers)
             all_notice_result[notice_way] = notice_result
 
@@ -432,9 +460,9 @@ class AlertShieldObj(ShieldObj):
         tag_prefix = "tags."
         for key, value in dimension.items():
             new_dimensions[key] = value
-            if key.startswith(tag_prefix) and key[len(tag_prefix) :] not in dimension:
+            if key.startswith(tag_prefix) and key[len(tag_prefix):] not in dimension:
                 # 将带tags前缀的维度转换为不带前缀，扩大搜索维度  (tags.device_name => device_name)
-                new_dimensions[key[len(tag_prefix) :]] = value
+                new_dimensions[key[len(tag_prefix):]] = value
         return new_dimensions
 
     def is_match(self, alert: AlertDocument):

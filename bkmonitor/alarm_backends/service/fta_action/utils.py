@@ -50,7 +50,7 @@ logger = logging.getLogger("fta_action.run")
 class PushActionProcessor:
     @classmethod
     def push_actions_to_queue(
-        cls, generate_uuid, alerts=None, is_shielded=False, need_noise_reduce=False, notice_config=None
+            cls, generate_uuid, alerts=None, is_shielded=False, need_noise_reduce=False, notice_config=None
     ):
         """推送处理事件至收敛队列"""
         if not alerts:
@@ -108,9 +108,9 @@ class PushActionProcessor:
                             converge_config = action["options"].get("converge_config")
 
                 if (
-                    not converge_config
-                    and action_instance.action_plugin.get("plugin_type") == ActionPluginType.NOTICE
-                    and notice_config
+                        not converge_config
+                        and action_instance.action_plugin.get("plugin_type") == ActionPluginType.NOTICE
+                        and notice_config
                 ):
                     converge_config = notice_config.get("options", {}).get("converge_config")
 
@@ -138,7 +138,7 @@ class PushActionProcessor:
 
     @classmethod
     def push_action_to_execute_queue(
-        cls, action_instance, alerts=None, countdown=0, callback_func="execute", kwargs=None
+            cls, action_instance, alerts=None, countdown=0, callback_func="execute", kwargs=None
     ):
         """
         直接推送告警到执行队列
@@ -289,9 +289,9 @@ def need_poll(action_instance: ActionInstance):
     :return:
     """
     if (
-        len(action_instance.alerts) != 1
-        or (action_instance.parent_action_id > 0)
-        or action_instance.inputs.get("notice_type") == ActionNoticeType.UPGRADE
+            len(action_instance.alerts) != 1
+            or (action_instance.parent_action_id > 0)
+            or action_instance.inputs.get("notice_type") == ActionNoticeType.UPGRADE
     ):
         # 只有单告警动作才会存在周期通知
         # 子任务也不需要创建周期通知
@@ -327,63 +327,69 @@ class AlertAssignee:
     """
 
     def __init__(self, alert, user_groups, follow_groups=None):
-        self.alert = alert
-        self.user_groups = user_groups
-        self.follow_groups = follow_groups or []
-        self.biz_group_users = self.get_biz_group_users()
+        """
+        :param alert: 告警
+        :param user_groups:  主要负责人组
+        :param follow_groups:  关注负责人组
+        """
+        self.alert = alert  # 初始化告警实例
+        self.user_groups = user_groups  # 初始化主要用户组
+        self.follow_groups = follow_groups or []  # 初始化关注责任人组
+        self.biz_group_users = self.get_biz_group_users()  # 获取业务组用户
+        # 所有组用户的默认字典，格式为{组ID: [用户ID, ...]}
         self.all_group_users = defaultdict(list)
+        # 微信机器人及用户的默认字典，
         self.wxbot_mention_users = defaultdict(list)
-        self.get_all_group_users()
+        self.get_all_group_users()  # 获取所有组用户
 
     @staticmethod
     def get_notify_item(notify_configs, bk_biz_id):
         """
         获取当前时间内的通知配置
-        :param notify_configs:
-        :param bk_biz_id
-        :return:
+        :param notify_configs: 通知配置列表
+        :param bk_biz_id: 业务ID
+        :return: 当前时间内的通知配置项
         """
         # 设置业务时区
         i18n.set_biz(bk_biz_id)
-        now_time = time_tools.strftime_local(datetime.now(), _format="%H:%M")
-        notify_item = None
-        for config in notify_configs:
+        now_time = time_tools.strftime_local(datetime.now(), _format="%H:%M")  # 获取当前本地时间
+        notify_item = None  # 初始化通知配置项为空
+        for config in notify_configs:  # 遍历所有通知配置
             # 通知时间段有多个，需要逐一进行遍历
             alarm_start_time, alarm_end_time = config.get("time_range", "00:00--23:59").split("--")
-            alarm_start_time = alarm_start_time.strip()[:5]
-            alarm_end_time = alarm_end_time.strip()[:5]
+            alarm_start_time = alarm_start_time.strip()[:5]  # 去除开始时间的空白并截取前5个字符
+            alarm_end_time = alarm_end_time.strip()[:5]  # 去除结束时间的空白并截取前5个字符
 
-            if alarm_start_time <= alarm_end_time:
-                if alarm_start_time <= now_time <= alarm_end_time:
-                    # 情况1：开始时间 <= 结束时间，属于同一天的情况
-                    notify_item = config
-                    break
-            elif alarm_start_time <= now_time or now_time <= alarm_end_time:
-                # 情况2：开始时间 > 结束时间，属于跨天的情况
-                notify_item = config
-                break
-        if notify_item:
-            for notify_config in notify_item["notify_config"]:
+            if alarm_start_time <= alarm_end_time:  # 如果开始时间小于等于结束时间，属于同一天的情况
+                if alarm_start_time <= now_time <= alarm_end_time:  # 如果当前时间在通知时间段内
+                    notify_item = config  # 设置通知配置项为当前配置
+                    break  # 跳出循环
+            elif alarm_start_time <= now_time or now_time <= alarm_end_time:  # 如果开始时间大于结束时间，属于跨天的情况
+                notify_item = config  # 设置通知配置项为当前配置
+                break  # 跳出循环
+        if notify_item:  # 如果找到了通知配置项
+            for notify_config in notify_item["notify_config"]:  # 遍历通知配置项中的每个配置
                 # 转换一下数据格式为最新支持的数据类型
                 UserGroup.translate_notice_ways(notify_config)
-        return notify_item
+        return notify_item  # 返回找到的通知配置项
 
     def get_group_notify_configs(self, notice_type, user_type):
         """
         获取通知组对应的通知方式内容
         @:param notice_type: alert_notice: 告警通知  action_notice： 执行通知配置
         """
-        group_notify_items = defaultdict(dict)
-        user_groups = self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups
-        for user_group in UserGroup.objects.filter(id__in=user_groups):
-            group_notify_items[user_group.id] = {
+        group_notify_items = defaultdict(dict)  # 初始化通知组项的默认字典
+        user_groups = self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups  # 根据用户类型选择用户组
+        for user_group in UserGroup.objects.filter(id__in=user_groups):  # 遍历选定的用户组
+            group_notify_items[user_group.id] = {  # 设置通知组项
                 "notice_way": self.get_notify_item(getattr(user_group, notice_type, []), self.alert.event.bk_biz_id),
-                "mention_users": self.get_group_mention_users(user_group),
+                # 获取通知方式
+                "mention_users": self.get_group_mention_users(user_group),  # 获取提及的用户
             }
-        return group_notify_items
+        return group_notify_items  # 返回通知组项
 
     def get_all_group_users(
-        self,
+            self,
     ):
         """
         获取所有的用户组信息
@@ -394,7 +400,9 @@ class AlertAssignee:
         if not user_groups:
             # 如果告警组不存在，忽略
             return
+        # 获取需要轮值的用户
         self.get_group_users_with_duty(user_groups)
+        # 获取不需要轮值的用户
         self.get_group_users_without_duty(user_groups)
 
     def get_group_users_without_duty(self, user_groups):
@@ -422,76 +430,91 @@ class AlertAssignee:
         """
         获取用户组对应的提醒人员列表和chat_id
         """
-        mention_users = []
-        mention_list = user_group.mention_list
+        mention_users = []  # 初始化提醒用户列表
+        mention_list = user_group.mention_list  # 获取用户组的提及列表
+        # 如果提及类型为0且提及列表为空，则设置提及列表为包含所有用户的默认值
         if user_group.mention_type == 0 and not user_group.mention_list:
             mention_list = [{"type": "group", "id": "all"}]
+            # 如果已经设置了channels并且没有企业微信机器人，直接设置为空
             if user_group.channels and NoticeChannel.WX_BOT not in user_group.channels:
-                # 如果已经设置了channels并且没有企业微信机器人，直接设置为空
                 mention_list = []
+        # 遍历提及列表
         for user in mention_list:
+            # 如果用户类型是组
             if user["type"] == "group":
+                # 如果是所有用户组，则扩展所有用户组的用户
                 if user["id"] == "all":
                     mention_users.extend(self.all_group_users.get(user_group.id, []))
                     continue
+                # 否则，遍历业务组用户并添加到提醒用户列表
                 for username in self.biz_group_users.get(user["id"]) or []:
                     if username not in mention_users:
                         mention_users.append(username)
+            # 如果用户类型是个人且ID不在提醒用户列表中，则添加到列表
             elif user["type"] == "user" and user["id"] not in mention_users:
                 mention_users.append(user["id"])
-        return mention_users
+        return mention_users  # 返回提醒用户列表
 
     def get_group_users_with_duty(self, user_groups):
         """
         获取需要轮值的用户
         :return:
         """
-        if not user_groups:
+        if not user_groups:  # 如果没有用户组，直接返回
             return
+        # 过滤出需要轮值的用户组，并只获取特定字段
         duty_groups = UserGroup.objects.filter(id__in=user_groups, need_duty=True).only("timezone", "id", "duty_rules")
-        group_duty_plans = defaultdict(dict)
+        group_duty_plans = defaultdict(dict)  # 初始化值班计划的字典
+        # 遍历需要轮值的用户组
         for group in duty_groups:
-            now = time_tools.datetime2str(datetime.now(tz=pytz.timezone(group.timezone)))
+            now = time_tools.datetime2str(datetime.now(tz=pytz.timezone(group.timezone)))  # 获取当前时间字符串
+            # 过滤出有效的值班计划，并按顺序排序
             for duty_plan in DutyPlan.objects.filter(
-                user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
+                    user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
             ).order_by("order"):
-                rule_id = duty_plan.duty_rule_id
-                group_duty_plans[group.id].setdefault(rule_id, []).append(duty_plan)
+                rule_id = duty_plan.duty_rule_id  # 获取值班规则的ID
+                group_duty_plans[group.id].setdefault(rule_id, []).append(duty_plan)  # 添加到值班计划字典
 
+        # 再次遍历需要轮值的用户组
         for group in duty_groups:
+            # 如果当前告警组没有值班计划，直接跳过
             if group.id not in group_duty_plans:
-                # 如果当前告警组没有值班计划，直接返回
                 continue
-            self.get_group_duty_users(group, group_duty_plans[group.id])
+            self.get_group_duty_users(group, group_duty_plans[group.id])  # 获取当前用户组的值班用户
 
     def get_group_duty_users(self, group, group_duty_plans):
         """
         获取当前用户组的值班用户
         """
+        # 遍历用户组的值班规则
         for rule_id in group.duty_rules:
-            is_rule_matched = False
+            is_rule_matched = False  # 初始化规则匹配标志
+            # 如果当前规则不存在计划中，继续下一个规则
             if rule_id not in group_duty_plans:
-                # 如果当前规则不存在计划中，继续下一个规则
                 continue
 
-            alert_time = datetime.now(tz=pytz.timezone(group.timezone))
+            alert_time = datetime.now(tz=pytz.timezone(group.timezone))  # 获取当前时间的时区感知对象
 
+            # 遍历当前规则的值班计划
             for duty_plan in group_duty_plans[rule_id]:
+                # 如果当前计划没有生效，则跳过
                 if not duty_plan.is_active_plan(data_time=time_tools.datetime2str(alert_time)):
-                    # 当前计划没有生效则不获取
                     continue
                 # 如果当前轮值规则适配生效，则需要终止下一个规则生效
                 is_rule_matched = True
-                group_users = self.all_group_users[duty_plan.user_group_id]
+                group_users = self.all_group_users[duty_plan.user_group_id]  # 获取用户组的用户列表
+                # 遍历值班计划中的用户
                 for user in duty_plan.users:
+                    # 如果用户类型是组，则遍历并添加用户
                     if user["type"] == "group":
                         for username in self.biz_group_users.get(user["id"]) or []:
                             if username not in group_users:
                                 group_users.append(username)
+                    # 如果用户类型是个人且ID不在用户列表中，则添加到列表
                     elif user["type"] == "user" and user["id"] not in group_users:
                         group_users.append(user["id"])
+            # 如果适配到了对应的轮值规则，记录日志并返回
             if is_rule_matched:
-                # 适配到了对应的轮值规则，中止
                 logger.info("user group (%s) matched duty rule(%s) for alert(%s)", group.id, rule_id, self.alert.id)
                 return
 
@@ -510,11 +533,11 @@ class AlertAssignee:
         return all_assignee
 
     def get_notice_receivers(
-        self,
-        notice_type=NoticeType.ALERT_NOTICE,
-        notice_phase=None,
-        notify_configs=None,
-        user_type=UserGroupType.MAIN,
+            self,
+            notice_type=NoticeType.ALERT_NOTICE,
+            notice_phase=None,
+            notify_configs=None,
+            user_type=UserGroupType.MAIN,
     ):
         """
         根据用户组和告警获取通知方式和对应的处理人元信息

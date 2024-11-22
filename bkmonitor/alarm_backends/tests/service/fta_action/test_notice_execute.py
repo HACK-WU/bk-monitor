@@ -467,6 +467,7 @@ def register_builtin_plugins():
 
 
 def get_strategy_dict(group_id):
+    # 处理套餐配置
     notice_action_config = {
         "execute_config": {
             "template_detail": {
@@ -487,6 +488,7 @@ def get_strategy_dict(group_id):
         "name": "test_notice",
     }
 
+    # 告警策略
     strategy_dict = {
         "id": 1,
         "type": "monitor",
@@ -504,7 +506,7 @@ def get_strategy_dict(group_id):
             "signal": ["abnormal", "recovered", "ack"],
             # 触发信号，abnormal-异常，recovered-恢复，closed-关闭，execute-执行动作时, execute_success-执行成功, execute_failed-执行失败
             "options": {
-                "converge_config": {
+                "converge_config": {  # 配置的维度匹配条件
                     "is_enabled": True,
                     "converge_func": "collect",
                     "timedelta": 60,
@@ -894,6 +896,8 @@ class TestActionProcessor(TransactionTestCase):
         local_timezone = pytz.timezone("Asia/Shanghai")
         today_begin = time_tools.datetime2str(datetime.now(tz=local_timezone), "%Y-%m-%d 00:00")
         today_end = time_tools.datetime2str(datetime.now(tz=local_timezone), "%Y-%m-%d 23:59")
+
+        # 轮值计划
         self.duty_plans = [
             {
                 "duty_rule_id": 1,
@@ -947,6 +951,7 @@ class TestActionProcessor(TransactionTestCase):
             }
         )
         self.current_time = int(time.time())
+        # 告警信息
         self.alert_info = {
             "id": "1",
             "alert_name": "test",
@@ -3408,15 +3413,22 @@ class TestActionProcessor(TransactionTestCase):
         action_config_patch.stop()
 
     def create_shield_group(self):
+        """
+        创建告警组
+        :return:
+        """
         duty_arranges = [
             {
                 "users": [{"id": "selinagyan", "display_name": "郭燕", "logo": "", "type": "user"}],
             },
         ]
+        # 创建告警组
         group = UserGroup.objects.create(**self.user_group_data)
+        # 不需要交替轮值
         group.need_duty = False
         group.save()
 
+        # 创建固定轮值，并关联告警组
         for duty in duty_arranges:
             duty.update({"user_group_id": group.id})
             DutyArrange.objects.create(**duty)
@@ -3938,8 +3950,10 @@ class TestActionProcessor(TransactionTestCase):
         :return:
         """
         settings.GLOBAL_SHIELD_ENABLED = True
+        # 创建告警组
         group = self.create_shield_group()
 
+        # 获取到关联当前告警组的告警策略
         strategy_dict = get_strategy_dict(group.id)
         self.alert_info["extra_info"].update(strategy=strategy_dict)
 
@@ -3952,12 +3966,15 @@ class TestActionProcessor(TransactionTestCase):
         ):
             alert_doc.strategy_id = strategy_dict["id"]
             alert = Alert(data=alert_doc.to_dict())
+            # 此时告警处于屏蔽状态,因为设置了全局屏蔽:settings.GLOBAL_SHIELD_ENABLED = True
+            # 检查所有告警的屏蔽状态，并将未屏蔽告警策略和ID存储起来
             ShieldStatusChecker(alerts=[alert]).check_all()
-            # 告警屏蔽的状态下创建了通知，因为屏蔽，实际上仅创建了主任务
+            # 告警屏蔽的状态下创建任务
             actions0 = create_actions(1, "abnormal", alerts=[alert_doc])
             self.assertEqual(len(actions0), 1)
             self.assertTrue(alert.data["is_shielded"])
 
+            # 相当于屏蔽解除
             settings.GLOBAL_SHIELD_ENABLED = False
             with patch("alarm_backends.service.fta_action.tasks.create_actions.delay", return_value=1):
                 # 解除屏蔽之后，应该创建一个新的通知任务

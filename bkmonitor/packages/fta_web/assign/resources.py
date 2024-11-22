@@ -89,6 +89,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
     @staticmethod
     def compare_rules(group_id, debug_rules):
+        # 获取到当前规则组下的已经存在的规则
         existed_rules = {
             rule["id"]: rule
             for rule in AssignRuleSlz(instance=AlertAssignRule.objects.filter(assign_group_id=group_id), many=True).data
@@ -144,6 +145,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
     def perform_request(self, validated_request_data):
         bk_biz_id = validated_request_data["bk_biz_id"]
+        # 获取主机属性|集群属性|模块属性
         self.hosts, self.sets, self.modules = self.get_cmdb_attributes(validated_request_data["bk_biz_id"])
         # step1 获取最近1周内产生的前1000条告警数据？，所有数据默认为abnormal
         current_time = datetime.now()
@@ -156,7 +158,9 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             "end_time": validated_request_data["end_time"] or int(current_time.timestamp()),
         }
         handler = AlertQueryHandler(**search_params)
+        # 查询并获取到告警数据
         search_result, _ = handler.search_raw()
+        # 将告警数据转为AlertDocument告警对象
         alerts = [AlertDocument(**hit.to_dict()) for hit in search_result]
 
         # step2 获取当前DB存储的所有规则，并替换掉当前的告警规则
@@ -166,13 +170,16 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         priority = validated_request_data.get("priority", 0)
         exclude_groups = validated_request_data.get("exclude_groups") or []
 
+        # 获取到告警分派规则组
         groups_queryset = AlertAssignGroup.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).order_by(
             "-priority"
         )
 
+        # 过滤掉不需要的规则组
         if exclude_groups:
             groups_queryset = groups_queryset.exclude(id__in=validated_request_data["exclude_groups"])
         groups = {group["id"]: group for group in AssignGroupSlz(instance=groups_queryset, many=True).data}
+        # 去掉ID字段
         for group in groups.values():
             group.pop("id", None)
 
@@ -185,13 +192,15 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             groups[group_id]["name"] = group_name
             priority_rules[priority] = validated_request_data["rules"]
 
-        # 2.2 获取所有的规则
+        # 2.2 获取到所有的不属于当前规则组的规则
         rules_queryset = AlertAssignRule.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).exclude(
             assign_group_id=group_id
         )
+        # 再次过滤掉不需要的规则
         if exclude_groups or group_id:
             exclude_groups.append(group_id)
             rules_queryset = rules_queryset.exclude(assign_group_id__in=exclude_groups)
+        # 拿到不属于当期规则组的规则
         rules = AssignRuleSlz(instance=rules_queryset, many=True).data
 
         # 2.3 通过优先级和组名进行排序
@@ -207,6 +216,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
         # step3 对告警进行规则适配 ?? 是否需要后台任务支持
         matched_alerts = []
+        # 按优先级进行排序并存储的规则
         matched_group_alerts = defaultdict(list)
         for alert in alerts:
             origin_severity = alert.severity
@@ -215,6 +225,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 notice_users=alert.assignee,
                 group_rules=sorted_priority_rules,
                 assign_mode=[AssignMode.BY_RULE],
+                # 获取到告警的CMDB属性： {"host": host, "sets": sets, "modules": modules}
                 cmdb_attrs=self.get_alert_cmdb_attributes(alert),
             )
             alert_manager.run_match()

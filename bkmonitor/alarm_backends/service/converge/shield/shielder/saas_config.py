@@ -40,7 +40,8 @@ class AlertShieldConfigShielder(BaseShielder):
     type = ShieldType.SAAS_CONFIG
 
     def get_shield_objs_from_cache(self):
-        # 从缓存获取alert近期命中的屏蔽配置ID列表
+        # 从缓存获取alert近期命中的屏蔽配置ID列表，并过滤存在于当前获取的config_ids中的屏蔽配置。
+        # 过滤出的就是曾经匹配到过的告警配置，因为只有匹配到了才会被写入缓存。
         key = self.shield_objs_cache_key(self.alert)
         if key is None:
             # 告警没有策略(第三方告警), 或者未设置过缓存 返回None
@@ -64,8 +65,17 @@ class AlertShieldConfigShielder(BaseShielder):
         return True
 
     def __init__(self, alert: AlertDocument):
+        """
+        初始化,并获取到符合当前告警的屏蔽配置列表，并保存在self.shield_objs中。
+        如果self.shield_objs为空，则说明当前告警没有被屏蔽。
+        :param alert:
+        """
         self.alert = alert
         try:
+            # 从缓存中获取到该业务下所有的告警屏蔽配置
+            # 缓存中的数据来源,后台有一个定时任务:"alarm_backends.core.cache.shield.main", "* * * * *", "global"
+            # 每分钟执行一次，从数据库中读取，将不同业务下的屏蔽配置存入缓存。
+            # 如果需要解除屏蔽，直接修改数据库即可，因为一分钟以后，会被刷新到缓存中。这样就匹配不到解除屏蔽后的告警了。
             self.configs = ShieldCacheManager.get_shields_by_biz_id(self.alert.event.bk_biz_id)
             config_ids: [str] = ",".join([str(config["id"]) for config in self.configs])
             logger.debug(
@@ -75,15 +85,21 @@ class AlertShieldConfigShielder(BaseShielder):
                 config_ids,
             )
         except BaseException as error:
+            # 如果获取配置失败，记录错误并初始化为空列表
             self.configs = []
             logger.exception(
                 "[load shield failed] alert(%s) strategy(%s) detail:(%s)", self.alert.id, self.alert.strategy_id, error
             )
 
+        # 尝试从缓存中获取屏蔽对象
         shield_objs_cache = self.get_shield_objs_from_cache()
         from_cache = True
+        # 没获取到，则现场生成一个屏蔽对象，然后写入缓存
         if shield_objs_cache is None:
+            # 如果缓存中没有，则进行匹配并更新缓存
             self.shield_objs = []
+            # 循环根据屏蔽配置生成告警屏蔽对象，然后匹配当前告警，匹配成功，证明当前告警需要被屏蔽，并记录下对一个的告警屏蔽对象。
+            # 最后将匹配成功的屏蔽对象写入缓存，下次匹配时，直接从缓存中获取，增加效率
             for config in self.configs:
                 shield_obj = AlertShieldObj(config)
                 if shield_obj.is_match(alert):
@@ -91,27 +107,32 @@ class AlertShieldConfigShielder(BaseShielder):
             self.set_shield_objs_cache()
             from_cache = False
         else:
+            # 如果缓存中有，直接使用缓存数据
             self.shield_objs = shield_objs_cache
 
+        # 如果没有匹配到任何屏蔽配置，记录日志
         if not self.shield_objs:
-            # 记录未匹配屏蔽的告警信息
             detail = "%s 条屏蔽配置全部未匹配" % len(self.configs)
             if len(self.configs) == 0:
                 detail = "无生效屏蔽配置"
             if not from_cache:
                 logger.info("[shield skipped] alert(%s) strategy(%s) %s", alert.id, alert.strategy_id, detail)
 
+        # 记录匹配到的屏蔽配置ID
         shield_config_ids = ",".join([str(shield_obj.id) for shield_obj in self.shield_objs])
         self.is_global_shielder = None
         self.is_host_shielder = None
+        # 设置屏蔽详情信息
         self.detail = extended_json.dumps({"message": _("因为告警屏蔽配置({})屏蔽当前处理").format(shield_config_ids)})
 
     def shield_objs_cache_key(self, alert):
+        # 生成缓存键，如果没有策略ID则返回None
         if not alert.strategy_id:
             return None
         return ALERT_SHIELD_SNAPSHOT.get_key(strategy_id=self.alert.strategy_id, alert_id=self.alert.id)
 
     def is_matched(self):
+        # 检查是否匹配全局屏蔽或主机屏蔽
         if GlobalShielder().is_matched():
             self.is_global_shielder = True
             self.detail = extended_json.dumps({"message": _("因系统全局屏蔽配置， 默认屏蔽当前处理")})
@@ -122,6 +143,7 @@ class AlertShieldConfigShielder(BaseShielder):
             self.detail = extended_json.dumps({"message": _("因当前主机状态为屏蔽告警，默认屏蔽当前处理")})
             return True
 
+        # 返回是否有匹配的屏蔽对象，如果有则返回True，表示需要被屏蔽
         return bool(self.shield_objs)
 
     def get_shield_left_time(self):
@@ -129,9 +151,10 @@ class AlertShieldConfigShielder(BaseShielder):
         获取当前告警的屏蔽剩余时间
         :return:
         """
+        # 如果是全局屏蔽或主机屏蔽，返回0
         if self.is_global_shielder or self.is_host_shielder:
-            # 全局屏蔽的情况下
             return 0
+        # 否则计算并返回剩余屏蔽时间
         matched_config_left_time = self.cal_shield_left_time()
         if matched_config_left_time:
             return matched_config_left_time[0][1]
@@ -144,15 +167,17 @@ class AlertShieldConfigShielder(BaseShielder):
         matched_config_left_time = []
         current_time = arrow.now()
         for shield_obj in self.shield_objs:
-            # 计算剩余屏蔽时间
+            # 计算每个屏蔽对象的剩余时间并添加到列表中
             matched_config_left_time.append((shield_obj.id, shield_obj.time_check.shield_left_time(current_time)))
+        # 按剩余时间倒序排列
         matched_config_left_time.sort(key=lambda s: s[1], reverse=True)
         return matched_config_left_time
 
     def list_shield_ids(self):
+        # 如果是全局屏蔽或主机屏蔽，返回空列表
         if self.is_global_shielder or self.is_host_shielder:
-            # 全局屏蔽的情况下直接返回
             return []
+        # 否则返回按屏蔽时长倒序排列的屏蔽配置ID列表
         matched_config_left_time = self.cal_shield_left_time()
         return [config[0] for config in matched_config_left_time]
 

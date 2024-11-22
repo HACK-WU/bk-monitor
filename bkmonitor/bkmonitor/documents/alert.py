@@ -79,6 +79,7 @@ class AlertDocument(BaseDocument):
 
     is_handled = field.Boolean()
     is_ack = field.Boolean()
+    # 是否已通知
     is_ack_noticed = field.Boolean()
     ack_operator = field.Keyword()
     is_shielded = field.Boolean()

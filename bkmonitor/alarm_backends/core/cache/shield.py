@@ -86,6 +86,11 @@ class ShieldCacheManager(CacheManager):
 
     @classmethod
     def refresh(cls):
+        """
+        刷新缓存
+        将不同业务下的所有屏蔽配置拉取出来，按业务缓存
+        :return:
+        """
         now = time_tools.now()
         biz_list = BusinessManager.all()
 
@@ -117,6 +122,7 @@ class ShieldCacheManager(CacheManager):
                 pipeline.delete(cls.CACHE_KEY_TEMPLATE.format(bk_biz_id))
         pipeline.execute()
 
-
+# "alarm_backends.core.cache.shield.main", "* * * * *", "global"
+# 存在一个后台的定时任务，每分钟执行一次，以bk_biz_id=[{xxx},...]的格式，存入到缓存中
 def main():
     ShieldCacheManager.refresh()

@@ -60,6 +60,10 @@ class CompositeCondition(Condition):
 
 
 class OrCondition(CompositeCondition):
+    """
+    OR条件匹配器
+    有一个条件匹配则匹配成功
+    """
     def is_match(self, data):
         if not self.conditions:
             return True
@@ -71,7 +75,12 @@ class OrCondition(CompositeCondition):
 
 
 class AndCondition(CompositeCondition):
+    """
+    AND条件匹配器
+    有一个条件不匹配则匹配失败
+    """
     def is_match(self, data):
+        # 匹配条件为空，则默认匹配
         if not self.conditions:
             return True
 
