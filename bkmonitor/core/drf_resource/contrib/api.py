@@ -132,6 +132,10 @@ class APIResource(six.with_metaclass(abc.ABCMeta, CacheResource)):
         return super(APIResource, self).request(request_data, **kwargs)
 
     def full_request_data(self, validated_request_data):
+        """
+        丰富请求数据
+        添加上请求的用户信息
+        """
         # 组装通用参数： 1. 用户信息 2. SaaS凭证
         if hasattr(self, "bk_username"):
             validated_request_data.update({BK_USERNAME_FIELD: self.bk_username})
@@ -316,6 +320,9 @@ class APIResource(six.with_metaclass(abc.ABCMeta, CacheResource)):
     def get_request_url(self, validated_request_data):
         """
         获取最终请求的url，也可以由子类进行重写
+        base_url="http://www.demo.com/url1/url2/"
+        actions="book"
+        return "http://www.demo.com/url1/url2/book"
         """
         return self.base_url.rstrip("/") + "/" + self.action.lstrip("/")
 

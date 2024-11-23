@@ -65,7 +65,6 @@ class AssignGroupViewSet(viewsets.ModelViewSet):
 class AssignRuleViewSet(viewsets.ModelViewSet):
     queryset = AlertAssignRule.objects.all()
     serializer_class = serializers.AssignRuleSlz
-
     filter_fields = {
         "assign_group_id": ["exact"],
     }

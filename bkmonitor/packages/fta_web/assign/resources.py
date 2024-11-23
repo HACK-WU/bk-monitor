@@ -13,9 +13,10 @@ import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from itertools import chain
+from typing import Dict
 
 from rest_framework import serializers
-
+from api.cmdb.define import Host, Set, Module
 from bkmonitor.action.alert_assign import AlertAssignMatchManager
 from bkmonitor.action.serializers import (
     AssignGroupSlz,
@@ -89,6 +90,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
     @staticmethod
     def compare_rules(group_id, debug_rules):
+        # 获取到当前规则组下的已经存在的规则
         existed_rules = {
             rule["id"]: rule
             for rule in AssignRuleSlz(instance=AlertAssignRule.objects.filter(assign_group_id=group_id), many=True).data
@@ -107,20 +109,37 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
     @staticmethod
     def get_cmdb_attributes(bk_biz_id):
-        hosts = {
+        # 获取到指定业务下的主机信息
+        hosts: Dict[str, Host] = {
             str(host.bk_host_id or host.host_id): host for host in api.cmdb.get_host_by_topo_node(bk_biz_id=bk_biz_id)
         }
-        sets = {str(bk_set.bk_set_id): bk_set for bk_set in api.cmdb.get_set(bk_biz_id=bk_biz_id)}
-        modules = {str(bk_module.bk_module_id): bk_module for bk_module in api.cmdb.get_module(bk_biz_id=bk_biz_id)}
+        # 获取到指定业务下的集群信息
+        sets: Dict[str, Set] = {str(bk_set.bk_set_id): bk_set for bk_set in api.cmdb.get_set(bk_biz_id=bk_biz_id)}
+        # 获取到指定业务下的模块信息
+        modules: Dict[str, Module] = {str(bk_module.bk_module_id): bk_module for bk_module in
+                                      api.cmdb.get_module(bk_biz_id=bk_biz_id)}
 
         return hosts, sets, modules
 
     def get_alert_cmdb_attributes(self, alert):
+        """
+        根据告警信息获取CMDB属性
+    
+        当没有可用的主机信息时，直接返回None
+    
+        参数:
+        - alert: 告警对象，包含事件信息
+    
+        返回:
+        - alert_cmdb_attributes: 包含主机、集群和模块信息的字典，如果无法获取则为None
+        """
         if not self.hosts:
             return None
         try:
+            # 尝试根据主机ID获取主机信息
             host = self.hosts.get(str(alert.event.bk_host_id))
             if not host:
+                # 如果根据主机ID未找到主机信息，尝试根据IP和云区域ID组合获取
                 host = self.hosts.get(f"{alert.event.ip}|{alert.event.bk_cloud_id}")
         except Exception as error:
             # 非主机的可能会抛出异常
@@ -132,19 +151,38 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         modules = []
         alert_cmdb_attributes = {"host": host, "sets": sets, "modules": modules}
         for bk_set_id in host.bk_set_ids:
+            # 根据集合ID获取集合信息
             biz_set = self.sets.get(str(bk_set_id))
             if biz_set:
                 sets.append(biz_set)
 
         for bk_module_id in host.bk_module_ids:
+            # 根据模块ID获取模块信息
             biz_module = self.modules.get(str(bk_module_id))
             if biz_module:
                 modules.append(biz_module)
         return alert_cmdb_attributes
 
     def perform_request(self, validated_request_data):
+        """
+        告警分派规则调试
+        调试的不仅仅只是当前告警分派规则组的内容，其他规则组的也会进行调试。
+    
+        获取到所有告警，然后循环告警用于匹配传入的规则，看是否命中
+
+        1、提取请求数据：从请求数据中提取业务ID。
+        2、获取CMDB属性：获取主机、集群和模块的属性。
+        3、查询告警数据：根据业务ID和时间范围，查询最近一段时间内的告警数据。
+        4、获取规则组：获取所有告警分派规则组，并根据优先级排序。
+        5、规则适配：对每个告警进行规则适配，记录匹配到的规则和告警信息。
+        6、返回结果：返回所有规则组的信息，包括匹配到的告警数量和规则详情
+        """
+        # 提取请求数据中的业务ID
         bk_biz_id = validated_request_data["bk_biz_id"]
+        
+        # 获取主机属性|集群属性|模块属性
         self.hosts, self.sets, self.modules = self.get_cmdb_attributes(validated_request_data["bk_biz_id"])
+        
         # step1 获取最近1周内产生的前1000条告警数据？，所有数据默认为abnormal
         current_time = datetime.now()
         search_params = {
@@ -152,30 +190,35 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             "page_size": validated_request_data["max_alert_count"],
             "ordering": ["-create_time"],
             "start_time": validated_request_data["start_time"]
-            or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
+                          or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
             "end_time": validated_request_data["end_time"] or int(current_time.timestamp()),
         }
         handler = AlertQueryHandler(**search_params)
+        # 查询并获取到告警数据
         search_result, _ = handler.search_raw()
+        # 将告警数据转为AlertDocument告警对象
         alerts = [AlertDocument(**hit.to_dict()) for hit in search_result]
-
+    
         # step2 获取当前DB存储的所有规则，并替换掉当前的告警规则
         # 2.1 获取到所有的规则组内容
         group_id = validated_request_data.get("assign_group_id", 0)
         group_name = validated_request_data.get("group_name", "")
         priority = validated_request_data.get("priority", 0)
         exclude_groups = validated_request_data.get("exclude_groups") or []
-
+    
+        # 获取到告警分派规则组
         groups_queryset = AlertAssignGroup.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).order_by(
             "-priority"
         )
-
+    
+        # 过滤掉不需要的规则组
         if exclude_groups:
             groups_queryset = groups_queryset.exclude(id__in=validated_request_data["exclude_groups"])
         groups = {group["id"]: group for group in AssignGroupSlz(instance=groups_queryset, many=True).data}
+        # 去掉ID字段
         for group in groups.values():
             group.pop("id", None)
-
+    
         group_rules = defaultdict(list)
         priority_rules = defaultdict(list)
         if group_id:
@@ -184,16 +227,18 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             groups[group_id]["priority"] = priority
             groups[group_id]["name"] = group_name
             priority_rules[priority] = validated_request_data["rules"]
-
-        # 2.2 获取所有的规则
+    
+        # 2.2 获取到所有的不属于当前规则组的规则
         rules_queryset = AlertAssignRule.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).exclude(
             assign_group_id=group_id
         )
+        # 再次过滤掉不需要的规则
         if exclude_groups or group_id:
             exclude_groups.append(group_id)
             rules_queryset = rules_queryset.exclude(assign_group_id__in=exclude_groups)
+        # 拿到不属于当期规则组的规则
         rules = AssignRuleSlz(instance=rules_queryset, many=True).data
-
+    
         # 2.3 通过优先级和组名进行排序
         for rule in rules:
             rule["alerts"] = []
@@ -203,10 +248,12 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         for rule in validated_request_data["rules"]:
             rule["alerts"] = []
         sorted_priorities = sorted(priority_rules.keys(), reverse=True)
+        # 按照优先级排序存储的分派规则
         sorted_priority_rules = [priority_rules[sorted_priority] for sorted_priority in sorted_priorities]
-
+    
         # step3 对告警进行规则适配 ?? 是否需要后台任务支持
         matched_alerts = []
+        # 按优先级排序并存储的匹配到的告警分派规则组
         matched_group_alerts = defaultdict(list)
         for alert in alerts:
             origin_severity = alert.severity
@@ -215,12 +262,15 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 notice_users=alert.assignee,
                 group_rules=sorted_priority_rules,
                 assign_mode=[AssignMode.BY_RULE],
+                # 获取到当前告警的CMDB属性： {"host": host, "sets": sets, "modules": modules}
                 cmdb_attrs=self.get_alert_cmdb_attributes(alert),
             )
+            # 匹配告警，如果匹配，则更新alert告警信息
             alert_manager.run_match()
             if not alert_manager.matched_rules:
                 # 没有适配到任何规则
                 continue
+            # 构建告警详情
             alert_info = {
                 "id": alert.id,
                 "origin_severity": origin_severity,
@@ -235,7 +285,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 matched_rule.assign_rule["alerts"].append(alert_info)
             matched_group_alerts[alert_manager.matched_group_info["group_id"]].append(alert)
             matched_alerts.append(alert_info)
-
+    
         MetricTranslator(bk_biz_ids=[bk_biz_id]).translate_from_dict(
             list(chain(*[alert["metrics"] for alert in matched_alerts])), "id", "name"
         )

@@ -24,6 +24,7 @@ __all__ = [
 SUPPORT_SIMPLE_METHODS = ("include", "exclude", "gt", "gte", "lt", "lte", "eq", "neq", "reg", "nreg")
 SUPPORT_COMPOSITE_METHODS = ("or", "and")
 
+# 条件表达式与类的映射
 CONDITION_CLASS_MAP = {
     "eq": conditions.EqualCondition,
     "neq": conditions.NotEqualCondition,
@@ -38,7 +39,9 @@ CONDITION_CLASS_MAP = {
     "issuperset": conditions.IsSuperSetCondition,
 }
 
+# 默认的维度字段类
 DEFAULT_DIMENSION_FIELD_CLASS = fields.DimensionField
+# 维度字段名称与类的映射
 DIMENSION_FIELD_CLASS_MAP = {
     "ip": fields.IpDimensionField,
     "bk_target_ip": fields.BkTargetIpDimensionField,
@@ -94,17 +97,22 @@ def load_agg_condition_instance(agg_condition):
 
 def load_condition_instance(conditions_config, default_value_if_not_exists=True):
     """
-    Load Condition instance by condition model
-    :param conditions_config:
-            [[{"field":"ip", "method":"eq", "value":"111"}, {}], []]
-    :return: condition object
+    根据conditions配置加载Conditions实例
+    :param conditions_config: 条件配置列表，每个元素是一个条件列表，用于构建OrCondition对象
+            格式为: [[{"field":"ip", "method":"eq", "value":"111"}, {}], []]
+    :param default_value_if_not_exists: 如果条件不存在时的默认值
+    :return: condition object: 返回构建的OrCondition对象
     """
+    # 检查conditions_config是否为列表或元组，如果不是则抛出异常
     if not isinstance(conditions_config, (list, tuple)):
         raise Exception("Config Incorrect, Check your settings.")
 
+    # 创建一个OrCondition对象，用于最终返回
     or_cond_obj = conditions.OrCondition()
+    # 遍历conditions_config中的每个条件列表，每个条件列表用于构建一个AndCondition对象
     for cond_item_list in conditions_config:
         and_cond_obj = conditions.AndCondition()
+        # 遍历条件列表中的每个条件，构建单个条件对象
         for cond_item in cond_item_list:
             field_name = cond_item.get("field")
             method = cond_item.get("method", "eq")
@@ -113,12 +121,19 @@ def load_condition_instance(conditions_config, default_value_if_not_exists=True)
                 method = cond_item.get("_origin_method", "eq")
 
             field_value = cond_item.get("value")
+            # 如果field_name, method, field_value任一为空，则跳过当前条件
             if not all([field_name, method, field_value]):
                 continue
 
+            # 加载单个条件字段实例
             cond_field = load_field_instance(field_name, field_value)
+            # 根据方法获取对应的条件类实例，并传入单个条件字段实例
             cond_obj = CONDITION_CLASS_MAP.get(method)(cond_field, default_value_if_not_exists)
+            # 将条件类实例添加到AndCondition对象中
             and_cond_obj.add(cond_obj)
 
+        # 将构建好的AndCondition对象添加到OrCondition对象中
         or_cond_obj.add(and_cond_obj)
+    # 返回最终构建的OrCondition对象
     return or_cond_obj
+

@@ -260,8 +260,22 @@ class GetHostByTopoNode(CacheResource):
         topo_nodes = serializers.DictField(label="拓扑节点", child=serializers.ListField(), required=False)
 
     def perform_request(self, params):
+        """
+        执行请求并返回主机对象列表。
+    
+        该方法首先根据业务ID和所需的字段获取主机字典。如果提供了拓扑节点参数，则将这些节点转换为模块ID，并过滤主机以仅包含属于这些模块的主机。
+        最后，为每个主机获取完整的云区域信息，并将每个主机封装到Host对象中返回。
+    
+        参数:
+        - params (dict): 包含请求参数的字典，必须包括业务ID('bk_biz_id')和字段('fields')，可选地包括拓扑节点('topo_nodes')。
+    
+        返回:
+        - list[Host]: 主机对象列表，每个对象都包含根据参数筛选后的主机信息。
+        """
+        # 根据业务ID和字段获取主机字典
         hosts = get_host_dict_by_biz(params["bk_biz_id"], params["fields"])
 
+        # 如果提供了拓扑节点参数
         if params.get("topo_nodes", {}):
             # 将查询节点转换为模块ID
             module_ids = _trans_topo_node_to_module_ids(params["bk_biz_id"], params["topo_nodes"])
@@ -272,8 +286,11 @@ class GetHostByTopoNode(CacheResource):
         # 获取云区域信息
         clouds = api.cmdb.search_cloud_area()
 
+        # 为每个主机获取完整的云区域信息
         for host in hosts:
             _host_full_cloud(host, clouds)
+
+        # 将每个主机封装到Host对象中并返回
         return [Host(host) for host in hosts]
 
 
@@ -415,7 +432,8 @@ class GetBusiness(Resource):
     """
 
     class RequestSerializer(serializers.Serializer):
-        bk_biz_ids = serializers.ListField(label="业务ID列表", child=serializers.IntegerField(), required=False, default=[])
+        bk_biz_ids = serializers.ListField(label="业务ID列表", child=serializers.IntegerField(), required=False,
+                                           default=[])
         all = serializers.BooleanField(default=False, help_text="return all space list in Business")
 
         def validate(self, attrs):
@@ -574,7 +592,8 @@ class GetProcess(Resource):
     class RequestSerializer(serializers.Serializer):
         bk_biz_id = serializers.IntegerField(label="业务ID")
         bk_host_id = serializers.IntegerField(label="主机ID", required=False, allow_null=True)
-        include_multiple_bind_info = serializers.BooleanField(required=False, label="是否返回多个绑定信息", default=False)
+        include_multiple_bind_info = serializers.BooleanField(required=False, label="是否返回多个绑定信息",
+                                                              default=False)
 
     def perform_request(self, validated_request_data):
         include_multiple_bind_info = validated_request_data["include_multiple_bind_info"]

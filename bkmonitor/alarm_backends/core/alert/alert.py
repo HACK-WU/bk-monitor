@@ -255,21 +255,37 @@ class Alert:
         self.data["is_blocked"] = is_blocked
 
     def is_valid_handle(self, execute_times=0, action_relation_id=None):
+        """
+        验证是否需要处理
+        如果是第一次处理，且没有关联的任务ID，则需要进行处理。
+        如果不是第一次处理，并且也获取不到处理记录，或者处理次数超过了当前已知处理次数，则不处理。
+        :param execute_times:
+        :param action_relation_id:
+        :return:
+        """
+
+        # 如果从来没有处理过，并且也没有关联任务的ID，则需要进行处理，返回True
         if execute_times == 0 and action_relation_id is None:
-            # 如果是没有处理过的的状态，则直接返回True,表示当次要执行
             return True
+        # 当前告警不是第一次处理了，获取关联任务的处理记录
         handle_record = self.cycle_handle_record.get(str(action_relation_id), {})
+        # 如果没有历史处理记录，但是存在关联的任务ID，则尝试获取到处理套餐ID
         if not handle_record and action_relation_id:
             config_id = None
+            # 尝试从直接通关联的通知配置中获取处理套餐ID
             if str(self.strategy.get("notice", {}).get("id", 0)) == str(action_relation_id):
                 config_id = self.strategy["notice"]["config_id"]
             else:
+                # 尝试从关联的action中获取处理套餐ID
                 for action_config in self.strategy.get("actions", []):
                     if str(action_config["id"]) == str(action_relation_id):
                         config_id = action_config["config_id"]
                         break
             if config_id:
+                # 获取到最新的处理记录
                 handle_record = self.get_latest_interval_record(config_id=config_id, relation_id=action_relation_id)
+
+        # 如果处理记录存在，且执行次数小于等于当前执行次数，则需要处理
         if handle_record and handle_record.get("execute_times") <= execute_times + 1:
             # 当此次执行的次数要大于记录次数情况下才进行处理
             return True

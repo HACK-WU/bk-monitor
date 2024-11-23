@@ -34,7 +34,7 @@ class AlertFieldDisplay:
     ID = _("告警ID")
     RELATED_INFO = _("关联信息")
 
-
+# 事件状态
 class EventStatus:
     CLOSED = "CLOSED"
     RECOVERED = "RECOVERED"

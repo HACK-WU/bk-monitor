@@ -156,6 +156,7 @@ def register_key_with_config(config):
     :rtype: RedisDataKey
     """
     key_type = config["key_type"]
+    # 获取key_type对应的类，比如StringKey,ListKey等等
     key_cls = globals().get("{}Key".format(underscore_to_camel(key_type)))
     if not key_cls:
         raise TypeError("unsupported key type: {}".format(key_type))
@@ -518,6 +519,7 @@ MAIL_REPORT_GROUP_CACHE_KEY = register_key_with_config(
 #####################################################
 #            fta alert 模块相关队列                   #
 #####################################################
+# 获取到的是是一个StringKey的实例
 ALERT_FIRST_HANDLE_RECORD = register_key_with_config(
     {
         "label": "[alert]告警首次处理记录",

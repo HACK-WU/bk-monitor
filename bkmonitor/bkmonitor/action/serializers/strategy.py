@@ -794,6 +794,7 @@ class UserGroupDetailSlz(UserGroupSlz):
 
     name = serializers.CharField(label="告警组名称", required=True)
     bk_biz_id = serializers.IntegerField(required=True)
+    # 是否需要轮值
     need_duty = serializers.BooleanField(required=False, default=False)
     desc = serializers.CharField(required=False, default="", allow_blank=True)
     # duty_arranges和duty_rules二者选其一

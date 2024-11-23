@@ -717,23 +717,25 @@ class MessageQueueSignal:
     RECOVERY_PUSH = "RECOVERY_PUSH"
     CLOSE_PUSH = "CLOSE_PUSH"
 
-
+# 动作信号
 class ActionSignal:
-    MANUAL = "manual"
-    ABNORMAL = "abnormal"
-    RECOVERED = "recovered"
-    CLOSED = "closed"
-    ACK = "ack"
-    NO_DATA = "no_data"
-    COLLECT = "collect"
-    EXECUTE = "execute"
-    EXECUTE_SUCCESS = "execute_success"
-    EXECUTE_FAILED = "execute_failed"
-    DEMO = "demo"
-    UNSHIELDED = "unshielded"
-    UPGRADE = "upgrade"
+    MANUAL = "manual"      # 手动处理
+    ABNORMAL = "abnormal"   # 异常，告警触发
+    RECOVERED = "recovered" # 恢复，告警恢复
+    CLOSED = "closed"      # 告警关闭
+    ACK = "ack"            # 告警确认
+    NO_DATA = "no_data"   # 无数据
+    COLLECT = "collect" # 汇总
+    EXECUTE = "execute" # 执行动作
+    EXECUTE_SUCCESS = "execute_success" # 动作执行成功
+    EXECUTE_FAILED = "execute_failed"   # 动作执行失败
+    DEMO = "demo"   # 调试
+    UNSHIELDED = "unshielded"   # 解除屏蔽
+    UPGRADE = "upgrade" # 通知升级(告警升级)
 
+    # 正常的action信号
     NORMAL_SIGNAL = [ABNORMAL, RECOVERED, CLOSED, NO_DATA, MANUAL, ACK]
+    # 异常的action信号
     ABNORMAL_SIGNAL = [ABNORMAL, NO_DATA]
 
     ACTION_SIGNAL_DICT = {
@@ -752,6 +754,7 @@ class ActionSignal:
         UPGRADE: _lazy("告警升级"),
     }
 
+    # 动作信号映射
     ACTION_SIGNAL_MAPPING = {
         ABNORMAL: "ANOMALY_NOTICE",
         RECOVERED: "RECOVERY_NOTICE",
@@ -759,6 +762,7 @@ class ActionSignal:
         CLOSED: CLOSED,
     }
 
+    # 消息队列操作类型
     MESSAGE_QUEUE_OPERATE_TYPE_MAPPING = {
         ABNORMAL: MessageQueueSignal.ANOMALY_PUSH,
         RECOVERED: MessageQueueSignal.RECOVERY_PUSH,
@@ -766,6 +770,7 @@ class ActionSignal:
         CLOSED: MessageQueueSignal.CLOSE_PUSH,
     }
 
+    # 动作信号选择
     ACTION_SIGNAL_CHOICE = [(key, value) for key, value in ACTION_SIGNAL_DICT.items()]
 
 
