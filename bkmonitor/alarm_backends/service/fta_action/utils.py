@@ -333,14 +333,16 @@ class AlertAssignee:
         :param follow_groups:  关注负责人组
         """
         self.alert = alert  # 初始化告警实例
-        self.user_groups = user_groups  # 初始化主要用户组
+        self.user_groups = user_groups  # 主要负责人组
         self.follow_groups = follow_groups or []  # 初始化关注责任人组
-        self.biz_group_users = self.get_biz_group_users()  # 获取业务组用户
+        # 获取该业务下告警主机的负责人或所在模块负责人
+        self.biz_group_users = self.get_biz_group_users()
         # 所有组用户的默认字典，格式为{组ID: [用户ID, ...]}
         self.all_group_users = defaultdict(list)
         # 微信机器人及用户的默认字典，
         self.wxbot_mention_users = defaultdict(list)
-        self.get_all_group_users()  # 获取所有组用户
+        # 获取告警组中的值班人员，结果会根据告警ID存在self.all_group_users中
+        self.get_all_group_users()
 
     @staticmethod
     def get_notify_item(notify_configs, bk_biz_id):
@@ -388,9 +390,7 @@ class AlertAssignee:
             }
         return group_notify_items  # 返回通知组项
 
-    def get_all_group_users(
-            self,
-    ):
+    def get_all_group_users(self):
         """
         获取所有的用户组信息
         """
@@ -400,30 +400,41 @@ class AlertAssignee:
         if not user_groups:
             # 如果告警组不存在，忽略
             return
-        # 获取需要轮值的用户
+        # 获取需要轮值的人员,人员信息会根据告警组ID存放在self.all_group_users中
         self.get_group_users_with_duty(user_groups)
-        # 获取不需要轮值的用户
+        # 获取不需要轮值的人员
         self.get_group_users_without_duty(user_groups)
 
     def get_group_users_without_duty(self, user_groups):
         """
-        获取不带轮值功能的用户
-        :return:
+        获取不带轮值功能的用户组中的所有用户。
+    
+        本函数旨在从用户组中筛选出不需要参与轮值的用户组，然后收集这些用户组中的所有用户，
+        包括直接指定的用户和属于其他用户组的用户。
+    
+        :param user_groups: 用户组的列表，用于限定查询范围。
+        :return: 一个字典，包含不需要轮值的用户组中的所有用户。
         """
+        # 筛选出不需要轮值的用户组
         no_duty_groups = list(
             UserGroup.objects.filter(id__in=user_groups, need_duty=False).values_list("id", flat=True)
         )
+
+        # 遍历每个不需要轮值的用户组的职责安排
         for duty in DutyArrange.objects.filter(user_group_id__in=no_duty_groups).order_by("id"):
             group_users = self.all_group_users[duty.user_group_id]
             if duty.user_group_id in no_duty_groups and group_users:
                 # 如果没有启动轮值，获取到第一个即可
                 continue
             for user in duty.users:
+                # 根据用户类型收集用户
                 if user["type"] == "group":
+                    # 如果是用户组类型，递归获取用户组中的所有用户
                     for username in self.biz_group_users.get(user["id"]) or []:
                         if username not in group_users:
                             group_users.append(username)
                 elif user["type"] == "user" and user["id"] not in group_users:
+                    # 如果是用户类型，直接添加到用户列表中
                     group_users.append(user["id"])
 
     def get_group_mention_users(self, user_group):
@@ -462,7 +473,7 @@ class AlertAssignee:
         """
         if not user_groups:  # 如果没有用户组，直接返回
             return
-        # 过滤出需要轮值的用户组，并只获取特定字段
+        # 过滤出需要轮值的告警组，并只获取到轮值规则
         duty_groups = UserGroup.objects.filter(id__in=user_groups, need_duty=True).only("timezone", "id", "duty_rules")
         group_duty_plans = defaultdict(dict)  # 初始化值班计划的字典
         # 遍历需要轮值的用户组
@@ -480,6 +491,7 @@ class AlertAssignee:
             # 如果当前告警组没有值班计划，直接跳过
             if group.id not in group_duty_plans:
                 continue
+            # 获取到告警组的值班人员，人员信息会根据告警组ID存放在self.all_group_users中
             self.get_group_duty_users(group, group_duty_plans[group.id])  # 获取当前用户组的值班用户
 
     def get_group_duty_users(self, group, group_duty_plans):
@@ -639,25 +651,35 @@ class AlertAssignee:
     def get_biz_group_users(self):
         """
         通过业务信息获取对应的角色人员信息
-        :return:
+        :return: 字典，包含业务对应的角色人员信息
         """
+        # 获取业务角色用户信息
         group_users = get_business_roles(self.alert.event.bk_biz_id)
+
+        # 确保某些角色键存在，避免后续访问时KeyError
         group_users.update(
             {
                 "operator": [],
                 "bk_bak_operator": [],
             }
         )
+
         try:
+            # 如果没有监控对象，则不需要获取负责人信息，直接返回当前的group_users
             if not self.alert.event.target_type:
-                # 无监控对象， 不需要获取负责人
                 return group_users
 
+            # 根据主机ID获取主机信息
             host = HostManager.get_by_id(self.alert.event.bk_host_id)
+
+            # 遍历操作者和备份操作者属性，获取并更新主机对应的负责人信息
             for operator_attr in ["operator", "bk_bak_operator"]:
                 group_users[operator_attr] = self.get_host_operator(host, operator_attr)
         except AttributeError:
+            # 如果在获取主机信息或负责人信息时遇到AttributeError异常，则忽略
             pass
+
+        # 返回更新后的业务角色用户信息
         return group_users
 
     @classmethod

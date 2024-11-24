@@ -60,24 +60,36 @@ class BackendAssignMatchManager(AlertAssignMatchManager):
     def get_matched_rules(self) -> List[AssignRuleMatch]:
         """
         适配分派规则, 后台通过缓存获取
-        :return:
+        :return: 返回匹配的分派规则列表
         """
+        # 初始化匹配的规则列表为空
         matched_rules = []
+        # 检查是否有分派模式且包含按规则分派的情况
         if self.assign_mode is None or AssignMode.BY_RULE not in self.assign_mode:
             # 如果没有分派规则或者当前配置不需要分派的情况下，不做分派适配
             return matched_rules
+        # 遍历每个优先级ID，从高到低
         for priority_id in AssignCacheManager.get_assign_priority_by_biz_id(self.bk_biz_id):
+            # 获取当前优先级下的分派组
             groups = AssignCacheManager.get_assign_groups_by_priority(self.bk_biz_id, priority_id)
+            # 初始化当前优先级下的分派规则列表为空
             group_rules = []
+            # 遍历每个分派组
             for group_id in groups:
+                # 将当前分派组的规则添加到分派规则列表中
                 group_rules.extend(AssignCacheManager.get_assign_rules_by_group(self.bk_biz_id, group_id))
+            # 遍历每个分派规则
             for rule in group_rules:
+                # 创建分派规则匹配对象
                 rule_match_obj = AssignRuleMatch(rule, self.rule_snaps.get(str(rule["id"])), self.alert)
+                # 检查规则是否匹配给定的维度
                 if rule_match_obj.is_matched(dimensions=self.dimensions):
+                    # 如果规则匹配，则添加到匹配的规则列表中
                     matched_rules.append(rule_match_obj)
+            # 如果在当前优先级下找到了匹配的规则，停止后续优先级的检查
             if matched_rules:
-                # 当前优先级下适配到分派规则，停止低优先级的适配
                 break
+        # 返回匹配的规则列表
         return matched_rules
 
 
@@ -86,11 +98,10 @@ class AlertAssigneeManager:
     告警处理通知人管理模块
     """
 
-
     def __init__(
             self,
             alert: AlertDocument,
-            notice_user_groups: List= None,
+            notice_user_groups: List = None,
             assign_mode: AssignMode = None,
             upgrade_config=None,
             notice_type: ActionNoticeType = None,
@@ -98,7 +109,14 @@ class AlertAssigneeManager:
             new_alert=False,
     ):
         """
-         :param alert: 告警
+        1、初始化基本属性：设置告警对象、通知用户组、分派模式、通知类型、用户类型和是否为新告警。
+        2、初始化升级规则匹配对象：根据传入的升级配置初始化 UpgradeRuleMatch 对象。
+        3、获取通知对象：根据通知类型（升级通知或默认通知）获取相应的通知对象。
+        4、初始化匹配状态：设置匹配状态和匹配的告警组ID。
+        5、获取告警分派管理对象：根据分派模式获取告警分派管理对象，并完成告警分派工作
+        5、获取通知负责人对象：根据分派模式获取通知负责人对象。
+        
+        :param alert: 告警
         :param notice_user_groups: 通知用户组(告警组)
         :param assign_mode: 分派模式
         :param upgrade_config: 通知升级规则
@@ -114,21 +132,21 @@ class AlertAssigneeManager:
         self.upgrade_rule = UpgradeRuleMatch(upgrade_config=upgrade_config or {})  # 初始化升级规则匹配对象
         self.user_type = user_type  # 设置用户类型
 
-        # 根据通知类型获取到通知人员对象(告警负责人)
+        # 获取到告警升级或者默认通知的通知对象
         if self.notice_type == ActionNoticeType.UPGRADE:
-            # 获取通知升级的负责人对象
-            self.origin_notice_users_object: AlertAssignee = self.get_origin_supervisor_object()  # 如果是通知升级，采用升级通知里的配置
+            # 获取告警升级通知对象
+            self.origin_notice_users_object: AlertAssignee = self.get_origin_supervisor_object()
         else:
-            # 获取默认通知的负责人对象
+            # 获取非告警升级通知对象
             self.origin_notice_users_object: AlertAssignee = self.get_origin_notice_users_object(
                 notice_user_groups or [])  # 否则使用原始的通知人员对象
 
-        self.matched_group = None  # 匹配的组ID
+        self.matched_group: List[AssignRuleMatch] = None  # 匹配的告警组ID
         self.is_matched = False  # 初始化匹配状态为未匹配
         # 获取告警分派管理对象，如果是默认通知，则返回None。否则会更新matched_group的值
-        self.match_manager = self.get_match_manager()
+        self.match_manager: BackendAssignMatchManager = self.get_match_manager()
         # 获取告警分派的通知负责人对象，如果是默认通知，则返回None
-        self.notice_appointees_object = self.get_notice_appointees_object()  # 获取通知指定人员对象
+        self.notice_appointees_object: AlertAssignee = self.get_notice_appointees_object()
         self._is_new = new_alert  # 再次设置是否为新告警，可能是为了确保属性的正确性
 
     def get_match_manager(self):
@@ -156,7 +174,8 @@ class AlertAssigneeManager:
         manager.run_match()  # 执行匹配逻辑
         if manager.matched_rules:  # 如果有匹配的规则
             self.is_matched = True  # 更新匹配状态为已匹配
-        self.matched_group = manager.matched_group_info.get("group_id")  # 获取匹配的组ID
+        # 获取匹配的告警组
+        self.matched_group = manager.matched_group_info.get("group_id")
         logger.info(
             "[%s assign match] finished: alert(%s), strategy(%s), matched_rule(%s), "
             "assign_rule_id(%s), assign_mode(%s)",

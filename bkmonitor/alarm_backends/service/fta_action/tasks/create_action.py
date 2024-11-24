@@ -352,7 +352,7 @@ class CreateActionProcessor:
             dimension_hash="",  # 维度哈希
             relation_id=None,  # 关联ID
             execute_times=0,  # 执行次数
-            is_unshielded=False,  #是否为解除屏蔽
+            is_unshielded=False,  # 是否为解除屏蔽
             notice_type=ActionNoticeType.NORMAL,  # 通知类型
     ):
         self.strategy_id = strategy_id  # 设置策略ID
@@ -477,7 +477,7 @@ class CreateActionProcessor:
             return False
         return True
 
-    def alert_assign_handle(self, alert, action_configs, origin_actions, itsm_actions):
+    def alert_assign_handle(self, alert, action_configs, origin_actions, itsm_actions) -> AlertAssigneeManager:
         """
         分派操作
         :param alert: 当前告警信息
@@ -638,7 +638,8 @@ class CreateActionProcessor:
             # 初步判断为流程服务类型的告警套餐
             itsm_actions = []
             # 告警分派处理，并返回分派管理对象
-            assignee_manager = self.alert_assign_handle(alert, action_configs, origin_action_ids, itsm_actions)
+            assignee_manager: AlertAssigneeManager = self.alert_assign_handle(alert, action_configs, origin_action_ids,
+                                                                              itsm_actions)
             # 自动分派负责人只能追加
             # 手动分派的情况下直接覆盖
             supervisors = []
@@ -679,6 +680,7 @@ class CreateActionProcessor:
             # 告警关注人
             alerts_follower[alert.id] = self.get_alert_related_users(followers, alerts_follower[alert.id])
 
+            # 循环创建处理套餐
             for action in actions + itsm_actions:
                 action_config = action_configs.get(str(action["config_id"]))
                 if not self.is_action_config_valid(alert, action_config):
