@@ -433,9 +433,10 @@ class PluginDataAccessor(DataAccessor):
             add_fields_names.append(("bk_target_device_ip", _("远程采集目标IP")))
         # 获取插件参数配置信息
         config_json = plugin_version.config.config_json
+        # 保存维度注入字段
         self.dms_field = []
 
-        # 维度注入参数名称，更新至group的添加参数信息中
+        # 如果脚本参数是维度注入
         for param in config_json:
             if param["mode"] == ParamMode.DMS_INSERT:
                 for dms_key in param["default"].keys():
@@ -506,23 +507,35 @@ class PluginDataAccessor(DataAccessor):
     def format_time_series_metric_info_data(self, metric_json, enable_field_blacklist):
         """
         将 saas 侧的 metric_json 数据处理为后台 timeseriesmetric 需要的指标维度信息
-        :param metric_json:
-        :param enable_field_blacklist:
-        :return:
+        分别将每个tabel中的维度信息全部提取出来存放每个指标的tag_list中
+        最后所有指标都统一存放在result中
+
+        :param metric_json: 包含指标和维度信息的 JSON 数据
+        :param enable_field_blacklist: 是否启用字段黑名单功能
+        :return: 格式化后的指标维度信息
         """
         result = []
         for table in metric_json:
+            # 将所有的维度信息转为一个标签列表
             table_tag_list = [
-                {"field_name": field["name"], "unit": "none", "type": "string", "description": field["description"]}
+                {
+                    "field_name": field["name"],
+                    "unit": "none",
+                    "type": "string",
+                    "description": field["description"]
+                }
                 for field in table["fields"]
                 if field["monitor_type"] == "dimension"
             ]
             for field in table["fields"]:
+                # 如果开启了自动发现功能，使用自带的tag_list,否则使用上面的table_tag_list代替
                 if enable_field_blacklist:
                     tag_list = field.get("tag_list", [])
                 else:
                     tag_list = table_tag_list
+                # 合并维度信息到标签列表中
                 self.merge_dimensions(tag_list)
+                # 如果当前字段是指标，则添加到结果列表中
                 if field["monitor_type"] == "metric":
                     result.append(
                         {

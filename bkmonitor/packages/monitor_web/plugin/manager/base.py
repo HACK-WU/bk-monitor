@@ -248,7 +248,7 @@ class BasePluginManager:
             is_changed = True
             current_info_version = current_info_version + 1
             updated_info_data = copy.deepcopy(current_info_data)
-            # 白名单模式下，清除 tag_list 内的值
+            # 没开启自动发现，不需要tag_list
             if not data["enable_field_blacklist"]:
                 for metric_data in metric_json:
                     for field_data in metric_data["fields"]:

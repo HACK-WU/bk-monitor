@@ -189,12 +189,13 @@ class SaveMetricResource(Resource):
                 if metric_num > safe_int(config.value, dft=MAX_METRIC_NUM):
                     raise MetricNumberError(max_metric_num=safe_int(config.value, dft=MAX_METRIC_NUM))
         plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=plugin_type)
+        # 更新指标维度信息(metric_json)
         config_version, info_version, is_change, need_make = plugin_manager.update_metric(validated_request_data)
         if need_make:
             register_info = {"plugin_id": plugin_id, "config_version": config_version, "info_version": info_version}
             token_list = PluginRegisterResource().request(register_info)["token"]
 
-        # 数据访问
+        # 接入数据链路
         plugin_manager.data_access(config_version, info_version)
         res = {"config_version": config_version, "info_version": info_version}
         # todo 已关联的采集配置，更新对应插件版本历史
@@ -237,11 +238,13 @@ class CreatePluginResource(Resource):
             plugin_manager.validate_config_info(params["collector_json"], params["config_json"])
 
             try:
+                # 保存插件元信息
                 plugin = self.request_serializer.save()
             except IntegrityError:
                 raise PluginIDExist({"msg": plugin_id})
 
             plugin_manager = PluginManagerFactory.get_manager(plugin=plugin)
+            # 创建对应的版本信息
             version, need_debug = plugin_manager.create_version(params)
 
             # 如果是新导入的插件，则需要保存其metric_json
