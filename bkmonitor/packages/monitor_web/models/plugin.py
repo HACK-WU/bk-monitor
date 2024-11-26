@@ -13,7 +13,7 @@ import copy
 import re
 from collections import OrderedDict, defaultdict
 from functools import cmp_to_key, lru_cache
-from typing import Dict, List, Optional, Union, Set
+from typing import Dict, List, Optional, Union
 
 import arrow
 from django.conf import settings
@@ -163,7 +163,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
 
         return id__current_version_id_map
 
-    def get_version(self, config_version, info_version) -> "PluginVersionHistory":
+    def get_version(self, config_version, info_version):
         """
         获取特定版本
         """
@@ -314,8 +314,8 @@ class CollectorPluginMeta(OperateRecordModelBase):
         group_list["metric_info_list"]数据格式：
         metric_info_list = [
             {
-                "field_name": "m1",     //指标名称
-                "tag_list": [           //维度信息
+                "field_name": "m1",     # 指标名称
+                "tag_list": [           # 维度信息
                     {
                         "field_name": "w2",
                         "unit": "none",
@@ -340,14 +340,13 @@ class CollectorPluginMeta(OperateRecordModelBase):
             }]
 
 
-
         :param group_list: QueryTimeSeriesGroup 返回数据
         :return: match_result: 命中规则的指标，包括其 table 信息，格式如：{table_name: [metric, metric]}
                 not_match_result: 未能命中规则的指标，格式如：[metric]
                 map_of_metric_and_tag: 指标和维度的映射关系
         """
-        # metric_json 中有的指标和维度集合
-        metric_set = self.current_version.info.metric_set
+        # metric_json 中有的指标集合
+        metric_from_plugin_set = self.current_version.info.metric_set
         # 表名和分组规则映射
         table_rule_map = self.current_version.info.table_rule_map
         # 将发现的新的指标分配到对应的规则在的表中：TSMetric -> table-field
@@ -365,7 +364,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
             metric = metric_info_list[0]
             map_of_metric_and_tag[metric["field_name"]] = metric["tag_list"]
             # 如果该指标已存在 metric_json，则略过
-            if metric["field_name"] in metric_set:
+            if metric["field_name"] in metric_from_plugin_set:
                 continue
             for table_name, rule_list in table_rule_map.items():
                 for rule in rule_list:
@@ -385,15 +384,10 @@ class CollectorPluginMeta(OperateRecordModelBase):
 
     def update_metric_json_from_ts_group(self, group_list):
         """
-        单指标单表一个group中只存在一个指标
         从 TimeSeriesGroup 中更新 metric_json 数据
         :param group_list: QueryTimeSeriesGroup 返回数据
         :return:
         """
-        # 根据表规则过滤指标，并获取不匹配规则的指标及指标与标签的映射
-        # match_rule_metric_under_table 表下匹配的指标
-        # not_match_rule_metric 未匹配的指标
-        # map_of_metric_and_tag: 指标和维度的映射关系
         match_rule_metric_under_table, not_match_rule_metric, map_of_metric_and_tag = self.filter_metric_by_table_rule(
             group_list
         )
@@ -401,18 +395,14 @@ class CollectorPluginMeta(OperateRecordModelBase):
         has_default_group_flag = False
         # 对已经存在的table(指标分组)进行扩展
         for table_fields in self.current_version.info.metric_json:
-            # 如果是默认分组，将未匹配到的添加到默认分组中
+            # 如果是默认分组，将未匹配到的指标添加到默认分组中
             if table_fields["table_name"] == "group_default" and table_fields["table_desc"] == "默认分组":
                 has_default_group_flag = True
-                # 将TSMetric 的指标格式转换为 field 的字典格式
+                # 将新增的指标添加到匹配到的table中。
                 table_fields["fields"].extend(self.convert_metric_to_field_dict(not_match_rule_metric, table_fields))
 
-            # todo 将新增的指标添加到当前的table中，但是当前table不存在于match_rule_metrics的指标应该就行删除
-
-            # 当前表中的所有指标的集合
             current_field_names = {field["name"] for field in table_fields["fields"] if
                                    field["monitor_type"] == "metric"}
-            # 将要删除的指标
             fields_to_remove = current_field_names - set(map_of_metric_and_tag.keys())
             # 删除当前table中不需要的指标
             table_fields["fields"] = [field for field in table_fields["fields"] if
@@ -422,9 +412,8 @@ class CollectorPluginMeta(OperateRecordModelBase):
             # 如果当前table不存在match_rule_metric_under_table中，证明这个table不需要进行扩展，跳过
             if table_fields["table_name"] not in match_rule_metric_under_table:
                 continue
-            # 扩展当前的table
+
             match_rule_metrics = match_rule_metric_under_table[table_fields["table_name"]]
-            # 将TSMetric 的指标格式转换为 field 的字典格式,并添加到匹配到的table中。
             # 将新增的指标添加到匹配到的table中。
             table_fields["fields"].extend(self.convert_metric_to_field_dict(match_rule_metrics, table_fields))
 
@@ -442,11 +431,11 @@ class CollectorPluginMeta(OperateRecordModelBase):
         # 检查每个table，添加新增的维度以及删除多余的维度
         for table_fields in self.current_version.info.metric_json:
             # step1: 首先收集到当前table下原有的维度字段集合，以及TimeSeriesGroup中获取到维度字段集合
-            raw_dimension_under_table: Set[str] = set()  # 当前table下的原有的维度字段名称集合
-            tag_list_set: Set[str] = set()  # 当前指标下的维度字段名称集合
+            raw_dimension_under_table = set()  # 当前table下的原有的维度字段名称集合
+            tag_list_set = set()  # 当前指标下的维度字段名称集合
             tag_data_list = []  # 当前指标下的维度信息列表
-            # 遍历每个 field，区分指标和维度
-            # 更新每个指标的维度信息；额外收集原有的维度字段名称
+
+            # 更新每个指标的维度信息,并收集原有的维度字段名称
             for field in table_fields["fields"]:
                 if field["monitor_type"] == "metric":
                     # 从TimeSeriesGroup中获取到当前指标的维度信息，并更新到当前指标中
@@ -459,7 +448,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
                 else:
                     raw_dimension_under_table.add(field["name"])
 
-            # step2: 删除多余的维度
+            # step2:删除多余的维度
             removed_tag = raw_dimension_under_table - (tag_list_set - set(self.reserved_dimension_list))
             if removed_tag:
                 table_fields["fields"] = [field for field in table_fields["fields"]
@@ -492,7 +481,6 @@ class CollectorPluginMeta(OperateRecordModelBase):
                             "is_disabled": tag_data.get("is_disabled", False),
                         }
                     )
-        # 保存更新后的信息
         self.current_version.info.save()
 
     def should_refresh_metric_json(self, timeout=5 * 60):
@@ -891,7 +879,8 @@ class PluginVersionHistory(OperateRecordModelBase):
 
     @property
     def is_official(self):
-        return Signature(self.signature).verificate("official", self)
+        # 官方插件ID都是以bkplugin_作为前缀
+        return self.plugin.plugin_id.startswith("bkplugin_")
 
     @property
     def is_safety(self):
