@@ -23,7 +23,7 @@ setattr(local, "assign_cache", {})
 
 class AssignCacheManager(CacheManager):
     """
-    告警屏蔽缓存
+    告警分派缓存
     """
 
     # 策略详情的缓存key
@@ -41,33 +41,51 @@ class AssignCacheManager(CacheManager):
         按业务ID返回存在的priority列表
         :param bk_biz_id: 业务ID
         """
+        # 根据业务ID生成缓存键
         cache_key = cls.BIZ_CACHE_KEY_TEMPLATE.format(bk_biz_id=bk_biz_id)
+        # 如果缓存不存在，则进行数据获取和处理
         if 1 or cache_key not in local.assign_cache:
+            # 获取全局配置的优先级列表
             default_priority = cls.get_global_config(cls.BIZ_CACHE_KEY_TEMPLATE) or []
+            # 尝试从缓存中获取特定业务的优先级列表
             priority = cls.cache.get(cache_key)
             if priority:
+                # 如果获取到优先级列表，则与全局配置合并，并排序
                 priority = sorted(set(extended_json.loads(priority) + default_priority), reverse=True)
             else:
+                # 如果没有获取到优先级列表，则使用全局配置的优先级列表
                 priority = sorted(default_priority, reverse=True)
+            # 将处理后的优先级列表存入本地缓存
             local.assign_cache[cache_key] = priority
+        # 返回本地缓存中的优先级列表
         return local.assign_cache[cache_key]
 
     @classmethod
     def get_assign_groups_by_priority(cls, bk_biz_id, priority):
         """
-        按业务ID
-        :param priority: 优先级
+        根据业务ID和优先级获取分配组
+    
         :param bk_biz_id: 业务ID
+        :param priority: 优先级
+        :return: 分配组的集合
         """
+        # 构造缓存键
         cache_key = cls.PRIORITY_CACHE_KEY_TEMPLATE.format(bk_biz_id=bk_biz_id, priority=priority)
+        # 检查本地缓存中是否已存在该优先级的分配组
         if cache_key not in local.assign_cache:
+            # 获取全局配置中的默认分配组
             default_groups = cls.get_global_config(cls.PRIORITY_CACHE_KEY_TEMPLATE, priority=priority) or []
+            # 尝试从缓存中获取分配组
             groups = cls.cache.get(cache_key)
             if groups:
+                # 如果缓存中存在分配组，将其与默认分配组合并
                 groups = set(extended_json.loads(groups) + default_groups)
             else:
+                # 如果缓存中不存在分配组，使用默认分配组
                 groups = set(default_groups)
+            # 将合并后的分配组存入本地缓存
             local.assign_cache[cache_key] = groups
+        # 返回分配组
         return local.assign_cache[cache_key]
 
     @classmethod
