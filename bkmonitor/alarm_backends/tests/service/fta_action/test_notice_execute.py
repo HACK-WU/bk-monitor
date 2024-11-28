@@ -3924,6 +3924,9 @@ class TestActionProcessor(TransactionTestCase):
         alert.add_dimension("ip", "127.0.0.1")
         alert.add_dimension("bk_cloud_id", 0)
 
+
+
+
         host_patcher = patch(
             "alarm_backends.core.cache.cmdb.host.HostManager.get",
             MagicMock(
