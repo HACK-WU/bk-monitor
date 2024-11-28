@@ -248,6 +248,9 @@ class ActionPlugin(AbstractRecordModel):
 
 
 class ActionConfig(AbstractRecordModel):
+    """
+    告警套餐表
+    """
     NOTICE_PLUGIN_ID = 1
 
     is_builtin = models.BooleanField("是否内置", default=False)
@@ -358,18 +361,25 @@ class ActionInstance(AbstractRecordModel):
         """
         根据notify分批次实现
         """
+        # 初始化通知信息，根据是否关注来选择通知配置
         notify_info = self.inputs.get("notify_info", {})
         if followed:
             # 如果是关注人通知，则用follower的配置
             notify_info = self.inputs.get("follow_notify_info", {})
+        
+        # 初始化子动作列表和排除的通知方式列表
         sub_actions = []
         exclude_notice_ways = self.inputs.get("exclude_notice_ways", [])
+        
+        # 处理微信机器人@用户配置，确保每个chat_id对应一个去重后的用户列表
         mention_users_list = notify_info.pop("wxbot_mention_users", [])
         wxbot_mention_users = defaultdict(list)
         for mention_users_dict in mention_users_list:
             for chat_id, users in mention_users_dict.items():
                 wxbot_mention_users[chat_id].extend(users)
         wxbot_mention_users = {chat_id: set(users) for chat_id, users in wxbot_mention_users.items()}
+        
+        # 遍历通知信息，创建子动作
         for notice_way, notice_receivers in notify_info.items():
             if notice_way in exclude_notice_ways:
                 # 当前的通知方式被排除，不创建对应的具体通知
@@ -377,6 +387,7 @@ class ActionInstance(AbstractRecordModel):
             for notice_receiver in notice_receivers:
                 if not notice_receiver:
                     continue
+                # 创建并添加子动作到列表中
                 sub_actions.append(
                     self.create_sub_notice_action(notice_way, notice_receiver, wxbot_mention_users, followed)
                 )
@@ -832,6 +843,10 @@ class ConvergeRelation(models.Model):
 class StrategyActionConfigRelation(AbstractRecordModel):
     """
     策略响应动作配置关联表
+
+    告警策略模型与处理套餐、告警组是多对多关系。
+    一个策略中可以有多个处理套餐，一个处理套餐可以关联多个策略。
+    一个策略中可以有多个告警组，一个告警组可以关联多个策略。
     """
 
     class RelateType:
@@ -843,11 +858,15 @@ class StrategyActionConfigRelation(AbstractRecordModel):
         (RelateType.ACTION, _("处理动作")),
     )
 
+    # 告警策略ID
     strategy_id = models.IntegerField("故障自愈的策略ID", null=False, db_index=True)
+    # 处理套餐ID
     config_id = models.IntegerField("响应动作配置ID", null=False, db_index=True)
     relate_type = models.CharField("关联类型", max_length=32, choices=RELATE_TYPE_CHOICES, default=RelateType.NOTICE)
     signal = models.JSONField("触发信号", default=default_list)
+    # 告警组
     user_groups = models.JSONField("用户组", default=default_list)
+    # 人员类型
     user_type = models.CharField("人员类型", default=UserGroupType.MAIN, choices=UserGroupType.CHOICE, max_length=32)
     options = models.JSONField("高级设置", default=default_dict)
 

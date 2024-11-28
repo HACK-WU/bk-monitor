@@ -3986,7 +3986,7 @@ class TestActionProcessor(TransactionTestCase):
                 ActionInstance.objects.filter(id__in=actions0).delete()
                 unshielded_actions = create_actions(**checker.unshielded_actions[0])
 
-                # 四个通知方式，产生了5个子任务
+                # 四个通知方式，产生了5个子任务，1个父任务
                 self.assertEqual(len(unshielded_actions), 6)
                 parent_action = ActionInstance.objects.get(is_parent_action=True, id__in=unshielded_actions)
                 self.assertTrue(parent_action.inputs["is_unshielded"])

@@ -479,7 +479,7 @@ class CreateActionProcessor:
 
     def alert_assign_handle(self, alert, action_configs, origin_actions, itsm_actions) -> AlertAssigneeManager:
         """
-        分派操作
+        告警分派，同时更新ITSM动作列表
         :param alert: 当前告警信息
         :param action_configs: 动作配置信息
         :param origin_action_ids: 原始动作ID列表
@@ -500,7 +500,8 @@ class CreateActionProcessor:
             exc = None  # 初始化异常变量
             assignee_manager = None  # 初始化分配管理器变量
             try:
-                # 创建告警处理通知人管理模块
+                # 获取分配管理器，该管理器中已经完成可对告警的分派。
+                # 所以获取分派结果只需要返回分配管理器即可
                 assignee_manager = AlertAssigneeManager(
                     alert,
                     self.notice["user_groups"],
@@ -520,7 +521,7 @@ class CreateActionProcessor:
 
         # 记录分配处理次数
         metrics.ALERT_ASSIGN_PROCESS_COUNT.labels(**assign_labels).inc()
-        # 如果是第一次执行且不是升级通知，并且没有异常发生
+        # 如果是第一次执行且不是升级通知，并且没有异常发生，判断匹配到规则
         if self.execute_times == 0 and self.notice_type != ActionNoticeType.UPGRADE and exc is None:
             # 遍历ITSM动作ID
             for itsm_action_id in assignee_manager.itsm_actions.keys():
@@ -635,8 +636,8 @@ class CreateActionProcessor:
             if not self.is_alert_status_valid(alert):
                 # 所有的通知，需要判断信号是否为有效状态
                 continue
-            # 初步判断为流程服务类型的告警套餐
-            itsm_actions = []
+
+            itsm_actions = []  # 流程服务类型的告警套餐
             # 告警分派处理，并返回分派管理对象
             assignee_manager: AlertAssigneeManager = self.alert_assign_handle(alert, action_configs, origin_action_ids,
                                                                               itsm_actions)
@@ -650,9 +651,13 @@ class CreateActionProcessor:
             if not assignee_manager.is_matched and not self.strategy_id:
                 # 第三方告警如果没有适配到的规则，直接忽略
                 continue
+
             if self.notice_type == ActionNoticeType.UPGRADE:
+                # 获取告警升级负责人
                 supervisors = assignee_manager.get_supervisors()
+                # 获取告警升级关注人
                 followers = assignee_manager.get_supervisors(user_type=UserGroupType.FOLLOWER)
+                # 没有告警升级负责人直接忽略
                 if not supervisors:
                     logger.info("ignore to send supervise notice for alert(%s) due to empty supervisor", alert.id)
                     continue
@@ -662,11 +667,13 @@ class CreateActionProcessor:
                     logger.info("ignore to send supervise notice for alert(%s) due to notice qos", alert.id)
                     continue
             else:
+                # 获取告警负责人
                 assignees = assignee_manager.get_assignees()
+                # 获取告警关注人
                 followers = assignee_manager.get_assignees(user_type=UserGroupType.FOLLOWER)
 
-            # 对历史的内容需要去重
             # TODO 需要确认告警通知人指的时候收集了所有接收到通知的总和吗？
+            # 获取告警相关的负责人并去重
             alerts_assignee[alert.id] = self.get_alert_related_users(assignees + supervisors, alerts_assignee[alert.id])
 
             # 告警负责人字段，替换为当前的负责人
@@ -674,7 +681,7 @@ class CreateActionProcessor:
                 # 如果有新的负责人，才进行更新
                 alerts_appointee[alert.id] = assignees
 
-            # 告警知会人
+            # 告警升级负责人
             alerts_supervisor[alert.id] = self.get_alert_related_users(supervisors, alerts_supervisor[alert.id])
 
             # 告警关注人
@@ -683,9 +690,12 @@ class CreateActionProcessor:
             # 循环创建处理套餐
             for action in actions + itsm_actions:
                 action_config = action_configs.get(str(action["config_id"]))
+                # 处理套餐无效则跳过
                 if not self.is_action_config_valid(alert, action_config):
                     continue
+                # 获取到插件
                 action_plugin = action_plugins.get(str(action_config["plugin_id"]))
+                # 创建处理套餐并保存实例，方便后续批量处理
                 action_instances.append(
                     self.do_create_action(
                         action_config,
@@ -700,10 +710,14 @@ class CreateActionProcessor:
                 alert_log = assignee_manager.match_manager.get_alert_log()
                 if alert_log:
                     alert_logs.append(AlertLog(**alert_log))
+        # 清理缓存
         AssignCacheManager.clear()
         if action_instances:
+            # 批量创建处理套餐
             ActionInstance.objects.bulk_create(action_instances)
+            #
             new_actions.extend(
+                # 推送处理事件至收敛队列，并返回处理套餐ID列表
                 PushActionProcessor.push_actions_to_queue(
                     self.generate_uuid,
                     alerts=self.alerts,
@@ -843,7 +857,7 @@ class CreateActionProcessor:
             shield_ids=None,
     ):
         """
-        根据套餐配置创建处理记录
+        根据套餐配置创建处理记录，并返回处理套餐实例
         :param assignee_manager: 告警负责人对象
         :param alert: 处理的告警对象
         :param shield_ids: 屏蔽ID
@@ -857,12 +871,13 @@ class CreateActionProcessor:
 
         # 初始化输入参数，包括告警最新时间、是否屏蔽、屏蔽ID等
         inputs = {
-            "alert_latest_time": alert.latest_time,
-            "is_alert_shielded": self.is_alert_shielded,
-            "shield_ids": shield_ids,
-            "shield_detail": self.shield_detail,
-            "is_unshielded": self.is_unshielded,
-            "notice_type": self.notice_type,
+            "alert_latest_time": alert.latest_time, # 最后的告警时间
+            "is_alert_shielded": self.is_alert_shielded,  # 是否是告警屏蔽
+            "shield_ids": shield_ids,   # 告警屏蔽ID
+            "shield_detail": self.shield_detail,    # 屏蔽详情
+            "is_unshielded": self.is_unshielded,    # 是否是告警解除
+            "notice_type": self.notice_type,    # 通知类型
+            # 获取排除通知方式
             "exclude_notice_ways": action_relation["options"].get("exclude_notice_ways", {}).get(self.signal, []),
             "time_range": "--".join(
                 [
@@ -884,8 +899,11 @@ class CreateActionProcessor:
 
         # 如果套餐类型为通知，则设置is_parent_action为True，并处理通知信息
         if action_plugin["plugin_type"] == ActionPluginType.NOTICE:
+            # 标记为父任务，因为如果是通知任务，还需要创建额外的子任务
             is_parent_action = True
+            # 获取要通知的主要负责人
             notify_info = assignee_manager.get_notify_info()
+            # 获取要通知的关注人
             follow_notify_info = assignee_manager.get_notify_info(user_type=UserGroupType.FOLLOWER)
 
             # 如果没有负责人的通知信息，使用跟随者的通知方式
@@ -893,7 +911,7 @@ class CreateActionProcessor:
                 # 如果没有负责人的通知信息，需要将负责人通知信息带上，默认以当前适配到的通知方式为准
                 notify_configs = {notice_way: [] for notice_way in follow_notify_info.keys()}
                 notify_info = assignee_manager.get_appointee_notify_info(notify_configs)
-            # 如果当前用户即是负责人，又是通知人, 需要进行去重, 以通知人为准
+            # 如果通知对象是负责人，又是通知人, 需要进行去重, 以通知人为准
             for notice_way, receivers in follow_notify_info.items():
                 valid_receivers = [
                     receiver for receiver in receivers if receiver not in notify_info.get(notice_way, [])
@@ -912,7 +930,7 @@ class CreateActionProcessor:
             # 当二次确认发生任意异常时，不影响原来的处理逻辑
         relation_id = action_relation.get("id") or 0
 
-        # 如果信号为异常且告警有额外信息，更新处理记录
+        # 如果是异常告警，并且有额外信息，
         if self.signal in ActionSignal.ABNORMAL_SIGNAL and alert.extra_info:
             # 如果处理的时候，记录第一次一次通知时间和通知次数，用来作为记录当前告警是否已经产生通知
             handle_record = {
@@ -925,6 +943,7 @@ class CreateActionProcessor:
             # 更新或添加周期处理记录
             if alert.cycle_handle_record:
                 history_record = alert.cycle_handle_record.get(str(relation_id))
+                # 如果没有周期记录，或者当前记录的执行次数大于当前执行次数，则更新
                 if not history_record or (
                         history_record and history_record["execute_times"] < handle_record["execute_times"]
                 ):
@@ -932,6 +951,7 @@ class CreateActionProcessor:
                     # 如果曾经有周期记录，并且当前记录的执行次数小于当前执行次数，则更新
                     alert.extra_info["cycle_handle_record"][str(relation_id)] = handle_record
             else:
+                # 以关联的处理套餐ID为key，创建周期处理记录
                 alert.extra_info["cycle_handle_record"] = {str(relation_id): handle_record}
 
         # 返回ActionInstance对象，包含所有必要的信息和配置

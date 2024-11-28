@@ -321,14 +321,14 @@ class AlertAssignMatchManager:
         self.matched_rules: List[AssignRuleMatch] = []
         # 匹配到的规则信息
         self.matched_rule_info = {
-            "notice_upgrade_user_groups": [],
-            "follow_groups": [],
-            "notice_appointees": [],
-            "itsm_actions": {},
-            "severity": 0,
-            "additional_tags": [],
-            "rule_snaps": {},
-            "group_info": {},
+            "notice_upgrade_user_groups": [],  # 通知升级负责人
+            "follow_groups": [],  # 关注人
+            "notice_appointees": [],  # 指定的通知人
+            "itsm_actions": {},  # ITSM事件
+            "severity": 0,  # 告警等级
+            "additional_tags": [],  # 附加的标签
+            "rule_snaps": {},  # 规则快照
+            "group_info": {},  # 告警组信息
         }
         self.severity_source = ""
 
@@ -542,7 +542,7 @@ class AlertAssignMatchManager:
 
     def get_matched_rule_info(self):
         """
-        获取匹配规则的信息。
+        获取匹配到的规则信息。
         
         此方法遍历所有匹配的规则对象，收集通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和规则快照信息。
         它还根据通知类型决定是否获取升级用户组，并处理用户组的去重和更新。
@@ -550,7 +550,7 @@ class AlertAssignMatchManager:
         # 如果没有匹配的规则，则不执行任何操作
         if not self.matched_rules:
             return
-        
+
         # 初始化通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和新规则快照的空容器
         notice_user_groups = []
         follow_groups = []
@@ -558,32 +558,32 @@ class AlertAssignMatchManager:
         all_severity = []
         additional_tags = []
         new_rule_snaps = {}
-        
+
         # 遍历所有匹配的规则对象
         for rule_obj in self.matched_rules:
             # 将规则对象的附加标签添加到总附加标签列表中
             additional_tags.extend(rule_obj.additional_tags)
             # 将规则对象的告警级别添加到所有告警级别列表中，如果规则对象的告警级别未设置，则使用当前告警的级别
             all_severity.append(rule_obj.alert_severity or self.alert.severity)
-    
+
             # 当有升级变动的时候才真正进行升级获取和记录
             user_groups = rule_obj.get_upgrade_user_group() if self.notice_type == "upgrade" else rule_obj.user_groups
-            
+
             # 根据规则对象的用户类型，将用户组添加到相应的列表中
             if rule_obj.user_type == UserGroupType.FOLLOWER:
                 follow_groups.extend([group_id for group_id in user_groups if group_id not in follow_groups])
             else:
                 new_groups = [group_id for group_id in user_groups if group_id not in notice_user_groups]
                 notice_user_groups.extend(new_groups)
-            
+
             # 更新规则快照并将其添加到新规则快照字典中
             rule_obj.assign_rule_snap.update(rule_obj.assign_rule)
             new_rule_snaps[str(rule_obj.rule_id)] = rule_obj.assign_rule_snap
-            
+
             # 如果规则对象包含ITSM操作，则将用户组添加到相应的ITSM操作ID下
             if rule_obj.itsm_action:
                 itsm_user_groups[rule_obj.itsm_action["action_id"]].extend(rule_obj.user_groups)
-    
+
         # 构建匹配规则信息字典，包含通知用户组、关注组、ITSM操作、最小告警级别、附加标签和规则快照信息
         self.matched_rule_info = {
             "notice_appointees": notice_user_groups,

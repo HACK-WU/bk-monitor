@@ -301,16 +301,19 @@ class AbstractConfig(metaclass=abc.ABCMeta):
         :param configs: 配置对象
         :param config_cls: 配置处理类
         """
+        # 为每个配置对象分配一个数据库记录ID
         for config, obj in zip(configs, objs):
             config.id = obj.id
-        # fmt: off
+        
+        # 为超出数据库记录数量的配置对象设置ID为0，表示这些配置未关联到任何记录
         for config in configs[len(objs):]:
             config.id = 0
+        
+        # 如果数据库记录数量多于配置对象数量，删除多余的记录
         if objs[len(configs):]:
             obj_ids = [obj.id for obj in objs[len(configs):]]
             model.objects.filter(id__in=obj_ids).delete()
             config_cls.delete_useless(obj_ids)
-        # fmt: on
 
     @staticmethod
     def _get_username():
@@ -796,6 +799,7 @@ class NoticeRelation(BaseActionRelation):
         action_config = ActionConfig()
 
         try:
+            # 更新通知配置时的逻辑。
             action_relation = RelationModel.objects.get(id=self.id, strategy_id=self.strategy_id)
         except RelationModel.DoesNotExist:
             pass
@@ -809,6 +813,7 @@ class NoticeRelation(BaseActionRelation):
         action_config.execute_config = {"template_detail": self.config}
         action_config.save()
 
+        # 保存通知处理套餐ID
         self.config_id = action_config.id
 
         return super(NoticeRelation, self).save()
@@ -1394,16 +1399,21 @@ class Item(AbstractConfig):
             params = serializers.ListField(child=serializers.DictField(), allow_empty=True)
 
         id = serializers.IntegerField(default=0)
+        # 被监控的指标名称
         name = serializers.CharField()
         expression = serializers.CharField(allow_blank=True, default="")
         functions = serializers.ListField(allow_empty=True, default=[], child=FunctionSerializer())
+        # promql 查询语法
         origin_sql = serializers.CharField(allow_blank=True, default="")
+        # 监控目标
         target = serializers.ListField(
             allow_empty=True, child=serializers.ListField(child=TargetSerializer(), allow_empty=True)
         )
+        # 无数据配置
         no_data_config = serializers.DictField()
-
+        # 被监控指标配置，数据的采集配置以及计算方式
         query_configs = serializers.ListField(allow_empty=False)
+        # 选择的检测算法
         algorithms = Algorithm.Serializer(many=True)
         metric_type = serializers.CharField(allow_blank=True, default="")
 
@@ -1648,9 +1658,12 @@ class Strategy(AbstractConfig):
         scenario = serializers.CharField()
         is_enabled = serializers.BooleanField(default=True)
         is_invalid = serializers.BooleanField(default=False)
+        # 策略失效类型
         invalid_type = serializers.CharField(default=StrategyModel.InvalidType.NONE, allow_blank=True)
 
+        # 监控项配置，
         items = serializers.ListField(child=Item.Serializer(), allow_empty=False)
+        # 检测规则(产生告警的判定条件)
         detects = serializers.ListField(child=Detect.Serializer(), allow_empty=False)
         actions = serializers.ListField(child=ActionRelation.Serializer(), allow_empty=True)
         notice = NoticeRelation.Serializer()
@@ -2272,9 +2285,17 @@ class Strategy(AbstractConfig):
     def save(self, rollback=False):
         """
         保存策略配置
+        
+        参数:
+        - rollback (bool): 是否回滚，默认为False
+        
+        该方法用于保存策略配置，包括创建新策略或更新现有策略。在保存过程中，会进行策略名称的重名检测，
+        并记录操作历史。如果发生错误，会根据操作类型进行回滚或删除操作，并记录错误信息。
         """
+        # 补充实例目标维度信息
         self.supplement_inst_target_dimension()
-
+    
+        # 不回滚，则创建策略历史表
         if not rollback:
             history = StrategyHistoryModel.objects.create(
                 create_user=self._get_username(),
@@ -2282,7 +2303,7 @@ class Strategy(AbstractConfig):
                 operate="create" if self.id == 0 else "update",
                 content=self.to_dict(),
             )
-
+    
             # 重名检测
             if StrategyModel.objects.filter(bk_biz_id=self.bk_biz_id, name=self.name).exclude(id=self.id).exists():
                 history.message = _("策略名称({})不能重复").format(self.name)
@@ -2290,15 +2311,17 @@ class Strategy(AbstractConfig):
                 raise CreateStrategyError(history.message)
         else:
             history = None
-
+    
         old_strategy = None
         try:
+            # 如果存在策略ID，则更新策略；否则创建新策略
             if self.id > 0:
                 strategy = StrategyModel.objects.get(id=self.id, bk_biz_id=self.bk_biz_id)
-
+    
                 # 记录原始配置
                 old_strategy = Strategy.from_models([strategy])[0]
-
+    
+                # 更新策略信息
                 strategy.name = self.name
                 strategy.scenario = self.scenario
                 strategy.source = self.source
@@ -2313,28 +2336,30 @@ class Strategy(AbstractConfig):
                 )
                 strategy.save()
             else:
+                # 保存策略表基础信息
                 self._create()
-
+    
             # 复用当前存在的记录
             model_configs = [
-                (ItemModel, Item, self.items),
+                (ItemModel, Item, self.items),          # 监控项模型，监控项模型管理器，当前模管理器实例
                 (DetectModel, Detect, self.detects),
             ]
             for model, config_cls, configs in model_configs:
                 objs = model.objects.filter(strategy_id=self.id).only("id")
                 self.reuse_exists_records(model, objs, configs, config_cls)
-
-            # 保存子配置
+    
+            # 保存监控项和检测项
             for obj in chain(self.items, self.detects):
                 obj.save()
-
+    
             # 复用旧ID地保存actions和notice
             self.save_actions()
             self.save_notice()
-
+    
             # 保存策略标签
             self.save_labels()
-
+    
+            # 更新策略历史记录
             if history and history.strategy_id == 0:
                 history.strategy_id = self.id
                 history.save()
@@ -2347,7 +2372,7 @@ class Strategy(AbstractConfig):
             # 回滚失败直接报错
             if rollback:
                 raise e
-
+    
             # 清空或回滚配置
             if history.operate == "create":
                 self.delete()
@@ -2357,15 +2382,16 @@ class Strategy(AbstractConfig):
                 except Exception as rollback_exception:
                     logger.error(f"策略({self.id})回滚失败")
                     logger.exception(rollback_exception)
-
+    
             # 记录错误信息
             history.message = traceback.format_exc()
             history.save()
             raise e
-
+    
+        # 更新历史记录状态
         history.status = True
         history.save()
-
+    
         # 接入智能监控
         self.access_aiops()
 
@@ -2595,11 +2621,17 @@ class Strategy(AbstractConfig):
             label_query = StrategyLabel.objects.all()
             related_query = RelationModel.objects.all()
         else:
+            # 监控配置项
             item_query = ItemModel.objects.filter(strategy_id__in=strategy_ids)
+            # 检测配置模型
             detect_query = DetectModel.objects.filter(strategy_id__in=strategy_ids)
+            # 检测算法模型
             algorithm_query = AlgorithmModel.objects.filter(strategy_id__in=strategy_ids)
+            # 查询配置模型
             query_config_query = QueryConfigModel.objects.filter(strategy_id__in=strategy_ids)
+            # 全局策略标签
             label_query = StrategyLabel.objects.filter(strategy_id__in=strategy_ids)
+            # 策略响应动作配置关联表
             related_query = RelationModel.objects.filter(strategy_id__in=strategy_ids)
 
         # 将查询结果整理为字典，便于后续根据策略ID快速查找

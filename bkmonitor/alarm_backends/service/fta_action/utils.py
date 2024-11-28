@@ -59,7 +59,7 @@ class PushActionProcessor:
                 generate_uuid,
             )
             return []
-
+        # 如果是告警屏蔽，则不创建子任务，记录日志即可
         if is_shielded or need_noise_reduce:
             logger.info(
                 "[create actions]alert(%s) is shielded(%s) or need_noise_reduce(%s), "

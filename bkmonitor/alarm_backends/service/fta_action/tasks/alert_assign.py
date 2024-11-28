@@ -193,7 +193,8 @@ class AlertAssigneeManager:
         获取通知渠道和通知人员信息
         """
         notify_configs = defaultdict(list)  # 初始化一个默认字典，用于存储通知配置
-        if self.is_matched:  # 如果当前规则匹配成功
+        # 匹配成功往往意味着就是有分派负责人
+        if self.is_matched:
             # 如果适配到了，直接发送给分派的负责人
             if self.notice_appointees_object:
                 self.notice_appointees_object.get_notice_receivers(notify_configs=notify_configs,
