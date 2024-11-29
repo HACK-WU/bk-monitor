@@ -78,11 +78,11 @@ class HandOffSettingsSerializer(serializers.Serializer):
 
     def validate_date(self, value):
         if self.initial_data.get("rotation_type") == RotationType.WEEKLY and value not in set(
-            IsoWeekDay.WEEK_DAY_RANGE
+                IsoWeekDay.WEEK_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
         if self.initial_data.get("rotation_type") == RotationType.MONTHLY and value not in set(
-            MonthDay.MONTH_DAY_RANGE
+                MonthDay.MONTH_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -105,7 +105,8 @@ class HandOffField(serializers.JSONField):
 
 class UserSerializer(serializers.Serializer):
     id = serializers.CharField(required=True, label="通知对象ID")
-    type = serializers.ChoiceField(required=True, choices=(("user", _("用户")), ("group", _("用户组"))), label="通知对象类别")
+    type = serializers.ChoiceField(required=True, choices=(("user", _("用户")), ("group", _("用户组"))),
+                                   label="通知对象类别")
 
 
 class ExcludeSettingsSerializer(serializers.Serializer):
@@ -143,14 +144,14 @@ class DutyTimeSerializer(serializers.Serializer):
     def validate_work_days(self, value):
         value_set = set(value)
         if (
-            self.initial_data.get("work_type") == RotationType.WEEKLY
-            and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
+                self.initial_data.get("work_type") == RotationType.WEEKLY
+                and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
 
         if (
-            self.initial_data.get("work_type") == RotationType.MONTHLY
-            and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
+                self.initial_data.get("work_type") == RotationType.MONTHLY
+                and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -591,7 +592,7 @@ class PreviewSerializer(serializers.Serializer):
         if isinstance(value, dict):
             value["name"] = "[demo] for preview"
         if self.initial_data.get(
-            "source_type", self.SourceType.API
+                "source_type", self.SourceType.API
         ) == self.SourceType.API and not self.initial_data.get("config"):
             # 如果数据来源是API，并且不带配置信息返回错误
             raise ValidationError(detail='params config is required when resource type is API')
@@ -742,8 +743,8 @@ class UserGroupSlz(serializers.ModelSerializer):
         data["strategy_count"] = len(set(self.strategy_count_of_given_type.get(instance.id, [])))
         data["rules_count"] = len(set(self.rule_count.get(instance.id, [])))
         data["delete_allowed"] = (
-            len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
-            and len(set(self.rule_count.get(instance.id, []))) == 0
+                len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
+                and len(set(self.rule_count.get(instance.id, []))) == 0
         )
         data["edit_allowed"] = instance.bk_biz_id != 0
         data["config_source"] = "YAML" if instance.app else "UI"
@@ -967,10 +968,10 @@ class UserGroupDetailSlz(UserGroupSlz):
             # 创建并更新并删除旧的轮值记录
             DutyArrange.bulk_create(duty_arranges, self.instance)
 
-        # step 3: 轮值情况下，需要构建告警组与轮值组的关联
+        # step 3: 构建告警组与轮值组的关联
         self.save_duty_rule_relations()
 
-        # 管理职责快照和计划
+        # 管理职责快照和计划,删除旧的轮值快照，创建新的轮值快照以及排班计划
         self.manage_duty_snap_and_plan()
 
         # 返回保存后的实例
@@ -1002,7 +1003,9 @@ class UserGroupDetailSlz(UserGroupSlz):
         ).data
 
         group_duty_manager = GroupDutyRuleManager(self.instance, duty_rules)
+        # 管理轮值规则快照，并创建排班计划
         group_duty_manager.manage_duty_rule_snap(time_tools.datetime_today().strftime("%Y-%m-%d %H:%M:%S"))
+
         # 删除掉已经解除绑定的相关的snap和排班信息
         DutyRuleSnap.objects.filter(user_group_id=self.instance.id).exclude(
             duty_rule_id__in=self.instance.duty_rules
@@ -1012,7 +1015,7 @@ class UserGroupDetailSlz(UserGroupSlz):
         # 如果不能快速删除，则采用批量删除的形式，这也是主要耗时的原因之一
         # 故参考 https://stackoverflow.com/a/36935536/24637892,
         # 使用 queryset._raw_delete(using=queryset.db) 私有api来加速这个删除的过程
-        delete_buty_plan_query = DutyPlan.objects.filter(user_group_id=self.instance.id).exclude(
+        needless_duty_plans = DutyPlan.objects.filter(user_group_id=self.instance.id).exclude(
             duty_rule_id__in=self.instance.duty_rules
         )
-        delete_buty_plan_query._raw_delete(delete_buty_plan_query.db)
+        needless_duty_plans._raw_delete(needless_duty_plans.db)

@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 import calendar
 import logging
-import typing
+from typing import Dict, List, Optional, Any
 from collections import defaultdict
 from datetime import datetime
 from datetime import time as dt_time
@@ -107,14 +107,14 @@ class DutyRuleManager:
     """
 
     def __init__(
-        self,
-        duty_rule,
-        begin_time: str = None,
-        days=0,
-        last_user_index=0,
-        last_time_index=0,
-        end_time: str = None,
-        snap_end_time: str = "",
+            self,
+            duty_rule,
+            begin_time: str = None,
+            days=0,
+            last_user_index=0,
+            last_time_index=0,
+            end_time: str = None,
+            snap_end_time: str = "",
     ):
         self.duty_arranges = duty_rule["duty_arranges"]
         self.category = duty_rule.get("category")
@@ -142,7 +142,7 @@ class DutyRuleManager:
         return self._last_duty_plans
 
     @staticmethod
-    def _calculate_end_date(rule_end_time: typing.Optional[str], snap_end_time: typing.Optional[str]) -> datetime.date:
+    def _calculate_end_date(rule_end_time: Optional[str], snap_end_time: Optional[str]) -> datetime.date:
         """结束日期，包括这一天，除非是一天的开始。"""
         rule_end_datetime = end_time_to_datetime(rule_end_time)
         snap_end_datetime = end_time_to_datetime(snap_end_time)
@@ -209,9 +209,9 @@ class DutyRuleManager:
             )
 
             if (
-                duty_time["work_type"] == RotationType.DAILY
-                or begin_time.isoweekday() in weekdays
-                or begin_time.day in days
+                    duty_time["work_type"] == RotationType.DAILY
+                    or begin_time.isoweekday() in weekdays
+                    or begin_time.day in days
             ):
                 # 如果是每天都轮班，则一定生效
                 # 如果是按周轮班，当天在工作日内
@@ -385,7 +385,7 @@ class DutyRuleManager:
         date_index = 0
         while date_index < len(duty_date_times):
             # 根据配置的有效时间进行轮转
-            current_duty_dates = duty_date_times[date_index : date_index + period_interval]
+            current_duty_dates = duty_date_times[date_index: date_index + period_interval]
             date_index = date_index + period_interval
             # 根据设置的用户数量进行轮转
             current_user_index = last_user_index
@@ -528,9 +528,8 @@ class DutyRuleManager:
         return duty_work_time
 
     @classmethod
-    def refresh_duty_rule_from_any_begin_time(
-        cls, duty_rule: typing.Dict[str, typing.Any], begin_time: str
-    ) -> typing.Optional["DutyRuleManager"]:
+    def refresh_duty_rule_from_any_begin_time(cls, duty_rule: Dict[str, Any], begin_time: str) \
+            -> Optional["DutyRuleManager"]:
         """
         从任何起点刷新 duty_rule 排班
 
@@ -559,29 +558,42 @@ class GroupDutyRuleManager:
     告警组的轮值规则管理
     """
 
-    def __init__(self, user_group: UserGroup, duty_rules):
+    def __init__(self, user_group: UserGroup, duty_rules: Dict):
+        """
+        :param user_group: 告警组
+        :param duty_rules: 轮值规则配置内容
+        """
         self.user_group = user_group
         self.duty_rules = duty_rules
 
     def manage_duty_rule_snap(self, task_time):
         """
-        管理值班规则的快照，包括创建新的快照、更新旧的快照和删除过期的快照。
+        管理值班规则的快照，包括创建新的快照、更新旧的快照和删除过期的快照、以及创建排班计划
+
+        Q:为什么需要轮值快照？
+        A:创建好的轮值规则，随时可能被修改，所以需要一个快照来记录当前值班规则的状态，然后关联到当前告警组中，以维持告警组的值班状态不发生变化。
+
         :param task_time: 任务时间，用于计算快照的有效时间
         :return:
         """
         # task_time需要提前定义, 这个可以是七天以后的一个时间
 
         logger.info("[manage_duty_rule_snap] begin to manage duty snap for current_time(%s)", task_time)
-        # 获取到当前告警组关联的值班规则快照
-        snaps = DutyRuleSnap.objects.filter(
+        # 获取到当前告警组关联的值班规则快照，一个告警组中可以关联多个值班规则，一个告警组也可以关联多个值班规则快照
+        # 针对更新逻辑，新建告警组，duty_snaps此时为空
+        duty_snaps = DutyRuleSnap.objects.filter(
             duty_rule_id__in=self.user_group.duty_rules, user_group_id=self.user_group.id, enabled=True
         ).order_by("duty_rule_id")
         # 以值班规则 id 为分组键，获取到同一个值班规则的所有快照
-        rule_id_to_snaps = {rule_id: list(snaps) for rule_id, snaps in groupby(snaps, key=attrgetter("duty_rule_id"))}
+        rule_id_to_snaps = {rule_id: list(snaps) for rule_id, snaps in
+                            groupby(duty_snaps, key=attrgetter("duty_rule_id"))}
 
-        rules_for_snap_creation = []
-        updated_rule_snaps = []
-        expired_snaps = []
+        # 存放需要创建的值班规则快照
+        duty_snaps_to_creat = []
+        # 存放需要更新的值班规则快照
+        duty_snaps_to_update = []
+        # 存放需要删除的值班规则快照
+        duty_snaps_to_delete = []
         for duty_rule in self.duty_rules:
             if not duty_rule["enabled"]:
                 continue
@@ -590,39 +602,48 @@ class GroupDutyRuleManager:
             rule_id = duty_rule["id"]
             # 如果没有快照，创建快照，并跳过
             if rule_id not in rule_id_to_snaps:
-                rules_for_snap_creation.append(duty_rule)
+                duty_snaps_to_creat.append(duty_rule)
                 continue
 
-            old_snaps: typing.List[DutyRuleSnap] = rule_id_to_snaps[rule_id]
+            # 当前轮值的旧的轮值规则快照
+            old_duty_snaps: List[DutyRuleSnap] = rule_id_to_snaps[rule_id]
 
             # 规则没有变化，跳过
-            old_hashes = {snap.rule_snap["hash"] for snap in old_snaps}
+            old_hashes = {snap.rule_snap["hash"] for snap in old_duty_snaps}
             if duty_rule["hash"] in old_hashes:
                 continue
 
             # 规则被修改，创建新快照，处理旧快照，更新旧计划
             new_snap_start_time = max(duty_rule["effective_time"], task_time)
             self.update_outdated_plans_by_rule(rule_id, new_snap_start_time)
-            rules_for_snap_creation.append(duty_rule)
+            duty_snaps_to_creat.append(duty_rule)
 
-            for old_snap in old_snaps:
+            # 保留旧快照，是为了让之前已经已经排班的值班人员，继续执行之前的计划
+            # 删除旧的快照，是因为旧的快照新的快照有重叠，以新的快照为准。
+
+            for old_snap in old_duty_snaps:
                 if old_snap.end_time and old_snap.end_time <= new_snap_start_time:
-                    # 如果新快照在旧快照结束后生效，啥也不做
+                    # 如果新快照在旧快照结束后生效，啥也不做。
+                    # 因为时间没有重叠
                     pass
                 elif old_snap.next_plan_time >= new_snap_start_time:
-                    # 否则，如果已排完班，直接删除
-                    expired_snaps.append(old_snap.id)
+                    # 如果next_plan_time下次轮值时间，已完成排班。
+                    # 下次排班时间，大于新的快照生效时间，发生重叠，这个就快照不需要，所以删除。
+                    duty_snaps_to_delete.append(old_snap.id)
                 else:
                     # 否则，修改旧快照的 end_time，让它们负责的时间段不重叠
+                    # 如果下次排版时间，下雨新的快照生效时间，那么之前安排的计划，需要继续执行，
+                    # 但为了避免冲突，所以让旧的快照有效时间提前
                     old_snap.end_time = new_snap_start_time
-                    updated_rule_snaps.append(old_snap)
+                    duty_snaps_to_update.append(old_snap)
 
-        # 禁用规则管理：删除快照、禁用计划
+        # 针对更新逻辑，如果关联的值班规则被禁用，那么轮值快照进行删除删除操作，轮值计划进行禁用操作
         self.manage_disabled_rules()
 
-        # step1 先创建一波新的snap
+        # step1 先创建一波新的duty_snap
+        # 存放告警组员关联的值班规则快照
         new_group_rule_snaps = []
-        for duty_rule in rules_for_snap_creation:
+        for duty_rule in duty_snaps_to_creat:
             # 获取到首次生效时间
             first_effective_time = max(duty_rule["effective_time"], task_time)
             new_group_rule_snaps.append(
@@ -638,14 +659,17 @@ class GroupDutyRuleManager:
                 )
             )
         if new_group_rule_snaps:
-            # Q：为什么不在上方 DutyRuleSnap 初始化时就执行 effective_time ~ task_time 的刷新？
-            # A：只有「新建 / 快照变更」场景需要根据 effective_time 刷对顺序，如果 DutyRuleSnap 已存在，排班顺序是有保障的
-            # Q：为什么 DutyRuleSnap 存在时，排班顺序有保障？
-            # A：DutyRuleManager.get_duty_plan 每次都会迭代 snap 里的 begin_time 和 user_index
             for new_group_rule_snap in new_group_rule_snaps:
-                refresh_duty_manager: typing.Optional[
-                    DutyRuleManager
-                ] = DutyRuleManager.refresh_duty_rule_from_any_begin_time(
+                # 刷新轮值规则的下次值班时间和下次值班用户
+                # Q: 为什么要刷新？
+                # A: 因为轮值规则中仅仅设置的是整个规则的生效时间和结束时间。并不是针对每次值班的生效时间，比如明天值班，但不可能24小时都是值班吧
+                #    所以要确定一下明天值班的时间，比如早上9点，那结束时间呢，比如下午6点。还有对应的值班用户，这些都是动态的，变化的。
+                #    所以需要根据当前的时间，刷新一下值班计划，以此获取下次值班时间和下次值班用户。
+                #    同时下次值班时间，也同时作为下次获取值班计划时，使用的开始时间。
+                # Q: 刷新期间干了什么？
+                # A: 其实就是根据当前时间调用了一下duty_manager.get_duty_plan()获取值班计划，值班计划中包含了下次值班时间和下次值班用户。
+                # Q: 更新了
+                refresh_duty_manager: Optional[DutyRuleManager] = DutyRuleManager.refresh_duty_rule_from_any_begin_time(
                     new_group_rule_snap.rule_snap, begin_time=task_time
                 )
                 if refresh_duty_manager:
@@ -656,17 +680,18 @@ class GroupDutyRuleManager:
             DutyRuleSnap.objects.bulk_create(new_group_rule_snaps)
 
         # step2 然后再来一波更新
-        if updated_rule_snaps:
-            DutyRuleSnap.objects.bulk_update(updated_rule_snaps, fields=["end_time"])
+        if duty_snaps_to_update:
+            DutyRuleSnap.objects.bulk_update(duty_snaps_to_update, fields=["end_time"])
 
         # step 3 删除掉过期的
-        if expired_snaps:
-            DutyRuleSnap.objects.filter(id__in=expired_snaps).delete()
+        if duty_snaps_to_delete:
+            DutyRuleSnap.objects.filter(id__in=duty_snaps_to_delete).delete()
 
         # 排班的时候提前7天造好数据
         plan_time = time_tools.str2datetime(task_time) + timedelta(days=7)
+        # 拿到未来7天内，有值班计划的轮值快照，并生成对应的未来几天的值班计划
         for rule_snap in DutyRuleSnap.objects.filter(
-            next_plan_time__lte=time_tools.datetime2str(plan_time), user_group_id=self.user_group.id, enabled=True
+                next_plan_time__lte=time_tools.datetime2str(plan_time), user_group_id=self.user_group.id, enabled=True
         ):
             self.manage_duty_plan(rule_snap=rule_snap)
 
@@ -687,7 +712,8 @@ class GroupDutyRuleManager:
 
         只关注当前用户组关联的，解除关联的已在用户组保存接口处理（直接删除快照和计划）
         增：如果规则在关联前已经是禁用状态，则快照和计划都不会创建（下面是空处理）
-        改：如果规则在关联后变为禁用状态，规则保存接口已经部分处理（禁用快照和计划）"""
+        改：如果规则在关联后变为禁用状态，规则保存接口已经部分处理（禁用快照和计划）
+        """
 
         rule_ids = self.user_group.duty_rules
         disabled_duty_rules = DutyRule.objects.filter(id__in=rule_ids, enabled=False).values_list("id", flat=True)
@@ -717,6 +743,7 @@ class GroupDutyRuleManager:
             logger.info("[manage_duty_plan] duty rule (%s) of group(%s) is disabled", snap_id, self.user_group.id)
             return
         # step 2 根据当前的轮值模式生成新的计划
+        # 使用下次值班时间作为开始时间，生成未来几天的值班计划
         begin_time = rule_snap.next_plan_time
 
         duty_manager = DutyRuleManager(rule_snap.rule_snap, begin_time=begin_time, snap_end_time=rule_snap.end_time)
@@ -747,13 +774,15 @@ class GroupDutyRuleManager:
 
         # 创建排班计划
         DutyPlan.objects.bulk_create(duty_plans)
-
         next_plan_time = time_tools.datetime2str(duty_manager.end_time)
+
         if rule_snap.end_time and next_plan_time >= rule_snap.end_time:
-            # 如果已生成负责的所有计划，则删除快照
+            # 如果duty_manager.end_time > rule_snap.end_time，说明本次生成的值班计划的最晚时间，已经覆盖了快照的结束时间。
+            # 则说明在快照的有效时间内的所有值班计划，都已经生成了。它的任务已完成，所以进行删除。
             rule_snap.delete()
         else:
-            # 否则保存下次排班的上下文信息
+            # 如果duty_manager.end_time < rule_snap.end_time，说明本次生成的值班计划的最晚时间，没有覆盖快照的结束时间。
+            # 则说明快照后续还需继续生成值班计划，但是已经生成的计划，不需要再生成，所以更新下次的值班时间，和下次值班用户，将他们作为新的计划起点。
             rule_snap.next_plan_time = next_plan_time
             rule_snap.next_user_index = duty_manager.last_user_index
             rule_snap.save(update_fields=["next_plan_time", "next_user_index", "rule_snap"])
@@ -1016,7 +1045,7 @@ class GroupDutyRuleManager:
         )
 
 
-def end_time_to_datetime(end_time: typing.Optional[str]) -> datetime:
+def end_time_to_datetime(end_time: Optional[str]) -> datetime:
     """返回 datetime 类型的结束时间。"""
     if not end_time:
         return datetime.max

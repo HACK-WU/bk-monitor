@@ -124,7 +124,8 @@ class DetectModel(Model):
     expression = models.TextField("计算公式", default="")
     trigger_config = models.JSONField("触发条件配置", default=dict)
     recovery_config = models.JSONField("恢复条件配置", default=dict)
-    connector = models.CharField("同级别算法连接符", choices=(("and", "AND"), ("or", "OR")), max_length=4, default="and")
+    connector = models.CharField("同级别算法连接符", choices=(("and", "AND"), ("or", "OR")), max_length=4,
+                                 default="and")
 
     class Meta:
         verbose_name = "检测配置V2"
@@ -572,8 +573,14 @@ class UserGroup(AbstractRecordModel):
 
 class DutyRule(AbstractRecordModel):
     """
-    轮值规则，与DutyArrange(轮值安排)是一对一关系，与UserGroup(告警组)是多对多关系
-
+    轮值规则，
+    1、DutyRule与DutyArrange(轮值安排)是一对一关系，DutyRule保存的是规则的基本信息，具体轮值安排保存在DutyArrange中。
+    2、DutyRule与UserGroup(告警组)是多对多关系，一个告警组可以配置多个轮值规则，一个轮值规则可以存在于多个告警组中。
+    3、DutyRule与DutyRuleSnap(轮值规则快照)是一对多关系，一个轮值规则可以关联多个轮值规则快照。
+      创建告警组时，如果选择的DutyRule配置有变更，并且变更后的内容与关联的多个DutyRuleSnap都不一致，
+      需要创建新的DutyRuleSnap，此时DutyRule关联的DutyRuleSnap数量就增加了
+    4、DutyPlan是通过DutyRuleSnap创建的，又因为DutyRule与DutyRuleSnap(轮值规则快照)是一对多关系，
+     所以DutyRule与DutyPlan(轮值计划)是一对多关系，一个轮值规则可以关联多个轮值计划。
     """
 
     bk_biz_id = models.IntegerField(verbose_name="业务ID", default=0, blank=True, db_index=True)
@@ -610,11 +617,15 @@ class DutyRule(AbstractRecordModel):
 class DutyRuleSnap(Model):
     """
     告警规则快照
+    DutyRule与DutyRuleSnap是一对多关系
+    当不同时间段，创建告警组时，如果DutyRule配置有变更，并且变更后的内容与已经创建的DutyRuleSnap不一致，
+    需要创建新的DutyRuleSnap，此时一个DutyRule就关联了多个DutyRuleSnap。
     """
 
     duty_rule_id = models.IntegerField("轮值组ID", null=False, db_index=True)
     user_group_id = models.IntegerField("用户组ID", null=False, db_index=True)
     first_effective_time = models.CharField("首次生效时间", null=True, max_length=32)
+    # 下次值班时间
     next_plan_time = models.CharField("下一次生效时间", null=True, max_length=32)
     end_time = models.CharField("结束时间", null=True, max_length=32)
     next_user_index = models.IntegerField("下一次轮岗用户组", default=0)
@@ -814,7 +825,8 @@ class DutyArrangeSnap(Model):
 
 class DutyPlan(Model):
     """
-    轮班计划表
+    排班计划表
+    排版计划是更具轮值规则快照生成的
     """
 
     id = models.BigAutoField("主键", primary_key=True)
