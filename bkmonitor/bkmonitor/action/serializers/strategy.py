@@ -338,6 +338,9 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
 
     @staticmethod
     def calc_hash(internal_data):
+        """
+        计算轮值安排的hash
+        """
         hash_data = {
             "duty_users": internal_data.get("duty_users", []),
             "users": internal_data.get("users", []),
@@ -507,6 +510,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
             for user_group in user_groups:
                 group_duty_manager = GroupDutyRuleManager(user_group, [self.data])
                 try:
+                    # 管理快照和排班计划，生成的新的快照和排班计划
                     group_duty_manager.manage_duty_rule_snap(time_tools.datetime_today().strftime("%Y-%m-%d %H:%M:%S"))
                 except Exception:  # noqa
                     continue
@@ -520,7 +524,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
 
     def to_internal_value(self, data):
         ret = super(DutyRuleDetailSlz, self).to_internal_value(data)
-        # 生成hash字段
+        # 生成hash字段，
         ret = self.calc_hash(ret)
         return ret
 
@@ -528,6 +532,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
     def calc_hash(internal_data):
         """
         计算关键字hash
+        用于与快照中的hash进行比较，如果有变化，则证明不是当前轮值组的快照
         """
         hash_data = {
             "effective_time": internal_data.get("effective_time", ""),

@@ -53,6 +53,7 @@ class AlertAssignGroup(AbstractRecordModel):
 class AlertAssignRule(models.Model):
     """
     告警分派规则
+    AlertAssignGroup告警分派规则组与AlertAssignRule告警分派规则时一对多的关系
     """
 
     id = models.BigAutoField(primary_key=True)

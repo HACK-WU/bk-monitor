@@ -118,7 +118,7 @@ class ShieldListResource(Resource):
         filter_dict = defaultdict(list)
         # 获取所有启用的字段
         enabled_fields = [field for field, value in Shield.__dict__.items() if isinstance(value, DeferredAttribute)]
-        # 构建用于过滤字段的过滤字典
+        # 构建用于过滤字段的字典
         for condition in conditions:
             # 支持多条件匹配
             key = condition['key'].lower()

@@ -9,7 +9,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 from django.utils.translation import ugettext_lazy as _
 
 from constants.data_source import DataSourceLabel, DataTypeLabel, ResultTableLabelObj
@@ -147,16 +146,16 @@ DATA_TARGET_MAP = {
 
 
 class TargetFieldType(object):
-    host_topo = "host_topo_node"
+    host_topo = "host_topo_node"  # 动态拓扑
     service_topo = "service_topo_node"
-    host_ip = "ip"
+    host_ip = "ip"  # 静态拓扑
     host_target_ip = "bk_target_ip"
 
-    host_set_template = "host_set_template"
+    host_set_template = "host_set_template"  # 集群模板
     service_set_template = "service_set_template"
-    host_service_template = "host_service_template"
+    host_service_template = "host_service_template"  # 服务模板
     service_service_template = "service_service_template"
-    dynamic_group = "dynamic_group"
+    dynamic_group = "dynamic_group"  # 动态分组
 
 
 class TargetMethodType(object):
@@ -174,6 +173,7 @@ class TargetMethodType(object):
 
 AdvanceConditionMethod = ["reg", "nreg", "include", "exclude"]
 
+# 目标字段列表
 TargetFieldList = [
     TargetFieldType.host_topo,
     TargetFieldType.service_topo,

@@ -570,6 +570,10 @@ class GroupDutyRuleManager:
         """
         管理值班规则的快照，包括创建新的快照、更新旧的快照和删除过期的快照、以及创建排班计划
 
+        1、创建新快照
+        2、删除、禁用或更新存在冲突的快照和值班计划
+        3、为未来7天内将生效的快照，创建值班计划
+
         Q:为什么需要轮值快照？
         A:创建好的轮值规则，随时可能被修改，所以需要一个快照来记录当前值班规则的状态，然后关联到当前告警组中，以维持告警组的值班状态不发生变化。
 
@@ -615,12 +619,13 @@ class GroupDutyRuleManager:
 
             # 规则被修改，创建新快照，处理旧快照，更新旧计划
             new_snap_start_time = max(duty_rule["effective_time"], task_time)
+            # 禁用和更新存在冲突的值班计划
             self.update_outdated_plans_by_rule(rule_id, new_snap_start_time)
             duty_snaps_to_creat.append(duty_rule)
 
+            # 删除或更新旧的快照，避免就快照与新的快照有重叠，导致值班计划冲突
             # 保留旧快照，是为了让之前已经已经排班的值班人员，继续执行之前的计划
             # 删除旧的快照，是因为旧的快照新的快照有重叠，以新的快照为准。
-
             for old_snap in old_duty_snaps:
                 if old_snap.end_time and old_snap.end_time <= new_snap_start_time:
                     # 如果新快照在旧快照结束后生效，啥也不做。
@@ -637,7 +642,7 @@ class GroupDutyRuleManager:
                     old_snap.end_time = new_snap_start_time
                     duty_snaps_to_update.append(old_snap)
 
-        # 针对更新逻辑，如果关联的值班规则被禁用，那么轮值快照进行删除删除操作，轮值计划进行禁用操作
+        # 针对更新逻辑，如果关联的值班组被禁用，那么轮值快照进行删除删除操作，轮值计划进行禁用操作
         self.manage_disabled_rules()
 
         # step1 先创建一波新的duty_snap
@@ -660,15 +665,14 @@ class GroupDutyRuleManager:
             )
         if new_group_rule_snaps:
             for new_group_rule_snap in new_group_rule_snaps:
-                # 刷新轮值规则的下次值班时间和下次值班用户
+                # 刷新轮值规则的下次生效时间和下次值班用户
                 # Q: 为什么要刷新？
                 # A: 因为轮值规则中仅仅设置的是整个规则的生效时间和结束时间。并不是针对每次值班的生效时间，比如明天值班，但不可能24小时都是值班吧
                 #    所以要确定一下明天值班的时间，比如早上9点，那结束时间呢，比如下午6点。还有对应的值班用户，这些都是动态的，变化的。
-                #    所以需要根据当前的时间，刷新一下值班计划，以此获取下次值班时间和下次值班用户。
+                #    所以需要根据当前的时间，刷新一下值班计划，以此获取下次生效和下次值班用户。
                 #    同时下次值班时间，也同时作为下次获取值班计划时，使用的开始时间。
                 # Q: 刷新期间干了什么？
-                # A: 其实就是根据当前时间调用了一下duty_manager.get_duty_plan()获取值班计划，值班计划中包含了下次值班时间和下次值班用户。
-                # Q: 更新了
+                # A: 其实就是根据当前时间调用了一下duty_manager.get_duty_plan()获取值班计划，值班计划中包含了下生效时间和下次值班用户。
                 refresh_duty_manager: Optional[DutyRuleManager] = DutyRuleManager.refresh_duty_rule_from_any_begin_time(
                     new_group_rule_snap.rule_snap, begin_time=task_time
                 )
@@ -696,13 +700,14 @@ class GroupDutyRuleManager:
             self.manage_duty_plan(rule_snap=rule_snap)
 
     def update_outdated_plans_by_rule(self, rule_id: int, new_start_time: str) -> None:
-        """规则修改后，更新旧计划。"""
+        """禁用和更新存在冲突的值班计划"""
         duty_plan_queryset = DutyPlan.objects.filter(
             duty_rule_id=rule_id, user_group_id=self.user_group.id, is_effective=1
         )
-        # 在指定日期之前生效的需要取消
+        # 值班计划生效时间大于最新的生效时间的，禁用该值班计划，避免与新的值班计划冲突
         duty_plan_queryset.filter(Q(start_time__gte=new_start_time)).update(is_effective=0)
-        # 在开始时间之后还生效的部分，设置结束时间为开始时间
+        # 结束时间，大于最新的生效时间的，将结束时间设置为最新的生效时间
+        # 避免旧的值班计划在，当前生效时间之后继续执行，不然会与新的值班计划发生重叠或冲突
         duty_plan_queryset.filter(
             Q(finished_time__gt=new_start_time) | Q(finished_time=None) | Q(finished_time="")
         ).update(finished_time=new_start_time)
@@ -729,6 +734,7 @@ class GroupDutyRuleManager:
     def manage_duty_plan(self, rule_snap: DutyRuleSnap):
         """
         排班计划生成
+
         """
         # step 1 当前分组的原计划都设置为False
         if not rule_snap:
@@ -776,13 +782,14 @@ class GroupDutyRuleManager:
         DutyPlan.objects.bulk_create(duty_plans)
         next_plan_time = time_tools.datetime2str(duty_manager.end_time)
 
+
         if rule_snap.end_time and next_plan_time >= rule_snap.end_time:
             # 如果duty_manager.end_time > rule_snap.end_time，说明本次生成的值班计划的最晚时间，已经覆盖了快照的结束时间。
             # 则说明在快照的有效时间内的所有值班计划，都已经生成了。它的任务已完成，所以进行删除。
             rule_snap.delete()
         else:
             # 如果duty_manager.end_time < rule_snap.end_time，说明本次生成的值班计划的最晚时间，没有覆盖快照的结束时间。
-            # 则说明快照后续还需继续生成值班计划，但是已经生成的计划，不需要再生成，所以更新下次的值班时间，和下次值班用户，将他们作为新的计划起点。
+            # 则说明快照后续还需继续生成值班计划，但是已经生成的计划，不需要再生成，所以更新下次生效时间，和下次值班用户，将他们作为新的计划起点。
             rule_snap.next_plan_time = next_plan_time
             rule_snap.next_user_index = duty_manager.last_user_index
             rule_snap.save(update_fields=["next_plan_time", "next_user_index", "rule_snap"])

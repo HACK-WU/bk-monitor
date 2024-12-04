@@ -90,6 +90,11 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
 
     @staticmethod
     def compare_rules(group_id, debug_rules):
+        """
+        对比需要debug的规则是否发生了变化
+        如果debug rules中存在新增的规则，则表示发生了变化
+        如果是已经存在，则对比当前规则和现有规则的md5值，如果不一致，则表示发生了变化
+        """
         # 获取到当前规则组下的已经存在的规则
         existed_rules = {
             rule["id"]: rule
@@ -166,8 +171,8 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
     def perform_request(self, validated_request_data):
         """
         告警分派规则调试
+
         调试的不仅仅只是当前告警分派规则组的内容，其他规则组的也会进行调试。
-    
         获取到所有告警，然后循环告警用于匹配传入的规则，看是否命中
 
         1、提取请求数据：从请求数据中提取业务ID。
@@ -179,11 +184,11 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         """
         # 提取请求数据中的业务ID
         bk_biz_id = validated_request_data["bk_biz_id"]
-        
+
         # 获取主机属性|集群属性|模块属性
         self.hosts, self.sets, self.modules = self.get_cmdb_attributes(validated_request_data["bk_biz_id"])
-        
-        # step1 获取最近1周内产生的前1000条告警数据？，所有数据默认为abnormal
+
+        # step1 获取最近1周内产生的前1000条告警数据，所有数据默认为abnormal
         current_time = datetime.now()
         search_params = {
             "bk_biz_ids": [bk_biz_id],
@@ -198,27 +203,28 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         search_result, _ = handler.search_raw()
         # 将告警数据转为AlertDocument告警对象
         alerts = [AlertDocument(**hit.to_dict()) for hit in search_result]
-    
+
         # step2 获取当前DB存储的所有规则，并替换掉当前的告警规则
         # 2.1 获取到所有的规则组内容
         group_id = validated_request_data.get("assign_group_id", 0)
         group_name = validated_request_data.get("group_name", "")
         priority = validated_request_data.get("priority", 0)
         exclude_groups = validated_request_data.get("exclude_groups") or []
-    
+
         # 获取到告警分派规则组
         groups_queryset = AlertAssignGroup.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).order_by(
             "-priority"
         )
-    
+
         # 过滤掉不需要的规则组
         if exclude_groups:
             groups_queryset = groups_queryset.exclude(id__in=validated_request_data["exclude_groups"])
+        # 组装获取到的规则组
         groups = {group["id"]: group for group in AssignGroupSlz(instance=groups_queryset, many=True).data}
         # 去掉ID字段
         for group in groups.values():
             group.pop("id", None)
-    
+
         group_rules = defaultdict(list)
         priority_rules = defaultdict(list)
         if group_id:
@@ -226,8 +232,9 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             group_rules[group_id] = validated_request_data["rules"]
             groups[group_id]["priority"] = priority
             groups[group_id]["name"] = group_name
+            # 添加当前分派规则
             priority_rules[priority] = validated_request_data["rules"]
-    
+
         # 2.2 获取到所有的不属于当前规则组的规则
         rules_queryset = AlertAssignRule.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).exclude(
             assign_group_id=group_id
@@ -238,7 +245,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             rules_queryset = rules_queryset.exclude(assign_group_id__in=exclude_groups)
         # 拿到不属于当期规则组的规则
         rules = AssignRuleSlz(instance=rules_queryset, many=True).data
-    
+
         # 2.3 通过优先级和组名进行排序
         for rule in rules:
             rule["alerts"] = []
@@ -250,7 +257,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         sorted_priorities = sorted(priority_rules.keys(), reverse=True)
         # 按照优先级排序存储的分派规则
         sorted_priority_rules = [priority_rules[sorted_priority] for sorted_priority in sorted_priorities]
-    
+
         # step3 对告警进行规则适配 ?? 是否需要后台任务支持
         matched_alerts = []
         # 按优先级排序并存储的匹配到的告警分派规则组
@@ -263,6 +270,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 group_rules=sorted_priority_rules,
                 assign_mode=[AssignMode.BY_RULE],
                 # 获取到当前告警的CMDB属性： {"host": host, "sets": sets, "modules": modules}
+                # 告警分派规则中，匹配条件可以使用CMDB属性，后续会将这些熟悉添加到告警中，作为所有告警共同维度
                 cmdb_attrs=self.get_alert_cmdb_attributes(alert),
             )
             # 匹配告警，如果匹配，则更新alert告警信息
@@ -285,7 +293,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 matched_rule.assign_rule["alerts"].append(alert_info)
             matched_group_alerts[alert_manager.matched_group_info["group_id"]].append(alert)
             matched_alerts.append(alert_info)
-    
+
         MetricTranslator(bk_biz_ids=[bk_biz_id]).translate_from_dict(
             list(chain(*[alert["metrics"] for alert in matched_alerts])), "id", "name"
         )

@@ -146,7 +146,8 @@ class AssignRuleMatch:
 
     @property
     def is_changed(self):
-        # 判断匹配状态是否发生改变
+        # 如果是新增规则，则认为规则已发生变化。
+        # 否则对当前规则和新增规则进行md5比较，如果不一致则认为规则已发生变化。
         if self.is_new:
             return True
         # 比较分派的用户组和分派条件
@@ -167,19 +168,22 @@ class AssignRuleMatch:
     @property
     def is_new(self):
         """
-        是否为新增规则
+        是否为新增规则。
+        快照的来源是从告警中获取的，而告警中的快照是重新适配成功后存入的，
+        所以如果快照id为空，说明这个告警从来没被适配过，则认为当前规则是新增规则。
+        又如果快照id与当前规则ID不一致，则说明当前规则是新增规则。
         """
         if self.snap_rule_id is None:
             return True
         return self.snap_rule_id and self.rule_id and self.snap_rule_id != self.rule_id
 
-    def is_matched(self, dimensions):
+    def is_matched(self, dimensions) -> bool:
         """
         当前规则是否适配
         :param dimensions: 告警维度信息
         :return:
         """
-        # 判断分派规则是否发生了变化，改变则重新适配，否则直接适配成功。
+        # 判断告警的分派规则是否发生了变化，改变则重新适配，否则直接适配成功。
         if self.is_changed:
             # 如果为新或者发生了变化，需要重新适配
             return self.dimension_check.is_match(dimensions)
@@ -285,6 +289,10 @@ class AssignRuleMatch:
 class AlertAssignMatchManager:
     """
     告警分派管理
+    主要功能：
+    1. 告警分派匹配前的数据准备，比如组装告警为维度信息
+    2. 告警分派匹配
+    3. 整理匹配到分派规则和告警信息
     """
 
     def __init__(
@@ -312,18 +320,20 @@ class AlertAssignMatchManager:
         # 针对存量的数据，默认为通知+分派规则
         self.assign_mode = assign_mode or [AssignMode.ONLY_NOTICE, AssignMode.BY_RULE]
         self.notice_type = notice_type
-        # 转换CMDB相关的维度信息
+        # 转换CMDB相关的维度信息，后续将会更新到告警维度中
         self.cmdb_dimensions = self.get_match_cmdb_dimensions(cmdb_attrs)
-        # 获取当前告警的维度
+        # 获取当前告警的维度，用于后续匹配分派规则
         self.dimensions = self.get_match_dimensions()
         extra_info = self.alert.extra_info.to_dict() if self.alert.extra_info else {}
+        # 获取到分派规则快照，如果该告警曾经匹配到过分派规则，会将该规则记录下来，作为快照。
+        # 后续需要再次匹配时，可以直接通过该快照进行对比，从而避免重复匹配
         self.rule_snaps = extra_info.get("rule_snaps") or {}
         self.bk_biz_id = self.alert.event.bk_biz_id
         # 指定的分派规则, 以优先级从高到低排序
         self.group_rules = group_rules or []
-        # 匹配到的规则信息
+        # 匹配到的规则
         self.matched_rules: List[AssignRuleMatch] = []
-        # 匹配到的规则信息
+        # 匹配到的规则对应的告警信息
         self.matched_rule_info = {
             "notice_upgrade_user_groups": [],  # 通知升级负责人
             "follow_groups": [],  # 关注人
@@ -475,7 +485,7 @@ class AlertAssignMatchManager:
         适配分派规则, 通过api获取动态分组，适用于SaaS调试预览，后台实现基于缓存重写
         :return: 匹配的规则列表
         """
-        # # 初始化匹配的规则列表
+        # 初始化匹配成功的匹配对象列表
         matched_rules: List[AssignRuleMatch] = []
         # # 检查是否需要按规则分派
         if AssignMode.BY_RULE not in self.assign_mode:
@@ -497,14 +507,15 @@ class AlertAssignMatchManager:
                         condition["field"] = "bk_host_id"
                 # 创建规则匹配对象
                 rule_match_obj = AssignRuleMatch(rule, self.rule_snaps.get(str(rule.get("id", ""))), self.alert)
-                # 检查规则是否匹配
+                # 规则匹配
                 if rule_match_obj.is_matched(dimensions=self.dimensions):
                     # 如果匹配，添加到匹配的规则列表中
                     matched_rules.append(rule_match_obj)
-            # 一旦匹配到一条规则，就结束匹配
+            # 规则组传入时已经优先级从高到底排序
+            # 如果存在匹配到高优先级的规则组时，优先级低的规则组不再匹配。
             if matched_rules:
                 break
-        # 返回匹配的规则
+        # 返回匹配对象列表
         return matched_rules
 
     def get_itsm_actions(self):
@@ -546,7 +557,7 @@ class AlertAssignMatchManager:
 
     def get_matched_rule_info(self):
         """
-        获取匹配到的规则信息。
+        整理匹配到的规则和告警信息。
         
         此方法遍历所有匹配的规则对象，收集通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和规则快照信息。
         它还根据通知类型决定是否获取升级用户组，并处理用户组的去重和更新。
@@ -610,7 +621,7 @@ class AlertAssignMatchManager:
         # 获取匹配的规则列表
         self.matched_rules: List[AssignRuleMatch] = self.get_matched_rules()
 
-        # 如果存在匹配的规则
+        # 整理匹配到的规则
         if self.matched_rules:
             # 计算所有匹配规则中的最大告警严重性
             assign_severity = max([rule_obj.alert_severity for rule_obj in self.matched_rules])
@@ -618,7 +629,7 @@ class AlertAssignMatchManager:
             # 根据计算出的严重性设置严重性来源
             self.severity_source = AssignMode.BY_RULE if assign_severity > 0 else ""
 
-            # 获取匹配规则的详细信息
+            # 整理匹配到的规则的以及告警信息
             self.get_matched_rule_info()
 
             # 更新告警的严重性，如果匹配的规则中有指定严重性，则使用规则指定的严重性

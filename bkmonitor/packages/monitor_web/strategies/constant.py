@@ -49,6 +49,7 @@ DETECT_ALGORITHM_CHOICES = [
 # 默认触发条件配置
 GLOBAL_TRIGGER_CONFIG = {"check_window": 5, "count": 1}
 
+# 默认告警触发条件配置
 DEFAULT_TRIGGER_CONFIG_MAP = {
     DataSourceLabel.BK_MONITOR_COLLECTOR: {
         DataTypeLabel.TIME_SERIES: {
