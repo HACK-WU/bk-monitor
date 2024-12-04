@@ -3974,7 +3974,7 @@ class TestActionProcessor(TransactionTestCase):
             self.assertEqual(len(actions0), 1)
             self.assertTrue(alert.data["is_shielded"])
 
-            # 相当于屏蔽解除,TODo
+            # 相当于屏蔽解除
             settings.GLOBAL_SHIELD_ENABLED = False
             with patch("alarm_backends.service.fta_action.tasks.create_actions.delay", return_value=1):
                 # 解除屏蔽之后，应该创建一个新的通知任务

@@ -251,6 +251,7 @@ class ActionConfig(AbstractRecordModel):
     """
     告警套餐表
     """
+    # 告警套餐的插件ID
     NOTICE_PLUGIN_ID = 1
 
     is_builtin = models.BooleanField("是否内置", default=False)
