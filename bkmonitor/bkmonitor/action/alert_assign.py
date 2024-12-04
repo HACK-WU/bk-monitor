@@ -146,7 +146,7 @@ class AssignRuleMatch:
 
     @property
     def is_changed(self):
-        # 判断当前的分派规则是否已经发生了变化
+        # 判断匹配状态是否发生改变
         if self.is_new:
             return True
         # 比较分派的用户组和分派条件
@@ -167,7 +167,7 @@ class AssignRuleMatch:
     @property
     def is_new(self):
         """
-        是否为新增
+        是否为新增规则
         """
         if self.snap_rule_id is None:
             return True
@@ -179,7 +179,7 @@ class AssignRuleMatch:
         :param dimensions: 告警维度信息
         :return:
         """
-        # 通过判断告警中的分派规则快照与当前反派规则是否一致，则默认匹配
+        # 判断分派规则是否发生了变化，改变则重新适配，否则直接适配成功。
         if self.is_changed:
             # 如果为新或者发生了变化，需要重新适配
             return self.dimension_check.is_match(dimensions)
@@ -299,7 +299,10 @@ class AlertAssignMatchManager:
         """
         :param alert: 告警
         :param notice_users: 通知人员（告警负责人）
-        :param group_rules: 指定的分派规则, 以优先级
+        :param group_rules: 指定的分派规则, 以优先级从高到低排序
+        :param assign_mode: 分派模式，仅通知、仅分派规则、通知+分派规则
+        :param notice_type: 通知类型
+        :param cmdb_attrs: CMDB相关的维度信息
         """
         self.alert = alert
         self.origin_severity = alert.severity
@@ -316,6 +319,7 @@ class AlertAssignMatchManager:
         extra_info = self.alert.extra_info.to_dict() if self.alert.extra_info else {}
         self.rule_snaps = extra_info.get("rule_snaps") or {}
         self.bk_biz_id = self.alert.event.bk_biz_id
+        # 指定的分派规则, 以优先级从高到低排序
         self.group_rules = group_rules or []
         # 匹配到的规则信息
         self.matched_rules: List[AssignRuleMatch] = []
@@ -471,9 +475,9 @@ class AlertAssignMatchManager:
         适配分派规则, 通过api获取动态分组，适用于SaaS调试预览，后台实现基于缓存重写
         :return: 匹配的规则列表
         """
-        # 初始化匹配的规则列表
+        # # 初始化匹配的规则列表
         matched_rules: List[AssignRuleMatch] = []
-        # 检查是否需要按规则分派
+        # # 检查是否需要按规则分派
         if AssignMode.BY_RULE not in self.assign_mode:
             # 如果不需要分派的，不要进行规则匹配
             return matched_rules
@@ -497,9 +501,9 @@ class AlertAssignMatchManager:
                 if rule_match_obj.is_matched(dimensions=self.dimensions):
                     # 如果匹配，添加到匹配的规则列表中
                     matched_rules.append(rule_match_obj)
-                # 如果当前优先级下有匹配的规则，停止低优先级的适配
-                if matched_rules:
-                    break
+            # 一旦匹配到一条规则，就结束匹配
+            if matched_rules:
+                break
         # 返回匹配的规则
         return matched_rules
 
