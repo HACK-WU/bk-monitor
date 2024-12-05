@@ -97,13 +97,18 @@ class AIOPSManager(abc.ABC):
 
     @classmethod
     def get_graph_panel(
-        cls, alert: AlertDocument, compare_function: Optional[Dict] = None, use_raw_query_config: bool = False
+        cls,
+        alert: AlertDocument,
+        compare_function: Optional[Dict] = None,
+        use_raw_query_config: bool = False,
+        with_anomaly: bool = True,
     ):
         """
         获取图表配置
         :param alert: 告警对象
         :param compare_function:
         :param use_raw_query_config: 是否使用原始查询配置（适用于AIOps接入后要获取原始数据源的场景）
+        :param with_anomaly: 是否需要在返回图表中包含is_anomaly字段
         """
         if compare_function is None:
             compare_function = {"time_compare": ["1d", "1w"]}
@@ -265,7 +270,7 @@ class AIOPSManager(abc.ABC):
                 extra_metrics = []
                 if not use_raw_query_config and intelligent_algorithm_list and intelligent_detect_accessed:
                     visual_type = intelligent_algorithm_list[0]["config"].get("visual_type")
-                    if visual_type != VisualType.FORECASTING:
+                    if visual_type != VisualType.FORECASTING and with_anomaly:
                         metrics.append(
                             {
                                 "field": "is_anomaly",
