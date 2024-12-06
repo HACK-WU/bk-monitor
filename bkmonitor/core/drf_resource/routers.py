@@ -9,7 +9,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import six
 from rest_framework.routers import DefaultRouter
 from rest_framework.viewsets import GenericViewSet
@@ -41,7 +40,7 @@ class ResourceRouter(DefaultRouter):
         """
         for attr, viewset in six.iteritems(viewset_module.__dict__):
             # 全小写的属性不是类，忽略
-            if attr.startswith("_") or attr[0].islower():
+            if attr.startswith("_") or attr[0].islower() or attr in ["ResourceViewSet", "ResourceRoute"]:
                 continue
 
             if isinstance(viewset, type) and issubclass(viewset, GenericViewSet):

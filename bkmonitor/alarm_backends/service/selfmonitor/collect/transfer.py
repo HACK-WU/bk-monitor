@@ -18,7 +18,7 @@ import arrow
 import requests
 from django.apps import apps
 from django.conf import settings
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str as force_text
 from prometheus_client.parser import text_string_to_metric_families
 from prometheus_client.samples import Sample
 

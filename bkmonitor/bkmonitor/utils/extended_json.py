@@ -16,7 +16,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import arrow
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str as force_text
 from django.utils.functional import Promise
 
 STD_DT_FORMAT = "%Y-%m-%d %H:%M:%S"

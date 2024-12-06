@@ -34,7 +34,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.core.serializers.json import DjangoJSONEncoder
 from django.utils import translation
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str as force_text
 from django.utils.functional import Promise
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext as _
@@ -153,11 +153,11 @@ class DataApiRetryClass(object):
 
     @staticmethod
     def create_retry_obj(
-        exceptions: list = None,
-        fail_check_functions: list = None,
-        stop_max_attempt_number=1,
-        wait_random_min=0,
-        wait_random_max=1000,
+            exceptions: list = None,
+            fail_check_functions: list = None,
+            stop_max_attempt_number=1,
+            wait_random_min=0,
+            wait_random_max=1000,
     ):
         retry_obj = DataApiRetryClass(
             stop_max_attempt_number=stop_max_attempt_number,
@@ -196,25 +196,25 @@ class DataAPI(object):
         LIMIT_OFFSET = "LimitOffsetPagination"
 
     def __init__(
-        self,
-        method,
-        url,
-        module,
-        description="",
-        default_return_value=None,
-        before_request=None,
-        after_request=None,
-        max_response_record=5000,
-        max_query_params_record=5000,
-        method_override=None,
-        url_keys=None,
-        header_keys=None,
-        after_serializer=None,
-        cache_time=0,
-        default_timeout=60,
-        data_api_retry_cls=None,
-        use_superuser=False,
-        pagination_style=PaginationStyle.LIMIT_OFFSET.value,
+            self,
+            method,
+            url,
+            module,
+            description="",
+            default_return_value=None,
+            before_request=None,
+            after_request=None,
+            max_response_record=5000,
+            max_query_params_record=5000,
+            method_override=None,
+            url_keys=None,
+            header_keys=None,
+            after_serializer=None,
+            cache_time=0,
+            default_timeout=60,
+            data_api_retry_cls=None,
+            use_superuser=False,
+            pagination_style=PaginationStyle.LIMIT_OFFSET.value,
     ):
         """
         初始化一个请求句柄
@@ -266,14 +266,14 @@ class DataAPI(object):
         self.pagination_style = pagination_style
 
     def __call__(
-        self,
-        params=None,
-        files=None,
-        raw=False,
-        timeout=None,
-        raise_exception=True,
-        request_cookies=True,
-        data_api_retry_cls=None,
+            self,
+            params=None,
+            files=None,
+            raw=False,
+            timeout=None,
+            raise_exception=True,
+            request_cookies=True,
+            data_api_retry_cls=None,
     ):
         """
         调用传参
@@ -596,12 +596,12 @@ class DataAPI(object):
             return cache.get(cache_key)
 
     def batch_request(
-        self,
-        chunk_key,
-        chunk_values,
-        params=None,
-        chunk_size=settings.BULK_REQUEST_LIMIT,
-        get_data=lambda x: x["list"],
+            self,
+            chunk_key,
+            chunk_values,
+            params=None,
+            chunk_size=settings.BULK_REQUEST_LIMIT,
+            get_data=lambda x: x["list"],
     ):
         """
         并发请求接口，用于需要切片多次请求的情况
@@ -624,7 +624,7 @@ class DataAPI(object):
         with ignored(Exception):
             request = get_request()
         for i in range(count):
-            request_params.update({chunk_key: chunk_values[i * chunk_size : i * chunk_size + chunk_size]})
+            request_params.update({chunk_key: chunk_values[i * chunk_size: i * chunk_size + chunk_size]})
             futures.append(
                 pool.apply_async(
                     self.thread_activate_request,
@@ -638,11 +638,11 @@ class DataAPI(object):
         return data
 
     def bulk_request(
-        self,
-        params=None,
-        get_data=lambda x: x["info"],
-        get_count=lambda x: x["count"],
-        limit=settings.BULK_REQUEST_LIMIT,
+            self,
+            params=None,
+            get_data=lambda x: x["info"],
+            get_count=lambda x: x["count"],
+            limit=settings.BULK_REQUEST_LIMIT,
     ):
         """
         并发请求接口，用于需要分页多次请求的情况
@@ -703,15 +703,15 @@ class DataAPI(object):
         return data
 
     def thread_activate_request(
-        self,
-        params=None,
-        files=None,
-        raw=False,
-        timeout=None,
-        raise_exception=True,
-        request_cookies=True,
-        request=None,
-        context=None,
+            self,
+            params=None,
+            files=None,
+            raw=False,
+            timeout=None,
+            raise_exception=True,
+            request_cookies=True,
+            request=None,
+            context=None,
     ):
         """
         处理并发请求无法activate_request的封装
@@ -906,7 +906,7 @@ class PassThroughAPI(DataAPI):
     """
 
     def __init__(
-        self, module, method, url_prefix, sub_url, supported_api=list()
+            self, module, method, url_prefix, sub_url, supported_api=list()
     ):  # pylint: disable=dangerous-default-value  # noqa
         is_supported = False
         for d_api in supported_api:
@@ -923,7 +923,8 @@ class PassThroughAPI(DataAPI):
         if not is_supported:
             logger.error("【API ERROR】%s 暂不支持透传" % sub_url)
             raise PermissionError(
-                _("非法请求，模块【{module}】，方法【{method}】，接口【{sub_url}】").format(module=module, method=method, sub_url=sub_url)
+                _("非法请求，模块【{module}】，方法【{method}】，接口【{sub_url}】").format(module=module, method=method,
+                                                                                   sub_url=sub_url)
             )
 
 

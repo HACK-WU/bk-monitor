@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from importlib import import_module
 
-from django.utils.encoding import force_text
+from django.utils.encoding import force_str as force_text
 
 
 class BaseDatabaseOperations(object):
