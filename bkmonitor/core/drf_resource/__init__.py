@@ -17,7 +17,7 @@ from core.drf_resource.management.root import adapter, api, resource
 # from core.drf_resource.routers import ResourceRouter
 # from core.drf_resource.viewsets import ResourceViewSet
 
-default_app_config = "core.drf_resource.app.DRFResourceConfig"
+default_app_config = "core.drf_resource.apps.DRFResourceConfig"
 
 
 __author__ = "蓝鲸智云"

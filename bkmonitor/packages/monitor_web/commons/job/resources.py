@@ -13,8 +13,7 @@ import base64
 import time
 
 from django.conf import settings
-from django.utils.translation import ungettext as _
-from six.moves import range
+from django.utils.translation import ngettext as _
 
 from bkmonitor.views import serializers
 from core.drf_resource import api, resource
