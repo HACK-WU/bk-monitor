@@ -515,6 +515,9 @@ class AddShieldResource(Resource, EventDimensionMixin):
 
 class BulkAddAlertShieldResource(AddShieldResource):
     """
+    快捷屏蔽，批量添加告警屏蔽
+    附带删减维度配置功能
+
     {
       "bk_biz_id": 2,
       "category": "alert",

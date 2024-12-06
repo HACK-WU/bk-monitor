@@ -34,19 +34,36 @@ logger = logging.getLogger("fta_action.shield")
 
 class AlertShieldConfigShielder(BaseShielder):
     """
-    监控SaaS配置的告警屏蔽
+    监控SaaS配置的告警屏蔽管理
+
+    主要功能：
+        1、进行屏蔽匹配
+        2、将当前告警屏蔽配置ID列表刷新到缓存
+        3、计算告警剩余屏蔽时间
     """
 
     type = ShieldType.SAAS_CONFIG
 
     def get_shield_objs_from_cache(self):
-        # 从缓存获取alert近期命中的屏蔽配置ID列表，并过滤存在于当前获取的config_ids中的屏蔽配置。
-        # 过滤出的就是曾经匹配到过的告警配置，因为只有匹配到了才会被写入缓存。
+        """
+          获取到该告警的屏蔽配置对象，获取成功则该告警已被设置屏蔽
+
+         从缓存获取alert近期命中的屏蔽配置ID列表，并过滤存在于当前获取的config_ids中的屏蔽配置。
+         过滤出的就是曾经匹配到过的告警配置，因为只有匹配到了才会被写入缓存。
+
+         补充：
+            告警只需要匹配到一个屏蔽配置，就可以进行屏蔽，所以只需要关心所否存在匹配的屏蔽配置。
+            也就是说如果有新增的屏蔽配置，这里没匹配到也不关心，后续会进行重新匹配
+
+         该告警缓存的屏蔽配置id列表，直到数据库中的对应的屏蔽配置被全部删除后，才会重新进行屏蔽匹配，和刷新缓存
+        """
+
         key = self.shield_objs_cache_key(self.alert)
         if key is None:
             # 告警没有策略(第三方告警), 或者未设置过缓存 返回None
             return None
         client = ALERT_SHIELD_SNAPSHOT.client
+        #
         config_ids = client.get(key)
         if config_ids:
             # 已经进行过屏蔽匹配了， 这里直接返回
@@ -55,7 +72,9 @@ class AlertShieldConfigShielder(BaseShielder):
         return None
 
     def set_shield_objs_cache(self):
-        # 将匹配的屏蔽策略id 放进缓存
+        """
+        将匹配的屏蔽策略id 放进缓存
+        """
         key = self.shield_objs_cache_key(self.alert)
         if key is None:
             return False
@@ -66,7 +85,7 @@ class AlertShieldConfigShielder(BaseShielder):
 
     def __init__(self, alert: AlertDocument):
         """
-        初始化,并获取到符合当前告警的屏蔽配置列表，并保存在self.shield_objs中。
+        获取匹配当前告警的屏蔽配置列表，并保存在self.shield_objs中。
         如果self.shield_objs为空，则说明当前告警没有被屏蔽。
         :param alert:
         """
@@ -207,7 +226,8 @@ class AlarmTimeShielder(BaseShielder):
             # 情况2：开始时间 > 结束时间，属于跨天的情况
             return True
         self.detail = extended_json.dumps(
-            {"message": _("当前时间({})不在设置的处理时间范围[{}]内").format(now_time, self.action.inputs.get("time_range"))}
+            {"message": _("当前时间({})不在设置的处理时间范围[{}]内").format(now_time,
+                                                                             self.action.inputs.get("time_range"))}
         )
         return False
 

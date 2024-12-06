@@ -407,6 +407,10 @@ class ShieldObj(object):
 
 
 class AlertShieldObj(ShieldObj):
+    """
+    告警屏蔽对象
+    用于对告警进行屏蔽匹配
+    """
     def get_dimension(self, alert: AlertDocument):
         try:
             dimension = copy.deepcopy(alert.origin_alarm["data"]["dimensions"])

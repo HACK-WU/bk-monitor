@@ -431,6 +431,8 @@ def clear_mysql_action_data(days=7, count=5000):
 def generate_duty_plan_task():
     """
     周期维护
+
+    "alarm_backends.service.fta_action.tasks.generate_duty_plan_task", "* * * * *"
     """
     duty_rule_ids = set(DutyRuleRelation.objects.all().values_list("duty_rule_id", flat=True))
     duty_rule_dict = {

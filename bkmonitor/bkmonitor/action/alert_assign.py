@@ -288,7 +288,7 @@ class AssignRuleMatch:
 
 class AlertAssignMatchManager:
     """
-    告警分派管理
+    告警分派管理(SaaS调试分派规则时使用)
     主要功能：
     1. 告警分派匹配前的数据准备，比如组装告警为维度信息
     2. 告警分派匹配

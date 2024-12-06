@@ -35,7 +35,7 @@ class ShieldCacheManager(CacheManager):
     @classmethod
     def get_shields_by_biz_id(cls, bk_biz_id):
         """
-        按业务ID获取屏蔽配置列表
+        按业务ID从缓存中获取屏蔽配置列表
         :param bk_biz_id: 业务ID
         :return: [
             {
@@ -88,7 +88,7 @@ class ShieldCacheManager(CacheManager):
     def refresh(cls):
         """
         刷新缓存
-        将不同业务下的所有屏蔽配置拉取出来，按业务缓存
+        将不同业务下，未来十分钟生效的屏蔽配置拉取出来，按业务缓存
         :return:
         """
         now = time_tools.now()

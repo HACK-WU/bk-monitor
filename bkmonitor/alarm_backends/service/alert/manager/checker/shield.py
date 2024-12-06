@@ -130,7 +130,6 @@ class ShieldStatusChecker(BaseChecker):
                 else:  # 如果告警不处于恢复期
                     self.add_unshield_action(alert, notice_relation)  # 推送解除屏蔽通知
             else:  # 如果告警处于未屏蔽状态
-                # TODO need_unshield_notice的值哪来的？
                 if alert.get_extra_info("need_unshield_notice"):  # 如果需要通知
                     self.add_unshield_action(alert, notice_relation)  # 发送一次通知
                     alert.extra_info.pop("need_unshield_notice", False)  # 移除通知标记
