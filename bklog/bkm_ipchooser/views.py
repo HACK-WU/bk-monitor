@@ -13,7 +13,7 @@ from bkm_ipchooser.serializers import (
     template_sers,
     topo_sers,
 )
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication, SessionAuthentication

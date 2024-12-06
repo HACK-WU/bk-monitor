@@ -24,7 +24,7 @@ from __future__ import absolute_import, unicode_literals
 from apps.grafana import views
 from apps.grafana.views import CustomESDatasourceViewSet, GrafanaProxyView
 from bk_dataview.grafana.views import StaticView, SwitchOrgView
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from rest_framework import routers
 
 router = routers.DefaultRouter(trailing_slash=True)

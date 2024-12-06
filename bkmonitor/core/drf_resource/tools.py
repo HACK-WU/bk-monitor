@@ -14,7 +14,7 @@ import json
 import logging
 from collections import OrderedDict
 
-from django.utils.encoding import force_text
+from django.utils.encoding import  force_str as force_text
 from rest_framework import serializers
 from rest_framework.fields import empty
 

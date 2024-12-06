@@ -24,7 +24,7 @@ import re
 from apps.exceptions import ValidationError
 
 from rest_framework import serializers
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apps.log_desensitize.constants import DesensitizeOperator, DesensitizeRuleTypeEnum
 from apps.log_desensitize.handlers.desensitize_operator import OPERATOR_MAPPING

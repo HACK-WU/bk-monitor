@@ -24,7 +24,7 @@ from typing import Dict, List, Union
 
 from apps.iam.exceptions import ActionNotExistError
 from apps.iam.handlers.resources import ResourceEnum
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from iam import Action
 
 

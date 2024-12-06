@@ -23,13 +23,14 @@ import arrow
 from arrow.parser import ParserError
 from bkstorages.exceptions import RequestError
 from celery.signals import task_postrun
-from celery.task import task
+# from celery import shared_task as task
+from celery import shared_task as task
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.dispatch import receiver as celery_receiver
 from django.forms import model_to_dict
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 from bkm_space.api import SpaceApi
 from bkm_space.define import Space, SpaceTypeEnum

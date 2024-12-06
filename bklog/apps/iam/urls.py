@@ -20,7 +20,7 @@ We undertake not to change the open source license (MIT license) applicable to t
 the project delivered to anyone in the future.
 """
 from django.conf import settings
-from django.conf.urls import url, include
+from django.urls import re_path as url, include
 from rest_framework import routers
 from blueapps.account.decorators import login_exempt
 from apps.iam import Permission

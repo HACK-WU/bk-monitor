@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 import logging
 
-from celery.task import task
+from celery import shared_task as task
 
 from alarm_backends.core.cluster import get_cluster_bk_biz_ids
 from alarm_backends.service.converge.shield.shield_obj import AlertShieldObj

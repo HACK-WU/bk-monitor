@@ -24,7 +24,7 @@ from apps.feature_toggle.plugins.base import FeatureToggleBase, get_feature_togg
 from apps.utils.function import ignored
 from apps.utils.log import logger
 from django.conf import settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 def feature_switch(featue):

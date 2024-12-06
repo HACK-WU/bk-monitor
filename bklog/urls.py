@@ -32,7 +32,7 @@ Including another URLconf
 """
 
 from django.conf import settings
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from django.contrib import admin
 from django.views import static
 from bk_notice_sdk import config as notice_config

@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 
 from core.drf_resource.routers import ResourceRouter
 from monitor_web.grafana import views as grafana_views

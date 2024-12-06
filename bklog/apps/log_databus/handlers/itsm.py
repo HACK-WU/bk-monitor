@@ -39,7 +39,7 @@ from apps.utils.local import get_request, get_request_username
 from apps.utils.log import logger
 from django.conf import settings
 from django.db import transaction
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from rest_framework.reverse import reverse
 
 

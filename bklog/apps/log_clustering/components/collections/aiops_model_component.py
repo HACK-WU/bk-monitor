@@ -34,7 +34,7 @@ from apps.log_clustering.models import (
 from apps.log_clustering.tasks.sync_pattern import sync
 from apps.utils.log import logger
 from apps.utils.pipline import BaseService
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from pipeline.builder import ServiceActivity, Var
 from pipeline.component_framework.component import Component
 from pipeline.core.flow.activity import Service, StaticIntervalGenerator

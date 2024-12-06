@@ -30,7 +30,7 @@ from apps.log_extract.utils.packing import get_packed_dir_name
 from apps.log_extract.utils.transit_server import TransitServer
 from apps.utils.pipline import BaseService
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from pipeline.component_framework.component import Component
 from pipeline.core.flow.activity import Service, StaticIntervalGenerator
 

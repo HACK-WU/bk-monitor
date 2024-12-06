@@ -24,7 +24,7 @@ from typing import Dict
 
 import arrow
 from cloudpickle import cloudpickle
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 from apps.api import BkDataAIOPSApi
 from apps.log_clustering.exceptions import (

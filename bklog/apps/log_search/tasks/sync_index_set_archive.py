@@ -19,7 +19,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 We undertake not to change the open source license (MIT license) applicable to the current version of
 the project delivered to anyone in the future.
 """
-from celery.task import task
+from celery import shared_task as task
 
 from apps.api import TransferApi
 from apps.log_databus.constants import ArchiveInstanceType

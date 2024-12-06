@@ -36,7 +36,7 @@ from apps.log_extract.utils.packing import (
 from apps.utils.db import array_chunk
 from apps.utils.log import logger
 from apps.utils.pipline import BaseService
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from pipeline.component_framework.component import Component
 from pipeline.core.flow.activity import Service, StaticIntervalGenerator
 

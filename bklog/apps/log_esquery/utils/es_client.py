@@ -26,7 +26,7 @@ from apps.log_esquery.exceptions import (
     EsClientHostPortException,
     EsClientSocketException,
 )
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from elasticsearch import Elasticsearch as Elasticsearch
 from elasticsearch import exceptions as ElasticsearchExceptions
 from elasticsearch5 import Elasticsearch as Elasticsearch5

@@ -10,13 +10,13 @@ specific language governing permissions and limitations under the License.
 """
 import json
 
-from celery import task
+from celery import shared_task as  task
 from django.conf import settings
 from django.core.cache import cache
 from django.db import models
 from django.db.transaction import atomic
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from opentelemetry import trace
 from opentelemetry.semconv.trace import SpanAttributes
 

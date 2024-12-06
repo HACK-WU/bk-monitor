@@ -32,7 +32,7 @@ from apps.log_databus.constants import (
 )
 from apps.log_databus.handlers.check_collector.checker.base_checker import Checker
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from kafka import KafkaConsumer
 from kafka.structs import TopicPartition
 

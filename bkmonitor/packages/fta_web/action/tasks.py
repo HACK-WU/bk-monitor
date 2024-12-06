@@ -10,9 +10,9 @@ specific language governing permissions and limitations under the License.
 """
 import datetime
 import logging
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
-from celery.task import task
+from celery import shared_task as task
 from django.conf import settings
 from fta_web.action.utils import (
     compile_assign_action_config,

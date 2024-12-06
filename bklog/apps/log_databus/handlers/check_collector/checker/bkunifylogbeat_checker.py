@@ -42,7 +42,7 @@ from apps.log_databus.handlers.collector import CollectorHandler
 from apps.log_databus.models import CollectorConfig
 from apps.utils.bcs import Bcs
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from kubernetes.client.models import v1_pod
 
 

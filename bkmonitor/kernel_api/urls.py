@@ -15,7 +15,7 @@ import os
 import six
 from blueapps.account.decorators import login_exempt
 from django.conf import settings
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import path

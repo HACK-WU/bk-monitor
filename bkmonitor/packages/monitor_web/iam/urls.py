@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from blueapps.account.decorators import login_exempt
 from django.conf import settings
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from iam.contrib.django.dispatcher import DjangoBasicResourceApiDispatcher
 from monitor_web.iam import views
 

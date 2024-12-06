@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from django.conf.urls import url
+from django.urls import re_path as url
 
 from monitor_adapter.home import views
 

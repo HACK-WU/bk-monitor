@@ -33,7 +33,7 @@ from apps.iam.handlers.resources import _all_resources
 from apps.utils.drf import list_route
 from django.conf import settings
 from django.urls import Resolver404, resolve
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from rest_framework.response import Response
 
 

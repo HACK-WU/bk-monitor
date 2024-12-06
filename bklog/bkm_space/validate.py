@@ -13,7 +13,7 @@ from bkm_space.api import SpaceApi
 from bkm_space.define import SpaceTypeEnum
 from bkm_space.errors import NoRelatedResourceError
 from bkm_space.utils import bk_biz_id_to_space_uid
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 def validate_bk_biz_id(bk_biz_id: int) -> int:

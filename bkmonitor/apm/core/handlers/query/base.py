@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from django.db.models import Q
 from django.utils.functional import cached_property, classproperty
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apm import types
 from apm.core.handlers.query.builder import QueryConfigBuilder, UnifyQuerySet

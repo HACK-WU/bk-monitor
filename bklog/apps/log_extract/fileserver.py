@@ -32,7 +32,7 @@ from apps.log_extract import constants
 from apps.log_extract.exceptions import PipelineApiFailed
 from django.conf import settings
 from django.template import engines
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 class FileServer(object):

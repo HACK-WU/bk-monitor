@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from collections import defaultdict
 from json import decoder
 
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 from bk_dataview.grafana import client as grafana_client
 from apps.log_measure.utils.metric import MetricUtils

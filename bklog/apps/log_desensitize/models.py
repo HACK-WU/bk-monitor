@@ -20,7 +20,7 @@ We undertake not to change the open source license (MIT license) applicable to t
 the project delivered to anyone in the future.
 """
 from django.db import models, transaction  # noqa
-from django.utils.translation import ugettext_lazy as _  # noqa
+from django.utils.translation import gettext_lazy as _  # noqa
 
 from apps.log_desensitize.constants import DesensitizeOperator
 from apps.models import SoftDeleteModel, OperateRecordModel

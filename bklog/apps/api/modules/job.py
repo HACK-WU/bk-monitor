@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from apps.api.base import DataAPI
 from apps.api.modules.utils import adapt_non_bkcc, add_esb_info_before_request
 from config.domains import JOB_APIGATEWAY_ROOT_V2, JOB_APIGATEWAY_ROOT_V3
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 def get_job_request_before(params):

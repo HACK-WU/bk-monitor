@@ -20,7 +20,7 @@ We undertake not to change the open source license (MIT license) applicable to t
 the project delivered to anyone in the future.
 """
 from apps.log_commons import views
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from rest_framework import routers
 
 from apps.log_commons.views import FrontendEventViewSet

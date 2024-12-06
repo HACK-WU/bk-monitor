@@ -16,7 +16,7 @@ NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES
 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
-from django.conf.urls import url, include
+from django.urls import re_path as url, include
 from rest_framework import routers
 
 from apps.log_bcs.views.bcs_views import BcsViewSet

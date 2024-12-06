@@ -9,7 +9,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 from blueapps.account.decorators import login_exempt
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from django.http import HttpResponse
 
 app_name = "monitor_adapter"

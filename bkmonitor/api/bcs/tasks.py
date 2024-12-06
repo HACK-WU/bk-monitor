@@ -15,7 +15,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Type
 
-from celery.task import task
+from celery import shared_task as task
 from django.conf import settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime

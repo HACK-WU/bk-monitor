@@ -1,4 +1,4 @@
-from django.conf.urls import url  # noqa
+from django.urls import re_path as url  # noqa
 
 from console import views  # noqa
 

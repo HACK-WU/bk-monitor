@@ -12,7 +12,8 @@ import requests
 import version_log.config as config
 from blueapps.account.decorators import login_exempt
 from django.conf import settings
-from django.conf.urls import url
+# from django.urls import re_path as url
+from django.urls import re_path as url
 from django.contrib import admin
 from django.http import HttpResponse
 from django.urls import include, path

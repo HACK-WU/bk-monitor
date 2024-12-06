@@ -32,7 +32,7 @@ from apps.utils.drf import list_route
 from django.conf import settings
 from django.http import HttpResponse
 from django.shortcuts import redirect
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from rest_framework.response import Response
 
 

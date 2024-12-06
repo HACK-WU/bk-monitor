@@ -19,7 +19,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 We undertake not to change the open source license (MIT license) applicable to the current version of
 the project delivered to anyone in the future.
 """
-from django.conf.urls import url, include
+from django.urls import re_path as url, include
 from rest_framework import routers
 from apps.log_extract.views import explorer_views, strategies_views, tasks_views, links_views
 

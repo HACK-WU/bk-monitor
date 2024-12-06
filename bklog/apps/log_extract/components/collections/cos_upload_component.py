@@ -28,7 +28,7 @@ from apps.log_extract.utils.packing import get_packed_file_name
 from apps.utils.pipline import BaseService
 from apps.utils.remote_storage import BKREPOStorage
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from pipeline.component_framework.component import Component
 from pipeline.core.flow import Service, StaticIntervalGenerator
 

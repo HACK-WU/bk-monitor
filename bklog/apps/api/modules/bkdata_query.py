@@ -23,7 +23,7 @@ the project delivered to anyone in the future.
 from apps.api.base import DataAPI
 from apps.api.modules.utils import add_esb_info_before_request_for_bkdata_token
 from config.domains import DATAQUERY_APIGATEWAY_ROOT
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 class _BkDataQueryApi:

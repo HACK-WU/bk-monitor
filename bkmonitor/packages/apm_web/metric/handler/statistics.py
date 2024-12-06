@@ -13,7 +13,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Callable, List, Type
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apm_web.constants import TopoNodeKind
 from apm_web.metric.constants import ErrorMetricCategory, StatisticsMetric

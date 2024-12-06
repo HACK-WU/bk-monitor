@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 import logging
 
-from celery.task import task
+from celery import shared_task as task
 
 from alarm_backends.core.cache import key
 from alarm_backends.service.detect.process import DetectProcess

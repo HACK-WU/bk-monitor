@@ -12,7 +12,7 @@ import json
 import time
 from typing import List
 
-from celery.task import task
+from celery import shared_task as task
 from kafka.consumer.fetcher import ConsumerRecord
 
 from alarm_backends.core.alert import Event

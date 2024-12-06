@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 
 from apm_trace.views import apm_trace_home
-from django.conf.urls import url
+from django.urls import re_path as url
 
 app_name = "apm_trace"
 

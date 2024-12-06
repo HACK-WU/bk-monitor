@@ -36,7 +36,7 @@ from apps.api import (
 from apps.exceptions import ApiResultError
 from apps.utils.local import activate_request
 from apps.utils.thread import generate_request
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from home_application.constants import (
     DEFAULT_BK_DATA_ID,
     DEFAULT_BK_USERNAME,

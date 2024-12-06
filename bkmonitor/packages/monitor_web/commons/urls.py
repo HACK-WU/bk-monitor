@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 
 from bkm_ipchooser import views as ip_views
 from core.drf_resource.routers import ResourceRouter

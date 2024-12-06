@@ -17,7 +17,7 @@ import logging
 
 from django.conf import settings
 from django.template import Context, Template
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from six.moves import range
 
 from alarm_backends.core.cache import key

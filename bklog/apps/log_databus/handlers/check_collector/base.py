@@ -32,7 +32,7 @@ from apps.log_databus.constants import (
     InfoTypeEnum,
 )
 from django.core.cache import cache
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 def generate_host_string(host: Dict[str, Any]) -> str:

@@ -28,7 +28,7 @@ from apps.log_databus.constants import (
     KAFKA_SSL_CONFIG_ITEMS,
 )
 from apps.log_databus.handlers.check_collector.checker.base_checker import Checker
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 logger = logging.getLogger()
 

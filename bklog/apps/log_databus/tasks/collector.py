@@ -28,7 +28,7 @@ import pytz
 from celery.schedules import crontab
 from celery.task import periodic_task
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 from apps.api import BkLogApi, TransferApi
 from apps.api.modules.bkdata_databus import BkDataDatabusApi

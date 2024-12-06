@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import List, Type
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apm_web.constants import CategoryEnum
 from apm_web.handlers.service_handler import ServiceHandler

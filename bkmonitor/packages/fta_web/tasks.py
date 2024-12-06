@@ -11,8 +11,8 @@ specific language governing permissions and limitations under the License.
 import logging
 import time
 
-from celery.task import task
-from django.utils.translation import ugettext as _
+from celery import shared_task as task
+from django.utils.translation import gettext as _
 
 from bkmonitor.models import ActionConfig, AlertAssignGroup, AlertAssignRule
 from core.drf_resource import api, resource

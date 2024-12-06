@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 import logging
 import time
 
-from celery.task import task
+from celery import shared_task as task
 
 from alarm_backends.service.nodata.processor import CheckProcessor
 from core.errors.alarm_backends import LockError

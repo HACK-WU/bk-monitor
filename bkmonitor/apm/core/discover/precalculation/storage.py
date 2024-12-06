@@ -24,7 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from django.conf import settings
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from elasticsearch import helpers as helpers_common
 from elasticsearch5 import helpers as helpers_5
 from elasticsearch6 import helpers as helpers_6

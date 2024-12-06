@@ -46,9 +46,9 @@ from apps.log_extract.utils.transit_server import TransitServer
 from apps.utils.db import array_chunk
 from apps.utils.log import logger
 from apps.utils.remote_storage import BKREPOStorage
-from celery.task import task as celery_task
+from celery import shared_task as task as celery_task
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 @celery_task(ignore_result=True, queue="async_export")

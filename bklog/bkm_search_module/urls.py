@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from rest_framework import routers
 
 from bkm_search_module.views import (

@@ -23,7 +23,7 @@ import sys
 
 from config import RUN_VER
 from config.env import load_settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 if RUN_VER == "open":
     from blueapps.patch.settings_open_saas import *  # noqa

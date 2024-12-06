@@ -20,7 +20,7 @@ We undertake not to change the open source license (MIT license) applicable to t
 the project delivered to anyone in the future.
 """
 import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from home_application.constants import QUEUES, REDIS_VARIABLES
 from home_application.handlers.metrics import (
     HealthzMetric,

@@ -23,7 +23,7 @@ from enum import Enum
 
 from django.apps import apps
 from django.conf import settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apps.log_databus.constants import (
     ETL_DELIMITER_DELETE,

@@ -24,7 +24,7 @@ from apps.utils.task import high_priority_task
 """
 自定义装饰器
 """
-from celery.task import task  # noqa
+from celery import shared_task as task  # noqa
 
 from apps.log_audit.models import UserOperationRecord  # noqa
 from bkm_space.utils import space_uid_to_bk_biz_id  # noqa

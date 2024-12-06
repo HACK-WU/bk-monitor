@@ -21,7 +21,7 @@ the project delivered to anyone in the future.
 """
 from apps.utils import ChoicesEnum
 from django.conf import settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 class DownloadStatus(ChoicesEnum):

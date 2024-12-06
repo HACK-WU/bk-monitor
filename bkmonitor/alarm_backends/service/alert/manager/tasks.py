@@ -12,7 +12,7 @@ import logging
 import time
 from typing import Dict, List
 
-from celery.task import task
+from celery import shared_task as task
 from elasticsearch.helpers import BulkIndexError
 from elasticsearch_dsl import Q
 

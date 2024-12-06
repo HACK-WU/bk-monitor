@@ -28,7 +28,7 @@ from unittest.mock import patch
 import arrow
 from django.conf import settings
 from django.test import TestCase, override_settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django_fakeredis import FakeRedis
 
 from apps.iam.handlers import permission

@@ -33,7 +33,7 @@ from apps.log_measure.exceptions import EsConnectFailException
 from apps.log_search.models import Space
 from apps.utils.log import logger
 from django.core.cache import cache
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 class Metric(object):

@@ -34,7 +34,7 @@ from apps.log_search.constants import TimeEnum
 from bk_monitor.api.client import Client
 from config.domains import MONITOR_APIGATEWAY_ROOT
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 logger = logging.getLogger()
 

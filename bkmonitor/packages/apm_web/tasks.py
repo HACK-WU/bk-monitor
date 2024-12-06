@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import time
 from enum import Enum
 
-from celery.task import task
+from celery import shared_task as task
 from django.conf import settings
 from django.utils.functional import cached_property
 from django.utils.translation import gettext as _

@@ -26,7 +26,7 @@ from apps.bk_log_admin.serializers import (
 from apps.exceptions import ValidationError
 from apps.generic import APIViewSet
 from apps.utils.drf import detail_route
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from rest_framework.response import Response
 
 

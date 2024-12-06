@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from django.conf import settings
 from django.contrib import admin
 from django.db import models
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django.forms import TextInput
 from django import forms
 

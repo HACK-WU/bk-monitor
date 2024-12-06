@@ -6,7 +6,7 @@ from bk_monitor.handler import monitor
 from bk_monitor.models import MonitorReportConfig
 from bk_monitor.utils.metric import Metric, register_metric
 from django.test import TestCase
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 # 公共测试常量
 APP_ID = ""

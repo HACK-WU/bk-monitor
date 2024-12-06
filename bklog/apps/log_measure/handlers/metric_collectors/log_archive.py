@@ -21,7 +21,7 @@ the project delivered to anyone in the future.
 """
 from collections import defaultdict
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.db.models import Count
 
 from apps.api import TransferApi

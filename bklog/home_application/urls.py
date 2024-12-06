@@ -33,7 +33,7 @@ Class-based views
 Including another URLconf
     1. Add a URL to urlpatterns:  url(r'^blog/', include('blog.urls'))
 """
-from django.conf.urls import url  # noqa
+from django.urls import re_path as url  # noqa
 
 from home_application import views  # noqa
 

@@ -2,7 +2,7 @@ import logging
 import time
 from collections import defaultdict
 
-from celery.task import task
+from celery import shared_task as task
 from django.conf import settings
 from django.db.models import Q
 from django.utils.functional import cached_property

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from bkm_ipchooser import mock_data
 from bkm_ipchooser.serializers import base
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 

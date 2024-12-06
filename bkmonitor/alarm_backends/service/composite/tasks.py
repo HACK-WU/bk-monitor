@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 
-from celery.task import task
+from celery import shared_task as task
 
 from alarm_backends.core.alert import Alert
 from alarm_backends.core.alert.alert import AlertKey

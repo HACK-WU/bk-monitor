@@ -23,7 +23,7 @@ the project delivered to anyone in the future.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 
 @dataclass

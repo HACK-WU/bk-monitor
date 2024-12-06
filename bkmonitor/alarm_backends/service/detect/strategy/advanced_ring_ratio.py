@@ -16,7 +16,7 @@ specific language governing permissions and limitations under the License.
 import logging
 
 from django.conf import settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from alarm_backends.service.detect.strategy.advanced_year_round import AdvancedYearRound
 from bkmonitor.strategy.serializers import AdvancedRingRatioSerializer

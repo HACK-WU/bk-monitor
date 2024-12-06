@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from django.utils.functional import cached_property
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from elasticsearch_dsl import Q, Search
 from luqum.auto_head_tail import auto_head_tail
 from luqum.elasticsearch import ElasticsearchQueryBuilder, SchemaAnalyzer

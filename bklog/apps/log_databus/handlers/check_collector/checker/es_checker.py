@@ -35,7 +35,7 @@ from apps.log_esquery.utils.es_client import get_es_client
 from apps.log_esquery.utils.es_route import EsRoute
 from apps.log_measure.exceptions import EsConnectFailException
 from apps.log_search.models import Scenario
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 def get_next_date(date_str: str, interval: int) -> str:

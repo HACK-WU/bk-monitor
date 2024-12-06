@@ -9,11 +9,10 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import logging
 from functools import wraps
 
-from celery import task
+from celery import shared_task as task
 from celery.result import AsyncResult
 
 from bkmonitor.utils.user import set_local_username

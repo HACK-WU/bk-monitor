@@ -10,7 +10,8 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from django.conf.urls import include, url
+from django.conf.urls import include
+from django.urls import re_path
 from monitor_api import views
 
 from core.drf_resource.routers import ResourceRouter
@@ -20,5 +21,5 @@ router = ResourceRouter()
 router.register_module(views)
 
 urlpatterns = [
-    url(r"^", include(router.urls)),
+    re_path(r"^", include(router.urls)),
 ]

@@ -39,7 +39,7 @@ from apps.log_databus.serializers import CollectorEtlStorageSerializer
 from apps.log_search.constants import CollectorScenarioEnum, EncodingsEnum
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 class Command(BaseCommand):

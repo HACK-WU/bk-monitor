@@ -4,7 +4,7 @@ from collections import Counter, deque
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from luqum.auto_head_tail import auto_head_tail
 from luqum.exceptions import IllegalCharacterError, ParseSyntaxError
 from luqum.parser import lexer, parser

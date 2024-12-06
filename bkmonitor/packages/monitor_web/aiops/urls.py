@@ -9,7 +9,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 from monitor_web.aiops.ai_setting import views as ai_setting_views
 from monitor_web.aiops.host_monitor import views as host_monitor_views
 

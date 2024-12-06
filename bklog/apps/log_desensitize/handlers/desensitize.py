@@ -24,7 +24,7 @@ import re
 from typing import List
 
 from django.db.models import Q
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 
 from apps.exceptions import ValidationError
 from apps.log_databus.models import CollectorConfig

@@ -29,7 +29,7 @@ from apps.utils.db import array_hash
 from bk_dataview.grafana.provisioning import BaseProvisioning, Datasource
 from bkm_space.utils import bk_biz_id_to_space_uid
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 
 class Provisioning(BaseProvisioning):

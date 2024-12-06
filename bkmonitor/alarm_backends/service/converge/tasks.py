@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 import logging
 import time
 
-from celery.task import task
+from celery import shared_task as task
 from django.db import OperationalError
 
 from alarm_backends.constants import CONST_HALF_MINUTE

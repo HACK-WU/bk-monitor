@@ -24,7 +24,7 @@ import time
 
 import pika
 import settings
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from home_application.constants import ALARM_QUEUE_LEN
 from kombu.utils.url import url_to_parts
 from pika.exceptions import ChannelClosedByBroker

@@ -22,7 +22,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs
 
 from django.conf import settings
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.db.models import Q as DQ
 
 from bkmonitor.aiops.utils import AiSetting, ReadOnlyAiSetting

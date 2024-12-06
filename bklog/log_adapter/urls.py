@@ -1,4 +1,4 @@
-from django.conf.urls import include, url
+from django.urls import re_path as url, include
 
 app_name = "log_adapter"
 
