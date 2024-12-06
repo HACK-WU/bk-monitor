@@ -12,25 +12,29 @@ specific language governing permissions and limitations under the License.
 import base64
 import time
 
+from core.drf_resource import api, resource
+from core.drf_resource.base import Resource
+from core.drf_resource.exceptions import CustomException
 from django.conf import settings
 from django.utils.translation import ngettext as _
 
 from bkmonitor.views import serializers
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.exceptions import CustomException
 
 
 class IPListRequestSerializer(serializers.Serializer):
     ip = serializers.IPAddressField(required=True, label="IP地址")
-    plat_id = serializers.IntegerField(required=True, label="平台ID", source="bk_cloud_id")
+    plat_id = serializers.IntegerField(
+        required=True, label="平台ID", source="bk_cloud_id"
+    )
 
 
 class IPListResponseSerializer(serializers.Serializer):
     bk_host_id = serializers.IntegerField(required=False, label="主机ID", allow_null=True)
     ip = serializers.CharField(required=False, label="IP", allow_null=True)
     plat_id = serializers.IntegerField(required=False, label="平台ID", allow_null=True)
-    bk_cloud_id = serializers.IntegerField(required=False, label="云区域ID", allow_null=True)
+    bk_cloud_id = serializers.IntegerField(
+        required=False, label="云区域ID", allow_null=True
+    )
 
 
 class TaskResultMixin(object):
@@ -44,18 +48,26 @@ class TaskResultMixin(object):
         task_id = serializers.CharField(required=True, label="启动任务返回的id")
         step_id = serializers.CharField(required=True, label="步骤实例id")
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
-        host_id_list = serializers.ListField(required=False, label="主机列表", allow_empty=True, default=[])
-        ip_list = serializers.ListField(required=False, label="IP列表", allow_empty=True, default=[])
+        host_id_list = serializers.ListField(
+            required=False, label="主机列表", allow_empty=True, default=[]
+        )
+        ip_list = serializers.ListField(
+            required=False, label="IP列表", allow_empty=True, default=[]
+        )
 
     class ResponseSerializer(serializers.Serializer):
         class SuccessSerializer(IPListResponseSerializer):
-            log_content = serializers.CharField(required=False, allow_null=True, allow_blank=True, label="日志信息")
+            log_content = serializers.CharField(
+                required=False, allow_null=True, allow_blank=True, label="日志信息"
+            )
 
         class PendingSerializer(IPListResponseSerializer):
             pass
 
         class FailedSerializer(IPListResponseSerializer):
-            errmsg = serializers.CharField(required=True, allow_null=True, allow_blank=True, label="错误信息")
+            errmsg = serializers.CharField(
+                required=True, allow_null=True, allow_blank=True, label="错误信息"
+            )
             exit_code = serializers.IntegerField(required=True, label="返回码")
 
         success = SuccessSerializer(required=True, many=True, label="成功IP")
@@ -119,7 +131,10 @@ class GetInstanceLogResource(TaskResultMixin, Resource):
 
         log_results = api.job.get_job_instance_ip_log(kwargs)
         if log_results and log_results.get("script_task_logs"):
-            log_content_map = {log["host_id"]: log["log_content"] for log in log_results["script_task_logs"]}
+            log_content_map = {
+                log["host_id"]: log["log_content"]
+                for log in log_results["script_task_logs"]
+            }
         else:
             return {}
 
@@ -134,7 +149,10 @@ class GetInstanceLogResource(TaskResultMixin, Resource):
             log_content = log_content_map[ip_log["bk_host_id"]]
             if ip_status == settings.IP_STATUS_SUCCESS:
                 success.append({**params, "log_content": log_content})
-            elif ip_status == settings.IP_STATUS_WAITING or ip_status == settings.IP_STATUS_RUNNING:
+            elif (
+                ip_status == settings.IP_STATUS_WAITING
+                or ip_status == settings.IP_STATUS_RUNNING
+            ):
                 pending.append(params)
             else:
                 exit_code = ip_log["exit_code"]
@@ -151,7 +169,8 @@ class GetInstanceLogResource(TaskResultMixin, Resource):
     def perform_request(self, validated_request_data):
         bk_biz_id = validated_request_data["bk_biz_id"]
         ip_list = [
-            ip if isinstance(ip, dict) else {"ip": ip, "bk_cloud_id": 0} for ip in validated_request_data["ip_list"]
+            ip if isinstance(ip, dict) else {"ip": ip, "bk_cloud_id": 0}
+            for ip in validated_request_data["ip_list"]
         ]
         kwargs = {
             "bk_biz_id": bk_biz_id,
@@ -168,7 +187,9 @@ class GetInstanceLogResource(TaskResultMixin, Resource):
         for i in range(self.RETRY_TIMES):
             data = api.job.get_job_instance_status({**kwargs, "return_ip_result": True})
             if data and data.get("finished", False) and data.get("step_instance_list"):
-                log_result = self.fetch_job_task_result(data["step_instance_list"], kwargs)
+                log_result = self.fetch_job_task_result(
+                    data["step_instance_list"], kwargs
+                )
                 if log_result and not log_result["pending"]:
                     break
             time.sleep(self.INTERVAL)
@@ -191,7 +212,9 @@ class FastExecuteScriptResource(Resource):
 
     class RequestSerializer(serializers.Serializer):
         bk_biz_id = serializers.IntegerField(required=True, label="资源范围ID")
-        bk_scope_type = serializers.CharField(required=False, label="资源范围类型", default="biz")
+        bk_scope_type = serializers.CharField(
+            required=False, label="资源范围类型", default="biz"
+        )
         host_list = serializers.ListField(required=False, allow_empty=True)
         script_content = serializers.CharField(required=True, label="脚本内容")
         script_param = serializers.CharField(default="", label="脚本参数")
@@ -207,14 +230,22 @@ class FastExecuteScriptResource(Resource):
     def perform_request(self, validated_request_data):
         bk_biz_id = validated_request_data["bk_biz_id"]
 
-        ip_list = [host for host in validated_request_data["host_list"] if host.get("ip")]
-        host_id_list = [host["bk_host_id"] for host in validated_request_data["host_list"] if host.get("bk_host_id")]
+        ip_list = [
+            host for host in validated_request_data["host_list"] if host.get("ip")
+        ]
+        host_id_list = [
+            host["bk_host_id"]
+            for host in validated_request_data["host_list"]
+            if host.get("bk_host_id")
+        ]
         target_server = {}
         if ip_list:
             target_server["ip_list"] = ip_list
         if host_id_list:
             target_server["host_id_list"] = host_id_list
-        validated_request_data["script_language"] = validated_request_data["script_type"]
+        validated_request_data["script_language"] = validated_request_data[
+            "script_type"
+        ]
         validated_request_data["bk_scope_id"] = validated_request_data["bk_biz_id"]
         validated_request_data["target_server"] = target_server
         task_instance_data = api.job.fast_execute_script(validated_request_data)
@@ -261,5 +292,7 @@ class FastPushFileResource(Resource):
         bk_biz_id = validated_request_data["bk_biz_id"]
         task_instance_data = api.job.push_config_file(validated_request_data)
         task_id = task_instance_data["job_instance_id"]
-        task_result = resource.commons.get_instance_log(task_id=task_id, bk_biz_id=bk_biz_id)
+        task_result = resource.commons.get_instance_log(
+            task_id=task_id, bk_biz_id=bk_biz_id
+        )
         return task_result

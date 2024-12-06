@@ -40,7 +40,10 @@ StringRegex = r"[\u4e00-\u9fff]"  # noqa
 
 ImportPath = "django.utils.translation"
 ImportNames = ["gettext", "gettext", "pgettext", "ngettext", "npgettext"]
-LazyImportNames = ["{}_lazy".format(name) for name in ImportNames] + ["gettext_noop", "ugettext_noop"]
+LazyImportNames = ["{}_lazy".format(name) for name in ImportNames] + [
+    "gettext_noop",
+    "ugettext_noop",
+]
 
 
 class TranslateFuncFinder(ast.NodeVisitor):
@@ -214,4 +217,9 @@ class TranslateChecker(object):
 
         for key, values in list(errors.items()):
             for value in values:
-                yield (value.lineno, value.col_offset, Messages[key].format(value.s), TranslateChecker)
+                yield (
+                    value.lineno,
+                    value.col_offset,
+                    Messages[key].format(value.s),
+                    TranslateChecker,
+                )
