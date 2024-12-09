@@ -19,15 +19,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 We undertake not to change the open source license (MIT license) applicable to the current version of
 the project delivered to anyone in the future.
 """
-from django.conf import settings
-
-from celery.schedules import crontab
-from blueapps.contrib.celery_tools.periodic import periodic_task
-
-from apps.utils.log import logger
-from apps.utils.bk_data_auth import BkDataAuthHandler
-from apps.log_search.models import LogIndexSetData, LogIndexSet, Scenario
 from apps.log_databus.models import BKDataClean
+from apps.log_search.models import LogIndexSet, LogIndexSetData, Scenario
+from apps.utils.bk_data_auth import BkDataAuthHandler
+from apps.utils.log import logger
+from blueapps.contrib.celery_tools.periodic import periodic_task
+from celery.schedules import crontab
+from django.conf import settings
 
 
 @periodic_task(run_every=crontab(minute="*/30"))

@@ -10,11 +10,10 @@ specific language governing permissions and limitations under the License.
 """
 
 import six
-from rest_framework.routers import DefaultRouter
-from rest_framework.viewsets import GenericViewSet
-
 from core.drf_resource.tools import get_underscore_viewset_name
 from core.drf_resource.viewsets import ResourceViewSet
+from rest_framework.routers import DefaultRouter
+from rest_framework.viewsets import GenericViewSet
 
 
 class ResourceRouter(DefaultRouter):

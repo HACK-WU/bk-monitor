@@ -11,19 +11,16 @@ specific language governing permissions and limitations under the License.
 
 import logging
 
-from celery.schedules import crontab
-from blueapps.contrib.celery_tools.periodic import periodic_task
-from django.conf import settings
-
 from alarm_backends.core.cluster import get_cluster
 from alarm_backends.core.lock.service_lock import share_lock
 from alarm_backends.service.new_report.tasks import new_report_detect
 from alarm_backends.service.report.tasks import (
-    collect_redis_metric,
-    operation_data_custom_report_v2,
-    report_mail_detect,
-)
+    collect_redis_metric, operation_data_custom_report_v2, report_mail_detect)
 from alarm_backends.service.scheduler.tasks.cron import task_duration
+from blueapps.contrib.celery_tools.periodic import periodic_task
+from celery.schedules import crontab
+from django.conf import settings
+
 from bkmonitor.utils.custom_report_aggate import register_report_task
 
 logger = logging.getLogger("bkmonitor.cron_report")

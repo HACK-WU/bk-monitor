@@ -20,11 +20,11 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 from datetime import datetime, timedelta
 
-from celery.schedules import crontab  # noqa
-from blueapps.contrib.celery_tools.periodic import periodic_task  # noqa
-
-from apps.log_search.models import LogIndexSet, Space, UserIndexSetSearchHistory
+from apps.log_search.models import (LogIndexSet, Space,
+                                    UserIndexSetSearchHistory)
 from apps.utils.core.cache.cmdb_host import CmdbHostCache
+from blueapps.contrib.celery_tools.periodic import periodic_task  # noqa
+from celery.schedules import crontab  # noqa
 
 
 @periodic_task(run_every=crontab(minute="0", hour="*"))
