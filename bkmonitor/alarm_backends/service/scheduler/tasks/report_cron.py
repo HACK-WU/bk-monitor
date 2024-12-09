@@ -49,7 +49,12 @@ REPORT_CRONTAB = [
 if int(settings.MAIL_REPORT_BIZ):
     # 如果配置了订阅报表默认业务
     # 订阅报表定时任务 REPORT_CRONTAB
-    REPORT_CRONTAB.extend([(report_mail_detect, "*/1 * * * *", "global"), (new_report_detect, "*/1 * * * *", "global")])
+    REPORT_CRONTAB.extend(
+        [
+            (report_mail_detect, "*/1 * * * *", "global"),
+            (new_report_detect, "*/1 * * * *", "global"),
+        ]
+    )
 
 for func, cron_expr, run_type in REPORT_CRONTAB:
     # 全局任务在非默认集群不执行

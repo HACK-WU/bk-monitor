@@ -41,9 +41,9 @@ def sync_auth_status():
     authorized_rt_list = BkDataAuthHandler().list_authorized_rt_by_token()
 
     # 获取所有数据平台类型的索引集
-    bkdata_index_set_ids = LogIndexSet.objects.filter(scenario_id=Scenario.BKDATA).values_list(
-        "index_set_id", flat=True
-    )
+    bkdata_index_set_ids = LogIndexSet.objects.filter(
+        scenario_id=Scenario.BKDATA
+    ).values_list("index_set_id", flat=True)
 
     # 获取状态为"审批中"的的索引集，并将token有权限的RT的状态置为NORMAL
     updated_count = LogIndexSetData.objects.filter(
@@ -54,10 +54,14 @@ def sync_auth_status():
         apply_status=LogIndexSetData.Status.NORMAL,
     )
 
-    logger.info(f"[sync_auth_status] {updated_count} rows of apply_status changed to NORMAL")
-
-    update_bkdata_clean_count = BKDataClean.objects.filter(result_table_id__in=authorized_rt_list).update(
-        is_authorized=True
+    logger.info(
+        f"[sync_auth_status] {updated_count} rows of apply_status changed to NORMAL"
     )
-    logger.info(f"[sync_bkdata_clean] {update_bkdata_clean_count} rows of is_authorized to True")
+
+    update_bkdata_clean_count = BKDataClean.objects.filter(
+        result_table_id__in=authorized_rt_list
+    ).update(is_authorized=True)
+    logger.info(
+        f"[sync_bkdata_clean] {update_bkdata_clean_count} rows of is_authorized to True"
+    )
     return updated_count

@@ -13,11 +13,14 @@ from django.conf import settings
 
 task = current_app.task
 
+
 def high_priority_task(*args, **kwargs):
     """高优先级任务"""
-    return task(*args, **dict({'queue': settings.BK_LOG_HIGH_PRIORITY_QUEUE}, **kwargs))
+    return task(*args, **dict({"queue": settings.BK_LOG_HIGH_PRIORITY_QUEUE}, **kwargs))
 
 
 def high_priority_periodic_task(*args, **options):
     """高优先级周期任务"""
-    return periodic_task(*args, **dict({'queue': settings.BK_LOG_HIGH_PRIORITY_QUEUE}, **options))
+    return periodic_task(
+        *args, **dict({"queue": settings.BK_LOG_HIGH_PRIORITY_QUEUE}, **options)
+    )

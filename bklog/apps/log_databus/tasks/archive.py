@@ -39,7 +39,9 @@ def clean_expired_restore_index_set():
                 index_set_handler = IndexSetHandler(expired_restore.index_set_id)
                 index_set_handler.stop()
         except Exception as e:  # pylint:disable=broad-except
-            logger.error(f"clean expired restore ->[{expired_restore.restore_config_id}] index_set failed -> {e}")
+            logger.error(
+                f"clean expired restore ->[{expired_restore.restore_config_id}] index_set failed -> {e}"
+            )
             continue
         logger.info(
             f"clean expired restore ->[{expired_restore.restore_config_id}]"
@@ -51,15 +53,21 @@ def clean_expired_restore_index_set():
 def check_restore_is_done_and_notice_user():
     not_done_restores = RestoreConfig.objects.filter(is_done=False)
     not_done_restores_by_meta_restore_id = {
-        not_done_restore.meta_restore_id: not_done_restore for not_done_restore in not_done_restores
+        not_done_restore.meta_restore_id: not_done_restore
+        for not_done_restore in not_done_restores
     }
     meta_restore_states = TransferApi.get_restore_result_table_snapshot_state(
         {"restore_ids": list(not_done_restores_by_meta_restore_id.keys())}
     )
     for meta_restore_state in meta_restore_states:
-        not_done_restore = not_done_restores_by_meta_restore_id.get(meta_restore_state["restore_id"])
+        not_done_restore = not_done_restores_by_meta_restore_id.get(
+            meta_restore_state["restore_id"]
+        )
         # maybe data not consistent
-        if meta_restore_state["total_doc_count"] <= meta_restore_state["complete_doc_count"]:
+        if (
+            meta_restore_state["total_doc_count"]
+            <= meta_restore_state["complete_doc_count"]
+        ):
             try:
                 not_done_restore.done(meta_restore_state["duration"])
             except Exception as e:  # pylint:disable=broad-except

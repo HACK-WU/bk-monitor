@@ -37,30 +37,39 @@ def sync_index_set_mapping_snapshot():
     logger.info("[sync_index_set_mapping_snapshot] task publish start")
     # 仅更新近一周用户检索过的索引集快照
     index_set_ids = list(
-        UserIndexSetSearchHistory.objects.filter(created_at__gte=datetime.now() - timedelta(days=1)).values_list(
-            "index_set_id", flat=True
-        )
+        UserIndexSetSearchHistory.objects.filter(
+            created_at__gte=datetime.now() - timedelta(days=1)
+        ).values_list("index_set_id", flat=True)
     )
-    index_set_list = LogIndexSet.objects.filter(index_set_id__in=index_set_ids, is_active=True)
+    index_set_list = LogIndexSet.objects.filter(
+        index_set_id__in=index_set_ids, is_active=True
+    )
 
     for index_set in index_set_list:
         sync_single_index_set_mapping_snapshot_periodic.delay(index_set.index_set_id)
 
-    logger.info(f"[sync_index_set_mapping_snapshot] task publish end, total: {len(index_set_list)}")
+    logger.info(
+        f"[sync_index_set_mapping_snapshot] task publish end, total: {len(index_set_list)}"
+    )
 
 
 def sync_mapping_snapshot_subtask(index_set_id=None):
     try:
         index_set_obj = LogIndexSet.objects.get(index_set_id=index_set_id)
     except LogIndexSet.DoesNotExist:
-        logger.exception(f"[sync_single_index_set_mapping_snapshot]index_set({index_set_id}) not exist")
+        logger.exception(
+            f"[sync_single_index_set_mapping_snapshot]index_set({index_set_id}) not exist"
+        )
         return
 
     try:
         index_set_obj.sync_fields_snapshot()
     except ApiResultError as e:
         # 当数据平台返回为无法获取元数据报错情况
-        if e.code in [BkDataErrorCode.STORAGE_TYPE_ERROR, BkDataErrorCode.COULD_NOT_GET_METADATA_ERROR]:
+        if e.code in [
+            BkDataErrorCode.STORAGE_TYPE_ERROR,
+            BkDataErrorCode.COULD_NOT_GET_METADATA_ERROR,
+        ]:
             index_set_obj.is_active = False
             index_set_obj.save()
         logger.exception(
@@ -71,14 +80,20 @@ def sync_mapping_snapshot_subtask(index_set_id=None):
             f"[sync_single_index_set_mapping_snapshot] index_set({index_set_obj.index_set_id}) sync failed: {e}"
         )
     else:
-        logger.info(f"[sync_single_index_set_mapping_snapshot] index_set({index_set_obj.index_set_id}) sync success")
+        logger.info(
+            f"[sync_single_index_set_mapping_snapshot] index_set({index_set_obj.index_set_id}) sync success"
+        )
 
 
 @task(ignore_result=True)
-def sync_single_index_set_mapping_snapshot_periodic(index_set_id=None):  # pylint: disable=function-name-too-long
+def sync_single_index_set_mapping_snapshot_periodic(
+    index_set_id=None,
+):  # pylint: disable=function-name-too-long
     sync_mapping_snapshot_subtask(index_set_id)
 
 
 @high_priority_task(ignore_result=True)
-def sync_single_index_set_mapping_snapshot(index_set_id=None):  # pylint: disable=function-name-too-long
+def sync_single_index_set_mapping_snapshot(
+    index_set_id=None,
+):  # pylint: disable=function-name-too-long
     sync_mapping_snapshot_subtask(index_set_id)

@@ -34,7 +34,9 @@ from pipeline.exceptions import InvalidOperationException
 from pipeline.service import task_service
 
 
-@periodic_task(run_every=crontab(minute="0", hour="2"))  # pylint: disable=function-name-too-long
+@periodic_task(
+    run_every=crontab(minute="0", hour="2")
+)  # pylint: disable=function-name-too-long
 def periodic_clear_timeout_pipeline_task():
     # 异常的下载状态
     abnormal_download_status = [
@@ -47,9 +49,9 @@ def periodic_clear_timeout_pipeline_task():
     ]
 
     # 处理已完成但超过时间还为下载的任务
-    expired_task_list = Tasks.objects.filter(expiration_date__lte=timezone.now()).exclude(
-        download_status__in=abnormal_download_status
-    )
+    expired_task_list = Tasks.objects.filter(
+        expiration_date__lte=timezone.now()
+    ).exclude(download_status__in=abnormal_download_status)
     expired_task_list.update(download_status=DownloadStatus.EXPIRED.value)
 
     task_expired_time = int(settings.PIPELINE_TASKS_EXPIRED_TIME)
@@ -61,7 +63,9 @@ def periodic_clear_timeout_pipeline_task():
     # 清理过期的内网下载文件
     for expired_task in expired_task_list:
         if expired_task.get_link_type() == ExtractLinkType.COMMON.value:
-            target_file_dir = os.path.join(settings.EXTRACT_SAAS_STORE_DIR, expired_task.cos_file_name)
+            target_file_dir = os.path.join(
+                settings.EXTRACT_SAAS_STORE_DIR, expired_task.cos_file_name
+            )
             os.remove(os.path.abspath(target_file_dir))
 
     for task in timeout_pipeline_task:
@@ -69,17 +73,21 @@ def periodic_clear_timeout_pipeline_task():
             task_service.revoke_pipeline(task["pipeline_id"])
         except InvalidOperationException as e:
             logger.exception(
-                _("[periodic_clear_timeout_pipeline_task]撤销超时pipeline任务失败：{}, task_id=>{}, pipeline_id=>{}").format(
-                    e, task["task_id"], task["pipeline_id"]
-                )
+                _(
+                    "[periodic_clear_timeout_pipeline_task]撤销超时pipeline任务失败：{}, task_id=>{}, pipeline_id=>{}"
+                ).format(e, task["task_id"], task["pipeline_id"])
             )
             raise exceptions.PipelineRevoked(
                 exceptions.PipelineRevoked.MESSAGE.format(
-                    exceptions=e, task_id=task["task_id"], pipeline_id=task["pipeline_id"]
+                    exceptions=e,
+                    task_id=task["task_id"],
+                    pipeline_id=task["pipeline_id"],
                 )
             )
         # 更新任务下载状态
         Tasks.objects.filter(pipeline_id=task["pipeline_id"]).update(
             download_status=DownloadStatus.FAILED.value,
-            task_process_info="task timeout, origin status is {}".format(task["download_status"]),
+            task_process_info="task timeout, origin status is {}".format(
+                task["download_status"]
+            ),
         )

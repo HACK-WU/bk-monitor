@@ -43,8 +43,11 @@ class ResourceRouter(DefaultRouter):
             if attr.startswith("_") or attr[0].islower():
                 continue
 
-            if (isinstance(viewset, type) and issubclass(viewset, (GenericViewSet, ResourceViewSet))
-                    and viewset not in (ResourceViewSet, GenericViewSet)):
+            if (
+                isinstance(viewset, type)
+                and issubclass(viewset, (GenericViewSet, ResourceViewSet))
+                and viewset not in (ResourceViewSet, GenericViewSet)
+            ):
                 prefix = self.get_default_basename(viewset)
                 self.register(prefix, viewset)
 
