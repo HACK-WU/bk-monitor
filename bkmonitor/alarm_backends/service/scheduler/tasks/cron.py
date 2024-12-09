@@ -14,7 +14,7 @@ import logging
 import time
 
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 from django.conf import settings
 from django.utils.module_loading import import_string
 

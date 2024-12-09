@@ -9,18 +9,17 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import logging
 
 from celery.schedules import crontab
-from celery.task import periodic_task
-
 from alarm_backends.core.api_cache.library import API_CRONTAB
 from alarm_backends.core.cluster import get_cluster
 from alarm_backends.service.scheduler.tasks.cron import task_duration
+from blueapps.contrib.celery_tools.periodic import periodic_task
 
 logger = logging.getLogger("cron")
 
+from celery import shared_task
 
 for func, cron_expr, run_type in API_CRONTAB:
     # 全局任务在非默认集群不执行

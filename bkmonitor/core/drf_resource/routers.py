@@ -40,10 +40,11 @@ class ResourceRouter(DefaultRouter):
         """
         for attr, viewset in six.iteritems(viewset_module.__dict__):
             # 全小写的属性不是类，忽略
-            if attr.startswith("_") or attr[0].islower() or attr in ["ResourceViewSet", "ResourceRoute"]:
+            if attr.startswith("_") or attr[0].islower():
                 continue
 
-            if isinstance(viewset, type) and issubclass(viewset, GenericViewSet):
+            if (isinstance(viewset, type) and issubclass(viewset, (GenericViewSet, ResourceViewSet))
+                    and viewset not in (ResourceViewSet, GenericViewSet)):
                 prefix = self.get_default_basename(viewset)
                 self.register(prefix, viewset)
 

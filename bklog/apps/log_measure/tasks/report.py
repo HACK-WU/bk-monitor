@@ -26,7 +26,7 @@ import time
 
 import arrow
 from celery.schedules import crontab
-from celery.task import periodic_task, task
+from blueapps.contrib.celery_tools.periodic import periodic_task, current_app
 from django.conf import settings
 
 from apps.feature_toggle.models import FeatureToggle
@@ -44,6 +44,8 @@ from bk_monitor.utils.metric import (
 from config.domains import MONITOR_APIGATEWAY_ROOT
 
 logger = logging.getLogger("app")
+
+task = current_app.task
 
 
 @periodic_task(run_every=crontab(minute="*/1"))
@@ -131,7 +133,7 @@ def bk_monitor_collect():
 
 @task(ignore_result=True)
 def collect_metrics(
-    collector_import_paths: list, namespaces: list = None, data_names: list = None, sub_types: list = None
+        collector_import_paths: list, namespaces: list = None, data_names: list = None, sub_types: list = None
 ):
     """
     将已通过 register_metric 注册的对应metric收集存入数据库

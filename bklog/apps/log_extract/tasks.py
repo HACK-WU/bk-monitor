@@ -26,7 +26,7 @@ from apps.log_extract.constants import DownloadStatus, ExtractLinkType
 from apps.log_extract.models import Tasks
 from apps.utils.log import logger
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 from django.conf import settings
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _

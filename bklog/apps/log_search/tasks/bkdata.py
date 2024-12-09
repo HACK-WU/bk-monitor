@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from django.conf import settings
 
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 
 from apps.utils.log import logger
 from apps.utils.bk_data_auth import BkDataAuthHandler

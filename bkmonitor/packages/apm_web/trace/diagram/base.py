@@ -583,8 +583,8 @@ class SpanNode:
         if self.config.with_parallel_detection:
             if not self._children_parallel_candidate.try_add_and_validate(child):
                 if (
-                    len(self._children_parallel_candidate.candidates)
-                    < self._children_parallel_candidate.min_valid_members
+                        len(self._children_parallel_candidate.candidates)
+                        < self._children_parallel_candidate.min_valid_members
                 ):
                     self._children_parallel_candidate.invalidate()
                     # invalidate would clear candidates, this new node should be added for next round
@@ -688,7 +688,8 @@ class SpanNode:
 class TraceTree:
     """A trace tree with multiple roots."""
 
-    config: TreeBuildingConfig = TreeBuildingConfig.default()
+    # config: TreeBuildingConfig = TreeBuildingConfig.default()
+    config: TreeBuildingConfig = field(default_factory=TreeBuildingConfig.default())
     roots: List[SpanNode] = field(default_factory=list)
     _roots_map: Dict[tuple, List[SpanNode]] = field(default_factory=lambda: defaultdict(list))
 
@@ -728,10 +729,10 @@ class TraceTree:
     # Building
     # ------
     def create_node(
-        self,
-        span: dict,
-        all_spans_map: Dict[str, dict],
-        config: TreeBuildingConfig,
+            self,
+            span: dict,
+            all_spans_map: Dict[str, dict],
+            config: TreeBuildingConfig,
     ) -> SpanNode:
         """[Deprecated] Create a node from a span.
         Because of recursive call, this method is limited when the trace is very deep.
@@ -808,7 +809,7 @@ class TraceTree:
 
     @classmethod
     def from_raw(
-        cls, traces: List[Dict], config: TreeBuildingConfig = TreeBuildingConfig.default(), force_sort: bool = False
+            cls, traces: List[Dict], config: TreeBuildingConfig = TreeBuildingConfig.default(), force_sort: bool = False
     ) -> "TraceTree":
         """Build a FlameTree from trace data."""
         if not traces:
@@ -882,7 +883,7 @@ class TraceTree:
             # find the index to insert the virtual return
             virtual_return_child = root.to_virtual_return()
             virtual_index = index + 1
-            for i, s in enumerate(self.roots[index + 1 :]):
+            for i, s in enumerate(self.roots[index + 1:]):
                 if s.index_refer > virtual_return_child.index_refer:
                     virtual_index += i
                     break

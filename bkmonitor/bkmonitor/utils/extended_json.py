@@ -36,7 +36,10 @@ class CustomJSONEncoder(json.JSONEncoder):
         type_ = type(obj)
         if type_ in SUPPORTED_TYPES:
             if issubclass(type_, (datetime, date, time)):
-                return {"__type__": type_.__name__, "__value__": obj.strftime(STD_DT_FORMAT)}
+                return {
+                    "__type__": type_.__name__,
+                    "__value__": obj.strftime(STD_DT_FORMAT),
+                }
             if issubclass(type_, Decimal):
                 return {"__type__": type_.__name__, "__value__": obj.as_tuple()}
             if issubclass(type_, UUID):

@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 import logging
 
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 from django.conf import settings
 
 from alarm_backends.core.cluster import get_cluster

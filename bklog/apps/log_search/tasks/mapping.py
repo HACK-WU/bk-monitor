@@ -22,13 +22,14 @@ the project delivered to anyone in the future.
 from datetime import datetime, timedelta
 
 from celery.schedules import crontab
-from celery.task import periodic_task, task
-
+from blueapps.contrib.celery_tools.periodic import periodic_task, current_app
 from apps.exceptions import ApiResultError
 from apps.log_search.constants import BkDataErrorCode
 from apps.log_search.models import LogIndexSet, UserIndexSetSearchHistory
 from apps.utils.log import logger
 from apps.utils.task import high_priority_task
+
+task = current_app.task
 
 
 @periodic_task(run_every=crontab(minute="*/10"))

@@ -8,9 +8,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-from celery.task import periodic_task, task
+from blueapps.contrib.celery_tools.periodic import periodic_task, current_app
 from django.conf import settings
 
+task = current_app.task
 
 def high_priority_task(*args, **kwargs):
     """高优先级任务"""

@@ -12,7 +12,6 @@ import json
 from collections import defaultdict
 
 import jmespath
-from elasticmock.fake_elasticsearch import FakeElasticsearch, MetricType
 from elasticmock.utilities import get_random_id
 from elasticmock.fake_elasticsearch import (
     FakeElasticsearch,
@@ -242,9 +241,9 @@ class FakeElasticsearchBucket(FakeElasticsearch):
                 else:
                     doc_as_upsert = line.get("doc_as_upsert")
                     if (
-                        doc_as_upsert
-                        and action == "update"
-                        and not self.exists(index, id=document_id, doc_type=doc_type, params=params)
+                            doc_as_upsert
+                            and action == "update"
+                            and not self.exists(index, id=document_id, doc_type=doc_type, params=params)
                     ):
                         index_line = index_line.replace("update", "create")
                         if "doc" in line:

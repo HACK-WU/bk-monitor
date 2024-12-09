@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from typing import Any, Dict
 
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 
 from apps.api import CCApi
 from apps.api.modules.bkdata_access import BkDataAccessApi

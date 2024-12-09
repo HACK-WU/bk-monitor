@@ -32,11 +32,11 @@ class TraceDiffer:
 
     @classmethod
     def from_raw(
-        cls,
-        baseline: list,
-        comparison: list,
-        config: TreeBuildingConfig = TreeBuildingConfig.default(),
-        policies: Optional[List[DiffPolicy]] = None,
+            cls,
+            baseline: list,
+            comparison: list,
+            config: TreeBuildingConfig = TreeBuildingConfig.default(),
+            policies: Optional[List[DiffPolicy]] = None,
     ) -> "TraceDiffer":
         baseline_tree = TraceTree.from_raw(baseline, config)
         comparison_tree = TraceTree.from_raw(comparison, config)
@@ -270,14 +270,15 @@ class SimilarityMap:
 @dataclass
 class DiffTree:
     roots: List[DiffNode] = field(default_factory=list)
-    config: TreeBuildingConfig = TreeBuildingConfig.default()
+    # config: TreeBuildingConfig = TreeBuildingConfig.default()
+    config: TreeBuildingConfig = field(default_factory=TreeBuildingConfig.default())
     level_similarity_map: Dict[int, SimilarityMap] = field(default_factory=lambda: defaultdict(SimilarityMap))
 
     # id -> DiffNode, quick access for DiffNode
     _children_map: Dict[str, DiffNode] = field(default_factory=dict)
 
     def calculate_level_similarity(
-        self, similarity_decrease_percentage: float = 30, max_missed_threshold: int = 3
+            self, similarity_decrease_percentage: float = 30, max_missed_threshold: int = 3
     ) -> bool:
         def get_similarity_percentage(_level: int) -> float:
             """Get the similarity percentage for a level."""

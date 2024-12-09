@@ -26,7 +26,7 @@ from collections import defaultdict
 
 import pytz
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 from django.conf import settings
 from django.utils.translation import gettext as _
 

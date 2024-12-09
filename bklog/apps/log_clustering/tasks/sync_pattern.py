@@ -22,7 +22,7 @@ the project delivered to anyone in the future.
 from typing import List
 
 from celery.schedules import crontab
-from celery.task import periodic_task
+from blueapps.contrib.celery_tools.periodic import periodic_task
 
 from apps.log_clustering.constants import (
     CONTENT_PATTERN_INDEX,

@@ -27,7 +27,7 @@ the project delivered to anyone in the future.
 3. 更新用户组信息
 """
 from celery.schedules import crontab  # noqa
-from celery.task import periodic_task  # noqa
+from blueapps.contrib.celery_tools.periodic import periodic_task  # noqa
 from django.conf import settings  # noqa
 
 from apps.utils.log import logger  # noqa

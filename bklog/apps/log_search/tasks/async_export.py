@@ -28,7 +28,8 @@ import arrow
 import pytz
 import ujson
 from celery.schedules import crontab
-from celery.task import periodic_task, task
+from blueapps.contrib.celery_tools.periodic import periodic_task, current_app
+
 from django.conf import settings
 from django.utils import timezone, translation
 from django.utils.crypto import get_random_string
@@ -57,19 +58,21 @@ from apps.utils.log import logger
 from apps.utils.notify import NotifyType
 from apps.utils.remote_storage import StorageType
 
+task = current_app.task
+
 
 @task(ignore_result=True, queue="async_export")
 def async_export(
-    search_handler: SearchHandler,
-    sorted_fields: list,
-    async_task_id: int,
-    url_path: str,
-    search_url_path: str,
-    language: str,
-    is_external: bool = False,
-    is_quick_export: bool = False,
-    export_file_type: str = "txt",
-    external_user_email: str = "",
+        search_handler: SearchHandler,
+        sorted_fields: list,
+        async_task_id: int,
+        url_path: str,
+        search_url_path: str,
+        language: str,
+        is_external: bool = False,
+        is_quick_export: bool = False,
+        export_file_type: str = "txt",
+        external_user_email: str = "",
 ):
     """
     异步导出任务
@@ -218,15 +221,15 @@ class AsyncExportUtils(object):
     """
 
     def __init__(
-        self,
-        search_handler: SearchHandler,
-        sorted_fields: list,
-        file_name: str,
-        tar_file_name: str,
-        is_external: bool = False,
-        is_quick_export: bool = False,
-        export_file_type: str = "txt",
-        external_user_email: str = "",
+            self,
+            search_handler: SearchHandler,
+            sorted_fields: list,
+            file_name: str,
+            tar_file_name: str,
+            is_external: bool = False,
+            is_quick_export: bool = False,
+            export_file_type: str = "txt",
+            external_user_email: str = "",
     ):
         """
         @param search_handler: the handler cls to search
@@ -303,13 +306,13 @@ class AsyncExportUtils(object):
         return self.storage.generate_download_url(url_path=url_path, file_name=self.tar_file_name)
 
     def send_msg(
-        self,
-        index_set_id: int,
-        async_task: AsyncTask,
-        search_url_path: str,
-        language: str,
-        name: str = ASYNC_EXPORT_EMAIL_TEMPLATE,
-        title_model: str = MsgModel.NORMAL,
+            self,
+            index_set_id: int,
+            async_task: AsyncTask,
+            search_url_path: str,
+            language: str,
+            name: str = ASYNC_EXPORT_EMAIL_TEMPLATE,
+            title_model: str = MsgModel.NORMAL,
     ):
         """
         发送邮件

@@ -40,7 +40,9 @@ class BaseDatabaseOperations(object):
 
     def prep_for_like_query(self, x):
         """Prepares a value for use in a LIKE query."""
-        return force_text(x).replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        return (
+            force_text(x).replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        )
 
     def prep_regex_query(self, reg_expr):
         reg_expr = force_text(reg_expr).replace("/", "\\/")
