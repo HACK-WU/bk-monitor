@@ -16,7 +16,7 @@ from functools import reduce
 from typing import Dict, OrderedDict, List
 
 from django.db.models import Q
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from rest_framework.exceptions import ValidationError
 
 from bkmonitor.documents.alert import AlertDocument

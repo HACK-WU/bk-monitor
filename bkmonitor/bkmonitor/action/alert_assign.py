@@ -14,7 +14,7 @@ import time
 from collections import defaultdict
 from typing import List, Dict, Union
 
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 
 from api.cmdb.define import Host, Set, Module
 from bkmonitor.documents import AlertDocument, AlertLog
