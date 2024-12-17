@@ -4,7 +4,7 @@ import math
 import time
 from typing import List
 
-from celery.task import task
+from celery import shared_task
 from django.conf import settings
 from django.utils.translation import gettext as _
 from elasticsearch import ConflictError
@@ -46,7 +46,7 @@ from core.prometheus import metrics
 logger = logging.getLogger("fta_action.run")
 
 
-@task(ignore_result=True, queue="celery_action")
+@shared_task(ignore_result=True, queue="celery_action")
 def create_actions(
         strategy_id,
         signal,
@@ -122,7 +122,7 @@ def create_actions(
     return actions  # 返回创建的动作列表
 
 
-@task(ignore_result=True, queue="celery_interval_action")
+@shared_task(ignore_result=True, queue="celery_interval_action")
 def create_interval_actions(
         strategy_id,
         signal,
@@ -180,7 +180,7 @@ def check_create_poll_action():
         check_create_poll_action_10_secs.apply_async(countdown=interval, expires=120)
 
 
-@task(ignore_result=True, queue="celery_action_cron")
+@shared_task(ignore_result=True, queue="celery_action_cron")
 def check_create_poll_action_10_secs():
     """
     每10s进行一次数据查询
