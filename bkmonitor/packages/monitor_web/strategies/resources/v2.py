@@ -3179,6 +3179,9 @@ class ListIntelligentModelsResource(Resource):
                 }
             )
 
+        # 默认is_default在最前面，除此外，按照ID降序排序
+        model_list = sorted(model_list, key=lambda x: (not x["is_default"], -int(x["id"])))
+
         return model_list
 
 
