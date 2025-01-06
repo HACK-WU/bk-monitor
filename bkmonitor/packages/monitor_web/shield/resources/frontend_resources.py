@@ -10,7 +10,9 @@ specific language governing permissions and limitations under the License.
 """
 import itertools
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Optional, Set
+from typing import List, Optional, Set,Dict
+
+from rest_framework.exceptions import ValidationError
 
 from bkmonitor.models import StrategyModel
 from bkmonitor.utils.time_tools import localtime, now
@@ -64,12 +66,26 @@ class FrontendShieldListResource(Resource):
         search_terms = set()
         # 初始化查询条件列表
         conditions = []
+        strategy_ids = []
         # 遍历查询条件，区分处理“query”关键词和其他条件
         for condition in data.get("conditions", []):
             if condition["key"] == "query":
                 search_terms.add(condition["value"])
+            elif condition["key"] == "strategy_id":
+                # 查询策略关联的屏蔽配置
+                if isinstance(condition["value"], list):
+                    strategy_ids.extend(condition["value"])
+                else:
+                    strategy_ids.append(condition["value"])
             else:
                 conditions.append(condition)
+
+        # 策略id必须是数字
+        try:
+            strategy_ids = [int(strategy_id) for strategy_id in strategy_ids]
+        except (ValueError, TypeError):
+            raise ValidationError("condition strategy_id must be integer")
+
         # 如果提供了额外的搜索关键词，则添加到搜索集合中
         if data.get("search"):
             search_terms.add(data["search"])
@@ -84,30 +100,44 @@ class FrontendShieldListResource(Resource):
             "time_range": data.get("time_range"),
         }
         # 如果未执行模糊搜索，则添加分页参数，以便后端进行分页处理
-        if not search_terms:
+        if not search_terms and not strategy_ids:
             params.update({"page": page, "page_size": page_size})
 
         # 调用后端接口获取屏蔽列表数据
         result: Dict = resource.shield.shield_list(**params)
         # 丰富屏蔽列表数据
-        shields = self.enrich_shields(bk_biz_id, result["shield_list"])
+        shields = self.enrich_shields(bk_biz_id, result["shield_list"], strategy_ids)
 
         # 如果执行了模糊搜索
         if search_terms:
             # 在丰富后的屏蔽列表中进行搜索
             shields = self.search(search_terms, shields, is_active)
+
+        # 如果执行模糊搜索或过滤策略id，则需要手动分页
+        if search_terms or strategy_ids:
+            total = len(shields)
             # 如果同时提供了分页参数，则执行分页
             if page and page_size:
-                shields = shields[(page - 1) * page_size: page * page_size]
+                shields = shields[(page - 1) * page_size : page * page_size]
+        else:
+            total = result["count"]
 
         # 返回查询结果，包括总数和屏蔽列表
-        return {"count": result["count"], "shield_list": shields}
+        return {"count": total, "shield_list": shields}
 
     @staticmethod
     def search(search_terms: Set[str], shields: list, is_active: bool) -> list:
         """模糊搜索屏蔽列表。"""
-        active_fields = ["id", "category_name", "content", "begin_time", "cycle_duration", "description", "status_name",
-                         "label"]
+        active_fields = [
+            "id",
+            "category_name",
+            "content",
+            "begin_time",
+            "cycle_duration",
+            "description",
+            "status_name",
+            "label",
+        ]
         inactive_fields = ["id", "category_name", "content", "failure_time", "description", "status_name", "label"]
         search_fields = active_fields if is_active else inactive_fields
 
@@ -119,16 +149,23 @@ class FrontendShieldListResource(Resource):
 
         return [shield for shield in shields if match(shield)]
 
-    def enrich_shields(self, bk_biz_id: Optional[int], shields: list) -> list:
+    def enrich_shields(self, bk_biz_id: Optional[int], shields: List, strategy_ids: List[int]) -> List:
         """补充屏蔽记录的数据便于展示。"""
         if not shields:
             return []
 
         manager = ShieldDisplayManager(bk_biz_id)
+
+        # 过滤策略id
+        strategy_ids = set(strategy_ids)
+        shields = [shield for shield in shields if set(manager.get_strategy_ids(shield)) & strategy_ids]
+
         # 获取关联策略名
-        strategy_ids = {strategy_id for shield in shields for strategy_id in manager.get_strategy_ids(shield)}
+        shield_strategy_ids = {strategy_id for shield in shields for strategy_id in manager.get_strategy_ids(shield)}
+
         strategy_id_to_name = {
-            strategy.id: strategy.name for strategy in StrategyModel.objects.filter(id__in=strategy_ids).only("name")
+            strategy.id: strategy.name
+            for strategy in StrategyModel.objects.filter(id__in=shield_strategy_ids).only("name")
         }
 
         with ThreadPoolExecutor(max_workers=20) as executor:
