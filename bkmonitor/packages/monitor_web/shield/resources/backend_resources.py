@@ -429,11 +429,17 @@ class AddShieldResource(Resource, EventDimensionMixin):
         # 根据ID获取告警详情
         alert = AlertDocument.get(alert_id)
 
+        dimension_keys = data.get("dimension_keys")
         # 初始化维度配置字典
         dimension_config = {}
+        shield_dimensions = []
         # 遍历告警的维度，将每个维度的键值对添加到维度配置字典中
         for dimension in alert.dimensions:
             dimension_data = dimension.to_dict()
+            # 若传递了dimension_keys，则只保留dimension_keys中指定的维度，用于前端动态删除维度信息
+            if dimension_keys is None or dimension_data["key"] in dimension_keys:
+                dimension_config[dimension_data["key"]] = dimension_data["value"]
+                shield_dimensions.append(dimension)
             dimension_config[dimension_data["key"]] = dimension_data["value"]
         # 更新维度配置字典，添加告警ID、策略ID、严重性、告警消息和维度字符串表示
         dimension_config.update(
@@ -442,7 +448,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
                 "strategy_id": alert.strategy_id,
                 "_severity": alert.severity,
                 "_alert_message": getattr(alert.event, "description", ""),
-                "_dimensions": AlertDimensionFormatter.get_dimensions_str(alert.dimensions),
+                "_dimensions": AlertDimensionFormatter.get_dimensions_str(shield_dimensions),
             }
         )
 
