@@ -251,6 +251,7 @@ class FrontendShieldDetailResource(Resource):
         shield_display_manager = ShieldDisplayManager(self.bk_biz_id)
 
         # 根据屏蔽的范围类型获取目标target信息
+        # 如果是快捷屏蔽，则scope_type为空
         if shield.get("scope_type"):
             if shield["scope_type"] == ScopeType.INSTANCE:
                 target = shield_display_manager.get_service_name_list(
@@ -274,7 +275,7 @@ class FrontendShieldDetailResource(Resource):
 
             dimension_config.update({"scope_type": shield["scope_type"], "target": target})
 
-        # 处理策略ID相关信息
+        # 处理策略ID相关信息,如果是基于策略屏蔽，将会有此流程
         if "strategy_id" in shield["dimension_config"]:
             strategy_ids = shield["dimension_config"]["strategy_id"]
             if not isinstance(strategy_ids, list):
