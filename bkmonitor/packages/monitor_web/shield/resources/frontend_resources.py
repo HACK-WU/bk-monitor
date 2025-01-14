@@ -280,16 +280,9 @@ class FrontendShieldDetailResource(Resource):
             strategy_ids = shield["dimension_config"]["strategy_id"]
             if not isinstance(strategy_ids, list):
                 strategy_ids = [strategy_ids]
-            strategy_ids = StrategyModel.objects.filter(id__in=strategy_ids, bk_biz_id=self.bk_biz_id).values_list(
-                "id", flat=True
+            strategies = list(
+                StrategyModel.objects.filter(id__in=strategy_ids, bk_biz_id=self.bk_biz_id).values("id", "name")
             )
-
-            strategies = []
-            for strategy_id in strategy_ids:
-                # 获取告警策略信息
-                strategy_info = resource.strategies.strategy_info(id=strategy_id, bk_biz_id=self.bk_biz_id)
-                strategies.append(strategy_info)
-            # 将告警策略信息更新到维度配置中
             dimension_config.update({"strategies": strategies})
 
         # 根据屏蔽的类别更新维度配置
