@@ -9,7 +9,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import inspect
 import logging
 from contextlib import contextmanager
@@ -25,11 +24,11 @@ from core.drf_resource.management.exceptions import (
     ResourceModuleNotRegistered,
     ResourceNotRegistered,
 )
-from core.drf_resource.management.finder import API_DIR, ResourceFinder
+from core.drf_resource.management.finder import API_DIR, ResourceFinder, ResourcePath
 
 logger = logging.getLogger(__name__)
 
-
+# 判断是否DRFResource是否已经初始化
 __setup__ = False
 __doc__ = """
 自动发现项目下resource和adapter和api
@@ -225,14 +224,14 @@ def setup():
         return
 
     finder = ResourceFinder()
-    for path in finder.resource_path:
+    for path in finder.resource_path:  # type: ResourcePath
         install_resource(path)
 
     __setup__ = True
     resource.__finder__ = finder
 
 
-def install_resource(rs_path):
+def install_resource(rs_path: ResourcePath):
     dotted_path = rs_path.path
     _resource = None
     endpoint = None
@@ -276,7 +275,7 @@ def install_adapter(rs_path):
     # adapter 和 api 代码结构一致， 唯一区别是entry不同，adapter多了一层`adapter`目录
     if is_api(dotted_path):
         api_root = path_to_dotted(API_DIR)
-        result = dotted_path[(len(API_DIR) + 1) :].split(".", 1)
+        result = dotted_path[(len(API_DIR) + 1):].split(".", 1)
         if len(result) == 2:
             rs, ada = result
         else:
