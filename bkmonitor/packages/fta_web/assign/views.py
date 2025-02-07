@@ -31,7 +31,7 @@ class AssignGroupViewSet(viewsets.ModelViewSet):
     queryset = AlertAssignGroup.objects.all().order_by("-priority")
     serializer_class = serializers.AssignGroupSlz
 
-    filter_fields = {
+    filterset_fields = {
         "name": ["exact", "icontains"],
         "priority": ["exact"],
     }
@@ -65,7 +65,7 @@ class AssignGroupViewSet(viewsets.ModelViewSet):
 class AssignRuleViewSet(viewsets.ModelViewSet):
     queryset = AlertAssignRule.objects.all()
     serializer_class = serializers.AssignRuleSlz
-    filter_fields = {
+    filterset_fields = {
         "assign_group_id": ["exact"],
     }
 
