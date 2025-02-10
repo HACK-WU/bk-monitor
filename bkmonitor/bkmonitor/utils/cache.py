@@ -14,11 +14,13 @@ import json
 import logging
 import time
 import zlib
-from typing import Callable, Optional
+from time import monotonic
+from typing import Any, Callable, Optional
 
 from django.conf import settings
 from django.core.cache import cache, caches
-from django.utils import translation
+
+# from django.utils import translation
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
@@ -39,13 +41,13 @@ class UsingCache(object):
     key_prefix = "web_cache"
 
     def __init__(
-            self,
-            cache_type,
-            backend_cache_type=None,
-            user_related=None,
-            compress=True,
-            is_cache_func=lambda res: True,
-            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+        self,
+        cache_type,
+        backend_cache_type=None,
+        user_related=None,
+        compress=True,
+        is_cache_func=lambda res: True,
+        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型
@@ -108,10 +110,12 @@ class UsingCache(object):
 
     def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
         # 新增根据用户openid设置缓存key
-        lang = "en" if translation.get_language() == "en" else "zh-hans"
+        # lang = "en" if translation.get_language() == "en" else "zh-hans"
         if self.using_cache_type:
-            return (f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
-                    f":{count_md5(args)}:{count_md5(kwargs)}:{self._get_username()}")
+            return (
+                f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
+                f":{count_md5(args)}:{count_md5(kwargs)}:{self._get_username()}"
+            )
 
         return None
 
@@ -370,3 +374,43 @@ class InstanceCache(object):
             del self.__cache[key]
         except KeyError:
             pass
+
+
+def lru_cache_with_ttl(
+    maxsize: int = 128, ttl: int = 60, decision_to_drop_func: Callable[[Any], bool] = lambda _: False
+):
+    """带有过期时间的 LRU Cache
+    原理：lru_cache 维护缓存对象的引用，通过包装 Result 注入期望过期时间，达到淘汰过期 Key 的效果。
+    :param maxsize: 最大容量
+    :param ttl: 过期时间，单位为秒
+    :param decision_to_drop_func: 缓存丢弃决策函数
+    :return:
+    """
+
+    class _Result:
+        __slots__ = ("value", "expired")
+
+        def __init__(self, value: Any, expired: int):
+            self.value: Any = value
+            self.expired: int = expired
+
+    def decorator(func):
+        @functools.lru_cache(maxsize=maxsize)
+        def cached_func(*args, **kwargs):
+            value: Any = func(*args, **kwargs)
+            # monotonic 提供了不受系统时间影响的稳定秒数增长基准。
+            expired: int = int(monotonic()) + ttl
+            return _Result(value, expired)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result: _Result = cached_func(*args, **kwargs)
+            if result.expired < monotonic() or decision_to_drop_func(result.value):
+                result.value = func(*args, **kwargs)
+                result.expired = int(monotonic()) + ttl
+            return result.value
+
+        wrapper.cache_clear = cached_func.cache_clear
+        return wrapper
+
+    return decorator
