@@ -13,6 +13,7 @@ import inspect
 import logging
 from contextlib import contextmanager
 from importlib import import_module
+from typing import Optional
 
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -51,6 +52,10 @@ __doc__ = """
         adapter.cc -> cc/adapter/default.py -> cc/adapter/${platform}/resources.py
         # 调用adapter.cc 即可访问对应文件下的resource，
         # 如果在${platform}/resources.py里面有相同定义，会重载default.py下的resource
+        
+        
+    补充，如果已经存在resource.py或者default.py或者resources目录，那么会自动将此文件作为最终的resource资源文件。
+        此时，与resource.py同级的目录下还存在其他的resource.py 需要手动导入到当前的resource.py中才会生效。
     """
 
 
@@ -72,13 +77,18 @@ def lazy_load(func):
 class ResourceShortcut(object):
     _package_pool = {}
 
+    # 定义Resource模块的入口名称，resources指的就是resources.py或者resources包
+    # 同样在API场景下，可以定义_entry = "default"
     _entry = "resources"
 
-    def __new__(cls, module_path):
+    def __new__(cls, module_path: str):
         def init_instance(self, m_path):
+            # 确保module_path 以 resources 结尾
             if not m_path.endswith(self._entry):
                 m_path += ".{}".format(self._entry)
+            # resource模块所在目录的路径
             self._path = m_path
+            # resource模块所在包
             self._package = None
             self._methods = {}
             self.loaded = False
@@ -169,13 +179,39 @@ class APIResourceShortcut(ResourceShortcut):
 
 
 class ResourceManager(tuple):
-    __parent__ = None
+    """
+    ResourceManager 类继承自 tuple，用于管理资源的层级结构。
+    它允许动态添加子资源，并维护资源间的父子关系。
+    底层使用 tuple 作为底层数据结构。
+    """
+    __parent__ = None  # 父资源引用，用于维护资源层级关系
 
     def __contains__(self, item):
+        """
+        重写 __contains__ 方法，用于检查项是否是资源本身或以资源为前缀。
+        
+        参数:
+        - item: 需要检查的项
+        
+        返回:
+        - bool: 项是否是资源本身或以资源为前缀
+        """
         return item is not None and (self is item or item[: len(self)] == self)
 
     def __getattr__(self, name):
+        """
+        重写 __getattr__ 方法，用于动态添加或获取子资源。
+        如果是设置阶段，尝试从转换后的对象中获取属性，如果未找到则抛出异常。
+        否则，创建新的 ResourceManager 实例作为子资源，并将其绑定到当前资源。
+        
+        参数:
+        - name: 属性名
+        
+        返回:
+        - ResourceManager 或其他类型: 动态添加的子资源或获取的属性值
+        """
         if __setup__:
+            # 在设置阶段，尝试从转换后的对象中获取属性
             got = getattr(self.transform(), name, None)
             if got is None:
                 raise ResourceModuleNotRegistered(
@@ -183,30 +219,61 @@ class ResourceManager(tuple):
                 )
             return got
 
+        # 创建新的子资源实例,并将当当前self的内容添加到子资源中。
+        # 然后给当前self(这个元组)添加name属性，指向新创建的子资源。
+        # 假设name是"a",那么self.a=("a",)
         new = ResourceManager(self + (name,))
         setattr(self, name, new)
         new.__parent__ = self
         return new
 
     def __repr__(self):
+        """
+        重写 __repr__ 方法，返回资源的字符串表示。
+        
+        返回:
+        - str: 资源的字符串表示
+        """
+        # self本身是一个元组对象，当self为空时，返回"resource"
+        # 当self不为空时，返回"resource."+ self中的内容，以"."分隔.
+        # 比如当self的内容为("a", "b", "c")时，返回"resource.a.b.c"
         return "resource" + ("." if self else "") + ".".join(self)
 
     def __bool__(self):
+        """
+        重写 __bool__ 方法，根据资源长度返回布尔值。
+        
+        返回:
+        - bool: 资源是否非空
+        """
         return bool(len(self))
 
     @property
     def __root__(self):
+        """
+        获取资源树的根节点。
+        
+        返回:
+        - ResourceManager: 资源树的根节点
+        """
         target = self
         while target.__parent__ is not None:
             target = target.__parent__
         return target
 
     def transform(self):
-        """make the little tuple instance get stronger(callable) ^_^"""
+        """
+        转换方法，使 ResourceManager 实例变得更强大（可调用）。
+        通过资源的路径，逐级获取属性，最终返回一个可调用的对象或 None。
+        
+        返回:
+        - Callable or None: 转换后的可调用对象或 None
+        """
         func_finder = self.__root__
         for attr in self:
             func_finder = getattr(func_finder, attr)
 
+        # 获取到的func_finder如果是ResourceManager实例，说明资源未注册，返回None
         if isinstance(func_finder, self.__class__):
             return None
             # raise Exception("func called before resource setup."
@@ -215,6 +282,17 @@ class ResourceManager(tuple):
         return func_finder
 
     def __call__(self, *args, **kwargs):
+        """
+        重写 __call__ 方法，使 ResourceManager 实例可调用。
+        调用转换后的对象，并传递参数。
+        
+        参数:
+        - *args: 位置参数
+        - **kwargs: 关键字参数
+        
+        返回:
+        - Any: 调用结果
+        """
         return self.transform()(*args, **kwargs)
 
 
@@ -225,48 +303,78 @@ def setup():
 
     finder = ResourceFinder()
     for path in finder.resource_path:  # type: ResourcePath
+        # print(path)
+        # >> web.plugin: unloaded  # unloaded 表示资源未注册
         install_resource(path)
 
     __setup__ = True
     resource.__finder__ = finder
+    print("Resource setup done.")
 
 
 def install_resource(rs_path: ResourcePath):
-    dotted_path = rs_path.path
-    _resource = None
-    endpoint = None
+    """
+    # 示例代码：展示如何使用已经注册的资源
+    # 假设我们有一个资源模块路径为 'plugin.resources'
+    # 并且该模块中有一个资源类 'InstallPluginResource'
 
-    # adapter, api
+    # 使用示例
+    # 1. 获取资源模块
+    plugin_resource = resource.plugin
+
+    # 2. 调用资源类的方法
+    # 假设 InstallPluginResource 类中有一个方法 install_plugin
+    result = plugin_resource.install_plugin(param1=value1, param2=value2)
+
+
+    补充说明： Resource类分为两种类型，一种是APIResource，主要用于发送API请求，一种是Resource,主要用于业务逻辑.
+        - 如果dotted_path以api.开头，那么该资源类为APIResource，否则为Resource
+    """
+    # 获取资源路径的点分隔表示形式
+    dotted_path: str = rs_path.path
+    # 初始化资源和端点变量
+    _resource: Optional[ResourceManager, ResourceShortcut] = None
+    endpoint: Optional[str] = None
+
+    # 如果路径指向的是API或适配器资源，则调用install_adapter函数处理
     if is_api(dotted_path) or is_adapter(dotted_path):
         return install_adapter(rs_path)
 
-    # resource
+    # 分割资源路径，逐段处理
     for p in dotted_path.split("."):
+        # 如果当前资源是一个资源快捷方式，则忽略此路径
         if isinstance(_resource, ResourceShortcut):
             logger.debug("ignored: {}".format(dotted_path))
             rs_path.ignored()
             return
+        # 只有第一次获取时，是从resource中获取,此时会产生一个初始的ResourceManage实例作为字资源，而当前resource就是该子资源的父资源
+        # 从第二次开始，就是从_resource中获取，里面已经记录了父资源。
         _resource = getattr(_resource or resource, p)
         endpoint = p
 
+    # 如果资源成功获取到
     if _resource:
         try:
             resource_module = ResourceShortcut(".".join(_resource))
             logger.debug("success: {}".format(dotted_path))
             rs_path.loaded()
         except ResourceNotRegistered:
+            # 如果资源未注册，记录警告日志并标记路径错误
             logger.warning("failed: {}".format(dotted_path))
             rs_path.error()
             return
 
-        # register shortcut
+        # 尝试从resource中获取快捷方式,如果获取到并且也是ResourceShortcut，则抛出冲突异常，证明同名资源已经存在
         shortcut = getattr(resource, endpoint)
+        # 如果快捷方式已经存在且类型为ResourceShortcut，则抛出冲突异常
         if isinstance(shortcut, ResourceShortcut):
             raise ResourceModuleConflict(
                 "resources conflict:\n>>> {}\n<<< {}".format(shortcut._path, ".".join(_resource))
             )
+        # 设置资源的快捷方式
         setattr(_resource.__parent__, endpoint, resource_module)
         setattr(resource, endpoint, resource_module)
+        print("install resource: {}".format(dotted_path))
 
 
 def install_adapter(rs_path):

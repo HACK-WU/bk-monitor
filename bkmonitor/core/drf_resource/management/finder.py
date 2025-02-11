@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 
 import logging
 import os
+from typing import List
 
 from django.apps import apps
 from django.conf import settings
@@ -33,7 +34,7 @@ if API_DIR not in RESOURCE_DIRS:
 class ResourceFinder(BaseFinder):
     def __init__(self, app_names=None, *args, **kwargs):
         # Mapping of app names to resource modules
-        self.resource_path = []
+        self.resource_path: List[ResourcePath] = []
         app_path_directories = []
         app_configs = apps.get_app_configs()  # type: list["AppConfig"]
         if app_names:
@@ -71,10 +72,11 @@ class ResourceFinder(BaseFinder):
         for path in self.resource_path:
             yield path.path, path.status
 
-    def find(self, path, root_path=None, from_settings=False):
+    def find(self, path, root_path=None, from_settings=False) -> tuple:
         """
-        查找app应用目录下的resources模块。
-        包括resources目录和resources.py文件以及default.py文件
+        查找app应用下存在resources.py、default.py和resources目录的目录(dir_name)并保存其相对路径.
+        dir_name，将会被在resource.[dir_name].[ResourceObj]中被使用，比如：resource.api.get_user_info.
+        所以dir_name必须唯一。
         """
         # 初始化匹配集合，用于存储找到的资源模块路径
         matches = set()
@@ -92,6 +94,13 @@ class ResourceFinder(BaseFinder):
             # 跳过 __pycache__ 目录
             if os.path.basename(root) == "__pycache__":
                 continue
+
+            # if "resources" in dirs:
+            #     relative_path = os.path.relpath(root, root_path or settings.BASE_DIR)
+            #     matches.add(self.path_to_dotted(relative_path))
+            #     continue
+            #
+
 
             # 匹配resources目录
             # 如果当前目录名为"resources"，则将其相对路径转换为点分隔格式并添加到匹配集合中
@@ -146,13 +155,15 @@ class ResourceStatus(object):
 class ResourcePath(object):
     """
     path = ResourcePath("api.xxx")
-    path.loaded()
-    path.ignored()
-    path.error()
+    # 调用loader()方法，设置状态，并返回状态的值
+    path.loaded()-> loaded
+    path.ignored()-> ignored
+    path.error() -> error
     """
 
     def __init__(self, path):
         status = ResourceStatus.unloaded
+        # 如果路径中包含:，则分割路径和状态
         path_info = path.split(":")
         if len(path_info) > 1:
             rspath, status = path_info[:2]
@@ -163,8 +174,10 @@ class ResourcePath(object):
         self.status = status.strip()
 
     def __getattr__(self, item):
+        # 这里实际上，当访问path.loaded时，就已经设置了ResourcePath的状态，而不是在调用loaded()时才设置。
         status = getattr(ResourceStatus, item, None)
         if status:
+            # 设置ResourcePath的状态
             return status_setter(status)(lambda: status, self)
 
     def __repr__(self):
