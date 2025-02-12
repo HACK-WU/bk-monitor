@@ -54,8 +54,15 @@ __doc__ = """
         # 如果在${platform}/resources.py里面有相同定义，会重载default.py下的resource
         
         
-    补充，如果已经存在resource.py或者default.py或者resources目录，那么会自动将此文件作为最终的resource资源文件。
+    补充：
+        1、如果已经存在resource.py或者default.py或者resources目录，那么会自动将此文件作为最终的resource资源文件。
         此时，与resource.py同级的目录下还存在其他的resource.py 需要手动导入到当前的resource.py中才会生效。
+        
+        2、drf_resource要求包含resource.py或者default.py或者resources目录的目录(dir_name)名称必须是唯一的，
+        因为目录名称会作为resource的快捷方式名称，而快捷方式名称必须是唯一的。
+        如果存在多个相同的名称(dir_name)，可以尝试在dir_name的父目录下创建在创建一个resource.py文件，从而将dir_name父目录的名称作为快捷方式名称。
+        此时就不会发生冲突。但注意一定要将当前的resource.py导入到dir_name父目录的resource.py中。
+        
     """
 
 
@@ -189,10 +196,10 @@ class ResourceManager(tuple):
     def __contains__(self, item):
         """
         重写 __contains__ 方法，用于检查项是否是资源本身或以资源为前缀。
-        
+
         参数:
         - item: 需要检查的项
-        
+
         返回:
         - bool: 项是否是资源本身或以资源为前缀
         """
@@ -203,13 +210,14 @@ class ResourceManager(tuple):
         重写 __getattr__ 方法，用于动态添加或获取子资源。
         如果是设置阶段，尝试从转换后的对象中获取属性，如果未找到则抛出异常。
         否则，创建新的 ResourceManager 实例作为子资源，并将其绑定到当前资源。
-        
+
         参数:
         - name: 属性名
-        
+
         返回:
         - ResourceManager 或其他类型: 动态添加的子资源或获取的属性值
         """
+        # 快捷方式挂载完成后，如果获取不到相关Resource类，会抛出异常
         if __setup__:
             # 在设置阶段，尝试从转换后的对象中获取属性
             got = getattr(self.transform(), name, None)
@@ -230,7 +238,7 @@ class ResourceManager(tuple):
     def __repr__(self):
         """
         重写 __repr__ 方法，返回资源的字符串表示。
-        
+
         返回:
         - str: 资源的字符串表示
         """
@@ -242,7 +250,7 @@ class ResourceManager(tuple):
     def __bool__(self):
         """
         重写 __bool__ 方法，根据资源长度返回布尔值。
-        
+
         返回:
         - bool: 资源是否非空
         """
@@ -252,7 +260,7 @@ class ResourceManager(tuple):
     def __root__(self):
         """
         获取资源树的根节点。
-        
+
         返回:
         - ResourceManager: 资源树的根节点
         """
@@ -265,7 +273,7 @@ class ResourceManager(tuple):
         """
         转换方法，使 ResourceManager 实例变得更强大（可调用）。
         通过资源的路径，逐级获取属性，最终返回一个可调用的对象或 None。
-        
+
         返回:
         - Callable or None: 转换后的可调用对象或 None
         """
@@ -285,11 +293,11 @@ class ResourceManager(tuple):
         """
         重写 __call__ 方法，使 ResourceManager 实例可调用。
         调用转换后的对象，并传递参数。
-        
+
         参数:
         - *args: 位置参数
         - **kwargs: 关键字参数
-        
+
         返回:
         - Any: 调用结果
         """
@@ -309,7 +317,6 @@ def setup():
 
     __setup__ = True
     resource.__finder__ = finder
-    print("Resource setup done.")
 
 
 def install_resource(rs_path: ResourcePath):
@@ -332,7 +339,8 @@ def install_resource(rs_path: ResourcePath):
     """
     # 获取资源路径的点分隔表示形式
     dotted_path: str = rs_path.path
-    # 初始化资源和端点变量
+    # 初始化资源和端点变量,表示当前字资源(路径上的某个点)所对应的ResourceManager实例
+    # 而resource是所有_resource的根节点
     _resource: Optional[ResourceManager, ResourceShortcut] = None
     endpoint: Optional[str] = None
 
@@ -342,13 +350,15 @@ def install_resource(rs_path: ResourcePath):
 
     # 分割资源路径，逐段处理
     for p in dotted_path.split("."):
-        # 如果当前资源是一个资源快捷方式，则忽略此路径
+        # 如果父资源是一个快捷方式，则无法再产生ResourceManger实例，所以直接跳过
         if isinstance(_resource, ResourceShortcut):
             logger.debug("ignored: {}".format(dotted_path))
             rs_path.ignored()
             return
         # 只有第一次获取时，是从resource中获取,此时会产生一个初始的ResourceManage实例作为字资源，而当前resource就是该子资源的父资源
         # 从第二次开始，就是从_resource中获取，里面已经记录了父资源。
+        # 这里挂载完之后，每个resource及其子资源都是一个ResourceManager实例。
+        # 经过后续处理之后，最后一个子资源，也就是endpoint，将会被覆盖变为一个ResourceShortcut实例，从而实现快捷方式的功能。
         _resource = getattr(_resource or resource, p)
         endpoint = p
 
@@ -366,15 +376,16 @@ def install_resource(rs_path: ResourcePath):
 
         # 尝试从resource中获取快捷方式,如果获取到并且也是ResourceShortcut，则抛出冲突异常，证明同名资源已经存在
         shortcut = getattr(resource, endpoint)
-        # 如果快捷方式已经存在且类型为ResourceShortcut，则抛出冲突异常
         if isinstance(shortcut, ResourceShortcut):
             raise ResourceModuleConflict(
                 "resources conflict:\n>>> {}\n<<< {}".format(shortcut._path, ".".join(_resource))
             )
         # 设置资源的快捷方式
+        # 挂载完整的路径，比如有资源"a.b.c.get_user_info",a和b都是ResourceManager实例，c是ResourceShortcut实例,
+        # 所以可以使用完整路径调用，比如resource.a.b.c.get_user_info进行调用
         setattr(_resource.__parent__, endpoint, resource_module)
+        # 挂载快捷方式，可以直接通过快捷方式调用，比如resource.c.get_user_info进行调用
         setattr(resource, endpoint, resource_module)
-        print("install resource: {}".format(dotted_path))
 
 
 def install_adapter(rs_path):

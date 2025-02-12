@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 import logging
 import os
-from typing import List
+from typing import List, Set
 
 from django.apps import apps
 from django.conf import settings
@@ -29,6 +29,9 @@ API_DIR = getattr(settings, "API_DIR", DEFAULT_API_DIR)
 RESOURCE_DIRS = getattr(settings, "RESOURCE_DIRS", DEFAULT_RESOURCE_DIRS)
 if API_DIR not in RESOURCE_DIRS:
     RESOURCE_DIRS.append(API_DIR)
+
+# 查找resource模块时将会忽略的目录
+RESOURCE_IGNORE_DIRS = getattr(settings, "RESOURCE_IGNORE_DIRS", ["__pycache__", "migrations", "test"])
 
 
 class ResourceFinder(BaseFinder):
@@ -72,8 +75,10 @@ class ResourceFinder(BaseFinder):
         for path in self.resource_path:
             yield path.path, path.status
 
-    def find(self, path, root_path=None, from_settings=False) -> tuple:
+    def find(self, path, root_path=None, from_settings=False) -> Set:
         """
+        root_path: 用于指定查找的根目录，如果为None，则使用settings.BASE_DIR
+
         查找app应用下存在resources.py、default.py和resources目录的目录(dir_name)并保存其相对路径.
         dir_name，将会被在resource.[dir_name].[ResourceObj]中被使用，比如：resource.api.get_user_info.
         所以dir_name必须唯一。
@@ -89,38 +94,30 @@ class ResourceFinder(BaseFinder):
             # 如果路径无效且非来自设置，则直接返回空列表
             return []
 
-        # 遍历指定路径下的所有目录和文件
-        for root, dirs, files in sorted(os.walk(path)):
-            # 跳过 __pycache__ 目录
-            if os.path.basename(root) == "__pycache__":
-                continue
+        def find_resource(target_path, found_paths=None):
+            if found_paths is None:
+                found_paths = []
 
-            # if "resources" in dirs:
-            #     relative_path = os.path.relpath(root, root_path or settings.BASE_DIR)
-            #     matches.add(self.path_to_dotted(relative_path))
-            #     continue
-            #
+            root, dirs, files = next(os.walk(target_path))
 
+            # 忽略指定的目录
+            if os.path.basename(root) in RESOURCE_IGNORE_DIRS:
+                return found_paths
 
-            # 匹配resources目录
-            # 如果当前目录名为"resources"，则将其相对路径转换为点分隔格式并添加到匹配集合中
-            if os.path.basename(root) == "resources":
-                # 获取到resources目录所在的相对路径，然后将其转换为点分隔格式，并添加到匹配集合中
-                relative_path = os.path.relpath(os.path.dirname(root), root_path or settings.BASE_DIR)
-                matches.add(self.path_to_dotted(relative_path))
-                continue
+            if any(item in ["resources", "resources.py", "default.py"] for item in dirs + files):
+                found_paths.append(root)
+                return found_paths
 
-            # 匹配resources.py文件以及default.py文件
-            for file_path in files:
-                file_name = os.path.basename(file_path)
-                base_file_name, ext_name = os.path.splitext(file_name)
+            for _dir in dirs:
+                find_resource(os.path.join(root, _dir), found_paths)
 
-                # 如果文件名为"resources"或"default"，则将其所在目录的相对路径转换为点分隔格式并添加到匹配集合中
-                if ext_name == ".py" and base_file_name in ["resources", "default"]:
-                    relative_path = os.path.relpath(root, root_path or settings.BASE_DIR)
-                    matches.add(self.path_to_dotted(relative_path))
+            return found_paths
 
-        # 返回匹配集合作为结果
+        for p in find_resource(path):
+            # 获取到resources目录所在的相对路径，然后将其转换为点分隔格式，并添加到匹配集合中
+            relative_path = os.path.relpath(p, root_path or settings.BASE_DIR)
+            matches.add(self.path_to_dotted(relative_path))
+
         return matches
 
     @staticmethod
