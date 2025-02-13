@@ -81,32 +81,43 @@ def get_strategy_user_group_dict(strategy_ids, bk_biz_id=None):
     :param bk_biz_id:指定的业务ID
     :return:
     """
+    # 如果不存在策略，直接返回空字典
     if not strategy_ids:
-        # 不存在策略的情况下，直接返回
         return {}
 
+    # 查询指定策略id的策略与告警组的关系，获取每个策略对应的告警组
     relations = StrategyActionConfigRelation.objects.filter(strategy_id__in=strategy_ids).values(
         "strategy_id", "user_groups"
     )
+    # 如果指定了业务ID，进一步筛选属于该业务的策略
     if bk_biz_id:
         strategy_ids = (
             StrategyModel.objects.filter(id__in=strategy_ids, bk_biz_id=bk_biz_id)
             .values_list("id", flat=True)
             .distinct()
         )
+    # 初始化一个字典，用于存储每个告警组对应的策略id列表
     strategy_count_of_user_group = {}
+    # 遍历每条策略与告警组的关系
     for relation in relations:
         strategy_id = relation["strategy_id"]
+        # 如果当前策略不在指定的策略列表中，则跳过
         if strategy_id not in strategy_ids:
             continue
+        # 遍历当前策略对应的每个告警组
         for user_group_id in relation["user_groups"]:
+            # 如果告警组id为空，则跳过
             if not user_group_id:
                 continue
+            # 如果当前告警组id不在结果字典中，则初始化其对应的策略id列表
             if user_group_id not in strategy_count_of_user_group:
                 strategy_count_of_user_group[user_group_id] = [strategy_id]
                 continue
+            # 将当前策略id添加到告警组对应的策略id列表中
             strategy_count_of_user_group[user_group_id].append(strategy_id)
+    # 返回结果字典，包含每个告警组及其对应的策略id列表
     return strategy_count_of_user_group
+
 
 
 def get_user_group_strategies(user_groups, bk_biz_ids=None):

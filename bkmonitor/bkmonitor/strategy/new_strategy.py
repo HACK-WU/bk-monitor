@@ -1869,19 +1869,39 @@ class Strategy(AbstractConfig):
     @classmethod
     def fill_user_groups(cls, configs: List[Dict], with_detail=False):
         """
-        显示告警组信息
+        根据配置列表填充用户组信息。该方法主要用于扩展配置信息，通过添加用户组详细信息或基本
+        信息到每个配置的特定操作中。
+    
+        参数:
+        - configs (List[Dict]): 包含配置信息的列表，每个配置是一个字典，必须包含"id"和"actions"键，
+          以及"notice"键，其中"actions"和"notice"的值是包含"user_groups"键的字典列表。
+        - with_detail (bool): 是否包含用户组的详细信息，默认为False，仅包含基本信息。
+    
+        返回:
+        该方法没有返回值，但它会直接修改传入的configs参数，为每个配置的每个操作和通知添加
+        "user_group_list"键，该键的值是一个包含用户组信息的列表。
         """
+        # 提取所有配置的ID
         strategy_ids = [config["id"] for config in configs]
+        
+        # 根据配置ID获取所有相关的操作关系
         action_relations = RelationModel.objects.filter(strategy_id__in=strategy_ids)
+        
+        # 从操作关系中提取所有用户组ID
         user_group_ids = []
         for action_relation in action_relations:
             user_group_ids.extend(action_relation.validated_user_groups)
+        
+        # 根据是否需要详细信息，选择性地获取用户组的详细信息或基本信息
         if with_detail:
             user_groups_slz = UserGroupDetailSlz(UserGroup.objects.filter(id__in=user_group_ids), many=True).data
         else:
             user_groups_slz = UserGroupSlz(UserGroup.objects.filter(id__in=user_group_ids), many=True).data
+        
+        # 将序列化的用户组信息转换为字典，以用户组ID为键
         user_groups = {group["id"]: dict(group) for group in user_groups_slz}
-
+        
+        # 为每个配置的每个操作和通知添加用户组列表信息
         for config in configs:
             for action in config["actions"] + [config["notice"]]:
                 user_group_list = []

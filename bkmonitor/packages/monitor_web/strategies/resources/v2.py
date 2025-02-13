@@ -191,44 +191,87 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_id(cls, filter_dict: dict, filter_strategy_ids_set: set):
-        """过滤策略ID"""
+        """过滤策略ID
+    
+        根据提供的过滤字典中的ID列表，对策略ID集合进行过滤。
+        仅保留那些在过滤字典的ID列表中出现的策略ID。
+    
+        参数:
+        - filter_dict: 包含过滤条件的字典，格式为 {"id": [id_list]}
+        - filter_strategy_ids_set: 需要过滤的策略ID集合
+    
+        返回: 无返回值，直接修改filter_strategy_ids_set
+        """
+        # 检查过滤字典中是否存在ID列表
         if filter_dict["id"]:
             ids = set()
             for _id in filter_dict["id"]:
                 try:
+                    # 尝试将过滤条件中的ID转换为整数并添加到集合中
                     ids.add(int(_id))
                 except (ValueError, TypeError):
                     # 无效的过滤条件，查不出数据
                     continue
+            # 更新策略ID集合，仅保留与过滤条件匹配的ID（做交集）
             filter_strategy_ids_set.intersection_update(ids)
 
     @classmethod
     def filter_strategy_ids_by_label(
             cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
-        """过滤策略标签"""
+        """过滤策略标签
+        
+        根据提供的标签过滤字典和策略ID集合，更新策略ID集合仅保留匹配指定标签的策略ID。
+        
+        参数:
+        - filter_dict: 包含过滤条件的字典，其中包含标签信息。
+        - filter_strategy_ids_set: 待过滤的策略ID集合。
+        - bk_biz_id: 可选参数，业务ID，用于进一步过滤标签。
+        """
+        # 如果过滤字典中的标签列表不为空，则执行过滤操作
         if filter_dict["label"]:
+            # 构造标签列表，统一格式为"/标签/"
             labels = [f"/{label.strip('/')}/" for label in filter_dict["label"]]
+            # 查询匹配的策略标签对象
             strategy_label_qs = StrategyLabel.objects.filter(label_name__in=labels)
+            # 如果业务ID已提供，则进一步按业务ID过滤
             if bk_biz_id is not None:
                 strategy_label_qs = strategy_label_qs.filter(bk_biz_id=bk_biz_id)
+            # 提取查询结果中的策略ID，并转换为列表
             label_strategy_ids = strategy_label_qs.values_list("strategy_id", flat=True).distinct()
+            # 更新原始策略ID集合，仅保留与指定标签关联的策略ID
             filter_strategy_ids_set.intersection_update(set(label_strategy_ids))
 
     @classmethod
     def filter_strategy_ids_by_data_source(cls, filter_dict: dict, filter_strategy_ids_set: set):
-        """过滤数据源"""
+        """过滤数据源
+    
+        根据给定的过滤字典和策略ID集合，过滤出与指定数据源相关的策略ID
+    
+        参数:
+        - filter_dict: 包含过滤条件的字典，其中包含"data_source"键
+        - filter_strategy_ids_set: 待过滤的策略ID集合
+    
+        返回:
+        无返回值，但会更新filter_strategy_ids_set以反映过滤后的策略ID集合
+        """
+        # 检查是否有数据源过滤条件
         if filter_dict["data_source"]:
             data_sources: List[Tuple] = []
+            # 遍历过滤条件中的每个数据源
             for data_source in filter_dict["data_source"]:
+                # 遍历数据类别以查找匹配的数据源类型
                 for category in DATA_CATEGORY:
                     if data_source != category["type"]:
                         continue
+                    # 找到匹配项，将其数据源标签和数据类型标签添加到列表中
                     data_sources.append((category["data_source_label"], category["data_type_label"]))
                     break
+            # 没有匹配到任何的数据源标签，则filter_strategy_ids_set为空,表示获取到0个策略
             if not data_sources:
                 filter_strategy_ids_set.intersection_update(set())
             else:
+                #  查询包含这些数据源标签和数据类型标签的策略ID
                 data_source_strategy_ids = (
                     QueryConfigModel.objects.filter(
                         reduce(
@@ -239,6 +282,7 @@ class GetStrategyListV2Resource(Resource):
                     .values_list("strategy_id", flat=True)
                     .distinct()
                 )
+                # 更新策略ID集合为与数据源匹配的策略ID集合
                 filter_strategy_ids_set.intersection_update(set(data_source_strategy_ids))
 
     @classmethod
@@ -248,6 +292,7 @@ class GetStrategyListV2Resource(Resource):
             result_table_id_strategy_ids = []
             for result_table_id in filter_dict["result_table_id"]:
                 result_table_id_strategy_ids.extend(
+                    # todo 可以增加对"filter_strategy_ids_set"的过滤
                     list(
                         QueryConfigModel.objects.filter(config__result_table_id=result_table_id)
                         .values_list("strategy_id", flat=True)
@@ -262,14 +307,14 @@ class GetStrategyListV2Resource(Resource):
     ):
         """策略状态过滤"""
         if filter_dict["strategy_status"]:
-            strategy_status_ids = []
+            strategy_ids = []
             for status in filter_dict["strategy_status"]:
                 filter_status_params = {"status": status}
                 if bk_biz_id is not None:
                     filter_status_params["bk_biz_id"] = bk_biz_id
 
-                strategy_status_ids.extend(cls.filter_by_status(**filter_status_params))
-            filter_strategy_ids_set.intersection_update(set(strategy_status_ids))
+                strategy_ids.extend(cls.filter_by_status(**filter_status_params))
+            filter_strategy_ids_set.intersection_update(set(strategy_ids))
 
     @classmethod
     def filter_strategy_ids_by_algo_type(cls, filter_dict: dict, filter_strategy_ids_set: set):
@@ -301,45 +346,81 @@ class GetStrategyListV2Resource(Resource):
     def filter_strategy_ids_by_event_group(
             cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
-        """过滤自定义事件组ID"""
+        """过滤自定义事件组ID
+    
+        本方法用于根据自定义事件组ID或蓝鲸事件组ID来过滤策略ID集合。
+    
+        参数:
+        - filter_dict: 包含过滤条件的字典，包括自定义事件组ID和蓝鲸事件组ID。
+        - filter_strategy_ids_set: 待过滤的策略ID集合。
+        - bk_biz_id: 可选参数，指定业务ID用于进一步过滤。
+    
+        返回:
+        无返回值，但会更新filter_strategy_ids_set，使其仅包含匹配条件的策略ID。
+        """
+        # 检查是否有自定义事件组ID或蓝鲸事件组ID用于过滤
         if filter_dict["custom_event_group_id"] or filter_dict["bk_event_group_id"]:
+            # 选择使用自定义事件组ID或蓝鲸事件组ID进行过滤
             event_group_id = filter_dict["custom_event_group_id"] or filter_dict["bk_event_group_id"]
+            # 查询符合事件组ID条件的自定义事件
             custom_event_qs = CustomEventGroup.objects.filter(bk_event_group_id__in=event_group_id)
+            # 如果提供了业务ID，则进一步按业务ID过滤
             if bk_biz_id is not None:
                 custom_event_qs = custom_event_qs.filter(bk_biz_id=bk_biz_id)
+            # 获取所有符合条件的自定义事件的table_id
             custom_event_table_ids = custom_event_qs.values_list("table_id", flat=True)
+            # 初始化自定义事件策略ID列表
             custom_event_strategy_ids = []
+            # 如果存在符合条件的自定义事件table_id，则查询相关策略ID
             if custom_event_table_ids:
                 custom_event_strategy_ids = set(
                     QueryConfigModel.objects.filter(
+                        # 根据table_id构建查询条件，支持多个table_id的或查询
                         reduce(
                             lambda x, y: x | y,
                             (Q(config__result_table_id=table_id) for table_id in custom_event_table_ids),
                         )
                         if len(custom_event_table_ids) > 1
                         else Q(config__result_table_id=custom_event_table_ids[0]),
+                        # 指定数据源和数据类型标签
                         data_source_label=DataSourceLabel.CUSTOM,
                         data_type_label=DataTypeLabel.EVENT,
                     )
                     .values_list("strategy_id", flat=True)
                     .distinct()
                 )
+            # 更新策略ID集合，仅保留与自定义事件相关的策略ID
             filter_strategy_ids_set.intersection_update(set(custom_event_strategy_ids))
 
     @classmethod
     def filter_strategy_ids_by_series_group(
             cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
-        """过滤自定义指标ID"""
+        """过滤自定义指标ID
+    
+        根据时间序列组ID和业务ID过滤出自定义指标的策略ID，并更新过滤策略ID集合
+    
+        Args:
+            filter_dict (dict): 包含过滤条件的字典，包括时间序列组ID等信息
+            filter_strategy_ids_set (set): 待更新的过滤策略ID集合
+            bk_biz_id (Optional[str], optional): 业务ID，如果为None，则不进行业务ID的过滤
+        """
+        # 如果时间序列组ID存在，则根据此ID过滤自定义指标
         if filter_dict["time_series_group_id"]:
             time_series_group_id = filter_dict["time_series_group_id"]
             custom_ts_qs = CustomTSTable.objects.filter(time_series_group_id__in=time_series_group_id)
+
+            # 如果业务ID不为空，则进一步根据业务ID过滤自定义指标
             if bk_biz_id is not None:
                 custom_ts_qs = custom_ts_qs.filter(bk_biz_id=bk_biz_id)
+
+            # 获取过滤后的自定义指标的表ID
             custom_metric_table_ids = custom_ts_qs.values_list("table_id", flat=True)
 
+            # 初始化自定义指标的策略ID列表
             custom_metric_strategy_ids = []
             if custom_metric_table_ids:
+                # 根据自定义指标的表ID过滤出对应的策略ID
                 custom_metric_strategy_ids = set(
                     QueryConfigModel.objects.filter(
                         reduce(
@@ -354,6 +435,8 @@ class GetStrategyListV2Resource(Resource):
                     .values_list("strategy_id", flat=True)
                     .distinct()
                 )
+
+            # 更新过滤策略ID集合，仅保留与自定义指标相关的策略ID
             filter_strategy_ids_set.intersection_update(set(custom_metric_strategy_ids))
 
     @classmethod
@@ -438,6 +521,26 @@ class GetStrategyListV2Resource(Resource):
     def filter_by_conditions(cls, conditions: List[Dict], strategies: QuerySet, bk_biz_id: int = None) -> QuerySet:
         """
         按条件进行过滤
+        conditions:[
+            {
+                "key":"strategy_id",
+                "value":"123",
+
+                # 过滤策略ID为"123"的策略
+                # value可以是列表，比如["123","456"],如果value是字符串，可以支持"|"分割成多个，比如"123|456"，
+                # 意思就是过滤策略ID为"123"和"456"的策略
+            },
+            {
+                "key": "query",
+                "value": ["test_strategy","123"]
+                # 过滤策略名称或者结果表ID包含"test_strategy"或"123"的策略，以及查询策略ID为"123"的策略。
+            },
+            {
+                "key":"name",
+                "value":["xxx"] #过滤策略名称包含"xxx"的策略
+            }
+            ]
+
         - id: 策略ID
         - name: 策略名称
         - user_group_id: 通知组ID
@@ -459,7 +562,7 @@ class GetStrategyListV2Resource(Resource):
         - bk_cloud_id: 云区域
         - result_table_id:结果表
         """
-
+        # 字段映射，将前端传入的字段名映射到数据库中的字段名
         field_mapping = {
             "strategy_id": "id",
             "strategy_name": "name",
@@ -472,20 +575,27 @@ class GetStrategyListV2Resource(Resource):
             "label_name": "label",
         }
 
+        # 初始化过滤字典，用于存储过滤条件
         filter_dict = defaultdict(list)
+        # 遍历条件列表，处理每个过滤条件
         for condition in conditions:
+            # 将条件键转换为小写，并根据字段映射获取对应的数据库字段名
             key = condition["key"].lower()
             key = field_mapping.get(key, key)
+            # 获取条件值，如果不是列表则转换为列表
             value = condition["value"]
             if not isinstance(value, list):
                 value = [value]
+            # 如果值只有一个元素，则将其按 | 分割为多个值
             if len(value) == 1:
-                # 默认按list传递，多个值用 | 分割
                 value = [i.strip() for i in str(value[0]).split(" | ") if i.strip()]
+            # 将处理后的值添加到过滤字典中
             filter_dict[key].extend(value)
 
+        # 获取所有策略的ID集合
         filter_strategy_ids_set = set(strategies.values_list("id", flat=True).distinct())
 
+        # 定义过滤方法列表，每个元组包含一个过滤方法和其参数
         filter_methods: List[Tuple] = [
             (cls.filter_strategy_ids_by_id, (filter_dict, filter_strategy_ids_set)),
             (cls.filter_strategy_ids_by_label, (filter_dict, filter_strategy_ids_set, bk_biz_id)),
@@ -504,10 +614,13 @@ class GetStrategyListV2Resource(Resource):
             (cls.filter_strategy_ids_by_uct_id, (filter_dict, filter_strategy_ids_set)),
             (cls.filter_strategy_ids_by_level, (filter_dict, filter_strategy_ids_set)),
         ]
+        # 遍历过滤方法列表，依次调用每个过滤方法
         for filter_method, args in filter_methods:
             filter_method(*args)
+            # 如果过滤后的策略ID集合为空，则返回空的查询集
             if not filter_strategy_ids_set:
                 return strategies.none()
+        # 根据过滤后的策略ID集合过滤策略
         strategies = strategies.filter(id__in=filter_strategy_ids_set)
 
         # 过滤创建人
@@ -603,28 +716,43 @@ class GetStrategyListV2Resource(Resource):
     @staticmethod
     def filter_by_user_groups(filter_dict, filter_strategy_ids_set: set, bk_biz_id: int = None):
         """
-        根据告警组信息查询策略
+        根据告警组过滤策略
+    
+        该方法用于根据用户组ID或用户组名称来过滤告警策略它首先检查是否有用户组ID或名称提供，
+        然后根据这些信息查询相关的用户组，并进一步获取这些用户组关联的策略ID，最后更新传入的策略ID集合
+    
+        参数:
+        - filter_dict: 包含过滤条件的字典，如用户组ID和用户组名称
+        - filter_strategy_ids_set: 需要更新的策略ID集合
+        - bk_biz_id: 可选参数，业务ID用于进一步过滤用户组
         """
+        # 检查是否有用户组ID或名称提供，如果没有则直接返回
         if not filter_dict.get("user_group_id") and not filter_dict.get("user_group_name"):
             return
 
+        # 初始化用户组ID过滤列表，并根据用户组名称查询用户组
         filter_user_group_ids = filter_dict.get("user_group_id", [])
         if filter_dict["user_group_name"]:
             user_group_qs = UserGroup.objects.filter(
                 reduce(operator.or_, (Q(**{"name__contains": name}) for name in filter_dict["user_group_name"])),
             )
+            # 如果提供了业务ID，则进一步按业务ID过滤用户组
             if bk_biz_id is not None:
                 user_group_qs = user_group_qs.filter(bk_biz_id=bk_biz_id)
+            # 将查询到的用户组ID添加到过滤列表中
             filter_user_group_ids.extend(user_group_qs.values_list("id", flat=True))
 
+        # 如果没有匹配的用户组ID，则将策略ID集合清空并返回
         if not filter_user_group_ids:
             filter_strategy_ids_set.intersection_update(set())
             return
 
+        # 构建或条件查询表达式，用于查询关联了特定用户组的策略
         or_condition = reduce(
             operator.or_, (Q(**{"user_groups__contains": group_id}) for group_id in set(filter_user_group_ids))
         )
 
+        # 查询并获取关联了指定用户组的策略ID，并更新传入的策略ID集合
         user_group_strategy_ids = set(
             StrategyActionConfigRelation.objects.filter(or_condition).values_list("strategy_id", flat=True).distinct()
         )
@@ -632,36 +760,46 @@ class GetStrategyListV2Resource(Resource):
 
     @staticmethod
     def filter_by_action(filter_dict, filter_strategy_ids_set: set, bk_biz_id: int = None):
+        """
+        根据处理动作过滤策略
+        
+        此函数旨在通过处理动作名称或处理动作ID来过滤策略，如果未指定处理动作名称或ID，则不进行过滤。
+        如果指定了处理动作名称或ID，则更新filter_strategy_ids_set以仅包含关联了指定处理动作的策略ID。
+        
+        参数:
+        - filter_dict: 包含过滤条件的字典，可能包含键'action_name'和'action_id'
+        - filter_strategy_ids_set: 用于存储过滤后的策略ID的集合
+        - bk_biz_id: 可选参数，指定的业务ID
+        """
+        # 检查filter_dict中是否包含必要的过滤条件
         if "action_name" not in filter_dict and "action_id" not in filter_dict:
             return
 
         filter_strategy_ids = set()
 
+        # 处理特殊情况：当action_id包含0或action_name为空字符串时，需要过滤出未配置处理动作的策略
         if 0 in filter_dict.get("action_id", []) or "" in filter_dict.get("action_name", []):
             # 如果 action_name 是个空列表，那么就检索出没有配置处理套餐的策略
             # 先找出这个业务所有的策略
             strategy_qs = StrategyModel.objects.all()
             if bk_biz_id is not None:
                 strategy_qs = strategy_qs.filter(bk_biz_id=bk_biz_id)
-                strategy_ids = strategy_qs.values_list("id", flat=True)
-                # 再找出关联了处理动作的策略
-                strategy_ids_with_action = StrategyActionConfigRelation.objects.filter(
-                    strategy_id__in=strategy_ids,
-                    relate_type=StrategyActionConfigRelation.RelateType.ACTION,
-                ).values_list("strategy_id", flat=True)
-            else:
-                strategy_ids = strategy_qs.values_list("id", flat=True)
-                strategy_ids_with_action = StrategyActionConfigRelation.objects.filter(
-                    relate_type=StrategyActionConfigRelation.RelateType.ACTION,
-                ).values_list("strategy_id", flat=True)
+            strategy_ids = strategy_qs.values_list("id", flat=True)
+            # 再找出关联了处理动作的策略
+            strategy_ids_with_action = StrategyActionConfigRelation.objects.filter(
+                strategy_id__in=strategy_ids,
+                relate_type=StrategyActionConfigRelation.RelateType.ACTION,
+            ).values_list("strategy_id", flat=True)
             # 通过差集计算出没有关联处理动作的策略
             filter_strategy_ids = set(strategy_ids) - set(strategy_ids_with_action)
 
+        # 查询所有非通知插件的处理动作配置
         action_qs = ActionConfig.objects.exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID)
         if bk_biz_id is not None:
             action_qs = action_qs.filter(bk_biz_id__in=[0, bk_biz_id])
         action_ids = action_qs.values_list("id", flat=True)
 
+        # 构建查询条件
         conditions = []
         if filter_dict.get("action_name"):
             conditions.extend(
@@ -670,14 +808,15 @@ class GetStrategyListV2Resource(Resource):
         if filter_dict.get("action_id"):
             conditions.extend([Q(id=action_id) for action_id in filter_dict["action_id"] if action_id])
 
+        # 如果没有其他条件，则不需要处理
         if not conditions:
-            # 如果没有其他条件，则不需要处理
             if filter_strategy_ids:
                 filter_strategy_ids_set.intersection_update(filter_strategy_ids)
             return
 
         action_ids = action_ids.filter(reduce(operator.or_, conditions))
 
+        # 更新filter_strategy_ids_set以包含满足条件的策略ID
         filter_strategy_ids_set.intersection_update(
             filter_strategy_ids
             | set(
@@ -689,55 +828,95 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_by_status(cls, status: str, filter_strategy_ids: List = None, bk_biz_id: int = None):
+        """
+        根据策略的状态过滤策略ID。
+    
+        参数:
+        - status: 策略状态，可以是 "ALERT", "INVALID", "SHIELDED", 或其他状态。
+        - filter_strategy_ids: 需要过滤的策略ID列表，如果提供，则只返回与此列表匹配的策略ID。
+        - bk_biz_id: 业务ID，如果提供，则只返回该业务相关的策略ID。
+    
+        返回:
+        - 匹配给定状态的策略ID列表。
+        """
         strategy_ids = set()
         if status == "ALERT":
-            # 告警中的策略
-            strategy_ids.update(cls.get_strategies_by_shield_status(bk_biz_id))
+            # 从es中获取告警中的策略
+            strategy_ids.update(cls.get_strategies_by_shield_status_from_es(bk_biz_id))
 
         elif status == "INVALID":
+            # 无效的策略
             invalid_qs = StrategyModel.objects.filter(is_invalid=True)
             if bk_biz_id is not None:
                 invalid_qs = invalid_qs.filter(bk_biz_id=bk_biz_id)
+            # todo 可以增加对策略ID的过滤
             strategy_ids.update(list(invalid_qs.values_list("id", flat=True).distinct()))
 
         elif status == "SHIELDED":
+            # 从屏蔽表中获取屏蔽中的策略
             shield_manager = ShieldDetectManager(bk_biz_id, "strategy")
             for shield_obj in shield_manager.shield_list:
                 match_info = {"strategy_id": shield_obj.dimension_config["strategy_id"], "level": [1, 2, 3]}
                 if shield_manager.is_shielded(shield_obj, match_info):
                     strategy_ids.update(shield_obj.dimension_config["strategy_id"])
-            # 屏蔽中的策略
-            strategy_ids.update(cls.get_strategies_by_shield_status(bk_biz_id, is_shielded=True))
+            # 从es中获取屏蔽中的策略
+            strategy_ids.update(cls.get_strategies_by_shield_status_from_es(bk_biz_id, is_shielded=True))
         else:
+            # 根据启用状态过滤策略
             enabled_qs = StrategyModel.objects.filter(is_enabled=status == "ON")
             if bk_biz_id is not None:
                 enabled_qs = enabled_qs.filter(bk_biz_id=bk_biz_id)
             strategy_ids.update(list(enabled_qs.values_list("id", flat=True).distinct()))
 
         if filter_strategy_ids is not None:
+            # 如果提供了filter_strategy_ids，则与strategy_ids进行交集操作
             return list(set(filter_strategy_ids) & strategy_ids)
         return list(strategy_ids)
 
     @staticmethod
-    def get_strategies_by_shield_status(bk_biz_id, is_shielded=False):
-        # 告警中的策略
+    def get_strategies_by_shield_status_from_es(bk_biz_id, is_shielded=False):
+        """
+        根据屏蔽状态从es中获取策略ID列表
+    
+        通过业务ID和是否被屏蔽的标志来筛选出符合要求的策略ID列表
+    
+        参数:
+        - bk_biz_id: 业务ID，用于筛选特定业务的告警
+        - is_shielded: 布尔值，表示是否被屏蔽，默认为False，用于筛选未被屏蔽的告警
+    
+        返回值:
+        - strategy_ids: 筛选后的策略ID列表
+        """
+        # 查询ES中异常的告警
         alert_qs = AlertDocument.search(all_indices=True).filter("term", status=EventStatus.ABNORMAL)
+
+        # 根据是否被屏蔽的标志来筛选告警
         if is_shielded:
             alert_qs = alert_qs.filter("term", is_shielded=True)
         else:
             # 屏蔽状态告警生成时未写入值，可能为null，用排除法比较好
             alert_qs = alert_qs.exclude("term", is_shielded=True)
 
+        # 如果业务ID不为空，则进一步筛选特定业务的告警
         if bk_biz_id is not None:
             alert_qs = alert_qs.filter("term", **{"event.bk_biz_id": bk_biz_id})
 
+        # 初始化搜索对象，用于聚合策略ID
         search_object = alert_qs[:0]
         search_object.aggs.bucket("strategy_id", "terms", field="strategy_id", size=10000)
+
+        # 执行ES查询
         search_result = search_object.execute()
+
+        # 初始化策略ID列表
         strategy_ids = []
+
+        # 如果搜索结果中包含聚合信息，则遍历聚合结果，提取策略ID
         if search_result.aggs:
             for bucket in search_result.aggs.strategy_id.buckets:
                 strategy_ids.append(int(bucket.key))
+
+        # 返回策略ID列表
         return strategy_ids
 
     @staticmethod
@@ -774,18 +953,27 @@ class GetStrategyListV2Resource(Resource):
     def get_action_config_list(strategy_ids: List[int], bk_biz_id: int):
         """
         按告警处理组统计策略数量
+    
+        :param strategy_ids: 策略ID列表，用于过滤策略
+        :param bk_biz_id: 业务ID，用于过滤告警配置
+        :return: 返回每个告警处理组及其关联策略数量的列表
         """
+        # 查询关联策略ID和配置ID的记录，仅限于告警处理组类型的关联
         action_relations = StrategyActionConfigRelation.objects.filter(
             strategy_id__in=strategy_ids,
             relate_type=StrategyActionConfigRelation.RelateType.ACTION,
         ).values("strategy_id", "config_id")
 
+        # 初始化未配置策略的集合和配置计数的字典
         no_config_strategy = set(strategy_ids)
         config_count = defaultdict(set)
         for relation in action_relations:
+            # 将策略ID添加到对应配置ID的集合中
             config_count[relation["config_id"]].add(relation["strategy_id"])
+            # 从未配置策略集合中移除已配置的策略ID
             no_config_strategy.discard(relation["strategy_id"])
 
+        # 初始化告警处理组列表，首先添加未配置的策略数量
         action_config_list = [
             {
                 "id": 0,
@@ -793,11 +981,13 @@ class GetStrategyListV2Resource(Resource):
                 "count": len(no_config_strategy),
             }
         ]
+        # 查询业务ID或全局的告警处理配置，排除通知插件的配置
         for action_config in (
                 ActionConfig.objects.filter(bk_biz_id__in=[0, bk_biz_id])
                         .exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID)
                         .values("id", "name")
         ):
+            # 将每个告警处理配置及其关联的策略数量添加到列表中
             action_config_list.append(
                 {
                     "id": action_config["id"],
@@ -806,13 +996,25 @@ class GetStrategyListV2Resource(Resource):
                 }
             )
 
+        # 返回告警处理组及其关联策略数量的列表
         return action_config_list
 
     def get_data_source_list(self, strategy_ids: List[int]):
         """
         按数据源统计策略数量
+    
+        根据提供的策略ID列表，计算每个数据源的策略数量
+    
+        参数:
+        strategy_ids (List[int]): 策略ID列表，用于过滤查询集
+    
+        返回:
+        List: 包含每个数据源及其对应策略数量的列表
         """
+        # 初始化数据源列表
         data_source_list = []
+
+        # 查询并统计每个数据源的策略数量，结果按数据源和数据类型排序
         count_records = (
             QueryConfigModel.objects.filter(strategy_id__in=strategy_ids)
             .values("data_source_label", "data_type_label")
@@ -820,10 +1022,12 @@ class GetStrategyListV2Resource(Resource):
             .order_by("data_source_label", "data_type_label")
         )
 
+        # 将查询结果转换为字典，以便快速查找每个数据源的策略数量
         data_source_counts = {
             (record["data_source_label"], record["data_type_label"]): record["total"] for record in count_records
         }
 
+        # 遍历数据源类别，为每个类别构建包含策略数量的信息
         for ds in DATA_CATEGORY:
             data_source_list.append(
                 {
@@ -831,15 +1035,24 @@ class GetStrategyListV2Resource(Resource):
                     "name": str(ds["name"]),
                     "data_type_label": ds["data_type_label"],
                     "data_source_label": ds["data_source_label"],
+                    # 使用get方法从字典中获取策略数量，如果不存在，则返回0
                     "count": data_source_counts.get((ds["data_source_label"], ds["data_type_label"]), 0),
                 }
             )
 
+        # 返回包含所有数据源及其策略数量的列表
         return data_source_list
 
     def get_strategy_label_list(self, strategy_ids: List[int], bk_biz_id):
         """
         按策略标签统计策略数量
+    
+        参数:
+        - strategy_ids: 策略ID列表，用于过滤策略
+        - bk_biz_id: 业务ID，用于获取业务相关的策略标签
+    
+        返回值:
+        - 返回一个列表，每个元素包含标签名称、标签ID和该标签下的策略数量
         """
 
         # 按策略标签进行聚合统计
@@ -850,6 +1063,7 @@ class GetStrategyListV2Resource(Resource):
             .order_by("label_name")
         )
 
+        # 将统计结果转换为字典形式，以便快速查询
         label_counts = {record["label_name"]: record["total"] for record in count_records}
 
         # 查询业务下所有的策略标签
@@ -857,19 +1071,28 @@ class GetStrategyListV2Resource(Resource):
             StrategyLabel.objects.filter(bk_biz_id__in=[0, bk_biz_id]).values_list("label_name", flat=True).distinct()
         )
 
+        # 构建最终返回的标签列表，包含标签名称、ID和策略数量
         return [{"label_name": label.strip("/"), "id": label, "count": label_counts.get(label, 0)} for label in labels]
 
     def get_scenario_list(self, strategies: QuerySet):
         """
         按监控对象统计策略数量
+    
+        参数:
+        strategies: QuerySet类型，表示策略的查询集
+    
+        返回:
+        scenario_list: 列表类型，包含按监控对象统计的策略数量信息
         """
         # 按监控对象统计数量
         scenarios = strategies.values("scenario").annotate(count=Count("scenario"))
 
         scenario_list = []
         try:
+            # 尝试获取标签信息
             labels = resource.commons.get_label()
         except Exception as e:
+            # 如果获取标签信息时发生异常，记录异常日志
             logger.exception(e)
             # 如果拉取标签信息报错，则直接使用监控对象ID展示
             for scenario in scenarios:
@@ -877,7 +1100,9 @@ class GetStrategyListV2Resource(Resource):
                     {"id": scenario["scenario"], "name": scenario["scenario"], "count": scenario["count"]}
                 )
         else:
+            # 创建一个字典，键为监控对象，值为策略数量
             scenario_counts = {scenario["scenario"]: scenario["count"] for scenario in scenarios}
+            # 使用标签信息构建scenario_list，如果没有对应的监控对象，则数量为0
             for label in chain(*(_label["children"] for _label in labels)):
                 scenario_list.append(
                     {"id": label["id"], "display_name": label["name"], "count": scenario_counts.get(label["id"], 0)}
@@ -911,8 +1136,17 @@ class GetStrategyListV2Resource(Resource):
     def get_alert_level_list(self, strategy_ids: List[int]):
         """
         按告警级别统计策略数量
+    
+        参数:
+        strategy_ids (List[int]): 策略ID列表，用于过滤DetectModel对象
+    
+        返回:
+        List[Dict[str, Union[int, str]]]: 告警级别列表，每个级别包括ID、名称和策略数量
         """
+        # 初始化告警级别列表
         alert_level_list = []
+
+        # 查询每个告警级别对应的策略数量，并按告警级别排序
         count_records = (
             DetectModel.objects.filter(strategy_id__in=strategy_ids)
             .values("level")
@@ -920,11 +1154,21 @@ class GetStrategyListV2Resource(Resource):
             .order_by("level")
         )
 
+        # 将查询结果转换为字典，键为告警级别，值为对应策略数量
         level_counts = {record["level"]: record["total"] for record in count_records}
 
+        # 定义所有告警级别及其对应的名称
         all_level = {1: _("致命"), 2: _("预警"), 3: _("提醒")}
+
+        # 遍历所有告警级别，为每个级别创建信息字典，并添加到告警级别列表中
         for level_id, level_name in all_level.items():
-            alert_level_list.append({"id": level_id, "name": level_name, "count": level_counts.get(level_id, 0)})
+            alert_level_list.append({
+                "id": level_id,
+                "name": level_name,
+                "count": level_counts.get(level_id, 0)  # 获取当前级别的策略数量，若不存在则默认为0
+            })
+
+        # 返回告警级别列表
         return alert_level_list
 
     def get_invalid_type_list(self, strategy_ids: List[int]):
@@ -1119,6 +1363,8 @@ class GetStrategyListV2Resource(Resource):
         strategies = StrategyModel.objects.filter(bk_biz_id=bk_biz_id)
 
         # 按条件过滤策略
+        # todo 过滤可以做一下优化
+        # todo 增加一个判断，conditions不为空，则进行过滤，否则里面会多做一个全量的策略ID的查询
         strategies = self.filter_by_conditions(params["conditions"], strategies, bk_biz_id)
 
         # 在过滤监控对象前统计数量
@@ -1140,6 +1386,8 @@ class GetStrategyListV2Resource(Resource):
 
         # 统计其他分类数量
         strategy_ids = list(strategies.values_list("id", flat=True).distinct())
+
+        # todo 全部是查询操作，可以做多线程优化。然后在最后return时获取数据
         user_group_list = self.get_user_group_list(strategy_ids, bk_biz_id)
         action_config_list = self.get_action_config_list(strategy_ids, bk_biz_id)
         data_source_list = self.get_data_source_list(strategy_ids)
@@ -1183,25 +1431,37 @@ class GetStrategyListV2Resource(Resource):
             .filter("term", status=EventStatus.ABNORMAL)
             .filter("terms", strategy_id=[strategy_config["id"] for strategy_config in strategy_configs])[:0]
         )
+        # 构建ES聚合查询
+        # 按strategy_id分桶,size=10000表示最多返回10000个桶
+        # 每个strategy_id桶下再按is_shielded字段分桶,统计屏蔽和未屏蔽的告警数量
         search_object.aggs.bucket("strategy_id", "terms", field="strategy_id", size=10000).bucket(
             "shield_status", "terms", field="is_shielded", size=10000
         )
         search_result = search_object.execute()
 
+        # 初始化策略告警计数字典,用于存储每个策略的告警统计信息
+        # todo 优化，可以封装成一个方法，最后返回strategy_alert_counts。
         strategy_alert_counts = defaultdict(dict)
         if search_result.aggs:
+            # 遍历ES聚合结果中的每个策略桶
             for strategy_bucket in search_result.aggs.strategy_id.buckets:
+                # 记录该策略的总告警数
                 strategy_alert_counts[strategy_bucket.key]["alert_count"] = strategy_bucket.doc_count
+                # 遍历该策略下的屏蔽状态桶,记录屏蔽和未屏蔽的告警数
                 for shield_bucket in strategy_bucket.shield_status:
                     strategy_alert_counts[strategy_bucket.key][shield_bucket.key_as_string] = shield_bucket.doc_count
 
+        # 为每个策略配置补充告警统计信息
         for strategy_config in strategy_configs:
+            # 设置未屏蔽的告警数,默认为0
             strategy_config["alert_count"] = strategy_alert_counts.get(str(strategy_config["id"]), {}).get("false", 0)
+            # 设置已屏蔽的告警数,默认为0
             strategy_config["shield_alert_count"] = strategy_alert_counts.get(str(strategy_config["id"]), {}).get(
                 "true", 0
             )
 
         # 补充策略相关指标信息
+        # todo 几个方法做成多线程
         self.fill_metric_info(bk_biz_id=params["bk_biz_id"], strategies=strategy_configs)
         self.fill_shield_info(bk_biz_id=params["bk_biz_id"], strategies=strategy_configs)
         self.fill_allow_target(strategies=strategy_configs)
@@ -1458,7 +1718,7 @@ class GetMetricListV2Resource(Resource):
 
             queries = []
             for query, field in product(
-                filter_dict["query"], ["data_label", "result_table_id", "metric_field", "metric_field_name"]
+                    filter_dict["query"], ["data_label", "result_table_id", "metric_field", "metric_field_name"]
             ):
                 queries.append(Q(**{f"{field}__icontains": query}))
 
@@ -2232,10 +2492,10 @@ class UpdatePartialStrategyV2Resource(Resource):
 
     @staticmethod
     def update_notice(
-        strategy: Strategy,
-        notice: Dict,
-        relations: Dict[int, List[StrategyActionConfigRelation]],
-        action_configs: Dict[int, ActionConfig],
+            strategy: Strategy,
+            notice: Dict,
+            relations: Dict[int, List[StrategyActionConfigRelation]],
+            action_configs: Dict[int, ActionConfig],
     ):
         """
         更新告警通知
@@ -2338,10 +2598,10 @@ class UpdatePartialStrategyV2Resource(Resource):
 
     @staticmethod
     def process_extra_data(
-        extra_create_or_update_datas: Dict[str, List[Dict[str, any]]],
-        key: str,
-        updates_data: DefaultDict[str, Dict[str, any]],
-        create_datas: DefaultDict[str, Dict[str, any]],
+            extra_create_or_update_datas: Dict[str, List[Dict[str, any]]],
+            key: str,
+            updates_data: DefaultDict[str, Dict[str, any]],
+            create_datas: DefaultDict[str, Dict[str, any]],
     ):
         extra_update_datas = extra_create_or_update_datas.get("update_data", [])
         extra_create_datas = extra_create_or_update_datas.get("create_data", [])
