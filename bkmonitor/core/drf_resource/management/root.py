@@ -68,6 +68,7 @@ __doc__ = """
 
 @contextmanager
 def _lazy_load(_instance):
+    # _instance就是ResourceShortcut实例，确保_resource_module_instance._setup()方法被调用
     if not _instance.loaded:
         getattr(_instance, "_setup", lambda: None)()
     yield _instance
@@ -97,6 +98,8 @@ class ResourceShortcut(object):
             self._path = m_path
             # resource模块所在包
             self._package = None
+            # Resource类转为下划线字符串后，保存在self._methods中
+            # {"get_info_info":GetInfoResource}
             self._methods = {}
             self.loaded = False
             # 新增单元测试 patch 支持
@@ -124,27 +127,46 @@ class ResourceShortcut(object):
         return tuple(rm)
 
     def _setup(self):
+        """
+        私有方法，用于动态设置资源。
+    
+        本方法尝试导入指定路径下的模块，并自动检测模块中的资源类和函数。
+        对于每个检测到的资源类（非抽象且继承自Resource的类），创建一个实例并作为当前实例的属性。
+        对于每个函数，直接绑定为当前实例的属性。
+        此方法在内部使用，主要用于初始化和动态加载资源。
+        """
         try:
+            # 尝试导入指定路径下的模块
             self._package = import_module(self._path)
         except ImportError as e:
+            # 如果导入失败，抛出ImportError异常，提供详细的错误信息
             raise ImportError("resource called before {} setup. detail: {}".format(self._path, e))
+
+        # 遍历模块中的所有属性和方法
         for name, obj in list(self._package.__dict__.items()):
+            # 忽略以"_"开头的私有属性和方法
             if name.startswith("_"):
                 continue
 
+            # 忽略抽象类
             if inspect.isabstract(obj):
                 continue
 
+            # 如果是继承自Resource的类，创建一个实例并作为当前实例的属性
             if inspect.isclass(obj) and issubclass(obj, Resource):
+                # 移除类名中的"Resource"后缀，如果存在的话
                 cleaned_name = "".join(name.rsplit("Resource", 1)) if name.endswith("Resource") else name
+                # 将类名转换为下划线风格，用作属性名
                 property_name = camel_to_underscore(cleaned_name)
                 setattr(self, property_name, obj())
                 self._methods[property_name] = obj
 
+            # 同时支持将函数直接绑定为当前实例的属性
             if inspect.isfunction(obj):
                 setattr(self, name, obj)
                 self._methods[name] = obj
 
+        # 标记资源为已加载
         self.loaded = True
 
     def __delattr__(self, name):
@@ -219,7 +241,7 @@ class ResourceManager(tuple):
         """
         # 快捷方式挂载完成后，如果获取不到相关Resource类，会抛出异常
         if __setup__:
-            # 在设置阶段，尝试从转换后的对象中获取属性
+            # # 如果name不存在当前的self中，尝试从self的最后一个子资源中获取。
             got = getattr(self.transform(), name, None)
             if got is None:
                 raise ResourceModuleNotRegistered(
@@ -271,17 +293,18 @@ class ResourceManager(tuple):
 
     def transform(self):
         """
-        转换方法，使 ResourceManager 实例变得更强大（可调用）。
-        通过资源的路径，逐级获取属性，最终返回一个可调用的对象或 None。
+        获取到当前资源的最尾端的资源。
 
         返回:
         - Callable or None: 转换后的可调用对象或 None
         """
         func_finder = self.__root__
+        # self本身是一个元组对象self[0]的值就是当前的资源名称
+        # 循环self中的值，获取到当前resource的最后一个子资源的实例，然后从实例中获取属性
         for attr in self:
             func_finder = getattr(func_finder, attr)
 
-        # 获取到的func_finder如果是ResourceManager实例，说明资源未注册，返回None
+        # 获取到的func_finder如果是ResourceManager实例，说明资源未注册，返回None。
         if isinstance(func_finder, self.__class__):
             return None
             # raise Exception("func called before resource setup."
@@ -389,10 +412,25 @@ def install_resource(rs_path: ResourcePath):
 
 
 def install_adapter(rs_path):
+    """
+    根据给定的资源路径安装适配器。
+
+    该函数负责根据资源路径（rs_path）来安装相应的适配器。适配器可以是API资源适配器，
+    也可以是适配器资源快捷方式，具体取决于路径是否指向API目录。
+
+    参数:
+    - rs_path: 资源路径对象，包含待安装适配器的路径信息。
+
+    返回值:
+    无直接返回值，但会通过rs_path.error()记录错误，或通过rs_path.loaded()标记加载成功。
+    """
+    # 获取资源路径的点分隔格式
     dotted_path = rs_path.path
+    # 初始化适配器类为AdapterResourceShortcut
     adapter_cls = AdapterResourceShortcut
     # adapter 和 api 代码结构一致， 唯一区别是entry不同，adapter多了一层`adapter`目录
     if is_api(dotted_path):
+        # 如果是API路径，进行特殊处理
         api_root = path_to_dotted(API_DIR)
         result = dotted_path[(len(API_DIR) + 1):].split(".", 1)
         if len(result) == 2:
@@ -403,16 +441,21 @@ def install_adapter(rs_path):
         rs = "{}.{}".format(api_root, rs)
         adapter_cls = APIResourceShortcut
     else:
+        # 分割非API路径，适配器路径应包含"adapter"目录
         rs, ada = [path.strip(".") for path in dotted_path.split("adapter")]
 
     try:
+        # 创建默认适配器实例
         default_adapter = adapter_cls(rs)
+        # 获取默认适配器定义的方法列表
         defined_method = default_adapter.list_method()
     except ImportError as e:
+        # 如果导入失败，记录错误并返回
         logger.warning("error: {}\n{}".format(dotted_path, e))
         rs_path.error()
         return
 
+    # 如果适配器路径以PLATFORM开头，加载平台特定的适配器
     if ada.startswith(settings.PLATFORM):
         platform_adapter = ResourceShortcut(dotted_path)
         # load method from platform adapter to default adapter
@@ -420,11 +463,15 @@ def install_adapter(rs_path):
             if method in platform_adapter.list_method():
                 default_adapter.reload_method(method, getattr(platform_adapter, method))
 
+    # 根据路径类型确定适配器的根路径
     root = adapter
     if is_api(dotted_path):
         root = api
+    # 在适配器或API的命名空间内注册加载的适配器
     setattr(root, rs.split(".")[-1], default_adapter)
+    # 记录成功加载的日志
     logger.debug("success: {}".format(dotted_path))
+    # 标记资源路径为已加载
     rs_path.loaded()
 
 

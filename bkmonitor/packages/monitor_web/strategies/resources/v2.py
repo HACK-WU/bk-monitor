@@ -1440,7 +1440,7 @@ class GetStrategyListV2Resource(Resource):
         search_result = search_object.execute()
 
         # 初始化策略告警计数字典,用于存储每个策略的告警统计信息
-        # todo 优化，可以封装成一个方法，最后返回strategy_alert_counts。
+        # todo 可以优化为后台进程，并发执行
         strategy_alert_counts = defaultdict(dict)
         if search_result.aggs:
             # 遍历ES聚合结果中的每个策略桶
@@ -1461,7 +1461,7 @@ class GetStrategyListV2Resource(Resource):
             )
 
         # 补充策略相关指标信息
-        # todo 几个方法做成多线程
+        # todo 可以改为多线程
         self.fill_metric_info(bk_biz_id=params["bk_biz_id"], strategies=strategy_configs)
         self.fill_shield_info(bk_biz_id=params["bk_biz_id"], strategies=strategy_configs)
         self.fill_allow_target(strategies=strategy_configs)
