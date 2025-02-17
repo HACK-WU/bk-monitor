@@ -8,17 +8,16 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-
+import os
 import inspect
 import logging
+import inflection
 from contextlib import contextmanager
 from importlib import import_module
 from typing import Optional
 
 from django.conf import settings
-from django.utils.module_loading import import_string
 
-from bkmonitor.utils.text import camel_to_underscore, path_to_dotted
 from core.drf_resource.base import Resource
 from core.drf_resource.management.exceptions import (
     ResourceModuleConflict,
@@ -86,7 +85,6 @@ class ResourceShortcut(object):
     _package_pool = {}
 
     # 定义Resource模块的入口名称，resources指的就是resources.py或者resources包
-    # 同样在API场景下，可以定义_entry = "default"
     _entry = "resources"
 
     def __new__(cls, module_path: str):
@@ -179,14 +177,16 @@ class ResourceShortcut(object):
         if item in self._methods:
             return getattr(self, item)
         try:
-            return ResourceShortcut(import_module("{}.{}".format(self._path, item)).__name__)
+            if item.endswith(self._entry):
+                # 支持导入当前ResourceShortcut对应路径下的子模块，并将其转为ResourceShortcut实例
+                return ResourceShortcut(import_module("{}.{}".format(self._path, item)).__name__)
+            else:
+                # 支持导入当前ResourceShortcut对应路径下的子模块
+                return import_module("{}.{}".format(self._path, item))
         except ImportError:
-            try:
-                return import_string("{}.{}".format(self._path, item))
-            except ImportError:
-                if item in self.__deleted_methods:
-                    return self.__deleted_methods[item]
-                raise ResourceNotRegistered("Resource {} not in [{}]".format(item, self._package.__name__))
+            if item in self.__deleted_methods:
+                return self.__deleted_methods[item]
+            raise ResourceNotRegistered("Resource {} not in [{}]".format(item, self._package.__name__))
 
     @lazy_load
     def list_method(self):
@@ -481,6 +481,21 @@ def is_api(dotted_path):
 
 def is_adapter(dotted_path):
     return "adapter" in dotted_path.split(".")
+
+
+def path_to_dotted(path) -> str:
+    """
+    将文件路径转换为带点的字符串格式。
+    """
+    # 使用os.sep来确保跨平台兼容性，移除空字符串以避免不必要的点
+    return ".".join([p for p in path.split(os.sep) if p])
+
+
+def camel_to_underscore(camel_str):
+    """
+    将驼峰式字符串转换为下划线格式。
+    """
+    return inflection.underscore(camel_str)
 
 
 resource = ResourceManager()
