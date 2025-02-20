@@ -13,7 +13,7 @@ import operator
 import time
 from collections import defaultdict
 from functools import reduce
-from typing import Dict, OrderedDict, List
+from typing import Dict, List, OrderedDict
 
 from django.db.models import Q
 from django.utils.translation import gettext as _
@@ -273,12 +273,12 @@ class AddShieldResource(Resource, EventDimensionMixin):
                 "target": [
                     {
                         "bk_host_id": 123,
-                        "ip": "10.0.4.6",
+                        "ip": "127.0.0.1",
                         "bk_cloud_id": 0
                     },
                     {
                         "bk_host_id": 399,
-                        "ip": "10.0.3.8",
+                        "ip": "127.0.0.1",
                         "bk_cloud_id": 0
                     }
                 ]
@@ -288,12 +288,12 @@ class AddShieldResource(Resource, EventDimensionMixin):
             "bk_target_ip": [       # target-> bk_target_ip
                 {
                     "bk_host_id": 123,
-                    "bk_target_ip": "10.0.4.6",  # ip-> bk_target_ip
+                    "bk_target_ip": "127.0.0.1",  # ip-> bk_target_ip
                     "bk_target_cloud_id": 0   # bk_cloud_id-> bk_target_cloud_id
                 },
                 {
                     "bk_host_id": 399,
-                    "bk_target_ip": "10.0.3.8",
+                    "bk_target_ip": "127.0.0.1",
                     "bk_target_cloud_id": 0
                 }
             ]
@@ -375,12 +375,12 @@ class AddShieldResource(Resource, EventDimensionMixin):
                 "bk_target_ip": [
                     {
                         "bk_host_id": 123,
-                        "bk_target_ip": "10.0.4.6",
+                        "bk_target_ip": "127.0.0.1",
                         "bk_target_cloud_id": 0
                     },
                     {
                         "bk_host_id": 399,
-                        "bk_target_ip": "10.0.3.8",
+                        "bk_target_ip": "127.0.0.1",
                         "bk_target_cloud_id": 0
                     }
                 ]
@@ -431,7 +431,7 @@ class AddShieldResource(Resource, EventDimensionMixin):
     @staticmethod
     def handle_alert(data):
         # 从数据中提取告警ID
-        alert_id = data["dimension_config"]["id"]
+        alert_id = data["dimension_config"]["alert_id"] or data["dimension_config"]["alert_ids"][0]
         # 根据ID获取告警详情
         alert = AlertDocument.get(alert_id)
 
@@ -560,7 +560,7 @@ class BulkAddAlertShieldResource(AddShieldResource):
 
     def handle_alerts(self, data):
         # 提取告警配置和目标维度配置
-        alert_ids = data["dimension_config"]["alert_ids"]
+        alert_ids = data["dimension_config"]["alert_ids"] or [data["dimension_config"]["alert_id"]]
         # dimension_config.dimensions 标记告警保留需要匹配的屏蔽维度
         target_dimension_config = data["dimension_config"].get("dimensions", {})
         alerts = AlertDocument.mget(ids=alert_ids)
@@ -584,7 +584,7 @@ class BulkAddAlertShieldResource(AddShieldResource):
                 if target_dimensions is None or dimension_data["key"] in target_dimensions:
                     # 注意，这里仅仅只是删除了dimension_config中维度配置，但_dimensions中维度配置保留,没有发生变化。
                     dimension_config[dimension_data["key"]] = dimension_data["value"]
-            # 添加与屏蔽逻辑无关的配置项
+                    # 添加与屏蔽逻辑无关的配置项
                     shield_dimensions.append(dimension)
             dimension_config.update(
                 {
