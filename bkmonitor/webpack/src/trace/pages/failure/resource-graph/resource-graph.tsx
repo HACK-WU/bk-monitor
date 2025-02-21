@@ -101,7 +101,7 @@ export default defineComponent({
     let graph: Graph;
     // 右侧画布数据获取检测
     const exceptionData = ref({
-      showException: true,
+      showException: false,
       type: '',
       msg: '',
     });
@@ -1011,7 +1011,7 @@ export default defineComponent({
         exceptionData.value.msg = t('暂无数据');
         return;
       }
-      loading.value = true;
+      exceptionData.value.showException = false;
       incidentTopologyUpstream(
         { id: incidentId.value, entity_id: props.entityId },
         {
@@ -1019,11 +1019,9 @@ export default defineComponent({
         }
       )
         .then(res => {
-          exceptionData.value.showException = false;
+          loading.value = true;
           const { ranks, edges } = res;
           if (ranks.length === 0 && edges.length === 0) {
-            graph?.destroy?.();
-            graph = null;
             exceptionData.value.showException = true;
             exceptionData.value.type = 'noData';
             exceptionData.value.msg =
@@ -1041,14 +1039,7 @@ export default defineComponent({
             }
           });
           graphData.value = createGraphData(ranksMap, edges);
-          if (!graph) {
-            setTimeout(() => {
-              init();
-              renderGraph();
-            }, 100);
-          } else {
-            renderGraph();
-          }
+          renderGraph();
         })
         .catch(err => {
           if (err) {
@@ -1118,7 +1109,6 @@ export default defineComponent({
     };
     /** 画布相关的 */
     const init = () => {
-      if (!graphRef.value) return;
       const { width, height } = graphRef.value.getBoundingClientRect();
       registerCustomNode();
       registerCustomEdge();
@@ -1426,9 +1416,6 @@ export default defineComponent({
         graph.setAutoPaint(true);
         return;
       });
-      nextTick(() => {
-        addListener(graphRef.value as HTMLElement, onResize);
-      });
     };
     /** 窗口宽度变化 */
     function handleResize() {
@@ -1449,6 +1436,9 @@ export default defineComponent({
     const onResize = debounce(300, handleResize);
     onMounted(() => {
       init();
+      nextTick(() => {
+        addListener(graphRef.value as HTMLElement, onResize);
+      });
     });
     onUnmounted(() => {
       graphRef.value && removeListener(graphRef.value as HTMLElement, onResize);
@@ -1458,7 +1448,6 @@ export default defineComponent({
     };
     const handleException = () => {
       const { type, msg } = exceptionData.value;
-      if (!type && !msg) return '';
       return (
         <Exception
           class='exception-wrap'
@@ -1496,20 +1485,20 @@ export default defineComponent({
   render() {
     return (
       <div class='resource-graph'>
-        <Loading
-          class='resource-graph-loading'
-          color='#292A2B'
-          loading={this.loading}
-        >
-          {this.exceptionData.showException ? (
-            this.handleException()
-          ) : (
+        {this.exceptionData.showException ? (
+          this.handleException()
+        ) : (
+          <Loading
+            class='resource-graph-loading'
+            color='#292A2B'
+            loading={this.loading}
+          >
             <div
               ref='graphRef'
               class='graph-wrapper'
             />
-          )}
-        </Loading>
+          </Loading>
+        )}
         <div style='display: none'>
           <FailureTopoTooltips
             ref='tooltipsRef'
