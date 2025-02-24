@@ -59,6 +59,7 @@ def deactivate(biz_id):
     biz_id = str(biz_id).strip()
     if not biz_id:
         return
+    print("hello")
     return redis_cli.zrem(ACTIVE_BIZ_LAST_VISIT_TIME, biz_id)
 
 
