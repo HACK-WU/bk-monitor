@@ -48,7 +48,7 @@ class WorkloadOverview(Resource):
             bk_biz_id=bk_biz_id,
             bcs_cluster_id=bcs_cluster_id,
         )
-
+        print("hello")
         # 如果前端传值则添加过滤
         if validated_request_data.get("namespace"):
             # 支持多个ns传递， 默认半角逗号连接
