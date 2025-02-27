@@ -9,10 +9,10 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+from ai_agent.core.qa.retriever import answer_with_documents, retrieve
 from langchain.agents import AgentExecutor, Tool
 from langchain.agents.chat.base import ChatAgent
 
-from ai_agent.core.qa.retriever import answer_with_documents, retrieve
 from ai_agent.llm import LLMConfig, LLMModel, LLMProvider, get_llm
 
 

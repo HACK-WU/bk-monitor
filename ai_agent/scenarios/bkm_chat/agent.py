@@ -13,11 +13,11 @@ specific language governing permissions and limitations under the License.
 import json
 import queue
 
+from ai_agent.core.qa.retriever import retrieve
 from django.http import StreamingHttpResponse
 from langchain.agents import Agent, AgentExecutor
 from langchain.callbacks.base import BaseCallbackHandler
 
-from ai_agent.core.qa.retriever import retrieve
 from ai_agent.llm import LLMConfig, LLMModel, LLMProvider, get_llm
 
 

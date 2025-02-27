@@ -11,6 +11,13 @@ specific language governing permissions and limitations under the License.
 import json
 from typing import List, Union
 
+from ai_agent.core.errors import KnowledgeNotConfig
+from ai_agent.core.qa.prompts import (
+    query_rewrite_sys_prompt,
+    query_rewrite_usr_prompt,
+    rag_sys_prompt,
+    rag_usr_prompt,
+)
 from django.conf import settings
 from langchain_core.agents import AgentAction, AgentFinish
 from langchain_core.documents import Document
@@ -19,14 +26,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 
-from ai_agent.core.errors import KnowledgeNotConfig
 from ai_agent.core.qa import Decision
-from ai_agent.core.qa.prompts import (
-    query_rewrite_sys_prompt,
-    query_rewrite_usr_prompt,
-    rag_sys_prompt,
-    rag_usr_prompt,
-)
 from ai_agent.llm import LLMConfig, LLMModel, LLMProvider, get_llm
 from core.drf_resource import api
 

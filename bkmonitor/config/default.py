@@ -15,6 +15,7 @@ import os
 import sys
 from urllib.parse import urljoin
 
+from ai_agent.conf.default import *
 from bkcrypto import constants
 from bkcrypto.symmetric.options import AESSymmetricOptions, SM4SymmetricOptions
 from bkcrypto.utils.convertors import Base64Convertor
