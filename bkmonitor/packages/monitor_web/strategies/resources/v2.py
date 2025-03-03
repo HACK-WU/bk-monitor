@@ -6,11 +6,11 @@ import re
 import time
 import typing
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import reduce
 from itertools import chain, product, zip_longest
 from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
 
 import arrow
 import pytz
@@ -219,7 +219,7 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_label(
-            cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
+        cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
         """过滤策略标签
 
@@ -305,7 +305,7 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_status(
-            cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
+        cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
         """策略状态过滤"""
         if filter_dict["strategy_status"]:
@@ -346,7 +346,7 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_event_group(
-            cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
+        cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
         """过滤自定义事件组ID
 
@@ -396,7 +396,7 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_series_group(
-            cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
+        cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
         """过滤自定义指标ID
 
@@ -443,7 +443,7 @@ class GetStrategyListV2Resource(Resource):
 
     @classmethod
     def filter_strategy_ids_by_plugin_id(
-            cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
+        cls, filter_dict: dict, filter_strategy_ids_set: set, bk_biz_id: Optional[str] = None
     ):
         # 无业务id，不支持搜索(RequestSerializer 明确bk_biz_id 必填)
         if not bk_biz_id:
@@ -952,6 +952,23 @@ class GetStrategyListV2Resource(Resource):
         return user_group_list
 
     @staticmethod
+    def get_alert_search_result(bk_biz_id, strategy_ids):
+        search_object = (
+            AlertDocument.search(all_indices=True)
+            .filter("term", **{"event.bk_biz_id": bk_biz_id})
+            .filter("term", status=EventStatus.ABNORMAL)
+            .filter("terms", strategy_id=strategy_ids)[:0]
+        )
+        # 构建ES聚合查询
+        # 按strategy_id分桶,size=10000表示最多返回10000个桶
+        # 每个strategy_id桶下再按is_shielded字段分桶,统计屏蔽和未屏蔽的告警数量
+        search_object.aggs.bucket("strategy_id", "terms", field="strategy_id", size=10000).bucket(
+            "shield_status", "terms", field="is_shielded", size=10000
+        )
+        search_result = search_object.execute()
+        return search_result
+
+    @staticmethod
     def get_action_config_list(strategy_ids: List[int], bk_biz_id: int):
         """
         按告警处理组统计策略数量
@@ -985,9 +1002,9 @@ class GetStrategyListV2Resource(Resource):
         ]
         # 查询业务ID或全局的告警处理配置，排除通知插件的配置
         for action_config in (
-                ActionConfig.objects.filter(bk_biz_id__in=[0, bk_biz_id])
-                        .exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID)
-                        .values("id", "name")
+            ActionConfig.objects.filter(bk_biz_id__in=[0, bk_biz_id])
+            .exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID)
+            .values("id", "name")
         ):
             # 将每个告警处理配置及其关联的策略数量添加到列表中
             action_config_list.append(
@@ -1164,11 +1181,9 @@ class GetStrategyListV2Resource(Resource):
 
         # 遍历所有告警级别，为每个级别创建信息字典，并添加到告警级别列表中
         for level_id, level_name in all_level.items():
-            alert_level_list.append({
-                "id": level_id,
-                "name": level_name,
-                "count": level_counts.get(level_id, 0)  # 获取当前级别的策略数量，若不存在则默认为0
-            })
+            alert_level_list.append(
+                {"id": level_id, "name": level_name, "count": level_counts.get(level_id, 0)}  # 获取当前级别的策略数量，若不存在则默认为0
+            )
 
         # 返回告警级别列表
         return alert_level_list
@@ -1238,8 +1253,8 @@ class GetStrategyListV2Resource(Resource):
                         )
                     )
                 elif (query_config["data_source_label"], query_config["data_type_label"]) == (
-                        DataSourceLabel.CUSTOM,
-                        DataTypeLabel.EVENT,
+                    DataSourceLabel.CUSTOM,
+                    DataTypeLabel.EVENT,
                 ):
                     if query_config["custom_event_name"]:
                         query_tuples.add(
@@ -1269,8 +1284,8 @@ class GetStrategyListV2Resource(Resource):
                         )
                     )
                 elif (query_config["data_source_label"], query_config["data_type_label"]) == (
-                        DataSourceLabel.BK_MONITOR_COLLECTOR,
-                        DataTypeLabel.ALERT,
+                    DataSourceLabel.BK_MONITOR_COLLECTOR,
+                    DataTypeLabel.ALERT,
                 ):
                     query_tuples.add(
                         (
@@ -1330,23 +1345,23 @@ class GetStrategyListV2Resource(Resource):
                 query_config["name"] = metric_info[metric_id].metric_field_name
             else:
                 query_config["name"] = (
-                            query_config.get("metric_field")
-                            or query_config.get("custom_event_name")
-                            or query_config.get("bkmonitor_strategy_id")
-                            or query_config.get("alert_name")
-                            or query_config.get("result_table_id", "")
+                    query_config.get("metric_field")
+                    or query_config.get("custom_event_name")
+                    or query_config.get("bkmonitor_strategy_id")
+                    or query_config.get("alert_name")
+                    or query_config.get("result_table_id", "")
                 )
 
     @staticmethod
     def fill_allow_target(strategy: Dict, target_strategy_mapping):
         """
-         补充是否允许增删目标
+        补充是否允许增删目标
         """
         target = target_strategy_mapping.get(strategy["id"])
         algorithms = strategy["items"][0]["algorithms"]
         algorithm = algorithms[0] if algorithms else {}
         strategy["add_allowed"] = (target != DataTarget.NONE_TARGET) or (
-                algorithm.get("type") == AlgorithmModel.AlgorithmChoices.MultivariateAnomalyDetection
+            algorithm.get("type") == AlgorithmModel.AlgorithmChoices.MultivariateAnomalyDetection
         )
 
     @staticmethod
@@ -1424,7 +1439,7 @@ class GetStrategyListV2Resource(Resource):
 
         # 分页
         if params.get("page") and params.get("page_size"):
-            strategies = strategies[(params["page"] - 1) * params["page_size"]: params["page"] * params["page_size"]]
+            strategies = strategies[(params["page"] - 1) * params["page_size"] : params["page"] * params["page_size"]]
 
         # 生成策略配置
         strategy_objs = Strategy.from_models(strategies)
@@ -1446,15 +1461,7 @@ class GetStrategyListV2Resource(Resource):
         strategy_ids = [strategy_config["id"] for strategy_config in strategy_configs]
 
         # 查询ES，统计策略告警数量
-        search_result_future = executor.submit(lambda: (
-            AlertDocument.search(all_indices=True)
-            .filter("term", **{"event.bk_biz_id": bk_biz_id})
-            .filter("term", status=EventStatus.ABNORMAL)
-            .filter("terms", strategy_id=strategy_ids)[:0]
-            .aggs.bucket("strategy_id", "terms", field="strategy_id", size=10000)
-            .bucket("shield_status", "terms", field="is_shielded", size=10000)
-            .execute()
-        ))
+        search_result_future = executor.submit(self.get_alert_search_result, bk_biz_id, strategy_ids)
         metric_info_future = executor.submit(self.get_metric_info, bk_biz_id, strategy_configs)
         target_strategy_mapping_future = executor.submit(self.get_target_strategy_mapping, strategy_configs)
         strategy_shield_info_future = executor.submit(self.get_shield_info, strategy_ids, bk_biz_id)
@@ -1473,6 +1480,10 @@ class GetStrategyListV2Resource(Resource):
         data_source_names = {
             (category["data_source_label"], category["data_type_label"]): category["name"] for category in DATA_CATEGORY
         }
+
+        metric_info = metric_info_future.result()
+        target_strategy_mapping = target_strategy_mapping_future.result()
+        strategy_shield_info = strategy_shield_info_future.result()
 
         metric_info = metric_info_future.result()
         target_strategy_mapping = target_strategy_mapping_future.result()
@@ -1745,7 +1756,7 @@ class GetMetricListV2Resource(Resource):
 
             queries = []
             for query, field in product(
-                    filter_dict["query"], ["data_label", "result_table_id", "metric_field", "metric_field_name"]
+                filter_dict["query"], ["data_label", "result_table_id", "metric_field", "metric_field_name"]
             ):
                 queries.append(Q(**{f"{field}__icontains": query}))
 
@@ -1921,7 +1932,7 @@ class GetMetricListV2Resource(Resource):
         # 每种类型取几个
         tags = [{"id": "__COMMON_USED__", "name": _("常用")}]
         for tag_list in zip_longest(
-                *([{"id": key, "name": value} for key, value in tags.items()] for tags in category_tags.values())
+            *([{"id": key, "name": value} for key, value in tags.items()] for tags in category_tags.values())
         ):
             tags.extend(tag for tag in tag_list if tag and tag["id"])
 
@@ -2106,8 +2117,8 @@ class GetMetricListV2Resource(Resource):
         strategy_ids = []
         for metric in metric_list:
             if (metric["data_source_label"], metric["data_type_label"]) == (
-                    DataSourceLabel.BK_MONITOR_COLLECTOR,
-                    DataTypeLabel.ALERT,
+                DataSourceLabel.BK_MONITOR_COLLECTOR,
+                DataTypeLabel.ALERT,
             ):
                 strategy_ids.append(metric["metric_field"])
 
@@ -2120,8 +2131,8 @@ class GetMetricListV2Resource(Resource):
         for strategy in strategies:
             for query_config in strategy.items[0].query_configs:
                 if (query_config.data_source_label, query_config.data_type_label) != (
-                        DataSourceLabel.BK_MONITOR_COLLECTOR,
-                        DataTypeLabel.ALERT,
+                    DataSourceLabel.BK_MONITOR_COLLECTOR,
+                    DataTypeLabel.ALERT,
                 ):
                     metric_id_by_strategy[strategy.id] = query_config.metric_id
 
@@ -2144,7 +2155,7 @@ class GetMetricListV2Resource(Resource):
 
             for d in metric["dimensions"]:
                 if d["id"].startswith("tags."):
-                    d["name"] = trans_dict.get(d["id"][len("tags."):], d["name"])
+                    d["name"] = trans_dict.get(d["id"][len("tags.") :], d["name"])
         return metric_list
 
     def perform_request(self, params):
@@ -2270,8 +2281,8 @@ class SaveStrategyV2Resource(Resource):
         for item in strategy.items:
             for query_config in item.query_configs:
                 if (query_config.data_source_label, query_config.data_type_label) != (
-                        DataSourceLabel.BK_MONITOR_COLLECTOR,
-                        DataTypeLabel.TIME_SERIES,
+                    DataSourceLabel.BK_MONITOR_COLLECTOR,
+                    DataTypeLabel.TIME_SERIES,
                 ):
                     continue
 
@@ -2520,10 +2531,10 @@ class UpdatePartialStrategyV2Resource(Resource):
 
     @staticmethod
     def update_notice(
-            strategy: Strategy,
-            notice: Dict,
-            relations: Dict[int, List[StrategyActionConfigRelation]],
-            action_configs: Dict[int, ActionConfig],
+        strategy: Strategy,
+        notice: Dict,
+        relations: Dict[int, List[StrategyActionConfigRelation]],
+        action_configs: Dict[int, ActionConfig],
     ):
         """
         更新告警通知
@@ -2626,10 +2637,10 @@ class UpdatePartialStrategyV2Resource(Resource):
 
     @staticmethod
     def process_extra_data(
-            extra_create_or_update_datas: Dict[str, List[Dict[str, any]]],
-            key: str,
-            updates_data: DefaultDict[str, Dict[str, any]],
-            create_datas: DefaultDict[str, Dict[str, any]],
+        extra_create_or_update_datas: Dict[str, List[Dict[str, any]]],
+        key: str,
+        updates_data: DefaultDict[str, Dict[str, any]],
+        create_datas: DefaultDict[str, Dict[str, any]],
     ):
         extra_update_datas = extra_create_or_update_datas.get("update_data", [])
         extra_create_datas = extra_create_or_update_datas.get("create_data", [])
@@ -2787,7 +2798,7 @@ class GetPlainStrategyListV2Resource(Resource):
         count = strategies.count()
 
         # 分页查询
-        strategies = strategies[(params["page"] - 1) * params["page_size"]: params["page"] * params["page_size"]]
+        strategies = strategies[(params["page"] - 1) * params["page_size"] : params["page"] * params["page_size"]]
 
         return {
             "count": count,
@@ -3228,15 +3239,14 @@ class PromqlToQueryConfig(Resource):
             time_function = query["time_aggregation"].get("function")
             if time_function:
                 if time_function[:-10] not in cls.aggr_ops and (
-                        time_function not in Functions or not Functions[time_function].time_aggregation
+                    time_function not in Functions or not Functions[time_function].time_aggregation
                 ):
                     raise ValidationError(_("不支持的方法({})").format(time_function))
                 # 维度聚合和时间聚合函数是否对应,count场景特殊处理
                 dimension_function_name = cls.time_functon_map.get(time_function[:-10], time_function[:-10])
                 if time_function[:-10] in cls.aggr_ops and dimension_function_names[0] != dimension_function_name:
                     raise ValidationError(
-                        _("如果时间聚合函数使用{}，那么维度聚合函数必须使用{}").format(time_function,
-                                                                                      dimension_function_name)
+                        _("如果时间聚合函数使用{}，那么维度聚合函数必须使用{}").format(time_function, dimension_function_name)
                     )
             else:
                 query["time_aggregation"] = {}
@@ -3637,18 +3647,15 @@ class GetIntelligentDetectAccessStatusResource(Resource):
         access_status_mapping = {
             "": {
                 "status": self.Status.FAILED,
-                "status_detail": _("{}接入任务未创建，请尝试重新保存策略，若问题仍然存在请联系系统管理员").format(
-                    algorithm_name),
+                "status_detail": _("{}接入任务未创建，请尝试重新保存策略，若问题仍然存在请联系系统管理员").format(algorithm_name),
             },
             AccessStatus.PENDING: {
                 "status": self.Status.WAITING,
-                "status_detail": _("{}接入任务等待创建中，预计10分钟生效，如超过30分钟未生效请联系系统管理员").format(
-                    algorithm_name),
+                "status_detail": _("{}接入任务等待创建中，预计10分钟生效，如超过30分钟未生效请联系系统管理员").format(algorithm_name),
             },
             AccessStatus.CREATED: {
                 "status": self.Status.WAITING,
-                "status_detail": _("{}接入任务创建中，预计10分钟生效，如超过30分钟未生效请联系系统管理员").format(
-                    algorithm_name),
+                "status_detail": _("{}接入任务创建中，预计10分钟生效，如超过30分钟未生效请联系系统管理员").format(algorithm_name),
             },
             AccessStatus.RUNNING: {
                 "status": self.Status.WAITING,
@@ -3677,8 +3684,7 @@ class GetIntelligentDetectAccessStatusResource(Resource):
             flow_status = flow["status"]
 
         flow_status_mapping = {
-            "": {"status": self.Status.FAILED,
-                 "status_detail": _("未创建，请尝试重新保存策略，若问题仍然存在请联系系统管理员")},
+            "": {"status": self.Status.FAILED, "status_detail": _("未创建，请尝试重新保存策略，若问题仍然存在请联系系统管理员")},
             DataFlow.Status.NoStart: {"status": self.Status.FAILED, "status_detail": _("未启动，请重新保存策略")},
             DataFlow.Status.Starting: {"status": self.Status.WAITING, "status_detail": _("启动中，预计10分钟内生效")},
             DataFlow.Status.Warning: {"status": self.Status.FAILED, "status_detail": _("运行异常，请联系系统管理员")},
