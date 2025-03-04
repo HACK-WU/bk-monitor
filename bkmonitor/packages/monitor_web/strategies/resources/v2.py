@@ -1323,7 +1323,7 @@ class GetStrategyListV2Resource(Resource):
             )
 
         if not queries:
-            return
+            return {}
 
         metrics = MetricListCache.objects.filter(bk_biz_id__in=[bk_biz_id, 0]).filter(
             reduce(lambda x, y: x | y, queries)
