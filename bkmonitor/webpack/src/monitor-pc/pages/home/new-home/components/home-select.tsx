@@ -682,17 +682,17 @@ export default class HomeSelect extends tsc<IHomeSelectProps, IHomeSelectEvent> 
         name: isNewK8sV2List ? 'k8s-new' : 'k8s',
         query: isNewK8sV2List
           ? {
-              sceneId: 'kubernetes',
-              cluster: item.bcs_cluster_id,
-              scene: 'performance',
-              activeTab: 'list',
-            }
+            sceneId: 'kubernetes',
+            cluster: item.bcs_cluster_id,
+            scene: 'performance',
+            activeTab: 'list',
+          }
           : {
-              'filter-bcs_cluster_id': item.bcs_cluster_id,
-              sceneId: 'kubernetes',
-              sceneType: 'detail',
-              dashboardId: 'cluster',
-            },
+            'filter-bcs_cluster_id': item.bcs_cluster_id,
+            sceneId: 'kubernetes',
+            sceneType: 'detail',
+            dashboardId: 'cluster',
+          },
       },
       /** 跳转到其他系统的话，则配置isOtherWeb为true */
       /** 集群管理跳转到bcs */

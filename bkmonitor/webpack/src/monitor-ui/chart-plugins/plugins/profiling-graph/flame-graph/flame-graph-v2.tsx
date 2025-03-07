@@ -146,8 +146,6 @@ export default defineComponent({
       debounce(16, async () => {
         emit('updateLoading', true);
         showException.value = false;
-        chartInstance?.clear();
-        chartInstance?.dispose();
         try {
           const { bizId, appName, serviceName, start, end, profileId } = props;
           const data: IFlameGraphDataItem = props.data
@@ -168,6 +166,7 @@ export default defineComponent({
                   }
                 ).catch(() => false)
               )?.flame_data ?? false);
+
           if (data) {
             if (props.diffTraceId) {
               emit('diffTraceSuccess');
@@ -181,12 +180,14 @@ export default defineComponent({
             maxLevel.value = profilingData.value.at(-1)?.level;
             height.value = Math.max(height.value, maxLevel.value * defaultHeight + 40);
             setTimeout(() => {
-              chartInstance = echarts.init(chartRef.value!, undefined, {
-                renderer: 'canvas',
-                useDirtyRect: false,
-                height: height.value,
-                ssr: false,
-              });
+              if (!chartInstance) {
+                chartInstance = echarts.init(chartRef.value!, undefined, {
+                  renderer: 'canvas',
+                  useDirtyRect: false,
+                  height: height.value,
+                  ssr: false,
+                });
+              }
               chartInstance.off('click');
               chartInstance.off('contextmenu');
               currentGraphData.value = profilingData.value;
