@@ -433,8 +433,11 @@ class ResourceTrendResource(Resource):
         resource_type: str = validated_request_data["resource_type"]
         resource_list: List[str] = validated_request_data["resource_list"]
         scenario: str = validated_request_data["scenario"]
+
+        # 如果资源列表为空，直接返回空结果
         if not resource_list:
             return []
+
         start_time: int = validated_request_data["start_time"]
         end_time: int = validated_request_data["end_time"]
 
@@ -443,11 +446,17 @@ class ResourceTrendResource(Resource):
         agg_method = validated_request_data["method"]
         resource_meta.set_agg_method(agg_method)
         resource_meta.set_agg_interval(start_time, end_time)
+
+        # 添加过滤条件
         ListK8SResources().add_filter(resource_meta, validated_request_data["filter_dict"])
+
+        # 获取指标信息
         column = validated_request_data["column"]
         series_map = {}
         metric = resource.k8s.get_scenario_metric(metric_id=column, scenario=scenario, bk_biz_id=bk_biz_id)
         unit = metric["unit"]
+
+        # 根据资源类型生成PromQL查询语句
         if resource_type == "workload":
             # workload 单独处理
             promql_list = []
@@ -466,9 +475,13 @@ class ResourceTrendResource(Resource):
                 [resource_meta.filter.remove(filter_obj) for filter_obj in tmp_filter_chain]
             promql = " or ".join(promql_list)
         else:
+            # 非workload类型资源，直接添加过滤条件
+            # 过滤出resource_type 为 resource_list 中的数据
             resource_meta.filter.add(load_resource_filter(resource_type, resource_list))
             # 不用topk 因为有resource_list
             promql = getattr(resource_meta, f"meta_prom_with_{column}")
+
+        # 构造查询参数
         interval = get_interval_number(start_time, end_time, interval=60)
         query_params = {
             "bk_biz_id": bk_biz_id,
@@ -489,6 +502,8 @@ class ResourceTrendResource(Resource):
             "slimit": 10001,
             "down_sample_range": "",
         }
+
+        # 执行查询并解析结果
         series = resource.grafana.graph_unify_query(query_params)["series"]
         max_data_point = 0
         for line in series:
@@ -497,6 +512,7 @@ class ResourceTrendResource(Resource):
                     if point[0] is not None:
                         max_data_point = max(max_data_point, point[1])
 
+        # 构造最终结果映射
         for line in series:
             resource_name = resource_meta.get_resource_name(line)
             if resource_type == "workload":

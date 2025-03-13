@@ -22,14 +22,18 @@ def register_filter(filter_cls):
 
 
 class ResourceFilter(object):
+    """
+    资源过滤器基类,用于构建过滤条件
+    """
     resource_type = ""
+    # 用于指定过滤字段：Model.objects.filter(filter_field__in=filter_value)
     filter_field = ""
 
-    def __init__(self, value, fuzzy=False):
-        if not isinstance(value, (list, tuple)):
-            value = [value]
-        value = list(map(str, value))
-        self.value = sorted(value)
+    def __init__(self, filter_value, fuzzy=False):
+        if not isinstance(filter_value, (list, tuple)):
+            filter_value = [filter_value]
+        filter_value = list(map(str, filter_value))
+        self.value = sorted(filter_value)
         self.fuzzy = fuzzy
 
     @property
@@ -39,7 +43,7 @@ class ResourceFilter(object):
     @property
     def filter_dict(self) -> Dict:
         """
-        用于ORM的查询
+        构建过滤字典，用于ORM的查询
         """
         if len(self.value) == 1:
             if self.fuzzy:
@@ -48,6 +52,9 @@ class ResourceFilter(object):
         return {f"{self.filter_field}__in": self.value}
 
     def filter_string(self) -> str:
+        """
+        构建过滤字符串，用于promql查询
+        """
         if self.fuzzy:
             return self.fuzzy_filter_string()
         if len(self.value) == 1:
@@ -159,6 +166,9 @@ class ServiceFilter(ResourceFilter):
 
 
 def load_resource_filter(resource_type, filter_value, fuzzy=False) -> ResourceFilter:
+    """
+    根据资源类型和过滤值获取对应的过滤条件
+    """
     if resource_type not in filter_options:
         # 兼容xxx_name字段
         if resource_type.endswith("_name"):

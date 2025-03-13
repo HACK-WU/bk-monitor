@@ -97,7 +97,7 @@ def get_interval(start_time, end_time, interval="auto"):
 
 
 def get_interval_number(start_time, end_time, interval="auto"):
-    """计算出适合的时间间隔返回 int"""
+    """计算出适合的时间间隔返回 int,单位秒"""
     if not interval or interval == "auto":
         hour_interval = (end_time - start_time) // 3600
         if hour_interval <= 1:

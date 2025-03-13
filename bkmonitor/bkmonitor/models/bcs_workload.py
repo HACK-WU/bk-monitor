@@ -32,6 +32,7 @@ class BCSWorkload(BCSBase, BCSBaseResources):
     pod_count = models.IntegerField()
     container_count = models.IntegerField(default=0)
 
+    # 定义多对多关系，通过中间表 BCSWorkloadLabels 关联标签
     labels = models.ManyToManyField(BCSLabel, through="BCSWorkloadLabels", through_fields=("resource", "label"))
 
     objects = BCSWorkloadManager()
