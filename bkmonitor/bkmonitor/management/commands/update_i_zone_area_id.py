@@ -42,8 +42,8 @@ def update_i_zone_area_id(area_id, biz, num=0):
     usages:
         python manage.py update_i_zone_area_id   # 预览所有业务下需要被更新的策略
         python manage.py update_i_zone_area_id --biz 2 # 预览2业务下所有需要被更新的策略
-        python manage.py update_i_zone_area_id --id 6 -biz 2 -n 1  # 追加area_id=6，更新2业务下的1条策略
-        python manage.py update_i_zone_area_id --id 6 -biz 2 3 -n all  # 追加area_id=6，更新2和3业务下的所有策略
+        python manage.py update_i_zone_area_id --id 6 --biz 2 -n 1  # 追加area_id=6，更新2业务下的1条策略
+        python manage.py update_i_zone_area_id --id 6 --biz 2 3 -n all  # 追加area_id=6，更新2和3业务下的所有策略
     """
     try:
         area_id = int(area_id)
@@ -51,7 +51,7 @@ def update_i_zone_area_id(area_id, biz, num=0):
     except Exception:
         raise TypeError("area_id和num必须是整数")
 
-    query_config = QueryConfigModel.objects.all().order_by("strategy_id").only("strategy_id", "config")
+    query_config = QueryConfigModel.objects.all().only("strategy_id", "config")
 
     # step1: 查询出所有要被更新的策略和query_config
     strategy_qc_mapping: Dict[int, Dict] = defaultdict(lambda: {"qc": None, "conditions": []})
