@@ -1,29 +1,49 @@
 import sys
 from collections import defaultdict
+from typing import Dict
 
 from django.core.management.base import BaseCommand
 
-from bkmonitor.models.strategy import QueryConfigModel
+from bkmonitor.models.strategy import QueryConfigModel, StrategyModel
 
 
 class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--id", type=int, default=-1, help="追加的area_id")
         parser.add_argument("-n", "--num", type=str, default="0", help="指定要更新的策略数量，'all',表示全部更新")
+        parser.add_argument("-b", "--biz", nargs="+", type=int, default=[], help="指定业务ID,多个业务ID用空格分隔,不指定业务则更新所有业务")
 
     def handle(self, *args, **options):
         print(update_i_zone_area_id.__doc__)
         num = -1 if options["num"] == "all" else options["num"]
-        update_i_zone_area_id(options["id"], num)
+        if num != "0" and options["id"] == -1:
+            print("需要指定追加的area_id,使用--id参数")
+            sys.exit(1)
+        update_i_zone_area_id(options["id"], options["biz"], num)
 
 
-def update_i_zone_area_id(area_id, num=0):
+def valid_condition(condition):
+    key = condition.get("key", "")
+    value = condition.get("value", [])
+    fields = ["iZoneAreaID", "iZoneAreaIDStr", "iZoneAreaID(iZoneAreaID)", "iZoneAreaIDStr(iZoneAreaIDStr)"]
+    values = [{1, 2}, {1}, {2}]
+    if not isinstance(value, list):
+        return False
+    try:
+        value = set(map(int, value))
+    except (ValueError, TypeError):
+        return False
+    return key in fields and value in values
+
+
+def update_i_zone_area_id(area_id, biz, num=0):
     """
     更新iZoneAreaID
     usages:
-        python manage.py update_i_zone_area_id  # 查看所有需要被更新的策略
-        python manage.py update_i_zone_area_id --id 6 -n 1  # 追加area_id=6，更新1条策略
-        python manage.py update_i_zone_area_id --id 6 -n all  # 追加area_id=6，更新所有策略
+        python manage.py update_i_zone_area_id   # 预览所有业务下需要被更新的策略
+        python manage.py update_i_zone_area_id --biz 2 # 预览2业务下所有需要被更新的策略
+        python manage.py update_i_zone_area_id --id 6 -biz 2 -n 1  # 追加area_id=6，更新2业务下的1条策略
+        python manage.py update_i_zone_area_id --id 6 -biz 2 3 -n all  # 追加area_id=6，更新2和3业务下的所有策略
     """
     try:
         area_id = int(area_id)
@@ -33,69 +53,60 @@ def update_i_zone_area_id(area_id, num=0):
 
     query_config = QueryConfigModel.objects.all().order_by("strategy_id").only("strategy_id", "config")
 
-    def valid_condition(condition):
-        # iZoneAreaID(iZoneAreaID)=1,2 或者 iZoneAreaIDStr(iZoneAreaIDStr)=1,2 时将会被更新
-        key = condition.get("key", "")
-        value = condition.get("value", [])
-        if not isinstance(value, list):
-            return False
-        try:
-            value = list(map(int, value))
-        except ValueError:
-            return False
-        return (
-            key in ["iZoneAreaID(iZoneAreaID)", "iZoneAreaIDStr(iZoneAreaIDStr)"]
-            and len(value) == 2
-            and 1 in value
-            and 2 in value
-        )
-
     # step1: 查询出所有要被更新的策略和query_config
-    strategy_qc_mapping = defaultdict(list)
+    strategy_qc_mapping: Dict[int, Dict] = defaultdict(lambda: {"qc": None, "conditions": []})
     for qc in query_config:
         agg_condition = qc.config.get("agg_condition", [])
-        for c in agg_condition:
-            if valid_condition(c):
-                strategy_qc_mapping[qc.strategy_id].append(qc)
+        for condition in agg_condition:
+            if valid_condition(condition):
+                strategy_qc_mapping[qc.strategy_id]["qc"] = qc
+                strategy_qc_mapping[qc.strategy_id]["conditions"].append(condition)
 
-    # step2: 如果num等于0，则表示不更新，这里打印出要更新的策略的ID和聚合条件配置信息
+    # step2: 过滤出指定业务的策略
+    filter_dict = {"id__in": list(strategy_qc_mapping.keys())}
+    if biz:
+        filter_dict["bk_biz_id__in"] = biz
+    strategies = StrategyModel.objects.filter(**filter_dict).only("id", "bk_biz_id")
+    # 构建strategy_id到biz_id的映射
+    strategy_biz_mapping = {s.id: s.bk_biz_id for s in strategies}
+    if not strategy_biz_mapping:
+        print("没有找到符合条件的策略")
+        return
+
+    # step3: 如果num等于0，则表示不更新，这里打印出要更新的策略的ID和聚合条件配置信息
     if num == 0:
-        print(f"总共有{len(strategy_qc_mapping)}个策略需要被更新:")
-        for strategy_id, qc_list in strategy_qc_mapping.items():
-            message = [f"Strategy ID: {strategy_id},condition: "]
-            for qc in qc_list:
-                agg_condition = qc.config.get("agg_condition", [])
-                for c in agg_condition:
-                    if valid_condition(c):
-                        message.append(f"{c.get('key')}={c.get('value')},")
-            print("".join(message)[:-1])
-        print("执行完毕")
-        sys.exit(0)
+        print(f"总共有{len(strategy_biz_mapping)}个策略需要被更新:")
+        for strategy_id, biz_id in strategy_biz_mapping.items():
+            message = [f"Strategy ID: {strategy_id}, biz_id:{biz_id}, condition: "]
+            for c in strategy_qc_mapping[strategy_id]["conditions"]:
+                message.append(f"{c.get('key')}={c.get('value')},")
+            print("".join(message).strip(","))
+        print("预览完毕")
+        return
 
-    # step3: 更新query_config
-    if area_id <= 0:
-        raise ValueError("area_id must be greater than 0")
-
+    # step4: 更新query_config
     count = 0
     qc_to_update = []
     updated_strategies = []
-    for strategy_id, qc_list in strategy_qc_mapping.items():
+    for strategy_id in strategy_biz_mapping:
         # 控制更新数量
         # num=-1 表示不限制
         if num != -1 and count >= num:
             break
 
-        for qc in qc_list:
-            agg_condition = qc.config.get("agg_condition", [])
-            for c in agg_condition:
-                # 追加新的area_id
-                c["value"].append(area_id)
-            qc_to_update.append(qc)
+        d = strategy_qc_mapping[strategy_id]
+        for c in d["conditions"]:
+            c["value"].append(area_id)
+        qc_to_update.append(d["qc"])
         updated_strategies.append(strategy_id)
         count += 1
 
     # 批量更新
     QueryConfigModel.objects.bulk_update(qc_to_update, ["config"])
-    print(f"本次更新了{count}条策略,策略ID为:")
-    print(updated_strategies)
+    print(f"本次更新了{count}条策略")
+    for strategy_id in updated_strategies:
+        message = [f"Strategy ID: {strategy_id}, biz_id:{strategy_biz_mapping[strategy_id]}, condition: "]
+        for c in strategy_qc_mapping[strategy_id]["conditions"]:
+            message.append(f"{c.get('key')}={c.get('value')},")
+        print("".join(message).strip(","))
     print("执行完毕")
