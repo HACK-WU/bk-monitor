@@ -428,6 +428,17 @@ class ResourceTrendResource(Resource):
         )
 
     def perform_request(self, validated_request_data):
+        """
+        1、根据resource_type加载resource meta
+        2、设置聚合函数和间隔时间
+        3、添加过滤条件：
+            -添加对filter_dict的过滤条件
+            -添加对resource_list的过滤条件
+            -如果是workload类型，则额外需要添加对namespace的过滤条件
+        4、根据column获取到指标对应的promql查询语句
+        5、根据promql，构建查询参数，并调用graph_unify_query获取到数据
+        6、构造资源数据映射表，并返回
+        """
         bk_biz_id: int = validated_request_data["bk_biz_id"]
         bcs_cluster_id: str = validated_request_data["bcs_cluster_id"]
         resource_type: str = validated_request_data["resource_type"]
@@ -441,7 +452,7 @@ class ResourceTrendResource(Resource):
         start_time: int = validated_request_data["start_time"]
         end_time: int = validated_request_data["end_time"]
 
-        # 1. 基于resource_type 加载对应资源元信息
+        # 加载资源元信息并设置聚合方法和时间间隔
         resource_meta: K8sResourceMeta = load_resource_meta(resource_type, bk_biz_id, bcs_cluster_id)
         agg_method = validated_request_data["method"]
         resource_meta.set_agg_method(agg_method)
@@ -458,7 +469,7 @@ class ResourceTrendResource(Resource):
 
         # 根据资源类型生成PromQL查询语句
         if resource_type == "workload":
-            # workload 单独处理
+            # 针对workload类型资源，单独处理命名空间信息
             promql_list = []
             for wl in resource_list:
                 # workload 资源，需要带上namespace 信息: blueking|Deployment:bk-monitor-web
@@ -506,22 +517,28 @@ class ResourceTrendResource(Resource):
         # 执行查询并解析结果
         series = resource.grafana.graph_unify_query(query_params)["series"]
         max_data_point = 0
+
+        # 找到最大数据点的时间戳
         for line in series:
             if line["datapoints"]:
                 for point in reversed(line["datapoints"]):
                     if point[0] is not None:
                         max_data_point = max(max_data_point, point[1])
 
-        # 构造最终结果映射
+        # 构造资源数据映射表
         for line in series:
             resource_name = resource_meta.get_resource_name(line)
             if resource_type == "workload":
-                # workload 补充namespace
+                # workload类型资源补充命名空间信息
                 resource_name = f"{line['dimensions']['namespace']}|{resource_name}"
+
+            # 如果最后一个数据点的时间戳等于最大数据点的时间戳，则只取最后一个数据点,否则不获取datapoints
             if line["datapoints"][-1][1] == max_data_point:
                 datapoints = line["datapoints"][-1:]
             else:
                 datapoints = []
             series_map[resource_name] = {"datapoints": datapoints, "unit": unit, "value_title": metric["name"]}
 
+        # 返回最终结果
         return [{"resource_name": name, column: info} for name, info in series_map.items()]
+

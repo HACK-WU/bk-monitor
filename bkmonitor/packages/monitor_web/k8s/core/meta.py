@@ -29,6 +29,7 @@ class FilterCollection(object):
     """
 
     def __init__(self, meta: "K8sResourceMeta"):
+        # filters={fileter_uid: resource_filter_obj}
         self.filters: Dict[str, ResourceFilter] = dict()
         self.meta = meta
         self.query_set = meta.resource_class.objects.all().order_by("id")
@@ -47,6 +48,9 @@ class FilterCollection(object):
 
     @cached_property
     def filter_queryset(self):
+        """
+        根据filters内容，返回过滤后的queryset
+        """
         for filter_obj in self.filters.values():
             self.query_set = self.query_set.filter(**self.transform_filter_dict(filter_obj))
         return self.query_set
@@ -79,6 +83,9 @@ class FilterCollection(object):
         return orm_filter_dict
 
     def filter_string(self, exclude=""):
+        """
+        根据filters内容，返回基于promql语法的过滤条件
+        """
         where_string_list = []
         for filter_type, filter_obj in self.filters.items():
             if exclude and filter_type.startswith(exclude):
@@ -256,6 +263,16 @@ class K8sResourceMeta(object):
         return obj_list
 
     def get_resource_name(self, series):
+        """
+        通过series获取资源名称，资源名称包含在series["dimensions"]中
+        例如：
+        series = {
+            "dimensions": {
+                    "namespace": "aiops-default"
+                }，
+            ....
+        }
+        """
         meta_field_list = [series["dimensions"][field] for field in self.resource_field_list]
         return ":".join(meta_field_list)
 
