@@ -88,7 +88,6 @@
   const clearSearchValueNum = computed(() => store.state.clearSearchValueNum);
   const queryText = computed(() => queryTypeList.value[activeIndex.value]);
 
-
   const indexFieldInfo = computed(() => store.state.indexFieldInfo);
   const isInputLoading = computed(() => {
     return indexFieldInfo.value.is_loading;
@@ -195,7 +194,10 @@
         ip_chooser: uiQueryValue.value.find(item => item.field === '_ip-select_')?.value?.[0] ?? {},
       });
 
-      store.dispatch('requestIndexSetQuery');
+      if (route.query.tab !== 'graphAnalysis') {
+        store.dispatch('requestIndexSetQuery');
+      }
+
       setRouteParams();
     }
   };
@@ -206,6 +208,14 @@
     });
 
     store.dispatch('requestIndexSetQuery');
+    setRouteParams();
+  };
+
+  const handleSqlQueryChange = value => {
+    store.commit('updateIndexItemParams', {
+      keyword: value,
+    });
+
     setRouteParams();
   };
 
@@ -255,7 +265,7 @@
   );
 
   const matchSQLStr = computed(() => {
-    if(props.activeFavorite?.index_set_id !== store.state.indexId ){
+    if (props.activeFavorite?.index_set_id !== store.state.indexId) {
       return false;
     }
     if (activeIndex.value === 0) {
@@ -274,25 +284,13 @@
     }
   });
   const indexSetItem = computed(() => store.state.indexItem);
-  const indexSetItemList = computed(() => store.state.indexItem.items);
-  const indexSetName = computed(() => {
-    return indexSetItemList.value?.map(item => item?.index_set_name).join(',');
-  });
 
   const saveCurrentActiveFavorite = async () => {
     if (matchSQLStr.value) {
       return;
     }
-    const {
-      name,
-      group_id,
-      display_fields,
-      visible_type,
-      is_enable_display_fields,
-      index_set_names,
-      index_set_type,
-      index_set_ids,
-    } = props.activeFavorite;
+    const { name, group_id, display_fields, visible_type, is_enable_display_fields, index_set_type } =
+      props.activeFavorite;
     const searchMode = activeIndex.value === 0 ? 'ui' : 'sql';
     const reqFormatAddition = uiQueryValue.value.map(item => new ConditionOperator(item).getRequestParam());
     const searchParams =
@@ -311,18 +309,18 @@
       is_enable_display_fields,
       search_mode: searchMode,
       ip_chooser: reqFormatAddition.find(item => item.field === '_ip-select_')?.value?.[0] ?? {},
-      index_set_id: store.state.indexId,
-      index_set_ids,
-      index_set_name: indexSetName.value,
       index_set_type,
-      index_set_names,
       ...searchParams,
     };
     if (indexSetItem.value.isUnionIndex) {
       Object.assign(data, {
         index_set_ids: indexSetItem.value.ids,
-        index_set_names: indexSetItemList.value?.map(item => item?.index_set_name),
-        index_set_type: 'union'
+        index_set_type: 'union',
+      });
+    } else {
+      Object.assign(data, {
+        index_set_id: store.state.indexId,
+        index_set_type: 'single',
       });
     }
     try {
@@ -372,13 +370,6 @@
       }
     }
   };
-
-  // const handleMouseenterInputSection = () => {
-  //   popToolInstance.show(refPopTraget.value);
-  // };
-
-  // const handleMouseleaveInputSection = () => {
-  // };
 
   useResizeObserve(refRootElement, () => {
     if (refRootElement.value) {
@@ -459,6 +450,7 @@
           v-if="activeIndex === 1"
           v-model="sqlQueryValue"
           @retrieve="handleSqlRetrieve"
+          @change="handleSqlQueryChange"
         ></SqlQuery>
         <div
           class="hidden-focus-pointer"
