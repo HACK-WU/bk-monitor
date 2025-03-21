@@ -118,6 +118,10 @@ def get_org_by_id(org_id: int) -> Optional[dict]:
 def get_or_create_org(org_name: str) -> dict:
     """
     获取或创建组织
+    1、获取或创建组织
+    2、创建组织对应的role规则
+    3、获取或创建admin用户
+    4、设置组织的用户为admin，角色为admin。
     """
     org_info = get_org_by_name(org_name)
     if org_info:
@@ -129,6 +133,7 @@ def get_or_create_org(org_name: str) -> dict:
         # 创建内置角色
         editor_role_uid = generate_uid(exclude_model=Role)
         viewer_role_uid = generate_uid(exclude_uids=[editor_role_uid], exclude_model=Role)
+        # 新建的org默认具有修改和查看权限
         Role.objects.bulk_create(
             [
                 Role(
@@ -154,6 +159,7 @@ def get_or_create_org(org_name: str) -> dict:
 
     # 确保admin用户存在
     user = get_or_create_user("admin")
+    # 设置Org的用户为admin，角色为admin
     sync_user_role(org.id, user["id"], "Admin")
 
     return {"id": org.id, "name": org.name}
@@ -258,7 +264,7 @@ def sync_user_role(org_id: int, user_id: int, role: str):
     except OrgUser.DoesNotExist:
         org_user = OrgUser.objects.create(org_id=org_id, user_id=user_id, role=role)
 
-    # 如果用户角色不一致，则更新
+    # 更新用户角色
     if org_user.role != role:
         org_user.role = role
         org_user.save()

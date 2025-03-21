@@ -433,23 +433,36 @@ class ExportPackageResource(Resource):
             plugin_manager.make_package(need_tar=False)
 
     def make_view_config_file(self):
+        """
+        生成视图配置文件并保存到指定目录。
+        """
+        # 如果没有视图配置ID，直接返回
         if not self.view_config_ids:
             return
 
+        # 创建视图配置文件的存储目录
         dashboard_file_path = os.path.join(self.package_path, "view_config_directory")
         os.makedirs(dashboard_file_path)
+
+        # 获取或创建组织ID，并获取该组织的所有数据源
         org_id = get_or_create_org(self.bk_biz_id)["id"]
         data_sources = api.grafana.get_all_data_source(org_id=org_id)["data"]
 
+        # 遍历每个视图配置ID，获取对应的仪表盘数据
         for view_config_id in self.view_config_ids:
+            # 更具uid和org_id到获取仪表盘数据
             result = api.grafana.get_dashboard_by_uid(uid=view_config_id, org_id=org_id)
+            # 检查是否成功获取仪表盘数据
             if result["result"] and result["data"].get("dashboard"):
                 dashboard = result["data"]["dashboard"]
+                # 将仪表盘数据转换为可导出格式
                 DashboardExporter(data_sources).make_exportable(dashboard)
                 view_config_file_name = dashboard.get("title", "dashboard")
             else:
+                # 如果未获取到有效数据，跳过当前循环
                 continue
 
+            # 将仪表盘数据写入JSON文件
             with open(
                 os.path.join(
                     self.package_path,

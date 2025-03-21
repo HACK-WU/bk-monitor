@@ -14,6 +14,10 @@ from .settings import APP_LABEL
 
 
 class User(models.Model):
+    """
+    用户表
+    """
+
     id = models.BigAutoField(primary_key=True)
     version = models.IntegerField(default=0)
     login = models.CharField(unique=True, max_length=190)
@@ -60,6 +64,11 @@ class UserRole(models.Model):
 
 
 class Org(models.Model):
+    """
+    组织表
+    Org--Role是一对多关系
+    """
+
     id = models.BigAutoField(primary_key=True)
     version = models.IntegerField(default=0)
     name = models.CharField(unique=True, max_length=190)
@@ -80,6 +89,11 @@ class Org(models.Model):
 
 
 class OrgUser(models.Model):
+    """
+    Org组织-User用户关系表
+    Org--User是一对多关系
+    """
+
     id = models.BigAutoField(primary_key=True)
     org_id = models.BigIntegerField()
     user_id = models.BigIntegerField()
@@ -267,6 +281,11 @@ class BuiltinRole(models.Model):
 
 
 class Role(models.Model):
+    """
+    规则表
+    Org--Role是一对多关系。
+    """
+
     id = models.BigAutoField(primary_key=True)
     name = models.CharField(max_length=190, db_index=True)
     description = models.TextField(blank=True, default="")

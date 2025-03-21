@@ -210,6 +210,7 @@ class SearchFolderOrDashboard(GrafanaApiResource):
 
 
 class GetDashboardByUID(GrafanaApiResource):
+    # https://grafana.com/docs/grafana/v9.5/developers/http_api/dashboard/#get-dashboard-by-uid
     method = "GET"
     path = "/api/dashboards/uid/{uid}"
     with_org_id = True
