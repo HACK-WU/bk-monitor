@@ -9,11 +9,11 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import hashlib
 import os
 import shutil
 import tarfile
+from typing import Optional
 
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
@@ -26,7 +26,7 @@ from monitor_web.models.plugin import CollectorPluginMeta
 class BaseFileManager(object):
     TYPE = ""
 
-    def __init__(self, file):
+    def __init__(self, file: Optional[UploadedFileInfo, int]):
         self._file_content = None
         if isinstance(file, UploadedFileInfo):
             _file = file
@@ -84,19 +84,28 @@ class BaseFileManager(object):
     @classmethod
     def save_file(cls, file_data, file_name=None, is_dir=False, *args, **kwargs):
         """
-        保存文件
-        :param file_name:
-        :param file_data:
-        :param is_dir: 是否为目录
-        :return:
+        保存文件或目录到存储系统，支持处理上传文件对象和二进制数据两种形式
+
+        处理流程：
+        1. 计算文件存储的相对路径
+        2. 根据输入数据类型进行分支处理
+        3. 计算文件MD5并创建/获取文件对象
+        4. 持久化存储文件内容
         """
+        # 获取文件的相对路径
         relative_path = cls._get_relative_path(*args, **kwargs)
+
+        # 处理上传文件对象的情况
         if isinstance(file_data, UploadedFile):
+            # 当未指定文件名时使用上传文件名
             if not file_name:
                 file_name = file_data.name
 
+            # 读取文件内容并生成MD5校验值
             file_content = file_data.read()
             file_md5 = hashlib.md5(file_content).hexdigest()
+
+            # 获取或创建文件记录对象
             file_obj, is_created = cls._get_or_create(
                 original_filename=file_data.name,
                 actual_filename=file_name,
@@ -106,9 +115,14 @@ class BaseFileManager(object):
             )
             fd = file_data
         else:
-            assert file_name
+            # 处理二进制数据的情况
+            assert file_name  # 必须指定文件名参数
+
+            # 生成MD5并包装为文件对象
             file_md5 = hashlib.md5(file_data).hexdigest()
             fd = ContentFile(file_data)
+
+            # 获取或创建文件记录对象
             file_obj, is_created = cls._get_or_create(
                 original_filename=file_name,
                 actual_filename=file_name,
@@ -117,7 +131,10 @@ class BaseFileManager(object):
                 is_dir=is_dir,
             )
 
+        # 持久化存储文件内容
         file_obj.file_data.save(file_name, fd)
+
+        # 返回包含文件对象的类实例
         return cls(file_obj)
 
     @classmethod

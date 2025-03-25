@@ -356,11 +356,22 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
 
 
 def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
-    # 已存在的视图名，防止重名
+    """导入Grafana仪表盘视图配置到指定业务
+
+    Args:
+        bk_biz_id (int): 业务ID，用于标识目标业务
+        view_config_list (list): 待导入的视图配置对象列表，每个元素应包含parse_id字段
+        is_overwrite_mode (bool, optional): 是否启用覆盖模式。若为False，重名视图会自动追加后缀
+
+    Returns:
+        None: 无直接返回值，通过修改view_config_list中的对象状态返回结果
+    """
+    # 获取已存在的仪表盘名称集合，用于名称冲突检测
     existed_dashboards = resource.grafana.get_dashboard_list(bk_biz_id=bk_biz_id)
     existed_names = {dashboard["name"] for dashboard in existed_dashboards}
     org_id = get_or_create_org(bk_biz_id)["id"]
 
+    # 构建数据源映射表，格式为{数据源类型: 数据源配置}
     data_sources = {
         data_source["type"]: {
             "type": "datasource",
@@ -370,15 +381,18 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
         for data_source in api.grafana.get_all_data_source(org_id=org_id)["data"]
     }
 
+    # 遍历处理每个视图配置
     for view_config in view_config_list:
         try:
+            # 从数据库获取解析配置模板
             parse_instance = ImportParse.objects.get(id=view_config.parse_id)
             create_config = copy.deepcopy(parse_instance.config)
             # 导入仪表盘，清理配置id
             create_config.pop("id", None)
             uid = create_config.pop("uid", "")
             logger.info(str(create_config))
-            # 非覆盖模式，视图重名增加后缀
+
+            # 名称冲突处理逻辑（非覆盖模式时生效）
             if not is_overwrite_mode:
                 while create_config["title"] in existed_names:
                     create_config["title"] = f"{create_config['title']}_clone"
@@ -389,6 +403,7 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
                     for query_config in target.get("query_configs", []):
                         check_and_change_bkdata_table_id(query_config, bk_biz_id)
 
+            # 构建数据源输入映射
             inputs = []
             for input_field in create_config.get("__inputs", []):
                 if input_field["type"] != "datasource":
@@ -403,7 +418,10 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
 
                 inputs.append({"name": input_field["name"], **data_sources[input_field["pluginId"]]})
 
+            # 执行仪表盘导入操作
             result = api.grafana.import_dashboard(dashboard=create_config, org_id=org_id, inputs=inputs, overwrite=True)
+
+            # 处理导入结果
             if result["result"]:
                 view_config.config_id = uid
                 view_config.import_status = ImportDetailStatus.SUCCESS
@@ -416,6 +434,7 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
                 view_config.error_msg = str(result["message"])
                 view_config.save()
         except Exception as e:
+            # 异常处理及状态记录
             logger.exception(e)
             view_config.import_status = ImportDetailStatus.FAILED
             view_config.error_msg = str(e)

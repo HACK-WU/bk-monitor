@@ -280,16 +280,23 @@ class ExportPackageResource(Resource):
         self.list_data = []
         self.bk_biz_id = None
         self.username = ""
-        self.tmp_path = os.path.join(settings.MEDIA_ROOT, "export_import", "tmp")
+        self.tmp_path = os.path.join(settings.MEDIA_ROOT, "export_import", "tmp")  # {media_root}/export_import/tmp
         self.package_path = ""
         self.package_name = ""
         self.file_msg = {}
         self.RequestSerializer = ExportPackageRequestSerializer
 
     def perform_request(self, validated_request_data):
+        """处理导出配置请求，生成配置导出包并返回下载信息
+        1、初始化包名称以及路径
+        2、获取到所有需要导出的配置ID
+        """
+        # 基础参数初始化
         self.bk_biz_id = validated_request_data.get("bk_biz_id")
         self.package_name = "bk_monitor_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         self.package_path = os.path.join(self.tmp_path, self.package_name)
+
+        # 配置参数获取与校验
         self.collect_config_ids = validated_request_data.get("collect_config_ids", [])
         self.strategy_config_ids = validated_request_data.get("strategy_config_ids", [])
         self.view_config_ids = validated_request_data.get("view_config_ids", [])
@@ -297,10 +304,12 @@ class ExportPackageResource(Resource):
         if not any([self.collect_config_ids, self.strategy_config_ids, self.view_config_ids, self.list_data]):
             raise ValidationError(_("未选择任何配置"))
 
+        # 文件准备与打包
         self.file_msg = self.prepare_file()
         filename = self.make_package()
         download_path, download_name = filename.replace(settings.MEDIA_ROOT, "").rsplit("/", 1)
 
+        # CEPH存储处理逻辑
         if settings.USE_CEPH:
             local_tar_file_path = os.path.join(self.package_path, filename)
             tar_file_fd = open(local_tar_file_path, "rb")
@@ -309,13 +318,14 @@ class ExportPackageResource(Resource):
             download_path, download_name = default_storage.url(tar_file_path).rsplit("/", 1)
             tar_file_fd.close()
 
-        # 如果当前PAAS_HOST是以https://开头的，则需要将download_path中的http://替换为https://
+        # HTTPS协议适配处理
         if settings.BK_MONITOR_HOST.startswith("https://"):
             download_path = download_path.replace("http://", "https://")
 
-        # 五分钟后删除文件夹
+        # 延迟清理临时文件
         remove_file.apply_async(args=(self.package_path,), countdown=300)
 
+        # 操作事件上报
         try:
             username = get_local_username() or ""
             event_content = (
@@ -332,31 +342,57 @@ class ExportPackageResource(Resource):
 
     @step(state="PREPARE_FILE", message=_("准备文件中..."))
     def prepare_file(self):
+        """准备并统计各类配置文件及关联信息
+
+        该函数主要完成以下任务：
+        1. 统计采集配置、策略配置、视图配置的数量
+        2. 分析策略配置中关联的采集配置ID
+        3. 计算所有关联的采集插件ID
+        4. 返回包含统计结果的字典
+
+        Returns:
+            dict: 包含各类配置统计结果的字典，键说明：
+                - collect_config_file: 直接关联的采集配置文件数量
+                - strategy_config_file: 策略配置文件数量
+                - view_config_file: 视图配置文件数量
+                - associated_plugin: 关联的采集插件种类数
+                - associated_collect_config: 关联的采集配置总数（包含直接和间接关联）
+        """
+        # 统计直接配置数量
         collect_config_file = len(self.collect_config_ids)
         strategy_config_file = len(self.strategy_config_ids)
         view_config_file = len(self.view_config_ids)
 
+        # 处理策略配置，提取关联的采集配置ID
         strategy_config_list = StrategyModel.objects.filter(id__in=self.strategy_config_ids)
         for strategy_config in strategy_config_list:
+            # 获取策略关联的指标项及查询配置
             item_instances = ItemModel.objects.filter(strategy_id=strategy_config.id)
             query_configs = QueryConfigModel.objects.filter(item_id__in=list({item.id for item in item_instances}))
+
+            # 解析查询条件中的采集配置ID
             for query_config in query_configs:
                 for condition in query_config.config.get("agg_condition", []):
                     if "bk_collect_config_id" not in list(condition.values()):
                         continue
+                    # 处理不同格式的配置值（列表或字符串）
                     if isinstance(condition["value"], list):
                         self.associated_collect_config_list.extend(condition["value"])
                     else:
                         self.associated_collect_config_list.append(condition["value"].split("(")[0])
 
+        # 去重并过滤无效值
         self.associated_collect_config_list = list(set(self.associated_collect_config_list))
         self.associated_collect_config_list = [i for i in self.associated_collect_config_list if i]
 
+        # 计算所有关联的采集插件
         all_collect_ids = list(set(self.collect_config_ids + self.associated_collect_config_list))
         self.associated_plugin_list = list(
             {config.plugin_id for config in CollectConfigMeta.objects.filter(id__in=all_collect_ids)}
         )
         associated_plugin = len(self.associated_plugin_list)
+
+        # 返回最终统计结果
         return {
             "collect_config_file": collect_config_file,
             "strategy_config_file": strategy_config_file,
@@ -435,34 +471,41 @@ class ExportPackageResource(Resource):
     def make_view_config_file(self):
         """
         生成视图配置文件并保存到指定目录。
+
+        处理流程:
+        1. 检查视图配置ID列表是否为空
+        2. 创建配置文件存储目录
+        3. 获取关联的组织信息及数据源
+        4. 遍历所有视图配置ID获取仪表盘数据
+        5. 转换数据格式并序列化为JSON文件
         """
-        # 如果没有视图配置ID，直接返回
+        # 视图配置ID空值检查
         if not self.view_config_ids:
             return
 
-        # 创建视图配置文件的存储目录
+        # 初始化存储目录结构
         dashboard_file_path = os.path.join(self.package_path, "view_config_directory")
         os.makedirs(dashboard_file_path)
 
-        # 获取或创建组织ID，并获取该组织的所有数据源
+        # 获取组织元数据及数据源配置
         org_id = get_or_create_org(self.bk_biz_id)["id"]
         data_sources = api.grafana.get_all_data_source(org_id=org_id)["data"]
 
-        # 遍历每个视图配置ID，获取对应的仪表盘数据
+        # 仪表盘数据导出处理流程
         for view_config_id in self.view_config_ids:
-            # 更具uid和org_id到获取仪表盘数据
+            # 通过Grafana API获取仪表盘配置
             result = api.grafana.get_dashboard_by_uid(uid=view_config_id, org_id=org_id)
-            # 检查是否成功获取仪表盘数据
+
+            # 校验API响应数据结构有效性
             if result["result"] and result["data"].get("dashboard"):
                 dashboard = result["data"]["dashboard"]
-                # 将仪表盘数据转换为可导出格式
+                # 数据格式转换处理
                 DashboardExporter(data_sources).make_exportable(dashboard)
                 view_config_file_name = dashboard.get("title", "dashboard")
             else:
-                # 如果未获取到有效数据，跳过当前循环
                 continue
 
-            # 将仪表盘数据写入JSON文件
+            # 文件持久化操作
             with open(
                 os.path.join(
                     self.package_path,
@@ -536,20 +579,47 @@ class ExportPackageResource(Resource):
 
     @step(state="MAKE_PACKAGE", message=_("文件打包中..."))
     def make_package(self):
+        """创建配置压缩包并返回压缩包路径
+
+        功能说明:
+            创建指定路径的临时目录，生成各类配置文件，将所有文件打包为tar.gz格式的压缩包。
+            过程中会更新任务状态，最终返回生成的压缩包绝对路径。
+
+        返回值:
+            str: 生成的压缩包完整路径（t.name即为压缩包绝对路径）
+
+        处理流程:
+            1. 更新任务状态到"文件打包中"阶段
+            2. 创建打包临时目录
+            3. 生成各种配置文件
+            4. 创建tar.gz压缩包并添加所有文件
+        """
+        # 更新任务状态到打包阶段
         self.update_state(state="MAKE_PACKAGE", message=_("文件打包中..."), data=self.file_msg)
+
+        # 创建打包目录（如果不存在会自动创建父目录）
         os.makedirs(self.package_path)
+
+        # 批量生成各类配置文件
         self.make_collect_config()
         self.make_plugin_file()
         self.make_strategy_config_file()
         self.make_view_config_file()
         self.make_list_to_csv_file()
+
+        # 创建并填充tar.gz压缩包
         t = tarfile.open(os.path.join(self.package_path, self.package_name + ".tar.gz"), "w:gz")
-        for root, dirs, files in os.walk(self.package_path):
-            for filename in files:
-                full_path = os.path.join(root, filename)
-                file_save_path = full_path.replace(self.package_path, "")
-                t.add(full_path, arcname=file_save_path)
-        t.close()
+        try:
+            # 遍历打包目录所有文件，保持相对路径结构添加到压缩包
+            for root, dirs, files in os.walk(self.package_path):
+                for filename in files:
+                    full_path = os.path.join(root, filename)
+                    # 计算文件在压缩包中的存储路径（去除package_path前缀）
+                    file_save_path = full_path.replace(self.package_path, "")
+                    t.add(full_path, arcname=file_save_path)
+        finally:
+            t.close()
+
         return t.name
 
     @step(state="MAKE_PACKAGE", message=_("文件打包中..."))
@@ -736,18 +806,29 @@ class UploadPackageResource(Resource):
         file_data = serializers.FileField(required=True, label="文件内容")
 
     def un_tar_package(self):
+        """
+        解压tar包到指定目录
+        """
+        # 获取文件实例
         file_instance = self.file_manager.file_obj
         t = None
         try:
+            # 尝试打开tar包
             t = tarfile.open(fileobj=file_instance.file_data.file)
+            # 解压全部内容到指定路径
             t.extractall(path=self.parse_path)
         except Exception as e:
+            # 记录解压失败的异常信息
             logger.exception("压缩包解压失败: {}".format(e))
+            # 抛出异常，指出文件格式不正确
             raise UploadPackageError({"msg": _("导入文件格式不正确，需要是.tar.gz/.tgz/.tar.bz2/.tbz2等后缀(gzip或bzip2压缩)")})
         finally:
+            # 确保tar包被正确关闭
             if t is not None:
                 t.close()
+        # 检查解压后的目录结构是否正确
         if not any(list([x in os.listdir(self.parse_path) for x in DIRECTORY_LIST])):
+            # 如果目录结构不正确，抛出异常
             raise UploadPackageError({"msg": _("导入包目录结构不对")})
 
     def parse_collect_config(self):
@@ -837,6 +918,15 @@ class UploadPackageResource(Resource):
             )
 
     def parse_view_config(self):
+        """
+        目录结构：
+            tree view_config_directory/
+                view_config_directory/
+                ├── 00-jc-test_fxHySlGNz.json
+                ├── 00测试指标二段式_eHBB5ikIz.json
+                └── 01-jc-test_qYIX0N4Hz.json
+        """
+
         view_config_dir = os.path.join(self.parse_path, "view_config_directory")
         if not os.path.exists(view_config_dir):
             return
@@ -891,25 +981,37 @@ class UploadPackageResource(Resource):
         }
 
     def perform_request(self, validated_request_data):
+        """
+        处理插件包上传请求，执行文件校验、存储及解析操作
+
+        1、文件基础校验：验证文件大小限制
+        2、文件存储逻辑：保存文件基础信息到数据库(UploadedFileInfo)并获取文件ID
+        3、文件解析逻辑：解压文件并解析配置，解析结果保存到数据库(ImportParse)
+        """
+        # 确保解析目录存在
         if not os.path.exists(self.parse_path):
             os.makedirs(self.parse_path)
 
         try:
+            # 文件基础校验：验证文件大小限制
             file_data = validated_request_data["file_data"]
             file_name = file_data.name
             if file_data.size > 500 * 1024 * 1024:
                 raise UploadPackageError({"msg": _("插件包不能大于500M")})
 
+            # 文件存储逻辑：保存文件到数据库并获取文件ID
             upload_file_ids = set(UploadedFileInfo.objects.values_list("id", flat=True))
             validated_request_data.setdefault("file_name", file_name)
             self.file_manager = ExportImportManager.save_file(**validated_request_data)
             self.file_id = self.file_manager.file_obj.id
+
+            # 新文件处理流程：仅处理首次上传的文件
             if self.file_id not in upload_file_ids:
-                # 解压导入的文件包
+                # 文件预处理流程：解压文件并解析配置
                 self.un_tar_package()
-                # 解析插件包
                 self.parse_package()
 
+            # 构造返回数据：转换数据库对象为接口响应格式
             config_list = list(map(self.handle_return_data, ImportParse.objects.filter(file_id=self.file_id)))
             return {
                 "config_list": config_list,
@@ -922,17 +1024,20 @@ class UploadPackageResource(Resource):
             }
 
         except Exception as e:
+            # 异常时清理文件资源：删除物理文件并更新数据库标记
             if self.file_manager:
                 file_instance = self.file_manager.file_obj
                 file_instance.file_data.delete()
                 file_instance.is_deleted = True
                 file_instance.save()
 
+            # 异常处理逻辑：保留原始错误类型，记录日志并转换异常类型
             if isinstance(e, UploadPackageError):
                 raise e
             logger.exception(e)
             raise UploadPackageError({"msg": str(e)})
         finally:
+            # 最终清理操作：强制删除整个临时解析目录
             shutil.rmtree(self.parse_path)
 
 
@@ -953,25 +1058,50 @@ class ImportConfigResource(Resource):
         is_overwrite_mode = serializers.BooleanField(required=False, label="是否覆盖", default=False)
 
     def perform_request(self, validated_request_data):
+        """
+        执行配置导入请求的核心处理函数
+
+        1、根据uuid获取到配置文件解析表（配置文件）
+        2、为当前导入程序创建导入历史记录
+        3、为每个配置文件创建一个导入详情记录，并绑定绑定历史记录
+        4、执行导入逻辑，并导入历史记录状态为IMPORTING
+        5、更新“导入详情”的导入状态为IMPORTED
+
+        Returns:
+            dict: 包含导入历史记录ID的字典，格式如 {"import_history_id": 123}
+
+        Raises:
+            ImportConfigError: 当没有有效解析文件或未选择配置时抛出
+            ImportHistoryNotExistError: 当指定导入历史记录不存在时抛出
+        """
+        # 用户信息获取
         username = get_request().user.username
+
+        # 基础参数初始化
         self.uuid_list = validated_request_data["uuid_list"]
         import_history_id = validated_request_data.get("import_history_id", "")
         bk_biz_id = validated_request_data["bk_biz_id"]
+
+        # 解析记录有效性校验：仅处理解析成功的记录
         parse_instances = ImportParse.objects.filter(uuid__in=self.uuid_list, file_status=ImportDetailStatus.SUCCESS)
         if not parse_instances:
             raise ImportConfigError({"msg": _("没有找到对应的解析文件内容")})
 
         parse_ids = [parse_obj.id for parse_obj in parse_instances]
+
+        # 历史记录处理逻辑：存在则验证有效性，不存在则新建记录
         if import_history_id:
             self.import_history_instance = ImportHistory.objects.filter(
                 id=import_history_id, bk_biz_id=bk_biz_id
             ).first()
             if not self.import_history_instance:
                 raise ImportHistoryNotExistError
+            # 筛选待处理配置：排除已完成或处理中的记录
             all_config_list = ImportDetail.objects.filter(
                 history_id=self.import_history_instance.id, parse_id__in=parse_ids
             ).exclude(import_status__in=[ImportDetailStatus.SUCCESS, ImportDetailStatus.IMPORTING])
         else:
+            # 新建历史记录并批量初始化明细数据
             self.import_history_instance = ImportHistory.objects.create(
                 status=ImportHistoryStatus.IMPORTING, bk_biz_id=bk_biz_id
             )
@@ -993,6 +1123,7 @@ class ImportConfigResource(Resource):
                 history_id=self.import_history_instance.id, parse_id__in=parse_ids
             )
 
+        # 配置分类处理：按类型分为采集/策略/视图三类
         collect_config_list = all_config_list.filter(type=ConfigType.COLLECT)
         strategy_config_list = all_config_list.filter(type=ConfigType.STRATEGY)
         view_config_list = all_config_list.filter(type=ConfigType.VIEW)
@@ -1000,7 +1131,9 @@ class ImportConfigResource(Resource):
         if not any([collect_config_list, strategy_config_list, view_config_list]):
             raise ImportConfigError({"msg": _("未选择任何配置")})
 
+        # 异步任务触发模块
         if any([collect_config_list, strategy_config_list, view_config_list]):
+            # 触发异步导入任务
             import_config.delay(
                 username,
                 bk_biz_id,
@@ -1011,9 +1144,11 @@ class ImportConfigResource(Resource):
                 validated_request_data["is_overwrite_mode"],
             )
 
-            # 执行导入的配置和导入历史状态置为importing
+            # 更新历史记录状态为处理中
             self.import_history_instance.status = ImportDetailStatus.IMPORTING
             self.import_history_instance.save()
+
+            # 插件状态联动处理：更新关联插件的导入状态
             collect_parse_instances = ImportParse.objects.filter(
                 id__in=[config.parse_id for config in collect_config_list]
             )
@@ -1021,11 +1156,13 @@ class ImportConfigResource(Resource):
             ImportDetail.objects.filter(
                 name__in=plugin_id_list, type=ConfigType.PLUGIN, history_id=self.import_history_instance.id
             ).exclude(import_status=ImportDetailStatus.SUCCESS).update(import_status=ImportDetailStatus.IMPORTING)
+
+            # 批量状态更新：三类配置统一标记为处理中
             collect_config_list.update(import_status=ImportDetailStatus.IMPORTING)
             strategy_config_list.update(import_status=ImportDetailStatus.IMPORTING)
             view_config_list.update(import_status=ImportDetailStatus.IMPORTING)
 
-        # 发送审计上报
+        # 审计事件上报模块
         try:
             event_content = (
                 f"导入{len(collect_config_list)}条采集配置, {len(strategy_config_list)}个策略配置, {len(view_config_list)}个仪表盘"

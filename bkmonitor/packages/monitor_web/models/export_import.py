@@ -79,6 +79,12 @@ class ImportHistory(OperateRecordModelBase):
 
 
 class ImportDetail(OperateRecordModelBase):
+    """
+    ImportParse--ImportDetail:一对多关系,外键parse_id
+    ImportDetail--ImportHistory:一对一系,外键history_id
+
+    """
+
     IMPORT_STATUS_CHOICES = (
         (ImportDetailStatus.IMPORTING, _lazy("导入中")),
         (ImportDetailStatus.SUCCESS, _lazy("导入成功")),
@@ -101,6 +107,14 @@ class ImportDetail(OperateRecordModelBase):
 
 
 class ImportParse(OperateRecordModelBase):
+    """
+    文件解析表
+
+    ImportParse--UploadedFileInfo:一对一关系,外键file_id
+    ImportParse--ImportDetail:一对多关系,外键parse_id
+    ImportParse--ImportHistory:关系表ImportDetail
+    """
+
     TYPE_CHOICES = (
         (ConfigType.PLUGIN, _lazy("插件配置")),
         (ConfigType.COLLECT, _lazy("采集配置")),
