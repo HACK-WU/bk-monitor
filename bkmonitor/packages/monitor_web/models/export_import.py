@@ -81,8 +81,8 @@ class ImportHistory(OperateRecordModelBase):
 class ImportDetail(OperateRecordModelBase):
     """
     ImportParse--ImportDetail:一对多关系,外键parse_id
-    ImportDetail--ImportHistory:一对一系,外键history_id
-
+    ImportHistory--ImportDetail:一对多关系,外键history_id
+      -一个历史记录可能包含多个针对不同的配置(ImportParse)的导入详情(ImportDetail)
     """
 
     IMPORT_STATUS_CHOICES = (
@@ -110,9 +110,12 @@ class ImportParse(OperateRecordModelBase):
     """
     文件解析表
 
-    ImportParse--UploadedFileInfo:一对一关系,外键file_id
+    UploadedFileInfo--ImportParse:一对多关系,外键file_id
+        - 一个压缩包中，可以包含多个配置文件
     ImportParse--ImportDetail:一对多关系,外键parse_id
-    ImportParse--ImportHistory:关系表ImportDetail
+    ImportHistory--ImportParse:多对多关系,关系表：ImportDetail
+        - 一个历史记录可能包含多个针对不同的配置(ImportParse)的导入详情(ImportDetail)
+        - 相同的文件可能被多次导入，那么也就会存在多个历史记录
     """
 
     TYPE_CHOICES = (

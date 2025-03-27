@@ -392,27 +392,48 @@ class GetPluginsResource(Resource):
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
 
     def perform_request(self, validated_request_data):
+        """
+        处理动作插件列表请求，返回分类整理的插件数据
+
+
+        Returns:
+            list: 结构化返回数据，包含三个分类：
+                - 内置插件（builtin来源）
+                - 周边系统插件（非builtin且非bk_plugin来源）
+                - 蓝鲸插件（bk_plugin来源）
+                每个分类包含名称字段和对应的插件数据列表
+        """
+        # 获取基础查询集，排除通知类和授权类插件
         queryset = ActionPlugin.objects.all().exclude(
             plugin_key__in=[ActionPluginType.NOTICE, ActionPluginType.AUTHORIZE]
         )
 
+        # 处理内置插件数据序列化
         internal_data = self.ActionPluginListSlz(
             queryset.filter(plugin_source="builtin"),
             many=True,
         ).data
+
+        # 初始化周边系统和蓝鲸插件数据容器
         all_peripheral_data = []
         all_bkplugin_data = []
+
+        # 处理非内置插件的分类处理
         for peripheral_plugin in queryset.exclude(plugin_source="builtin"):
             data = self.ActionPluginListSlz(peripheral_plugin).data
 
+            # 动态生成插件模板创建URL并更新描述信息
             new_info = peripheral_plugin.get_plugin_template_create_url(**validated_request_data)
             data["description"] = data["description"].format(plugin_url=new_info.get("url", ""))
-            data["new_info"] = new_info
+            data["new_info"] = new_info  # 附加插件创建相关信息
+
+            # 根据插件来源进行数据分类
             if data["plugin_source"] == "bk_plugin":
                 all_bkplugin_data.append(data)
             else:
                 all_peripheral_data.append(data)
 
+        # 构建最终响应数据结构
         rsp_data = [
             {"name": _("内置"), "children": internal_data},
             {"name": _("周边系统"), "children": all_peripheral_data},

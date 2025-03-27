@@ -57,6 +57,8 @@ def default_dict():
 class ActionPlugin(AbstractRecordModel):
     """
     响应动作插件表定义
+    ActionPlugin--ActionConfig: 一对多关系
+        - 一个动作插件可以配置给多个告警套餐使用
     """
 
     plugin_type = models.CharField(
@@ -250,7 +252,9 @@ class ActionPlugin(AbstractRecordModel):
 class ActionConfig(AbstractRecordModel):
     """
     告警套餐表
+    ActionPlugin--ActionConfig: 一对多关系
     """
+
     # 告警套餐的插件ID
     NOTICE_PLUGIN_ID = 1
 
@@ -367,11 +371,11 @@ class ActionInstance(AbstractRecordModel):
         if followed:
             # 如果是关注人通知，则用follower的配置
             notify_info = self.inputs.get("follow_notify_info", {})
-        
+
         # 初始化子动作列表和排除的通知方式列表
         sub_actions = []
         exclude_notice_ways = self.inputs.get("exclude_notice_ways", [])
-        
+
         # 处理微信机器人@用户配置，确保每个chat_id对应一个去重后的用户列表
         mention_users_list = notify_info.pop("wxbot_mention_users", [])
         wxbot_mention_users = defaultdict(list)
@@ -379,7 +383,7 @@ class ActionInstance(AbstractRecordModel):
             for chat_id, users in mention_users_dict.items():
                 wxbot_mention_users[chat_id].extend(users)
         wxbot_mention_users = {chat_id: set(users) for chat_id, users in wxbot_mention_users.items()}
-        
+
         # 遍历通知信息，创建子动作
         for notice_way, notice_receivers in notify_info.items():
             if notice_way in exclude_notice_ways:

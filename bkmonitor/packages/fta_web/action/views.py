@@ -30,6 +30,7 @@ from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 class ActionConfigViewSet(viewsets.ModelViewSet):
     """套餐配置视图"""
 
+    # 排除notice通知套餐
     queryset = ActionConfig.objects.exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID).all()
     serializer_class = serializers.ActionConfigDetailSlz
 

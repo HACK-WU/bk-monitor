@@ -157,21 +157,34 @@ class CollectConfigParse(BaseParse):
 
 class StrategyConfigParse(BaseParse):
     def check_msg(self):
+        """检查并处理策略配置文件内容，生成校验结果和相关配置数据
+
+        处理流程说明:
+            1. 基础校验：检查必须存在的name字段
+            2. 配置转换：将v1版策略转换为v2版格式
+            3. 配置验证：使用序列化器验证配置有效性
+            4. 通知组检查：验证用户组配置完整性
+            5. 数据采集：提取采集配置ID信息
+        """
+        # 前置条件检查：配置文件必须包含name字段
         if self.file_content.get("name") is None:
             return None
 
+        # 初始化返回数据结构（SUCCESS为默认状态）
         return_data = {
             "file_status": ImportDetailStatus.SUCCESS,
             "config": Strategy.convert_v1_to_v2(self.file_content),
             "name": self.file_content.get("name"),
         }
 
+        # 使用序列化器进行配置校验
         serializers = Strategy.Serializer(data=return_data["config"])
         try:
             serializers.is_valid(raise_exception=True)
         except ValidationError as e:
-
+            # 错误信息递归处理函数
             def error_msg(value):
+                """处理嵌套的错误信息结构，将错误详情提取到error_list"""
                 for k, v in list(value.items()):
                     if isinstance(v, dict):
                         error_msg(v)
@@ -181,25 +194,30 @@ class StrategyConfigParse(BaseParse):
                         for v_msg in v:
                             error_msg(v_msg)
 
+            # 收集并格式化校验错误信息
             error_list = []
             error_msg(e.detail)
             error_detail = "；".join(error_list)
             return_data.update(file_status=ImportDetailStatus.FAILED, error_msg=error_detail)
 
+        # 检查通知组名称配置
         action_list = return_data["config"]["actions"]
         for action_detail in action_list:
             for notice_detail in action_detail.get("user_group_list", []):
                 if notice_detail.get("name") is None:
                     return_data.update(file_status=ImportDetailStatus.FAILED, error_msg=_("缺少通知组名称"))
 
+        # 从查询条件中提取采集配置ID
         bk_collect_config_ids = []
         for query_config in return_data["config"]["items"][0]["query_configs"]:
             agg_condition = query_config.get("agg_condition", [])
 
+            # 处理不同格式的采集配置ID参数
             for condition_msg in agg_condition:
                 if "bk_collect_config_id" not in list(condition_msg.values()):
                     continue
 
+                # 处理数组格式和字符串格式的配置值
                 if isinstance(condition_msg["value"], list):
                     bk_collect_config_ids.extend(map(int, condition_msg["value"]))
                 else:

@@ -556,6 +556,7 @@ class GetStrategyListV2Resource(Resource):
             }
             ]
 
+        过滤支持的key:
         - id: 策略ID
         - name: 策略名称
         - user_group_id: 通知组ID

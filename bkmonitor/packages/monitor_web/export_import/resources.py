@@ -275,8 +275,8 @@ class ExportPackageResource(Resource):
         self.collect_config_ids = []
         self.strategy_config_ids = []
         self.view_config_ids = []
-        self.associated_plugin_list = []
-        self.associated_collect_config_list = []
+        self.associated_plugin_list = []  # 关联的插件ID列表
+        self.associated_collect_config_list = []  # 关联的采集配置列表
         self.list_data = []
         self.bk_biz_id = None
         self.username = ""
@@ -370,7 +370,7 @@ class ExportPackageResource(Resource):
             item_instances = ItemModel.objects.filter(strategy_id=strategy_config.id)
             query_configs = QueryConfigModel.objects.filter(item_id__in=list({item.id for item in item_instances}))
 
-            # 解析查询条件中的采集配置ID
+            # 解析查询条件中的采集配置ID，目的将关联插件也一并导出
             for query_config in query_configs:
                 for condition in query_config.config.get("agg_condition", []):
                     if "bk_collect_config_id" not in list(condition.values()):
@@ -387,6 +387,7 @@ class ExportPackageResource(Resource):
 
         # 计算所有关联的采集插件
         all_collect_ids = list(set(self.collect_config_ids + self.associated_collect_config_list))
+        # 获取关联的插件ID
         self.associated_plugin_list = list(
             {config.plugin_id for config in CollectConfigMeta.objects.filter(id__in=all_collect_ids)}
         )
@@ -402,6 +403,7 @@ class ExportPackageResource(Resource):
         }
 
     def make_collect_config(self):
+        # 加入策略中关联的采集配置ID
         self.collect_config_ids.extend(self.associated_collect_config_list)
         all_collect_config_ids = list(set(self.collect_config_ids))
         if not all_collect_config_ids:
@@ -517,10 +519,27 @@ class ExportPackageResource(Resource):
                 fs.write(json.dumps(dashboard, indent=2, ensure_ascii=False))
 
     def make_strategy_config_file(self):
+        """生成策略配置文件到指定目录
+
+        功能说明：
+        1. 当存在策略配置ID时，创建策略配置目录
+        2. 通过API获取完整策略配置信息
+        3. 处理指标拆分和特殊数据源类型的配置转换
+        4. 将处理后的策略配置写入JSON文件
+
+        流程说明：
+        - 根据策略配置ID获取策略列表
+        - 对主机/服务类型策略进行维度扩展处理
+        - 对自定义上报和插件采集类指标进行数据标签替换
+        - 生成标准化策略配置文件
+        """
         if not self.strategy_config_ids:
             return
 
+        # 创建策略配置存储目录
         os.makedirs(os.path.join(self.package_path, "strategy_config_directory"))
+
+        # 获取策略配置列表（包含用户组详细信息）
         result = resource.strategies.get_strategy_list_v2(
             bk_biz_id=self.bk_biz_id,
             conditions=[{"key": "id", "value": self.strategy_config_ids}],
@@ -528,31 +547,38 @@ class ExportPackageResource(Resource):
             page_size=0,
             with_user_group=True,
             with_user_group_detail=True,
-            # 导出时不要转换 grafana 相关配置
+            # 导出时保留原始配置不转换grafana相关配置
             convert_dashboard=False,
         )["strategy_config_list"]
 
+        # 目标类型与维度映射关系（用于指标拆分策略处理）
         target_type_to_dimensions = {
             TargetObjectType.HOST: ["bk_target_ip", "bk_target_cloud_id"],
             TargetObjectType.SERVICE: ["bk_target_service_instance_id"],
         }
+
+        # 遍历处理每个策略配置
         for result_data in result:
             strategy_config_file_name = result_data.get("name")
             strategy_id = result_data.pop("id")
-            # 判断是否是指标拆分字段，如果是，处理为未拆分策略配置
+
+            # 处理指标拆分策略配置
             for item_msg in result_data["items"]:
-                item_msg["target"] = [[]]
+                item_msg["target"] = [[]]  # 重置目标配置
                 for query_config in item_msg["query_configs"]:
+                    # 处理CMDB层级指标的特殊配置
                     if query_config.get("result_table_id", "").endswith("_cmdb_level"):
+                        # 还原原始配置并扩展维度信息
                         extend_msg = query_config["origin_config"]
                         strategy_instance = StrategyModel.objects.get(id=strategy_id)
                         target_type = strategy_instance.target_type
                         query_config["result_table_id"] = extend_msg["result_table_id"]
                         query_config["agg_dimension"] = extend_msg["agg_dimension"]
                         query_config["extend_fields"] = {}
+                        # 添加目标类型对应的默认维度
                         query_config["agg_dimension"].extend(target_type_to_dimensions[target_type])
 
-                    # 如果需要的话，自定义上报和插件采集类指标导出时将结果表ID替换为 data_label
+                    # 处理数据标签导出配置（自定义上报和插件采集类型）
                     data_label = query_config.get("data_label", None)
                     if (
                         settings.ENABLE_DATA_LABEL_EXPORT
@@ -562,11 +588,13 @@ class ExportPackageResource(Resource):
                             in [DataSourceLabel.BK_MONITOR_COLLECTOR, DataSourceLabel.CUSTOM]
                         )
                     ):
+                        # 替换结果表ID为数据标签
                         query_config["metric_id"] = re.sub(
                             rf"\b{query_config['result_table_id']}\b", data_label, query_config["metric_id"]
                         )
                         query_config["result_table_id"] = data_label
 
+            # 写入处理后的策略配置到文件
             with open(
                 os.path.join(
                     self.package_path,
@@ -709,17 +737,25 @@ class HistoryDetailResource(Resource):
         return all_count, plugin_count, collect_count, strategy_count, view_count
 
     def perform_request(self, validated_request_data):
+        """处理导入配置请求并返回格式化结果
+
+        Raises:
+            ImportHistoryNotExistError: 当指定导入历史记录不存在时抛出
+        """
+        # 获取并验证导入历史记录
         history_id = validated_request_data["import_history_id"]
         bk_biz_id = validated_request_data["bk_biz_id"]
         history_instance = ImportHistory.objects.filter(id=history_id, bk_biz_id=bk_biz_id).first()
         if not history_instance:
             raise ImportHistoryNotExistError
 
+        # 获取基础配置列表并分类提取成功项
         config_list = list(
             ImportDetail.objects.filter(history_id=history_id).values(
                 "id", "name", "type", "import_status", "error_msg", "label", "config_id", "parse_id"
             )
         )
+        # 分类提取成功导入的配置ID
         collect_ids = [
             config["config_id"]
             for config in config_list
@@ -731,40 +767,52 @@ class HistoryDetailResource(Resource):
             if config["type"] == ConfigType.STRATEGY and config["import_status"] == ImportDetailStatus.SUCCESS
         ]
 
+        # 批量查询关联配置实例
         collect_instances = CollectConfigMeta.objects.filter(id__in=collect_ids).select_related("deployment_config")
         strategy_instances = StrategyModel.objects.filter(id__in=strategy_ids)
         item_instances = ItemModel.objects.filter(strategy_id__in=strategy_ids)
+
+        # 构建策略与监控项的映射关系
         strategy_to_items = {}
         for item_instance in item_instances:
             strategy_to_items[item_instance.strategy_id] = item_instance
+
+        # 构建目标类型映射表（采集配置和策略配置）
         target_map = {ConfigType.COLLECT: {}, ConfigType.STRATEGY: {}}
+        # 处理采集配置的目标信息
         for instance in collect_instances:
             target_map[ConfigType.COLLECT][str(instance.id)] = {
                 "target_type": instance.target_object_type,
-                "exist_target": True if instance.deployment_config.target_nodes else False,
+                "exist_target": bool(instance.deployment_config.target_nodes),
             }
+        # 处理策略配置的目标信息
         for instance in strategy_instances:
             target = strategy_to_items[instance.id].target
             target_map[ConfigType.STRATEGY][str(instance.id)] = {
                 "target_type": instance.target_type,
-                "exist_target": target and target[0],
+                "exist_target": target and target[0],  # 检查是否存在有效目标
             }
 
+        # 补充配置项的元数据信息
         for config in config_list:
             config["uuid"] = ImportParse.objects.get(id=config["parse_id"]).uuid
             config.update(target_map.get(config["type"], {}).get(config["config_id"], {}))
 
+        # 处理标签信息格式化
         label_map = {}
         for config in config_list:
             if config["type"] == ConfigType.VIEW:
-                break
+                break  # 视图配置不需要处理标签
+            # 缓存并格式化标签信息
             if not label_map.get(config["label"]):
                 label_msg = resource.commons.get_label_msg(config["label"])
-                label_info = "{}-{}".format(label_msg["first_label_name"], label_msg["second_label_name"])
+                label_info = f"{label_msg['first_label_name']}-{label_msg['second_label_name']}"
                 label_map[config["label"]] = label_info
             config["label"] = label_map[config["label"]]
+            # 移除冗余字段
             config.pop("id", "config_id")
 
+        # 统计各类型配置数量
         all_count, plugin_count, collect_count, strategy_count, view_count = self.get_count_msg(
             config_list, history_instance.status
         )
@@ -886,26 +934,48 @@ class UploadPackageResource(Resource):
                 )
 
     def parse_strategy_config(self):
+        """解析策略配置文件并创建对应数据库记录
+
+        功能说明:
+        - 遍历指定策略配置目录下的文件
+        - 过滤无效文件后解析每个策略配置
+        - 验证关联的采集配置是否完整
+        - 将解析结果持久化到ImportParse模型
+
+        参数说明:
+        self: 隐式参数，包含当前实例关联的file_id、parse_path等属性
+
+        返回值说明:
+        无显式返回值，执行结果通过数据库操作体现
+        """
+        # 构造策略配置目录路径并进行存在性检查
         strategy_config_dir = os.path.join(self.parse_path, "strategy_config_directory")
         if not os.path.exists(strategy_config_dir):
             return
 
+        # 获取目录下所有文件并过滤已成功保存的采集配置ID
         strategy_filenames = os.listdir(strategy_config_dir)
         import_collect_configs = ImportParse.objects.filter(
             type=ConfigType.COLLECT, file_id=self.file_id, file_status=ImportDetailStatus.SUCCESS
         )
         import_collect_config_ids = [collect_config_msg.config["id"] for collect_config_msg in import_collect_configs]
+
+        # 遍历处理每个策略配置文件
         for filename in strategy_filenames:
-            # 避免用户通过ide编辑配置，遗留ide缓存文件
+            # 跳过系统/IDE生成的隐藏文件
             if filename.startswith("."):
                 logger.info(f"strategy parse ignore: {filename}")
                 continue
+
+            # 初始化解析器并执行配置解析
             parse_manager = StrategyConfigParse(file_path=os.path.join(strategy_config_dir, filename))
             parse_result, bk_collect_config_ids = parse_manager.parse_msg()
 
+            # 验证关联的采集配置是否全部存在
             if not set(bk_collect_config_ids).issubset(set(import_collect_config_ids)):
                 parse_result.update({"file_status": ImportDetailStatus.FAILED, "error_msg": _("关联采集配置未发现")})
 
+            # 创建策略配置解析记录
             ImportParse.objects.create(
                 name=parse_result["name"],
                 label=parse_result["config"].get("scenario", ""),
@@ -1066,9 +1136,6 @@ class ImportConfigResource(Resource):
         3、为每个配置文件创建一个导入详情记录，并绑定绑定历史记录
         4、执行导入逻辑，并导入历史记录状态为IMPORTING
         5、更新“导入详情”的导入状态为IMPORTED
-
-        Returns:
-            dict: 包含导入历史记录ID的字典，格式如 {"import_history_id": 123}
 
         Raises:
             ImportConfigError: 当没有有效解析文件或未选择配置时抛出

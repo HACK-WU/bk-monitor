@@ -13,7 +13,7 @@ import hashlib
 import os
 import shutil
 import tarfile
-from typing import Optional
+from typing import Union
 
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
@@ -26,7 +26,7 @@ from monitor_web.models.plugin import CollectorPluginMeta
 class BaseFileManager(object):
     TYPE = ""
 
-    def __init__(self, file: Optional[UploadedFileInfo, int]):
+    def __init__(self, file: Union[UploadedFileInfo, int]):
         self._file_content = None
         if isinstance(file, UploadedFileInfo):
             _file = file
