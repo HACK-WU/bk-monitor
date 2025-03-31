@@ -14,7 +14,6 @@ import json
 import logging
 from collections import defaultdict
 
-from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -119,7 +118,7 @@ class QueryServicesDetailResource(Resource):
             sample_type_parts = svr["sample_type"].split("/")
             key = svr["sample_type"]
             name = sample_type_parts[0].upper()
-            default_agg_method = settings.APM_PROFILING_AGG_METHOD_MAPPING.get(name, "SUM")
+            default_agg_method = agg_method.get(name, "SUM")
 
             if sample_type_parts[-1] == "count" and key not in cls.COUNT_ALLOW_SAMPLE_TYPES:
                 continue
@@ -132,10 +131,6 @@ class QueryServicesDetailResource(Resource):
                     "default_agg_method": default_agg_method,
                 }
             )
-
-        for item in res:
-            if item["name"] in agg_method.keys():
-                item["default_agg_method"] = agg_method.get(item["name"])
 
         return res
 
