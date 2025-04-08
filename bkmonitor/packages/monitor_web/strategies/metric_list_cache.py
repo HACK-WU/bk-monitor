@@ -1691,7 +1691,7 @@ class BkmonitorK8sMetricCacheManager(BkmonitorMetricCacheManager):
 
 class BkMonitorAlertCacheManager(BaseMetricCacheManager):
     """
-    批量缓存监控告警事件指标
+    批量缓存监控告警事件指标(关联子策略的名称)
     """
 
     data_sources = ((DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.ALERT),)

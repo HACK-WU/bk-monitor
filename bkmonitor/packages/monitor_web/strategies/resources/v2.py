@@ -3740,14 +3740,38 @@ class GetIntelligentDetectAccessStatusResource(Resource):
 
 class UpdateMetricListByBizResource(Resource):
     """
-    按业务更新指标缓存列表
+    按业务更新指标缓存列表的API接口类
+
+    该资源类实现按业务ID异步更新指标缓存列表的功能，通过Celery任务控制更新频率，
+    保证20分钟内同一个业务ID最多触发一次指标缓存更新任务
     """
 
     class RequestSerializer(serializers.Serializer):
+        """
+        请求参数序列化器
+
+        参数：
+        bk_biz_id -- 需要更新指标缓存的业务ID，整数类型，必填字段
+        """
+
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
 
     def perform_request(self, validated_request_data):
-        # 查询该任务是否已有执行任务
+        """
+        执行指标缓存更新请求的核心方法
+
+        参数：
+        validated_request_data -- 经过验证的请求数据字典，包含bk_biz_id字段
+
+        返回值：
+        str -- 当前任务的Celery任务ID
+
+        处理逻辑：
+        1. 检查是否已有未过期的任务正在执行
+        2. 如果存在过期任务（超过20分钟）则重新触发
+        3. 不存在记录时创建新任务
+        """
+        # 尝试获取已有配置记录
         try:
             config = ApplicationConfig.objects.get(
                 cc_biz_id=validated_request_data['bk_biz_id'],

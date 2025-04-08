@@ -285,9 +285,11 @@ def update_metric_list():
 
 @shared_task(queue="celery_resource")
 def update_metric_list_by_biz(bk_biz_id):
+    """根据业务ID更新指标缓存列表"""
     from monitor.models import ApplicationConfig
     from monitor_web.strategies.metric_list_cache import SOURCE_TYPE
 
+    # 需要关联业务的数据源类型列表
     source_type_use_biz = [
         "BKDATA",
         "LOGTIMESERIES",
@@ -298,17 +300,23 @@ def update_metric_list_by_biz(bk_biz_id):
         "BKFTAALERT",
         "BKMONITORK8S",
     ]
+    # 需要业务ID大于0的数据源类型列表
     source_type_gt_0 = ["BKDATA"]
 
+    # 遍历所有数据源类型进行缓存更新
     for source_type, source in list(SOURCE_TYPE.items()):
-        # 部分环境可用禁用数据平台指标缓存
+        # 跳过被禁用的数据平台指标缓存
         if not settings.ENABLE_BKDATA_METRIC_CACHE and source_type == "BKDATA":
             continue
 
         try:
+            # 处理需要关联业务的数据源类型
             if source_type in source_type_use_biz:
+                # 过滤需要业务ID>0但当前业务不符合的情况
                 if source_type in source_type_gt_0 and bk_biz_id <= 0:
                     continue
+
+                # 执行具体的指标缓存更新操作
                 start = time.time()
                 logger.info("update metric list({}) by biz({})".format(source_type, bk_biz_id))
                 source(bk_biz_id).run(delay=False)
@@ -317,6 +325,7 @@ def update_metric_list_by_biz(bk_biz_id):
         except BaseException as e:
             logger.exception("Failed to update metric list(%s) for (%s)", source_type, e)
 
+    # 清理该业务的指标缓存更新标记
     ApplicationConfig.objects.filter(cc_biz_id=bk_biz_id, key=f"{bk_biz_id}_update_metric_cache").delete()
 
 
