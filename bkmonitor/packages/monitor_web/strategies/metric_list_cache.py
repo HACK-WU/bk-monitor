@@ -244,39 +244,56 @@ class BaseMetricCacheManager:
         }
 
     def _run(self):
+        """执行指标缓存更新任务
+
+        该函数负责从数据源获取指标信息，对比现有指标缓存池，进行差量更新（创建/更新/删除）
+        主要流程包括：
+        1. 初始化待处理列表，刷新指标使用频率
+        2. 获取当前指标缓存池数据并构建哈希字典
+        3. 遍历数据源表结构，处理每个指标信息
+        4. 执行批量创建、更新、删除操作
+        5. 记录操作日志及耗时统计
+        """
+        # 记录任务启动时间及日志
         start_time = time.time()
         logger.info(f"[start] update metric {self.__class__.__name__}({self.bk_biz_id})")
 
-        # 集中整理后进行差量更新
+        # 初始化待处理指标容器
         to_be_create = []
         to_be_update = []
         to_be_delete = []
+        # 刷新指标使用频率数据
         self.refresh_metric_use_frequency()
 
+        # 获取当前业务下的指标缓存数据
         metric_pool = self.get_metric_pool()
         if self.bk_biz_id is not None:
             metric_pool = metric_pool.filter(bk_biz_id=self.bk_biz_id)
         metric_pool_values = metric_pool.only(*METRIC_POOL_KEYS)
 
-        # metric_hash_dict
-        metric_hash_dict = {}
+        # 构建指标哈希字典（用于去重和存在性判断）
+        metric_hash_dict: Dict[str, MetricListCache] = {}
         for m in list(metric_pool_values):
             metric_id = "{}.{}.{}.{}".format(m.bk_biz_id, m.result_table_id, m.metric_field, m.related_id)
             if metric_id in metric_hash_dict:
+                # 处理重复指标：将重复条目加入待删除列表
                 to_be_delete.append(m.id)
             else:
                 metric_hash_dict[metric_id] = m
 
+        # 遍历数据源中的所有结果表
         for table in self.get_tables():
+            # 处理每个结果表中的指标
             for metric in self.get_metrics_by_table(table):
-                # 处理result_table_id长度
+                # 处理结果表ID长度限制（超过256字符截断）
                 if len(metric.get("result_table_id", "")) > 256:
                     metric["result_table_id"] = metric["result_table_id"][:256]
 
+                # 跳过特定类型的日志表
                 if metric.get("result_table_id", "") in ["bkunifylogbeat_task.base", "bkunifylogbeat_common.base"]:
                     continue
 
-                # 补全维度字段
+                # 补全维度字段的默认属性
                 dimensions = metric.get("dimensions", [])
                 for dimension in dimensions:
                     if "is_dimension" not in dimension:
@@ -284,6 +301,7 @@ class BaseMetricCacheManager:
                     if "type" not in dimension:
                         dimension["type"] = DimensionFieldType.String
 
+                # 更新指标使用频率数据
                 metric.update(
                     dict(
                         use_frequency=self.metric_use_frequency.get(
@@ -293,26 +311,29 @@ class BaseMetricCacheManager:
                         )
                     )
                 )
+
+                # 生成唯一指标标识
                 metric_id = "{}.{}.{}.{}".format(
                     metric["bk_biz_id"],
                     metric.get("result_table_id", ""),
                     metric["metric_field"],
                     metric.get("related_id", ""),
                 )
+
+                # 处理指标实例的创建/更新逻辑
                 metric_instance = metric_hash_dict.pop(metric_id, None)
                 if metric_instance is None:
+                    # 创建新指标实例
                     _metric = MetricListCache(**metric)
                     metric["readable_name"] = _metric.get_human_readable_name()
                     _metric.readable_name = metric["readable_name"]
                     _metric.metric_md5 = count_md5(metric)
-
                     logger.info("Going to add %s to cache creating list", metric_id)
                     to_be_create.append(_metric)
                     continue
 
-                # readable_name 可能会因用户修改data_label而变更，因此跟随周期任务自动更新
+                # 更新已有指标实例
                 metric["readable_name"] = metric_instance.get_human_readable_name()
-
                 metric["metric_md5"] = count_md5(metric)
                 if not metric_instance.metric_md5 or metric_instance.metric_md5 != metric["metric_md5"]:
                     metric["last_update"] = datetime.now()
@@ -321,12 +342,12 @@ class BaseMetricCacheManager:
                     to_be_update.append(metric)
                     metric_instance.metric_md5 = metric["metric_md5"]
 
-        # create
+        # 批量创建新指标
         if to_be_create:
             logger.info("Going to bulk create %s metric caches", len(to_be_create))
             MetricListCache.objects.bulk_create(to_be_create, batch_size=50)
 
-        # update
+        # 批量更新现有指标
         if to_be_update:
             logger.info("Going to bulk update %s metric caches", len(to_be_update))
             for metrics in chunks(to_be_update, 500):
@@ -334,6 +355,7 @@ class BaseMetricCacheManager:
                 for metric in metrics:
                     _metric = MetricListCache(**metric)
                     init_md5_metrics.append(_metric)
+                # 获取所有可更新字段
                 fields = [
                     field.name
                     for field in MetricListCache._meta.get_fields(include_parents=False)
@@ -341,12 +363,13 @@ class BaseMetricCacheManager:
                 ]
                 MetricListCache.objects.bulk_update(init_md5_metrics, fields, batch_size=500)
 
-        # clean (手动添加的自定义指标标记md5为0，不做删除处理）
+        # 清理无效指标（保留手动添加的自定义指标）
         to_be_delete.extend([m.id for m in list(metric_hash_dict.values()) if m.metric_md5 != "0"])
         if to_be_delete:
             logger.info("Going to delete metric caches %s", list(metric_hash_dict.keys()))
             MetricListCache.objects.filter(id__in=to_be_delete).delete()
 
+        # 记录任务完成日志及耗时统计
         logger.info(
             f"[end] update metric {self.__class__.__name__}({self.bk_biz_id}) "
             f"create {len(to_be_create)} metric,update {len(to_be_update)} metric, delete {len(to_be_delete)} metric."
