@@ -1,7 +1,6 @@
 from collections import defaultdict
 from typing import Dict, List
 
-import arrow
 from django.core.management.base import BaseCommand
 from django.db.models import Q
 from django.utils.translation import gettext as _
@@ -36,9 +35,8 @@ doc = """
     处理方案：
         - 修改数据库，将这两个内置策略的query_config内容替换为正确的promql查询语句。
         - 判断条件：
-            - 如果近期1分钟内这两个策略有被创建过或者更新过，则对query_config进行替换。
-            - 如果这两个策略曾经被修改过，但是未修改query_config，则对query_config进行替换。
-        - 剩余的未进行修改的内置策略（之前创建的，但是从未被修改过的策略）输出策略信息，人工处理。
+            - 未修改query_config，则对query_config进行替换。
+        - 最后输出被修改过query_config的策略的相关信息，待人工处理。
 
     处理步骤：
         1. 在数据库中查询出这两个内置策略、及其对应的query_config(查询配置)、item_model(监控项配置)
@@ -64,7 +62,8 @@ TERMINATED_REASON_METRIC_FIELD = 'kube_pod_container_status_terminated_reason'
 # pod近30分钟重启次数过多，promql
 RESTARTS_TOTAL_PROMQL = (
     r'increase(sum by (pod_name, bcs_cluster_id, namespace, container_name)'
-    r'(bkmonitor:kube_pod_container_status_restarts_total{bk_job="kube-state-metrics"})[30m:])'
+    r'(bkmonitor:kube_pod_container_status_restarts_total{job="kube-state-metrics",'
+    r'pod_name!="",namespace!="bkmonitor-operator",container!="tke-monitor-agent"})[30m:])'
 )
 # 因OOM重启，promql
 TERMINATED_REASON_PROMQL = (
@@ -165,6 +164,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         preview = not options["no_preview"]
+        print(kube_state_metrics_analysis.__doc__)
         kube_state_metrics_analysis(preview)
 
 
@@ -222,6 +222,8 @@ class QueryConfigProcessor:
         qc = {key: self[key] for key in default_query_config.keys()}
         # 对列表进行排序，使得顺序一致
         self.handle_list(qc)
+        print(self["strategy_id"], qc, "\n", default_query_config)
+        print(qc == default_query_config)
         return qc == default_query_config
 
 
@@ -232,8 +234,8 @@ def kube_state_metrics_analysis(preview=True):
     非预览模式下打印未处理的策略的相关信息。
 
     usage:
-        python manage.py kube_state_analysis.py   # 预览模式
-        python manage.py kube_state_analysis.py --no_preview # 非预览模式
+        python manage.py kube_state_analysis    # 预览模式
+        python manage.py kube_state_analysis --no_preview # 非预览模式
 
     """
     print()
@@ -242,6 +244,9 @@ def kube_state_metrics_analysis(preview=True):
     else:
         print("以下打印的是未处理的策略的相关信息")
     print("策略id、策略名称、业务ID、关联的查询配置ID列表:")
+
+    # 处理模式
+    handle_mode = not preview
 
     restarts_total_default_query_config = restarts_total_default_strategy["items"][0]["query_configs"][0]
     terminated_reason_default_query_config = terminated_reason_default_strategy["items"][0]["query_configs"][0]
@@ -281,72 +286,55 @@ def kube_state_metrics_analysis(preview=True):
     query_configs_to_update = []
     items_to_update = []
 
-    # 获取到日期时间的时间戳
-    now = arrow.now('Asia/Shanghai').timestamp
-    time_delta = 1 * 60  # 1分钟
-
     for strategy in strategies:
         try:
-            create_time = arrow.get(strategy.create_time).timestamp
-            update_time = arrow.get(strategy.update_time).timestamp
+            promql = None
+            related_item_ids = set()  # 关联的监控项ID
+            not_handle_qc_ids = []  # 未处理的query_config ID
+            for qc in query_configs_mapping[strategy.id]:
+                default_qc = promql_mapping[qc.config.get("metric_field")]["default_query_configs"]
 
-            # 是否被更新过，创建时间和更新时间差值大于2秒，则认为被更新过
-            is_updated = abs(create_time - update_time) > 2
-            # 是否在最近被创建或者更新过
-            is_recently_modified = now - create_time < time_delta or now - update_time < time_delta
-            if is_recently_modified or is_updated:
-                promql = None
-                related_item_ids = set()  # 关联的监控项ID
-                query_config_ids = []
-                for qc in query_configs_mapping[strategy.id]:
-                    default_qc = promql_mapping[qc.config.get("metric_field")]["default_query_configs"]
-
-                    # 被更新过，且更新后与默认query_config配置不一致，则不处理
-                    if (
-                        not is_recently_modified
-                        and is_updated
-                        and not QueryConfigProcessor(qc).is_same_query_config(default_qc)
-                    ):
-                        query_config_ids.append(qc.id)
-                        continue
-
-                    # 开启预览模式，则不处理
-                    if preview:
-                        previewed_strategies_info[f"{strategy.id}、{strategy.name}、{strategy.bk_biz_id}"].append(qc.id)
-                        continue
-
-                    related_item_ids.add(qc.item_id)
-                    promql = promql_mapping[qc.config.get("metric_field")]["promql"]
-                    # 将bk_monitor..kube_pod_container_status_restarts_total替换为
-                    # bk_monitor:kube_pod_container_status_restarts_total
-                    metric_id = qc.metric_id.replace("..", ":")
-
-                    # 更新QueryConfigModel
-                    qc.data_source_label = "prometheus"
-                    qc.metric_id = metric_id  # promql内容超过字段长度
-                    qc.config = {
-                        "promql": promql,
-                        "agg_interval": qc.config.get("agg_interval", ""),
-                        "functions": qc.config.get("functions", []),
-                    }
-                    query_configs_to_update.append(qc)
-
-                # 不开启预览模式，则打印未处理的策略相关信息
-                if not preview and not promql:
-                    print(f"{strategy.id}、{strategy.name}、{strategy.bk_biz_id}、{query_config_ids}")
+                # 有更改query_config，则不处理
+                if not QueryConfigProcessor(qc).is_same_query_config(default_qc):
+                    print(f"不处理{strategy.id}")
+                    not_handle_qc_ids.append(qc.id)
                     continue
 
-                # 修改关联监控项的origin_sql字段
-                for item in items_mapping[strategy.id]:
-                    if item.id in related_item_ids:
-                        item.origin_sql = promql
-                        items_to_update.append(item)
+                # 开启预览模式，则不处理
+                if preview:
+                    previewed_strategies_info[f"{strategy.id}、{strategy.name}、{strategy.bk_biz_id}"].append(qc.id)
+                    continue
 
-            else:
-                query_config_ids = [qc.id for qc in query_configs_mapping[strategy.id]]
-                # 不开启预览模式，则打印未处理的策略相关信息
-                if not preview:
-                    print(f"{strategy.id}、{strategy.name}、{strategy.bk_biz_id}、{query_config_ids}")
+                related_item_ids.add(qc.item_id)
+                promql = promql_mapping[qc.config.get("metric_field")]["promql"]
+                # 将bk_monitor..kube_pod_container_status_restarts_total替换为
+                # bk_monitor:kube_pod_container_status_restarts_total
+                metric_id = qc.metric_id.replace("..", ":")
+
+                # 更新QueryConfigModel
+                qc.data_source_label = "prometheus"
+                qc.metric_id = metric_id  # promql内容超过字段长度
+                qc.config = {
+                    "promql": promql,
+                    "agg_interval": qc.config.get("agg_interval", ""),
+                    "functions": qc.config.get("functions", []),
+                }
+                query_configs_to_update.append(qc)
+
+            # 处理模式下，需要打印未处理的query_config的策略信息
+            if handle_mode and not_handle_qc_ids:
+                print(f"{strategy.id}、{strategy.name}、{strategy.bk_biz_id}、{not_handle_qc_ids}")
+
+            # promql为空，无需修改origin_sql
+            if not promql:
+                continue
+
+            # 修改关联监控项的origin_sql字段
+            for item in items_mapping[strategy.id]:
+                if item.id in related_item_ids:
+                    item.origin_sql = promql
+                    items_to_update.append(item)
+
         except Exception as e:
             print(f"ERROR: 处理[{strategy.id}][{strategy.name}]策略时发生错误， error: {e}")
             continue
@@ -362,3 +350,16 @@ def kube_state_metrics_analysis(preview=True):
         ItemModel.objects.bulk_update(items_to_update, fields=["origin_sql"])
 
     print("\n执行结束\n")
+
+
+# 回滚
+from bkmonitor.models import QueryConfigModel, StrategyHistoryModel
+from bkmonitor.strategy.new_strategy import Strategy
+
+
+def rollback(strategy_id):
+    record = StrategyHistoryModel.objects.filter(strategy_id=strategy_id).first()
+    s = Strategy(**record.content)
+    s.id = strategy_id
+    print(QueryConfigModel.objects.filter(strategy_id=strategy_id).delete())
+    s.save()
