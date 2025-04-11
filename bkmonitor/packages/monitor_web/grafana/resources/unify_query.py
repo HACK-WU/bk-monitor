@@ -35,7 +35,7 @@ from bkmonitor.data_source import (
     load_data_source,
 )
 from bkmonitor.data_source.unify_query.query import UnifyQuery
-from bkmonitor.models import MetricListCache
+from bkmonitor.models import BCSCluster, MetricListCache
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.strategy.new_strategy import get_metric_id
 from bkmonitor.utils.range import load_agg_condition_instance
@@ -1012,25 +1012,12 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
 
     def translate_dimensions(self, params: Dict, data: List):
         """
-        维度翻译函数，将监控数据中的各类维度ID转换为可读名称
-        当前支持翻译的维度：
-            - bk_host_id: 主机ID
-            - service_instance_id: 服务实例ID
-            - bk_target_service_instance_id: 目标服务实例ID
-            - bk_obj_id: 对象类型ID
-            - bk_inst_id: 实例ID
-
-        Returns:
-            List: 处理后的监控数据列表，每个元素增加了dimensions_translation字段:
-                - dimensions_translation: 包含转换后的维度名称的字典
+        维度翻译
         """
         if not data:
             return data
 
-        # 处理主机维度翻译：通过主机ID获取对应的展示名称
-        # 1. 从数据中提取所有有效的主机ID
-        # 2. 调用CMDB接口批量获取主机信息
-        # 3. 构建主机ID到展示名称的映射字典
+        # 主机ID
         host_id_list = {row["dimensions"]["bk_host_id"] for row in data if row["dimensions"].get("bk_host_id")}
         if host_id_list:
             try:
@@ -1041,16 +1028,15 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
             hosts = []
         host_id_to_name = {str(host.bk_host_id): host.display_name for host in hosts}
 
-        # 处理服务实例维度翻译：收集所有服务实例ID并批量查询
-        # 1. 收集两种服务实例ID字段（bk_service_instance_id和bk_target_service_instance_id）
-        # 2. 调用CMDB接口获取服务实例详细信息
-        # 3. 构建服务实例ID到名称的映射字典
-        service_instance_id_list = set()
+        service_instance_id_list = set()  # 服务实例
+        bcs_cluster_id_list = set()  # BCS集群
         for row in data:
             if row["dimensions"].get("bk_service_instance_id"):
                 service_instance_id_list.add(row["dimensions"]["bk_service_instance_id"])
             if row["dimensions"].get("bk_target_service_instance_id"):
                 service_instance_id_list.add(row["dimensions"]["bk_target_service_instance_id"])
+            if row["dimensions"].get("bcs_cluster_id"):
+                bcs_cluster_id_list.add(row["dimensions"]["bcs_cluster_id"])
         if service_instance_id_list:
             try:
                 service_instances = api.cmdb.get_service_instance_by_id(
@@ -1064,10 +1050,7 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
             str(service_instance.service_instance_id): service_instance.name for service_instance in service_instances
         }
 
-        # 处理拓扑节点维度翻译：动态获取拓扑树信息
-        # 1. 延迟加载拓扑树数据（仅在需要时调用接口）
-        # 2. 获取所有拓扑节点及其关联关系
-        # 3. 构建对象类型ID和实例ID到名称的映射
+        # 节点类型、节点名称
         bk_obj_id_to_name = {}
         bk_inst_id_to_name = {}
         topo_tree = None
@@ -1085,16 +1068,23 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
                     bk_obj_id_to_name[bk_obj_id] = node.bk_obj_name
                     bk_inst_id_to_name[bk_inst_id] = node.bk_inst_name
 
-        # 统一执行维度字段翻译
-        # 1. 定义各维度字段对应的映射字典
-        # 2. 遍历所有数据行，逐个字段进行翻译
-        # 3. 将翻译结果存入dimensions_translation字段
+        # BCS集群
+        if bcs_cluster_id_list:
+            bcs_clusters = BCSCluster.objects.filter(
+                bk_biz_id=params["bk_biz_id"], bcs_cluster_id__in=bcs_cluster_id_list
+            ).only("bcs_cluster_id", "name")
+            bcs_cluster_to_name = {cluster.bcs_cluster_id: cluster.name for cluster in bcs_clusters}
+        else:
+            bcs_cluster_to_name = {}
+
+        # 字段映射
         field_mapper = {
             "bk_host_id": host_id_to_name,
             "service_instance_id": service_instance_id_to_name,
             "bk_target_service_instance_id": service_instance_id_to_name,
             "bk_obj_id": bk_obj_id_to_name,
             "bk_inst_id": bk_inst_id_to_name,
+            "bcs_cluster_id": bcs_cluster_to_name,
         }
         for row in data:
             dimensions_translation = {}
@@ -1127,7 +1117,6 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
         unit = self.get_unit(metrics, params)
         for row in series:
             row["unit"] = unit
-
         return {
             "series": series,
             "metrics": metrics,
