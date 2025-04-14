@@ -308,12 +308,12 @@ class AbstractConfig(metaclass=abc.ABCMeta):
             config.id = obj.id
 
         # 为超出数据库记录数量的配置对象设置ID为0，表示这些配置未关联到任何记录
-        for config in configs[len(objs):]:
+        for config in configs[len(objs) :]:
             config.id = 0
 
         # 如果数据库记录数量多于配置对象数量，删除多余的记录
-        if objs[len(configs):]:
-            obj_ids = [obj.id for obj in objs[len(configs):]]
+        if objs[len(configs) :]:
+            obj_ids = [obj.id for obj in objs[len(configs) :]]
             model.objects.filter(id__in=obj_ids).delete()
             config_cls.delete_useless(obj_ids)
 
@@ -1245,6 +1245,7 @@ class QueryConfig(AbstractConfig):
         serializer = serializer_class(data=kwargs)
         serializer.is_valid(raise_exception=True)
 
+        # 将验证后的数据设置到当前实例，例如self.agg_dimension=serializer.validated_data["agg_dimension"]
         for field, value in serializer.validated_data.items():
             setattr(self, field, value)
 
@@ -1308,11 +1309,26 @@ class QueryConfig(AbstractConfig):
         self.id = obj.id
 
     def save(self):
+        """保存查询配置信息，处理创建或更新逻辑
+
+        方法流程:
+        1. 执行前置数据清洗和维度补充操作
+        2. 根据ID判断执行创建或更新操作：
+           - 当id>0时尝试获取已有配置，不存在时执行新建
+           - 当id<=0时直接创建新配置
+        3. 对更新场景：
+           - 使用对应数据源的序列化器验证配置数据
+           - 构建更新字段字典
+           - 批量更新查询配置实例字段并保存
+        """
+        # 清理空维度和补充高级查询条件维度
         self._clean_empty_dimension()
         self.supplement_adv_condition_dimension()
 
+        # 根据ID判断执行更新或新建操作
         try:
             if self.id > 0:
+                # 获取已存在的查询配置实例
                 query_config: QueryConfigModel = QueryConfigModel.objects.get(
                     id=self.id, item_id=self.item_id, strategy_id=self.strategy_id
                 )
@@ -1323,8 +1339,11 @@ class QueryConfig(AbstractConfig):
             self._create()
             return
 
+        # 序列化并验证配置数据
         serializer = self.get_serializer_class(self.data_source_label, self.data_type_label)(data=self.to_dict())
         serializer.is_valid(raise_exception=True)
+
+        # 构建需要更新的字段集合
         data = {
             "alias": self.alias,
             "data_source_label": self.data_source_label,
@@ -1332,6 +1351,8 @@ class QueryConfig(AbstractConfig):
             "metric_id": self.metric_id,
             "config": serializer.validated_data,
         }
+
+        # 批量更新实例字段并保存到数据库
         for field, value in data.items():
             setattr(query_config, field, value)
         query_config.save()
@@ -1360,14 +1381,30 @@ class QueryConfig(AbstractConfig):
 
     def supplement_adv_condition_dimension(self):
         """
-        高级条件补全维度
+        补充高级条件到聚合维度中
+
+        功能说明:
+        - 当存在高级条件方法时，将条件中的维度字段合并到agg_dimension中
+        - 高级条件方法指需要特殊处理的条件类型（如比值类计算等）
+
+        参数说明:
+            self: 当前对象实例，需要包含agg_condition和agg_dimension属性
+
+        返回值:
+            无返回值，直接修改实例的agg_dimension属性
         """
+        # 检查基础维度属性是否存在
         if not hasattr(self, "agg_dimension"):
             return
+
+        # 加载数据源配置获取高级条件方法定义
         data_source = load_data_source(self.data_source_label, self.data_type_label)
         has_advance_method = False
         dimensions = set()
+
+        # 遍历所有条件进行特征分析
         for condition in self.agg_condition:
+            # 识别高级计算方法并收集维度字段
             if condition["method"] in data_source.ADVANCE_CONDITION_METHOD:
                 has_advance_method = True
             dimensions.add(condition["key"])
@@ -1877,36 +1914,36 @@ class Strategy(AbstractConfig):
         """
         根据配置列表填充用户组信息。该方法主要用于扩展配置信息，通过添加用户组详细信息或基本
         信息到每个配置的特定操作中。
-    
+
         参数:
         - configs (List[Dict]): 包含配置信息的列表，每个配置是一个字典，必须包含"id"和"actions"键，
           以及"notice"键，其中"actions"和"notice"的值是包含"user_groups"键的字典列表。
         - with_detail (bool): 是否包含用户组的详细信息，默认为False，仅包含基本信息。
-    
+
         返回:
         该方法没有返回值，但它会直接修改传入的configs参数，为每个配置的每个操作和通知添加
         "user_group_list"键，该键的值是一个包含用户组信息的列表。
         """
         # 提取所有配置的ID
         strategy_ids = [config["id"] for config in configs]
-        
+
         # 根据配置ID获取所有相关的操作关系
         action_relations = RelationModel.objects.filter(strategy_id__in=strategy_ids)
-        
+
         # 从操作关系中提取所有用户组ID
         user_group_ids = []
         for action_relation in action_relations:
             user_group_ids.extend(action_relation.validated_user_groups)
-        
+
         # 根据是否需要详细信息，选择性地获取用户组的详细信息或基本信息
         if with_detail:
             user_groups_slz = UserGroupDetailSlz(UserGroup.objects.filter(id__in=user_group_ids), many=True).data
         else:
             user_groups_slz = UserGroupSlz(UserGroup.objects.filter(id__in=user_group_ids), many=True).data
-        
+
         # 将序列化的用户组信息转换为字典，以用户组ID为键
         user_groups = {group["id"]: dict(group) for group in user_groups_slz}
-        
+
         # 为每个配置的每个操作和通知添加用户组列表信息
         for config in configs:
             for action in config["actions"] + [config["notice"]]:
@@ -2437,7 +2474,7 @@ class Strategy(AbstractConfig):
 
             # 复用当前存在的记录
             model_configs = [
-                (ItemModel, Item, self.items),          # 监控项模型，监控项模型管理器，当前模管理器实例
+                (ItemModel, Item, self.items),  # 监控项模型，监控项模型管理器，当前模管理器实例
                 (DetectModel, Detect, self.detects),
             ]
             for model, config_cls, configs in model_configs:

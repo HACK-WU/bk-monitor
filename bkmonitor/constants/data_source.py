@@ -20,9 +20,9 @@ class LabelType(object):
 
 # 数据来源标签，例如：计算平台(bk_data)，监控采集器(bk_monitor_collector)
 class DataSourceLabel(object):
-    BK_MONITOR_COLLECTOR = "bk_monitor"
-    BK_DATA = "bk_data"
-    CUSTOM = "custom"
+    BK_MONITOR_COLLECTOR = "bk_monitor"  # 监控采集器
+    BK_DATA = "bk_data"  # 计算平台
+    CUSTOM = "custom"  # 自定义指标
     BK_LOG_SEARCH = "bk_log_search"
     BK_FTA = "bk_fta"
     BK_APM = "bk_apm"

@@ -325,6 +325,10 @@ class CustomTimeSeriesSerializer(BkMonitorTimeSeriesSerializer):
 
 
 class BkDataTimeSeriesSerializer(QueryConfigSerializer):
+    """
+    针对bkdata(计算平台)的query_config序列化器
+    """
+
     result_table_id = serializers.CharField(label="结果表")
     agg_method = serializers.CharField(label="聚合方法")
     agg_interval = serializers.IntegerField(label="聚合周期", min_value=0)

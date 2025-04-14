@@ -2675,22 +2675,22 @@ def load_data_source(data_source_label: str, data_type_label: str) -> Type[DataS
     加载对应的DataSource
     """
     data_sources = [
-        BkMonitorTimeSeriesDataSource,
-        BkMonitorLogDataSource,
-        BkMonitorEventDataSource,
-        BkdataTimeSeriesDataSource,
-        CustomEventDataSource,
-        CustomTimeSeriesDataSource,
-        LogSearchLogDataSource,
-        LogSearchTimeSeriesDataSource,
-        BkMonitorAlertDataSource,
-        BkFtaAlertDataSource,
-        BkFtaEventDataSource,
-        BkApmTraceDataSource,
-        NewCustomEventDataSource,
-        NewBkMonitorLogDataSource,
-        BkApmTraceTimeSeriesDataSource,
-        PrometheusTimeSeriesDataSource,
+        BkMonitorTimeSeriesDataSource,  # 监控采集时序型数据源
+        BkMonitorLogDataSource,  # 监控采集日志型数据源
+        BkMonitorEventDataSource,  # 监控采集事件型数据源
+        BkdataTimeSeriesDataSource,  # 计算平台时序型数据源
+        CustomEventDataSource,  # 自定义事件型数据源
+        CustomTimeSeriesDataSource,  # 自定义时序型数据源
+        LogSearchLogDataSource,  # 日志关键字数据源
+        LogSearchTimeSeriesDataSource,  # 日志时序型数据源
+        BkMonitorAlertDataSource,  # 监控告警数据源
+        BkFtaAlertDataSource,  # 故障自愈告警数据源
+        BkFtaEventDataSource,  # 故障自愈事件数据源
+        BkApmTraceDataSource,  # APM Trace 数据源
+        NewCustomEventDataSource,  # 新版自定义事件数据源
+        NewBkMonitorLogDataSource,  # 新版监控采集日志型数据源
+        BkApmTraceTimeSeriesDataSource,  # APM Trace 时序型数据源
+        PrometheusTimeSeriesDataSource,  # Prometheus 时序型数据源
     ]
 
     data_source_mapping = {
