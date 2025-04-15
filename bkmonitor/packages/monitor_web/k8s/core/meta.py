@@ -224,6 +224,9 @@ class K8sResourceMeta(object):
     def get_from_promql(self, start_time, end_time, order_by="", page_size=20, method="sum"):
         """
         数据获取来源
+        order_by: 排序字段,对应的就是指标名称，
+        比如:
+            container_cpu_usage_seconds_total，容器CPU累计使用时间的 Prometheus 指标
         """
         self.set_agg_method(method)
         interval = get_interval_number(start_time, end_time, interval=60)
@@ -325,88 +328,186 @@ class K8sResourceMeta(object):
 
     @property
     def meta_prom_with_node_boot_time_seconds(self):
+        """获取节点启动时间的 Prometheus 原始指标
+        Returns:
+            str: 通过 tpl_prom_with_nothing 模板生成的 node_boot_time_seconds 指标
+        """
         return self.tpl_prom_with_nothing("node_boot_time_seconds")
 
     @property
     def meta_prom_with_container_memory_working_set_bytes(self):
+        """获取容器内存工作集的 Prometheus 原始指标
+        Returns:
+            str: 通过 tpl_prom_with_nothing 模板生成的 container_memory_working_set_bytes 指标
+        """
         return self.tpl_prom_with_nothing("container_memory_working_set_bytes")
 
     @property
     def meta_prom_with_container_cpu_usage_seconds_total(self):
+        """获取容器CPU累计使用时间的 Prometheus 指标（带速率计算）
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 container_cpu_usage_seconds_total 指标
+        """
         return self.tpl_prom_with_rate("container_cpu_usage_seconds_total")
 
     @property
     def meta_prom_with_kube_pod_cpu_requests_ratio(self):
+        """(未实现) 获取 Pod CPU 请求量比率的 Prometheus 指标
+        Raises:
+            NotImplementedError: 该指标尚未支持
+        """
         raise NotImplementedError("metric: [kube_pod_cpu_requests_ratio] not supported")
 
     @property
     def meta_prom_with_kube_pod_cpu_limits_ratio(self):
+        """(未实现) 获取 Pod CPU 限制量比率的 Prometheus 指标
+        Raises:
+            NotImplementedError: 该指标尚未支持
+        """
         raise NotImplementedError("metric: [kube_pod_cpu_limits_ratio] not supported")
 
     @property
     def meta_prom_with_kube_pod_memory_requests_ratio(self):
+        """(未实现) 获取 Pod 内存请求量比率的 Prometheus 指标
+        Raises:
+            NotImplementedError: 该指标尚未支持
+        """
         raise NotImplementedError("metric: [kube_pod_memory_requests_ratio] not supported")
 
     @property
     def meta_prom_with_kube_pod_memory_limits_ratio(self):
+        """(未实现) 获取 Pod 内存限制量比率的 Prometheus 指标
+        Raises:
+            NotImplementedError: 该指标尚未支持
+        """
         raise NotImplementedError("metric: [kube_pod_memory_limits_ratio] not supported")
 
     @property
     def meta_prom_with_container_network_receive_bytes_total(self):
+        """获取容器网络入流量指标（性能场景）
+        维度层级: pod_name -> workload -> namespace -> cluster
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 container_network_receive_bytes_total 指标，
+                 并排除 container_exclude 标签
+        """
         # 网络入流量（性能场景）维度层级: pod_name -> workload -> namespace -> cluster
         return self.tpl_prom_with_rate("container_network_receive_bytes_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_container_network_transmit_bytes_total(self):
+        """获取容器网络出流量指标（性能场景）
+        维度层级: pod_name -> workload -> namespace -> cluster
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 container_network_transmit_bytes_total 指标，
+                 并排除 container_exclude 标签
+        """
         # 网络出流量（性能场景）维度层级: pod_name -> workload -> namespace -> cluster
         return self.tpl_prom_with_rate("container_network_transmit_bytes_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_receive_bytes_total(self):
+        """获取网络场景的容器入流量指标
+        维度层级: pod_name -> service -> ingress -> namespace -> cluster
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_receive_bytes_total 指标，
+                 并排除 container_exclude 标签
+        """
         # 网络入流量（网络场景）维度层级: pod_name -> service -> ingress -> namespace -> cluster
         return self.tpl_prom_with_rate("nw_container_network_receive_bytes_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_transmit_bytes_total(self):
+        """获取网络场景的容器出流量指标
+        维度层级: pod_name -> service -> ingress -> namespace -> cluster
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_transmit_bytes_total 指标，
+                 并排除 container_exclude 标签
+        """
         # 网络出流量（网络场景）维度层级: pod_name -> service -> ingress -> namespace -> cluster
         return self.tpl_prom_with_rate("nw_container_network_transmit_bytes_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_receive_packets_total(self):
+        """获取网络接收数据包总数指标
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_receive_packets_total 指标，
+                 并排除 container_exclude 标签
+        """
         return self.tpl_prom_with_rate("nw_container_network_receive_packets_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_transmit_packets_total(self):
+        """获取网络发送数据包总数指标
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_transmit_packets_total 指标，
+                 并排除 container_exclude 标签
+        """
         return self.tpl_prom_with_rate("nw_container_network_transmit_packets_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_receive_errors_total(self):
+        """获取网络接收错误总数指标
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_receive_errors_total 指标，
+                 并排除 container_exclude 标签
+        """
         return self.tpl_prom_with_rate("nw_container_network_receive_errors_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_transmit_errors_total(self):
+        """获取网络发送错误总数指标
+        Returns:
+            str: 通过 tpl_prom_with_rate 模板生成的 nw_container_network_transmit_errors_total 指标，
+                 并排除 container_exclude 标签
+        """
         return self.tpl_prom_with_rate("nw_container_network_transmit_errors_total", exclude="container_exclude")
 
     @property
     def meta_prom_with_nw_container_network_receive_errors_ratio(self):
+        """计算网络接收错误率指标
+        Returns:
+            str: 接收错误总数与接收数据包总数的比值表达式
+        """
         return f"""{self.meta_prom_with_nw_container_network_receive_errors_total}
         /
         {self.meta_prom_with_nw_container_network_receive_packets_total}"""
 
     @property
     def meta_prom_with_nw_container_network_transmit_errors_ratio(self):
+        """计算网络发送错误率指标
+        Returns:
+            str: 发送错误总数与发送数据包总数的比值表达式
+        """
         return f"""{self.meta_prom_with_nw_container_network_transmit_errors_total}
         /
         {self.meta_prom_with_nw_container_network_transmit_packets_total}"""
 
     @property
     def meta_prom_with_container_cpu_cfs_throttled_ratio(self):
+        """(未实现) 获取容器CPU被限制的比率指标
+        Raises:
+            NotImplementedError: 该指标尚未支持
+        """
         raise NotImplementedError("metric: [container_cpu_cfs_throttled_ratio] not supported")
 
     def tpl_prom_with_rate(self, metric_name, exclude=""):
+        """（模板方法）生成带速率计算的 PromQL 表达式
+        Args:
+            metric_name (str): Prometheus 指标名称
+            exclude (str): 需要排除的标签名称
+        Raises:
+            NotImplementedError: 需要子类实现具体逻辑
+        """
         raise NotImplementedError(f"metric: [{metric_name}] not supported")
 
     def tpl_prom_with_nothing(self, metric_name, exclude=""):
+        """（模板方法）生成原始 Prometheus 指标表达式
+        Args:
+            metric_name (str): Prometheus 指标名称
+            exclude (str): 需要排除的标签名称
+        Raises:
+            NotImplementedError: 需要子类实现具体逻辑
+        """
         raise NotImplementedError(f"metric: [{metric_name}] not supported")
 
     @property
@@ -671,43 +772,79 @@ class K8sNamespaceMeta(K8sResourceMeta):
     def tpl_prom_with_rate(self, metric_name, exclude=""):
         """
         生成基于速率（rate）的PromQL查询模板
-        返回基于namespace维度的，使用某个聚合函数后的，针对某指标的每秒增长率的promql
+
+        Args:
+            metric_name (str): 指标名称，若以"nw_"开头会自动去除前缀
+            exclude (str, optional): 需要排除的过滤条件
+
+        Returns:
+            str: 基于namespace维度的PromQL查询语句，包含指定指标的每秒增长率计算，
+                根据agg_interval判断是否添加时间窗口聚合
         """
-        # 网络场景下的网络指标，默认代了前缀，需要去掉
+        # 处理网络指标前缀规则
         if metric_name.startswith("nw_"):
             metric_name = metric_name[3:]
 
+        # 计算出某指标的每秒增长率 ->
+        # 计算历史时间段的增长率，并做基于时间窗口的聚合操作 ->
+        # 然后再做基于namespace维度的sum聚合操作
         if self.agg_interval:
             return (
                 f"sum by (namespace) ({self.agg_method}_over_time(rate("
                 f"{metric_name}{{{self.filter.filter_string(exclude=exclude)}}}[1m])[{self.agg_interval}:]))"
             )
+        # 计算出某指标的每秒增长率 ->
+        # 基于namespace维度进行聚合
         return (
             f"{self.method} by (namespace) "
             f"(rate({metric_name}{{{self.filter.filter_string(exclude=exclude)}}}[1m]))"
         )
 
     def tpl_prom_with_nothing(self, metric_name, exclude=""):
-        """按内存排序的资源查询promql
-        返回基于namespace维度的，使用某个聚合函数后的，针对某指标的promql
         """
+        生成直接指标查询的PromQL模板（非速率计算）
+
+        Args:
+            metric_name (str): 需要查询的指标名称
+            exclude (str, optional): 需要排除的过滤条件
+
+        Returns:
+            str: 基于namespace维度的PromQL查询语句，
+                根据agg_interval判断是否添加时间窗口聚合
+        """
+        # 当存在聚合时间窗口时，添加_over_time聚合逻辑，然后做基于namespace维度的sum聚合操作
         if self.agg_interval:
             return (
                 f"sum by (namespace) ({self.agg_method}_over_time("
                 f"{metric_name}{{{self.filter.filter_string(exclude=exclude)}}}[{self.agg_interval}:]))"
             )
+        # 基础指标查询格式
         return f"{self.method} by (namespace) ({metric_name}{{{self.filter.filter_string(exclude=exclude)}}})"
 
     @property
     def meta_prom_with_container_cpu_cfs_throttled_ratio(self):
         """
-        CPU 限流占比
+        生成CPU限流占比的PromQL查询语句
 
-        container_cpu_cfs_throttled_periods_total：记录容器被CFS限制的周期数。
-        container_cpu_cfs_periods_total：记录容器总的CFS周期数。
+        Returns:
+            str: 计算容器CPU限流占比的PromQL公式，
+                根据agg_interval判断是否添加时间窗口聚合
+
+        Notes:
+            - container_cpu_cfs_throttled_periods_total: 容器CPU CFS限流周期总数
+            - container_cpu_cfs_periods_total: 容器CPU CFS周期总数
         """
+        # 当存在聚合时间窗口时，计算历史时间段的限流占比
         if self.agg_interval:
-            # 计算所有容器在过去一段时间(agg_interval)内的CPU限流占比情况
+            # example(忽略filter_string):
+            #   sum by (namespace) (avg_over_time((increase(container_cpu_cfs_throttled_periods_total[1m])
+            #   / increase(container_cpu_cfs_periods_total[1m]))[5m:]))
+            #
+            # 含义：
+            # - 计算过去5分钟内每个namespace的container_cpu_cfs_throttled_periods_total和container_cpu_cfs_periods_total的增量
+            # - 对每个namespace的增量进行平均值计算(avg_over_time 除以时间窗口长度)
+            # - 对所有namespace的平均值进行求和
+
             return (
                 f"sum by (namespace) "
                 f"({self.agg_method}_over_time((increase("
@@ -715,7 +852,11 @@ class K8sNamespaceMeta(K8sResourceMeta):
                 f"container_cpu_cfs_periods_total{{{self.filter.filter_string()}}}[1m]))[{self.agg_interval}:]))"
             )
 
-        # 计算所有容器在最近一分钟内的CPU限流占比情况
+        # 基础计算公式：最近1分钟的限流占比
+        # example(忽略filter_string):
+        #   sum by (namespace) ((increase(container_cpu_cfs_throttled_periods_total[1m]) / increase(
+        #   container_cpu_cfs_periods_total[1m])))
+
         return (
             f"{self.method} by (namespace) "
             f"((increase(container_cpu_cfs_throttled_periods_total{{{self.filter.filter_string()}}}[1m]) / increase("
