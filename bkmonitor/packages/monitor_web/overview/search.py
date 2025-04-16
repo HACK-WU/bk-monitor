@@ -427,18 +427,41 @@ class BCSClusterSearchItem(SearchItem):
     @classmethod
     def search(cls, username: str, query: str, limit: int = 5) -> Optional[List[Dict]]:
         """
-        Search the bcs cluster by cluster name
+        根据集群名称搜索BCS集群
+
+        Args:
+            username: 执行搜索操作的用户名，用于权限校验
+            query: 搜索关键词，匹配集群名称或集群ID
+            limit: 最大返回结果数量，默认为5条
+
+        Returns:
+            Optional[List[Dict]]: 包含搜索结果的结构化数据，格式为：
+                [{
+                    "type": "bcs_cluster",
+                    "name": "BCS集群分类名称",
+                    "items": [{
+                        "bk_biz_id": 业务ID,
+                        "bk_biz_name": 业务名称,
+                        "name": 集群名称,
+                        "cluster_name": 集群名称,
+                        "bcs_cluster_id": 集群ID,
+                        "project_name": 项目名称
+                    }]
+                }]
+                当无权限或无结果时返回None
         """
+        # 获取用户有查看权限的业务ID列表
         bk_biz_ids = cls._get_allowed_bk_biz_ids(username, ActionEnum.VIEW_BUSINESS)
         if not bk_biz_ids:
             return
 
-        # 构建基础查询
+        # 构建基础查询条件：名称或ID的模糊匹配
         query_filter = Q(name__icontains=query) | Q(bcs_cluster_id__icontains=query)
+        # 当业务数量较少时直接过滤，避免大量数据的内存消耗
         if len(bk_biz_ids) <= 20:
             query_filter &= Q(bk_biz_id__in=bk_biz_ids)
 
-        # 使用迭代器分页查询
+        # 分页查询机制：使用offset+limit实现内存安全的分页加载
         items = []
         offset = 0
         while True:
@@ -446,6 +469,7 @@ class BCSClusterSearchItem(SearchItem):
             if not clusters:
                 break
 
+            # 转换集群对象为前端需要的字典格式
             for cluster in clusters:
                 items.append(
                     {
@@ -458,6 +482,7 @@ class BCSClusterSearchItem(SearchItem):
                     }
                 )
 
+                # 达到数量限制时提前终止循环
                 if len(items) >= limit:
                     break
 
@@ -466,9 +491,11 @@ class BCSClusterSearchItem(SearchItem):
 
             offset += limit
 
+        # 空结果处理
         if not items:
             return
 
+        # 封装符合前端要求的响应结构
         return [{"type": "bcs_cluster", "name": _("BCS集群"), "items": items}]
 
 
@@ -488,34 +515,53 @@ class Searcher:
     ]
 
     def __init__(self, username: str):
+        """
+        初始化搜索器
+
+        :param username: 执行搜索操作的用户名
+        """
         self.username = username
 
     def search(self, query: str, timeout: int = 30) -> Generator[Dict[str, Any], None, None]:
         """
-        Search the query in the search items.
+        并行执行多类型搜索项的搜索请求
+
+        :param query: 搜索关键词/查询语句
+        :param timeout: 总超时时间（秒），超过该时间未完成所有搜索将提前终止
+        :return: 生成器，按完成顺序逐个产出各搜索项的返回结果
+                 每个结果为包含搜索元数据的字典对象
         """
+        # 过滤匹配查询条件的搜索项
         search_items = [item for item in self.search_items if item.match(query)]
 
+        # 使用线程池并行执行多个搜索项
         with ThreadPool() as pool:
+            # 无序映射执行，任意搜索项完成立即返回结果
             results: IMapIterator = pool.imap_unordered(
                 lambda item: item.search(self.username, query, limit=5), search_items
             )
 
+            # 超时控制核心逻辑：总执行时间不超过timeout参数
             start_time = time.time()
             for __ in range(len(search_items)):
                 try:
+                    # 设置单个搜索项5秒超时防止卡死
                     result: Optional[List[Dict]] = results.next(timeout=5)
                 except StopIteration:
                     break
                 except TimeoutError:
+                    # 单个搜索项超时不影响其他搜索结果
                     logger.error(f"Searcher search timeout, query: {query}")
                     continue
                 except Exception as e:
+                    # 异常捕获保证单个搜索错误不影响整体流程
                     logger.exception(f"Searcher search error, query: {query}, error: {e}")
                     continue
 
+                # 检查总超时时间是否已耗尽
                 if time.time() - start_time > timeout:
                     break
 
+                # 产出有效搜索结果
                 if result:
                     yield from result

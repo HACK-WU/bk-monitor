@@ -647,7 +647,6 @@ class AlertDetailResource(Resource):
 
         topo_info = result["extend_info"].get("topo_info", "")
         result["relation_info"] = f"{topo_info} {relation_info}"
-
         return result
 
 
