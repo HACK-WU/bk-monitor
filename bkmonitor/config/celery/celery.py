@@ -15,6 +15,11 @@ from celery.signals import beat_init, setup_logging
 from django.conf import settings
 from django.db import close_old_connections
 
+try:
+    from local_settings import CELERY_ALWAYS_ASYNC
+except ImportError:
+    CELERY_ALWAYS_ASYNC = True
+
 # http://docs.celeryproject.org/en/latest/userguide/daemonizing.html#running-the-worker-with-superuser-privileges-root
 # for root start celery
 platforms.C_FORCE_ROOT = True
@@ -29,7 +34,7 @@ app.config_from_object("config.celery.config:Config")
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
-if getattr(settings, 'CELERY_ALWAYS_ASYNC', False):
+if not CELERY_ALWAYS_ASYNC:
     app.conf.update(task_always_eager=True, task_eager_propagates=True)  # 同步执行所有任务  # 同步时异常直接抛出
 
 
