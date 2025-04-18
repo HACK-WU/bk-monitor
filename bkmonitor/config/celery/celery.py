@@ -29,6 +29,9 @@ app.config_from_object("config.celery.config:Config")
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
+if getattr(settings, 'CELERY_ALWAYS_ASYNC', False):
+    app.conf.update(task_always_eager=True, task_eager_propagates=True)  # 同步执行所有任务  # 同步时异常直接抛出
+
 
 @app.task(bind=True)
 def debug_task(self):
