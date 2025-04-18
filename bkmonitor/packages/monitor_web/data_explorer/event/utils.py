@@ -79,7 +79,7 @@ def get_data_labels_map(bk_biz_id: int, tables: Iterable[str]) -> Dict[str, str]
     return data_labels_map
 
 
-def create_workload_info(origin_data, fields: List[str]):
+def create_k8s_info(origin_data, fields: List[str]):
     return create_event_info(origin_data, fields, EventCategory.K8S_EVENT.value)
 
 
