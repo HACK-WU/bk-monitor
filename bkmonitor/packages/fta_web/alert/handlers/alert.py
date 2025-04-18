@@ -244,17 +244,27 @@ class AlertQueryHandler(BaseBizQueryHandler):
         is_finaly_partition: bool = False,
     ):
         """
-        获取查询对象
+        获取告警文档的查询对象，支持时间范围过滤、业务条件过滤、用户状态过滤等复杂条件组合
+
+        :param start_time: 查询起始时间戳（可选，默认使用实例的start_time）
+        :param end_time: 查询结束时间戳（可选，默认使用实例的end_time）
+        :param is_time_partitioned: 是否启用时间分区查询（默认False）
+        :param is_finaly_partition: 是否为最终时间分区（仅在is_time_partitioned=True时生效）
+        :return: 构建完成的elasticsearch查询对象
         """
+        # 参数初始化：优先使用传入参数，否则使用实例变量
         start_time = start_time or self.start_time
         end_time = end_time or self.end_time
         is_time_partitioned = is_time_partitioned or self.is_time_partitioned
         is_finaly_partition = is_finaly_partition or self.is_finaly_partition
 
+        # 初始化基础查询对象
         search_object = AlertDocument.search(start_time=self.start_time, end_time=self.end_time)
 
+        # 时间范围过滤逻辑（核心条件组合）
         if start_time and end_time:
             if is_time_partitioned:
+                # 时间分区模式下的特殊处理逻辑
                 if is_finaly_partition:
                     search_object = search_object.filter(
                         (Q("range", end_time={"gte": start_time}) | ~Q("exists", field="end_time"))
@@ -266,20 +276,24 @@ class AlertQueryHandler(BaseBizQueryHandler):
                         & (Q("range", begin_time={"lte": end_time}) | Q("range", create_time={"lte": end_time}))
                     )
             else:
+                # 非时间分区模式的基础过滤
                 search_object = search_object.filter(
                     (Q("range", end_time={"gte": start_time}) | ~Q("exists", field="end_time"))
                     & (Q("range", begin_time={"lte": end_time}) | Q("range", create_time={"lte": end_time}))
                 )
 
+        # 添加业务维度过滤条件
         search_object = self.add_biz_condition(search_object)
 
+        # 用户维度过滤（精确匹配负责人或委托负责人）
         if self.username:
-            # 当接口明确存在用户名称的时候，仅过滤指定用户的告警
             search_object = search_object.filter(Q("term", assignee=self.username) | Q("term", appointee=self.username))
 
+        # 复杂状态过滤逻辑（多条件OR组合）
         if self.status:
             queries = []
             for status in self.status:
+                # 特殊状态转换逻辑
                 if status == self.MINE_STATUS_NAME:
                     queries.append(
                         Q("term", assignee=self.request_username) | Q("term", appointee=self.request_username)
@@ -297,36 +311,63 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 else:
                     queries.append(Q("term", status=status))
 
+            # 组合所有状态查询条件
             if queries:
                 search_object = search_object.filter(reduce(operator.or_, queries))
 
+        # 添加必须存在字段的过滤条件
         for field in self.must_exists_fields:
             search_object = search_object.filter("exists", field=field)
 
         return search_object
 
     def search_raw(self, show_overview=False, show_aggs=False, show_dsl=False):
+        """
+        执行原始搜索并返回搜索结果与DSL字典
+
+        返回:
+            tuple: 包含两个元素的元组
+                - SearchResult: 搜索结果对象
+                - dict/None: 当show_dsl=True时返回DSL字典，否则返回None
+        """
+        # 构建基础搜索对象：添加条件、查询语句、排序和分页
         search_object = self.get_search_object()
         search_object = self.add_conditions(search_object)
         search_object = self.add_query_string(search_object)
         search_object = self.add_ordering(search_object)
         search_object = self.add_pagination(search_object)
 
+        # 根据参数添加附加功能
         if show_overview:
             search_object = self.add_overview(search_object)
 
         if show_aggs:
             search_object = self.add_aggs(search_object)
 
+        # 执行搜索并跟踪总匹配数
         search_result = search_object.params(track_total_hits=True).execute()
 
+        # 根据参数决定是否返回DSL字典
         if show_dsl:
             return search_result, search_object.to_dict()
 
         return search_result, None
 
     def search(self, show_overview=False, show_aggs=False, show_dsl=False):
+        """搜索告警并返回格式化结果
+        Returns:
+            dict: 结构化的告警搜索结果，包含以下字段：
+                - alerts (list): 格式化后的告警列表
+                - total (int): 匹配的告警总数
+                - overview (dict): 统计概览信息（当show_overview=True时存在）
+                - aggs (dict): 聚合数据（当show_aggs=True时存在）
+                - dsl (str): 原始查询DSL语句（当show_dsl=True时存在）
+
+        Raises:
+            Exception: 当搜索过程中发生错误时抛出，异常对象会包含已处理的结果数据
+        """
         exc = None
+        # 执行原始搜索并处理异常情况
         try:
             search_result, dsl = self.search_raw(show_overview, show_aggs, show_dsl)
         except Exception as e:
@@ -335,10 +376,11 @@ class AlertQueryHandler(BaseBizQueryHandler):
             dsl = None
             exc = e
 
+        # 处理原始搜索结果
         alerts = self.handle_hit_list(search_result)
         self.handle_operator(alerts)
 
-        # 字段翻译
+        # 执行多维度字段翻译
         MetricTranslator(bk_biz_ids=self.bk_biz_ids).translate_from_dict(
             list(chain(*[alert["metric_display"] for alert in alerts])), "id", "name"
         )
@@ -347,8 +389,10 @@ class AlertQueryHandler(BaseBizQueryHandler):
         CategoryTranslator().translate_from_dict(alerts, "category", "category_display")
         PluginTranslator().translate_from_dict(alerts, "plugin_id", "plugin_display_name")
 
+        # 构建基础结果集
         result = {"alerts": alerts, "total": search_result.hits.total.value}
 
+        # 按需添加扩展信息
         if show_overview:
             result["overview"] = self.handle_overview(search_result)
 
