@@ -77,9 +77,6 @@ class QueryField:
         return value
 
 
-query_cache = {}
-
-
 class BaseQueryTransformer(BaseTreeTransformer):
     """
     Elasticsearch 自定义 query_string 到 标准化 query_string 转换器
@@ -154,17 +151,10 @@ class BaseQueryTransformer(BaseTreeTransformer):
             except ParseError as e:
                 raise QueryStringParseError({"msg": e})
 
-        # 使用全局缓存提升重复查询处理性能
-        global query_cache
         if not query_string:
             return ""
         transform_obj = cls()
-
-        # 缓存未命中时执行解析流程
-        if query_string not in query_cache:
-            query_cache[query_string] = parse_query_string_node(transform_obj, query_string)
-
-        query_tree = query_cache[query_string]
+        query_tree = parse_query_string_node(transform_obj, query_string)
 
         # 处理嵌套字段的特殊转换逻辑
         if getattr(transform_obj, "has_nested_field", False) and cls.doc_cls:
