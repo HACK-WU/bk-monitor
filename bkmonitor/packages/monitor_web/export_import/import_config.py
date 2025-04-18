@@ -125,26 +125,7 @@ def import_process_collect(data, bk_biz_id):
 
 
 def check_and_change_bkdata_table_id(query_config, bk_biz_id):
-    """
-    检查并修改监控数据配置中的结果表ID
-    当数据源为bk_data且数据类型为时间序列时，重构result_table_id字段
-
-    example:
-    >> original_config = {
-        "data_source_label": "bk_data",
-        "data_type_label": "time_series",
-        "result_table_id": "1001_system_cpu_usage"  # 原始带业务前缀的表ID
-      }
-    >> bk_biz_id = 2000  # 当前业务ID
-    >> check_and_change_bkdata_table_id(original_config, bk_biz_id)
-    >> original_config["result_table_id"]
-    >> 2000_system_cpu_usage   # 前缀发生了改变，从1001变为2000
-
-    """
-
-    # 检查是否为bk_data数据源的时序数据场景
     if query_config.get("data_source_label") == "bk_data" and query_config.get("data_type_label") == "time_series":
-        # 重构结果表ID格式：业务ID + 原表后缀（去除原有业务前缀）
         query_config["result_table_id"] = str(bk_biz_id) + "_" + query_config["result_table_id"].split("_", 1)[-1]
 
 
@@ -156,48 +137,29 @@ import_handler = {
 
 def import_collect(bk_biz_id, import_history_instance, collect_config_list):
     def handle_collect_without_plugin(import_collect_obj, config_dict, target_bk_biz_id, handle_func):
-        """
-        处理无需插件关联的采集配置导入
-
-        Args:
-            import_collect_obj (ImportDetail): 采集配置导入记录对象
-            config_dict (dict): 采集配置参数字典
-            target_bk_biz_id (int): 目标业务ID
-            handle_func (function): 实际处理函数，参数为(config_dict, target_bk_biz_id)
-        """
         try:
-            # 调用处理函数执行核心逻辑
             handle_result = handle_func(config_dict, target_bk_biz_id)
         except Exception as e:
-            # 异常处理：标记导入失败状态并记录错误信息
             import_collect_obj.import_status = ImportDetailStatus.FAILED
             import_collect_obj.error_msg = str(e)
             import_collect_obj.config_id = None
             import_collect_obj.save()
         else:
-            # 成功处理：更新配置ID并标记成功状态
             import_collect_obj.config_id = handle_result["id"]
             import_collect_obj.import_status = ImportDetailStatus.SUCCESS
             import_collect_obj.error_msg = ""
             import_collect_obj.save()
 
-    # 遍历所有待导入的采集配置
     for import_collect_config in collect_config_list:
-        # 获取解析器实例并提取配置
         parse_instance = ImportParse.objects.get(id=import_collect_config.parse_id)
         config = parse_instance.config
-
-        # 处理进程/日志类采集配置（无需插件）
         if config["collect_type"] in [CollectConfigMeta.CollectType.PROCESS, CollectConfigMeta.CollectType.LOG]:
             handler = import_handler[config["collect_type"]]
             handle_collect_without_plugin(import_collect_config, config, bk_biz_id, handler)
             continue
 
-        # 准备插件关联的采集配置参数
         config["bk_biz_id"] = bk_biz_id
         config["target_nodes"] = []
-
-        # 检查关联插件是否已导入
         plugin_instance = ImportDetail.objects.filter(
             history_id=import_history_instance.id, type=ConfigType.PLUGIN, name=config["plugin_id"]
         ).first()
@@ -207,7 +169,6 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             import_collect_config.save()
             continue
 
-        # 执行插件导入流程
         plugin_instance = import_plugin(bk_biz_id, plugin_instance)
         if plugin_instance.import_status == ImportDetailStatus.FAILED:
             import_collect_config.import_status = ImportDetailStatus.FAILED
@@ -215,7 +176,6 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             import_collect_config.save()
             continue
 
-        # 创建带插件关联的采集配置
         plugin_obj = CollectorPluginMeta.objects.get(plugin_id=plugin_instance.config_id)
         deployment_config_params = {
             "plugin_version": plugin_obj.packaged_release_version,
@@ -225,7 +185,6 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             "remote_collecting_host": config.get("remote_collecting_host"),
         }
         try:
-            # 初始化采集配置对象
             collect_config = CollectConfigMeta(
                 bk_biz_id=config["bk_biz_id"],
                 name=config["name"],
@@ -236,18 +195,14 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
                 target_object_type=config["target_object_type"],
                 label=config["label"],
             )
-
-            # 执行部署安装流程
             installer = get_collect_installer(collect_config)
             installer.install(deployment_config_params, operation=OperationType.STOP)
 
-            # 更新导入记录为成功状态
             import_collect_config.config_id = collect_config.id
             import_collect_config.import_status = ImportDetailStatus.SUCCESS
             import_collect_config.error_msg = ""
             import_collect_config.save()
         except Exception as e:
-            # 异常回滚：删除已创建的配置，记录失败状态
             collect_config.delete()
             DeploymentConfigVersion.objects.filter(config_meta_id=collect_config.id).delete()
             import_collect_config.import_status = ImportDetailStatus.FAILED
@@ -257,20 +212,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
 
 
 def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is_overwrite_mode=False):
-    """
-    批量导入监控策略配置
-
-    Args:
-        bk_biz_id (int): 业务ID，标识策略所属的业务
-        import_history_instance (Model): 导入历史记录模型实例，用于关联导入明细
-        strategy_config_list (list): 待导入的策略配置对象列表，包含原始解析数据
-        is_overwrite_mode (bool, optional): 是否启用覆盖模式，True时会覆盖同名策略
-
-    Returns:
-        None: 无直接返回值，导入结果通过更新strategy_config_list对象状态体现
-    """
-
-    # 构建已导入采集配置的ID映射关系（原始ID -> 新创建ID）
+    # 已导入的采集配置，原有ID与创建ID映射，用于更改策略配置的监控条件中关联采集配置
     import_collect_configs = ImportDetail.objects.filter(
         type=ConfigType.COLLECT, history_id=import_history_instance.id, import_status=ImportDetailStatus.SUCCESS
     )
@@ -279,13 +221,13 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
         parse_instance = ImportParse.objects.get(id=import_config_instance.parse_id)
         import_config_id_map[parse_instance.config["id"]] = int(import_config_instance.config_id)
 
-    # 获取当前业务下所有策略名称与ID的映射，用于重名检测
+    # 已存在的策略名，防止重名
     existed_name_to_id = {
         strategy_dict["name"]: strategy_dict["id"]
         for strategy_dict in list(StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values("name", "id"))
     }
 
-    # 建立轮值规则哈希值与规则对象的映射，避免重复创建相同规则
+    # 已存在的轮值规则
     existed_hash_to_rule = {
         duty_rule.hash: duty_rule for duty_rule in DutyRule.objects.filter(bk_biz_id=bk_biz_id, hash__isnull=False)
     }
@@ -295,40 +237,41 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
 
     for strategy_config in strategy_config_list:
         try:
-            # 获取原始解析配置并进行深拷贝
             parse_instance = ImportParse.objects.get(id=strategy_config.parse_id)
             create_config = copy.deepcopy(parse_instance.config)
 
-            # 策略ID处理逻辑
+            # 覆盖模式，使用原配置策略id覆盖新导入的策略id
+            # 也就是对当前业务下已存在的策略进行覆盖
             if is_overwrite_mode and create_config["name"] in existed_name_to_id:
-                # 覆盖模式使用已存在的策略ID
                 create_config["id"] = existed_name_to_id[create_config["name"]]
             else:
-                # 非覆盖模式生成唯一策略名称
+                # 策略重名增加后缀
                 while create_config["name"] in existed_name_to_id:
                     create_config["name"] = f"{create_config['name']}_clone"
 
-            # 配置格式转换及基础字段设置
             create_config = Strategy.convert_v1_to_v2(create_config)
             create_config["bk_biz_id"] = bk_biz_id
 
-            # 用户组处理逻辑
+            # 用于创建新通知组或覆盖已有通知组
             user_groups_mapping = {}
             action_list = create_config["actions"] + [create_config["notice"]]
-            user_groups_dict = {}
-            user_groups_new = []
-
-            # 提取所有用户组配置信息
+            imported_user_groups_dict = {}  # 新导入的告警组信息 {group.name:group}
+            newly_created_group_ids = []  # 新创建的通知组id
             for action_detail in action_list:
                 for group_detail in action_detail.get("user_group_list", []):
-                    user_groups_dict[group_detail["name"]] = group_detail
+                    imported_user_groups_dict[group_detail["name"]] = group_detail
 
-            # 处理轮值规则关联关系
-            for name, group_detail in user_groups_dict.items():
+            # 创建用户组关联的 duty_rules 及规则关联的 duty_arranges
+            for name, group_detail in imported_user_groups_dict.items():
                 rule_id_mapping = {}
                 for rule_info in group_detail.get("duty_rules_info") or []:
-                    # 通过哈希值复用已有规则或创建新规则
+                    # 优先沿用 hash 相同的旧 duty_rule 记录
                     rule = existed_hash_to_rule.get(rule_info["hash"])
+                    # 避免重复创建轮值规则：
+                    #   -如果当前轮值的hash已经存在于old_hash_to_new_hash中则表示该轮值规则已经被创建过了
+                    #   -此时rule就是新创建的轮值规则，那么后续操作相当于更新操作
+                    #   -但是当前轮值的hash是旧hash,已经失效，所以需要将旧hash替换为新hash，对应就是如下的：
+                    #    rule_info["hash"] = old_hash_to_new_hash[rule_info["hash"]] 这步操作
                     if rule_info["hash"] in old_hash_to_new_hash:
                         rule_info["hash"] = old_hash_to_new_hash[rule_info["hash"]]
 
@@ -342,17 +285,17 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
                     # 记录新旧 id 对应关系
                     rule_id_mapping[rule_info["id"]] = new_rule.id
 
-                # 更新用户组关联的规则ID
+                # 更新用户组与规则的关联
                 group_detail["duty_rules"] = (
                     [rule_id_mapping.get(old_id, old_id) for old_id in group_detail["duty_rules"]]
                     if "duty_rules" in group_detail
                     else []
                 )
 
-            # 更新或创建用户组
-            qs = UserGroup.objects.filter(name__in=list(user_groups_dict.keys()), bk_biz_id=bk_biz_id)
+            # 如果告警组名称已经存在当前业务下，则进行覆盖
+            qs = UserGroup.objects.filter(name__in=list(imported_user_groups_dict.keys()), bk_biz_id=bk_biz_id)
             for user_group in qs:
-                group_detail = user_groups_dict[user_group.name]
+                group_detail = imported_user_groups_dict[user_group.name]
                 origin_id = group_detail.pop("id", None)
                 group_detail["bk_biz_id"] = bk_biz_id
                 user_group_serializer = UserGroupDetailSlz(user_group, data=group_detail)
@@ -361,11 +304,11 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
                 if origin_id:
                     user_groups_mapping[origin_id] = instance.id
                 else:
-                    user_groups_new.append(instance.id)
-                user_groups_dict.pop(user_group.name, None)
+                    newly_created_group_ids.append(instance.id)
+                imported_user_groups_dict.pop(user_group.name, None)
 
-            # 处理剩余未创建的用户组
-            for name, group_detail in user_groups_dict.items():
+            # 对于剩余未导入的用户组，直接创建
+            for name, group_detail in imported_user_groups_dict.items():
                 origin_id = group_detail.pop("id", None)
                 group_detail["bk_biz_id"] = bk_biz_id
                 user_group_serializer = UserGroupDetailSlz(data=group_detail)
@@ -374,14 +317,14 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
                 if origin_id:
                     user_groups_mapping[origin_id] = instance.id
                 else:
-                    user_groups_new.append(instance.id)
+                    newly_created_group_ids.append(instance.id)
 
-            # 更新动作配置中的用户组引用
+            # 更新处理套餐关联的告警组ID
             for action in action_list:
                 if action.get("user_groups", []):
                     action["user_groups"] = [user_groups_mapping[group_id] for group_id in action["user_groups"]]
-                if user_groups_new:
-                    action["user_groups"].extend(user_groups_new)
+                if newly_created_group_ids:
+                    action["user_groups"].extend(newly_created_group_ids)
 
             # 创建新处理套餐或覆盖已有处理套餐
             for action in create_config["actions"]:
@@ -399,7 +342,6 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
                 # 对计算平台数据源进行处理
                 check_and_change_bkdata_table_id(query_config, bk_biz_id)
 
-                # 处理指标条件中的采集配置引用
                 agg_condition = query_config.get("agg_condition", [])
                 for condition_msg in agg_condition:
                     if "bk_collect_config_id" in list(condition_msg.values()):
@@ -416,10 +358,8 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
                             if not import_config_id_map.get(int(old_config_id)):
                                 raise ImportConfigError({"msg": _("关联采集配置{}未导入成功").format(old_config_id)})
                             new_config_ids.append(str(import_config_id_map[int(old_config_id)]))
-                        # 同步新导入的采集配置ID
                         condition_msg["value"] = new_config_ids
 
-            # 保存策略配置并更新状态
             result = resource.strategies.save_strategy_v2(**create_config)
             if result.get("id"):
                 StrategyModel.objects.filter(id=result["id"]).update(is_enabled=False)
@@ -441,22 +381,11 @@ def import_strategy(bk_biz_id, import_history_instance, strategy_config_list, is
 
 
 def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
-    """导入Grafana仪表盘视图配置到指定业务
-
-    Args:
-        bk_biz_id (int): 业务ID，用于标识目标业务
-        view_config_list (list): 待导入的视图配置对象列表，每个元素应包含parse_id字段
-        is_overwrite_mode (bool, optional): 是否启用覆盖模式。若为False，重名视图会自动追加后缀
-
-    Returns:
-        None: 无直接返回值，通过修改view_config_list中的对象状态返回结果
-    """
-    # 获取已存在的仪表盘名称集合，用于名称冲突检测
+    # 已存在的视图名，防止重名
     existed_dashboards = resource.grafana.get_dashboard_list(bk_biz_id=bk_biz_id)
     existed_names = {dashboard["name"] for dashboard in existed_dashboards}
     org_id = get_or_create_org(bk_biz_id)["id"]
 
-    # 构建数据源映射表，格式为{数据源类型: 数据源配置}
     data_sources = {
         data_source["type"]: {
             "type": "datasource",
@@ -466,10 +395,8 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
         for data_source in api.grafana.get_all_data_source(org_id=org_id)["data"]
     }
 
-    # 遍历处理每个视图配置
     for view_config in view_config_list:
         try:
-            # 从数据库获取解析配置模板
             parse_instance = ImportParse.objects.get(id=view_config.parse_id)
             create_config = copy.deepcopy(parse_instance.config)
             # 导入仪表盘，清理配置id
@@ -477,19 +404,17 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
             uid = create_config.pop("uid", "")
             folder_id = create_config.pop("folderId", None)
             logger.info(str(create_config))
-
-            # 名称冲突处理逻辑（非覆盖模式时生效）
+            # 非覆盖模式，视图重名增加后缀
             if not is_overwrite_mode:
                 while create_config["title"] in existed_names:
                     create_config["title"] = f"{create_config['title']}_clone"
 
-            # 对计算平台数据源进行处理（处理result_table_id）
+            # 对计算平台数据源进行处理
             for panel in create_config.get("panels", []):
                 for target in panel.get("targets", []):
                     for query_config in target.get("query_configs", []):
                         check_and_change_bkdata_table_id(query_config, bk_biz_id)
 
-            # 构建数据源输入映射
             inputs = []
             for input_field in create_config.get("__inputs", []):
                 if input_field["type"] != "datasource":
@@ -526,7 +451,6 @@ def import_view(bk_biz_id, view_config_list, is_overwrite_mode=False):
                 view_config.error_msg = str(result["message"])
                 view_config.save()
         except Exception as e:
-            # 异常处理及状态记录
             logger.exception(e)
             view_config.import_status = ImportDetailStatus.FAILED
             view_config.error_msg = str(e)
