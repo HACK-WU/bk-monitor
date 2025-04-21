@@ -512,6 +512,7 @@ class BaseActionRelation(AbstractConfig):
                 ActionSignal.EXECUTE,
                 ActionSignal.EXECUTE_SUCCESS,
                 ActionSignal.EXECUTE_FAILED,
+                ActionSignal.INCIDENT,
             ],
         )
         options = OptionsSerializer()

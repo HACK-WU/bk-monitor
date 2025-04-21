@@ -717,21 +717,23 @@ class MessageQueueSignal:
     RECOVERY_PUSH = "RECOVERY_PUSH"
     CLOSE_PUSH = "CLOSE_PUSH"
 
+
 # 动作信号
 class ActionSignal:
-    MANUAL = "manual"      # 手动处理
-    ABNORMAL = "abnormal"   # 异常，告警触发
-    RECOVERED = "recovered" # 恢复，告警恢复
-    CLOSED = "closed"      # 告警关闭
-    ACK = "ack"            # 告警确认
-    NO_DATA = "no_data"   # 无数据
-    COLLECT = "collect" # 汇总
-    EXECUTE = "execute" # 执行动作
-    EXECUTE_SUCCESS = "execute_success" # 动作执行成功
-    EXECUTE_FAILED = "execute_failed"   # 动作执行失败
-    DEMO = "demo"   # 调试
-    UNSHIELDED = "unshielded"   # 解除屏蔽
-    UPGRADE = "upgrade" # 通知升级(告警升级)
+    MANUAL = "manual"  # 手动处理
+    ABNORMAL = "abnormal"  # 异常，告警触发
+    RECOVERED = "recovered"  # 恢复，告警恢复
+    CLOSED = "closed"  # 告警关闭
+    ACK = "ack"  # 告警确认
+    NO_DATA = "no_data"  # 无数据
+    COLLECT = "collect"  # 汇总
+    EXECUTE = "execute"  # 执行动作
+    EXECUTE_SUCCESS = "execute_success"  # 动作执行成功
+    EXECUTE_FAILED = "execute_failed"  # 动作执行失败
+    DEMO = "demo"  # 调试
+    UNSHIELDED = "unshielded"  # 解除屏蔽
+    UPGRADE = "upgrade"  # 通知升级(告警升级)
+    INCIDENT = "incident"
 
     # 正常的action信号
     NORMAL_SIGNAL = [ABNORMAL, RECOVERED, CLOSED, NO_DATA, MANUAL, ACK]
@@ -752,6 +754,7 @@ class ActionSignal:
         DEMO: _lazy("调试时"),
         UNSHIELDED: _lazy("解除屏蔽时"),
         UPGRADE: _lazy("告警升级"),
+        INCIDENT: _lazy("故障生成时"),
     }
 
     # 动作信号映射
