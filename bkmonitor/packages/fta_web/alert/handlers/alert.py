@@ -210,6 +210,14 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     query_transformer = AlertQueryTransformer
 
+    # 以下常量定义不同状态名称，用于业务逻辑中的状态过滤或标识：
+    # - MINE_STATUS_NAME: 表示当前用户直接关联的状态（如用户自己创建的条目）
+    # - MY_APPOINTEE_STATUS_NAME: 表示被当前用户指定人员关联的状态（如被委派人处理的条目）
+    # - MY_ASSIGNEE_STATUS_NAME: 表示当前用户被指派处理的状态（如用户被分配的任务）
+    # - MY_FOLLOW_STATUS_NAME: 表示当前用户关注条目的状态
+    # - SHIELD_ABNORMAL_STATUS_NAME: 表示被屏蔽的异常状态
+    # - NOT_SHIELD_ABNORMAL_STATUS_NAME: 表示未被屏蔽的正常状态
+
     # “我的告警” 状态名称
     MINE_STATUS_NAME = "MINE"
     MY_APPOINTEE_STATUS_NAME = "MY_APPOINTEE"
@@ -246,6 +254,8 @@ class AlertQueryHandler(BaseBizQueryHandler):
         """
         获取告警文档的查询对象，支持时间范围过滤、业务条件过滤、用户状态过滤等复杂条件组合
 
+        没有恢复的告警不受start_time和end_time限制
+
         :param start_time: 查询起始时间戳（可选，默认使用实例的start_time）
         :param end_time: 查询结束时间戳（可选，默认使用实例的end_time）
         :param is_time_partitioned: 是否启用时间分区查询（默认False）
@@ -277,6 +287,60 @@ class AlertQueryHandler(BaseBizQueryHandler):
                     )
             else:
                 # 非时间分区模式的基础过滤
+                # 对应dsl语句
+                # {
+                #   "query": {
+                #     "bool": {
+                #       "must": [
+                #         {
+                #           "bool": {
+                #             "should": [
+                #               {
+                #                 "range": {
+                #                   "end_time": {
+                #                     "gte": start_time
+                #                   }
+                #                 }
+                #               },
+                #               {
+                #                 "bool": {
+                #                   "must_not": {
+                #                     "exists": {
+                #                       "field": end_time
+                #                     }
+                #                   }
+                #                 }
+                #               }
+                #             ]
+                #           }
+                #         },
+                #         {
+                #           "bool": {
+                #             "should": [
+                #               {
+                #                 "range": {
+                #                   "begin_time": {
+                #                     "lte": end_time
+                #                   }
+                #                 }
+                #               },
+                #               {
+                #                 "range": {
+                #                   "create_time": {
+                #                     "lte": end_time
+                #                   }
+                #                 }
+                #               }
+                #             ]
+                #           }
+                #         }
+                #       ]
+                #     }
+                #   }
+                # }
+
+                # 查询在start_time到end_time之间的已恢复(已失效)的告警，或者查询还没有恢复的告警。
+                # 不存在end_time,则说明告警未恢复。
                 search_object = search_object.filter(
                     (Q("range", end_time={"gte": start_time}) | ~Q("exists", field="end_time"))
                     & (Q("range", begin_time={"lte": end_time}) | Q("range", create_time={"lte": end_time}))
@@ -587,23 +651,36 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return super(AlertQueryHandler, self).parse_condition_item(condition)
 
     def add_biz_condition(self, search_object):
+        """根据业务权限和用户关系条件过滤告警查询
+
+        参数:
+            search_object (Search): 原始查询对象
+
+        返回:
+            Search: 添加过滤条件后的查询对象。当存在查询条件时返回过滤后的查询，
+                    否则返回原始查询对象
+        """
         queries = []
+        # 添加授权业务ID过滤条件
         if self.authorized_bizs is not None and self.bk_biz_ids:
-            # 进行我有权限的告警过滤
             queries.append(Q("terms", **{"event.bk_biz_id": self.authorized_bizs}))
 
+        # 构建用户相关查询条件（处理人/负责人/督导人）
         user_condition = Q(
             Q("term", assignee=self.request_username)
             | Q("term", appointee=self.request_username)
             | Q("term", supervisor=self.request_username)
         )
+
+        # 未指定业务ID时仅返回用户相关告警
         if not self.bk_biz_ids:
-            # 如果不带任何业务信息，表示获取跟自己相关的告警
             queries.append(user_condition)
 
+        # 处理未授权业务下的用户关联告警
         if self.unauthorized_bizs and self.request_username:
             queries.append(Q(Q("terms", **{"event.bk_biz_id": self.unauthorized_bizs}) & user_condition))
 
+        # 合并所有过滤条件
         if queries:
             return search_object.filter(reduce(operator.or_, queries))
         return search_object

@@ -314,8 +314,22 @@ class BaseQueryHandler:
 
     def add_conditions(self, search_object: Search, conditions: List = None):
         """
-        处理 filter 条件
+        为搜索对象添加过滤条件
+
+        Args:
+            search_object: 需要被处理的原始搜索对象（Search类型）
+            conditions: 过滤条件列表，每个条件项应包含字段、方法、值等信息。
+                        当为None时使用self.conditions作为默认条件
+
+        Returns:
+            Search: 添加过滤条件后的新搜索对象
+
+        处理逻辑：
+        1. 条件预处理：转换条件字段命名或格式
+        2. 条件组合：根据逻辑运算符（AND/OR）组合多个条件
+        3. 反向条件处理：支持不等于（neq）的特殊处理
         """
+        # 处理条件默认值及字段转换
         conditions = (
             self.conditions if conditions is None else self.query_transformer.transform_condition_fields(conditions)
         )
@@ -323,11 +337,16 @@ class BaseQueryHandler:
         if not conditions:
             return search_object
 
+        # 初始化组合查询条件
         cond_q = None
+        # 遍历所有条件进行组合
         for condition in conditions:
             q = self.parse_condition_item(condition)
+            # 处理不等于的特殊逻辑
             if condition["method"] == "neq":
                 q = ~q
+
+            # 组合查询逻辑（AND/OR）
             if cond_q is None:
                 cond_q = q
             elif condition["condition"] == "or":
@@ -335,6 +354,7 @@ class BaseQueryHandler:
             else:
                 cond_q &= q
 
+        # 将最终组合的条件应用到搜索对象
         if cond_q is not None:
             search_object = search_object.filter(cond_q)
 
