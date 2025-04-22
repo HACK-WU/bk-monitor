@@ -90,6 +90,7 @@ class AlertQueryTransformer(BaseQueryTransformer):
         "event.data_type": DATA_SOURCE_LABEL_CHOICE,
     }
     doc_cls = AlertDocument
+    # 可供查询的ES字段配置
     query_fields = [
         QueryField("id", AlertFieldDisplay.ID),
         QueryField("alert_name", _lazy("告警名称"), agg_field="alert_name.raw", is_char=True),

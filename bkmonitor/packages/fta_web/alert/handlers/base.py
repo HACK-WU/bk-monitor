@@ -135,22 +135,38 @@ class BaseQueryTransformer(BaseTreeTransformer):
 
     @classmethod
     def transform_query_string(cls, query_string: str):
+        """
+        转换查询字符串为ES查询DSL或重整后的查询字符串
+
+        参数:
+            cls: 当前类，用于创建转换对象实例
+            query_string: 原始查询字符串，需要被解析转换的输入
+
+        返回:
+            str: 转换后的ES查询DSL字符串或重整后的查询字符串。当存在嵌套字段时返回DSL，否则返回优化后的查询字符串
+        """
+
         def parse_query_string_node(_transform_obj, _query_string):
+            """解析查询字符串生成语法树节点"""
             try:
                 query_node = parser.parse(_query_string, lexer=lexer.clone())
                 return _transform_obj.visit(query_node)
             except ParseError as e:
                 raise QueryStringParseError({"msg": e})
 
+        # 使用全局缓存提升重复查询处理性能
         global query_cache
         if not query_string:
             return ""
         transform_obj = cls()
+
+        # 缓存未命中时执行解析流程
         if query_string not in query_cache:
             query_cache[query_string] = parse_query_string_node(transform_obj, query_string)
 
         query_tree = query_cache[query_string]
 
+        # 处理嵌套字段的特殊转换逻辑
         if getattr(transform_obj, "has_nested_field", False) and cls.doc_cls:
             # 如果有嵌套字段，就不能用 query_string 查询了，需要转成 dsl（dsl 模式并不能完全兼容 query_string，只是折中方案）
             schema_analyzer = SchemaAnalyzer(cls.doc_cls._index.to_dict())
