@@ -455,6 +455,10 @@ class CreateActionProcessor:
                 return True
             return False
 
+        # 故障生成时，默认有效
+        if self.signal == ActionSignal.INCIDENT:
+            return True
+
         compared_status = EventStatus.ABNORMAL if self.signal == ActionSignal.NO_DATA else self.signal.upper()
         # 如果告警状态是已确认，或者告警状态和当前信号不一致，则不进行告警分派
         # 当告警状态发生变化时，系统会忽略掉所有通知和处理套餐的执行
