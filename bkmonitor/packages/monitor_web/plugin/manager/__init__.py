@@ -66,24 +66,32 @@ FILE_PLUGINS_FACTORY = {
     CollectorPluginMeta.PluginType.SNMP: PluginFileManager,
 }
 
-
 class PluginManagerFactory(object):
     @classmethod
-    def get_manager(cls, plugin: Union[int, CollectorPluginMeta] = None, plugin_type: str = None, operator="",
+    def get_manager(cls, plugin: Union[int,str, CollectorPluginMeta] = None, plugin_type: str = None, operator="",
                     tmp_path=None) -> PluginManager:
         """
-        根据插件ID和插件类型获取对应的插件管理对象
-        :param plugin: CollectorPluginMeta对象或id
-        :param plugin_type: 插件类型
-        :param operator: 操作者
-        :param tmp_path: 临时路径
+        根据插件标识或元数据获取对应类型的插件管理对象
+
+        :param plugin: 插件标识符plugin_id为str或者int类型或CollectorPluginMeta元数据对象。当传入plugin_id时，
+                       若对应元数据不存在会自动创建新实例
+        :type plugin: Union[int, CollectorPluginMeta]
+        :param plugin_type: 插件类型标识字符串，当plugin参数为整型ID时必须提供
+        :type plugin_type: str
+        :param operator: 操作者标识，默认为空字符串。当未指定时会自动获取全局用户作为操作者
+        :type operator: str
+        :param tmp_path: 临时文件路径，如果指定则必须存在有效目录路径
+        :type tmp_path: str
+        :return: 特定插件类型的PluginManager实例
         :rtype: PluginManager
+        :raises IOError: 当指定的tmp_path路径不存在时抛出
+        :raises KeyError: 当插件类型不在支持列表SUPPORTED_PLUGINS中时抛出
         """
         # 检查临时路径是否存在，若提供且不存在则抛出异常
         if tmp_path and not os.path.exists(tmp_path):
             raise IOError(_("文件夹不存在：%s") % tmp_path)
 
-        # 若plugin不是CollectorPluginMeta实例，则尝试通过id获取或创建新的实例
+        # 处理插件元数据：当输入为ID时尝试查询数据库，不存在则创建新实例
         if not isinstance(plugin, CollectorPluginMeta):
             plugin_id = plugin
             try:
@@ -91,19 +99,19 @@ class PluginManagerFactory(object):
             except CollectorPluginMeta.DoesNotExist:
                 plugin = CollectorPluginMeta(plugin_id=plugin_id, plugin_type=plugin_type)
 
-        # 确保插件类型受支持，否则抛出异常
+        # 验证插件类型合法性
         plugin_type = plugin.plugin_type
         if plugin_type not in SUPPORTED_PLUGINS:
             raise KeyError("Unsupported plugin type: %s" % plugin_type)
 
-        # 根据插件类型获取对应的插件管理器类
+        # 根据类型获取对应的管理器类
         plugin_manager_cls = SUPPORTED_PLUGINS[plugin_type]
 
-        # 若未提供操作者，则使用全局用户作为操作者
+        # 自动填充操作者信息
         if not operator:
             operator = get_global_user()
 
-        # 返回对应插件类型的新插件管理对象
+        # 实例化具体的插件管理器
         return plugin_manager_cls(plugin, operator, tmp_path)
 
 

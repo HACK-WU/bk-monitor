@@ -41,6 +41,9 @@ from monitor_web.plugin.signature import Signature
 class CollectorPluginMeta(OperateRecordModelBase):
     """
     采集插件源信息
+    CollectorPluginMeta-->PluginVersionHistory: one-to-many
+    PluginVersionHistory-->CollectorPluginInfo: one-to-one
+    PluginVersionHistory-->CollectorPluginConfig: one-to-one
     """
 
     PluginType = PluginType
@@ -690,6 +693,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
 class CollectorPluginConfig(OperateRecordModelBase):
     """
     采集器插件功能信息
+    PluginVersionHistory-->CollectorPluginConfig: one-to-one
     """
 
     config_json = JsonField("参数配置", default=None)
@@ -746,6 +750,8 @@ class CollectorPluginInfo(OperateRecordModelBase):
     采集器插件信息
     发布成功后，新纪录的info_version+=1
     草稿下，info_version=0
+
+    PluginVersionHistory-->CollectorPluginInfo: one-to-one
     """
 
     plugin_display_name = models.CharField("插件别名", max_length=64, default="")

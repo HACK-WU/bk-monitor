@@ -971,17 +971,43 @@ class SaveCollectConfigResource(Resource):
             return attrs
 
     def perform_request(self, data):
+        """执行采集配置请求处理
+        
+        Args:
+            data (dict): 请求参数字典，包含字段：
+                - id (int, optional): 采集配置ID（存在时为更新操作）
+                - bk_biz_id (int): 业务ID
+                - name (str): 采集配置名称
+                - collect_type (str): 采集类型
+                - target_node_type (str): 目标节点类型
+                - target_object_type (str): 目标对象类型
+                - metric_relabel_configs (list): 指标重标记配置
+                - params (dict): 采集参数
+                - label (str): 标签信息
+                - operation (str): 操作类型（CREATE/UPDATE）
+        
+        Returns:
+            object: 部署安装器返回的结果对象
+            
+        Raises:
+            PluginIDNotExist: 采集插件不存在异常
+            CollectConfigNotExist: 采集配置不存在异常
+            Exception: 部署安装过程中的任意异常
+        """
         try:
+            # 获取采集插件元信息（失败时抛出插件不存在异常）
             collector_plugin = self.get_collector_plugin(data)
         except CollectorPluginMeta.DoesNotExist:
             raise PluginIDNotExist
 
+        # 预处理请求参数：补充节点类型、对象类型，转移指标重标记配置到采集参数中
         data["params"]["target_node_type"] = data["target_node_type"]
         data["params"]["target_object_type"] = data["target_object_type"]
         data["params"]["collector"]["metric_relabel_configs"] = data.pop("metric_relabel_configs")
 
-        # 获取或新建采集配置
+        # 采集配置创建/更新处理
         if data.get("id"):
+            # 更新已有配置：获取配置对象，处理敏感字段，更新名称
             try:
                 collect_config = CollectConfigMeta.objects.get(id=data["id"])
             except CollectConfigMeta.DoesNotExist:
@@ -990,6 +1016,7 @@ class SaveCollectConfigResource(Resource):
             self.update_password_inplace(data, collect_config)
             collect_config.name = data["name"]
         else:
+            # 新建配置：构造配置元数据对象，标记创建操作
             collect_config = CollectConfigMeta(
                 bk_biz_id=data["bk_biz_id"],
                 name=data["name"],
@@ -1002,7 +1029,7 @@ class SaveCollectConfigResource(Resource):
             )
             data["operation"] = OperationType.CREATE
 
-        # 部署
+        # 执行部署安装（失败时进行新建配置的回滚）
         installer = get_collect_installer(collect_config)
         try:
             result = installer.install(data, data["operation"])
@@ -1014,7 +1041,7 @@ class SaveCollectConfigResource(Resource):
                 self.roll_back_result_table(collector_plugin)
             raise err
 
-        # 添加完成采集配置，主动更新指标缓存表
+        # 后处理：更新指标缓存，创建默认告警策略
         self.update_metric_cache(collector_plugin)
 
         # 采集配置完成
@@ -1049,42 +1076,68 @@ class SaveCollectConfigResource(Resource):
 
     @staticmethod
     def get_collector_plugin(data) -> CollectorPluginMeta:
+        """
+        根据采集配置数据获取或创建对应的采集器插件
+        
+        Args:
+            data (dict): 采集配置数据字典，需要包含：
+                - collect_type: 采集类型（日志/进程/SNMP_TRAP/K8S）
+                - plugin_id: 插件ID（可选）
+                - bk_biz_id: 业务ID
+                - label: 采集器标签
+                - params: 具体采集参数
+        
+        Returns:
+            CollectorPluginMeta: 采集器插件元数据对象
+        
+        功能说明：
+            根据不同的采集类型处理插件创建/更新逻辑，返回最终使用的采集器插件
+        """
         plugin_id = data["plugin_id"]
         # 虚拟日志采集器
         if data["collect_type"] == CollectConfigMeta.CollectType.LOG:
             label = data["label"]
             bk_biz_id = data["bk_biz_id"]
             rules = data["params"]["log"]["rules"]
+            
+            # 新建日志采集器场景：生成唯一ID并创建插件
             if "id" not in data:
                 plugin_id = "log_" + str(shortuuid.uuid())
                 plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=PluginType.LOG)
                 params = plugin_manager.get_params(plugin_id, bk_biz_id, label, rules=rules)
                 resource.plugin.create_plugin(params)
+            # 更新已有日志采集器场景
             else:
                 plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=PluginType.LOG)
                 params = plugin_manager.get_params(plugin_id, bk_biz_id, label, rules=rules)
                 plugin_manager.update_version(params)
         # 虚拟进程采集器
         elif data["collect_type"] == CollectConfigMeta.CollectType.PROCESS:
+            # 获取全局唯一的进程采集器插件
             plugin_manager = PluginManagerFactory.get_manager("bkprocessbeat", plugin_type=PluginType.PROCESS)
             # 全局唯一
             plugin_manager.touch()
             plugin_id = plugin_manager.plugin.plugin_id
+        
+        # 处理SNMP_TRAP采集器逻辑
         elif data["collect_type"] == CollectConfigMeta.CollectType.SNMP_TRAP:
             plugin_id = resource.collecting.get_trap_collector_plugin(data)
+        
+        # 处理Kubernetes采集器逻辑
         elif data["collect_type"] == CollectConfigMeta.CollectType.K8S:
             qcloud_exporter_plugin_id = f"{settings.TENCENT_CLOUD_METRIC_PLUGIN_ID}_{data['bk_biz_id']}"
-
-            # 仅支持腾讯云指标采集
+            
+            # 校验插件ID合法性（仅支持腾讯云指标采集）
             if plugin_id not in [settings.TENCENT_CLOUD_METRIC_PLUGIN_ID, qcloud_exporter_plugin_id]:
                 raise ValueError(f"Only support {settings.TENCENT_CLOUD_METRIC_PLUGIN_ID} k8s collector")
-
+            
             plugin_id = qcloud_exporter_plugin_id
-
-            # 检查是否配置了腾讯云指标插件配置
+            
+            # 检查腾讯云指标插件配置是否就绪
             if not settings.TENCENT_CLOUD_METRIC_PLUGIN_CONFIG:
                 raise ValueError("TENCENT_CLOUD_METRIC_PLUGIN_CONFIG is not set, please contact administrator")
-
+            
+            # 构建插件参数配置
             plugin_config: Dict[str, Any] = settings.TENCENT_CLOUD_METRIC_PLUGIN_CONFIG
             plugin_params = {
                 "plugin_id": plugin_id,
