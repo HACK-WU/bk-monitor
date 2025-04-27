@@ -430,7 +430,7 @@ class ListK8SResources(Resource):
         bcs_cluster_id = serializers.CharField(required=True)
         resource_type = serializers.ChoiceField(
             required=True,
-            choices=["pod", "workload", "namespace", "container", "ingress", "service", "node"],
+            choices=["pod", "workload", "namespace", "container", "ingress", "service", "node", "cluster"],
             label="资源类型",
         )
         # 用于模糊查询
@@ -606,7 +606,7 @@ class ResourceTrendResource(Resource):
         column = serializers.ChoiceField(required=True, choices=get_all_metrics())
         resource_type = serializers.ChoiceField(
             required=True,
-            choices=["pod", "workload", "namespace", "container", "ingress", "service", "node"],
+            choices=["pod", "workload", "namespace", "container", "ingress", "service", "node", "cluster"],
             label="资源类型",
         )
         method = serializers.ChoiceField(required=True, choices=["max", "avg", "min", "sum", "count"])
@@ -682,30 +682,7 @@ class ResourceTrendResource(Resource):
             # 不用topk 因为有resource_list
             promql = getattr(resource_meta, f"meta_prom_with_{column}")
 
-        # 构造查询参数
-        interval = get_interval_number(start_time, end_time, interval=60)
-        query_params = {
-            "bk_biz_id": bk_biz_id,
-            "query_configs": [
-                {
-                    "data_source_label": "prometheus",
-                    "data_type_label": "time_series",
-                    "promql": promql,
-                    "interval": interval,
-                    "alias": "result",
-                }
-            ],
-            "expression": "",
-            "alias": "result",
-            "start_time": start_time,
-            "end_time": end_time,
-            "type": "range",
-            "slimit": 10001,
-            "down_sample_range": "",
-        }
-
-        # 执行查询并解析结果
-        series = resource.grafana.graph_unify_query(query_params)["series"]
+        series = self.get_series_with_promql(promql, start_time, end_time, bk_biz_id)
         max_data_point = 0
 
         # 找到最大数据点的时间戳
@@ -736,3 +713,26 @@ class ResourceTrendResource(Resource):
         # 返回最终结果
         return [{"resource_name": name, column: info} for name, info in series_map.items()]
 
+    def get_series_with_promql(self, promql: str, start_time: int, end_time: int, bk_biz_id: int) -> list[dict]:
+        interval = get_interval_number(start_time, end_time, interval=60)
+        query_params = {
+            "bk_biz_id": bk_biz_id,
+            "query_configs": [
+                {
+                    "data_source_label": "prometheus",
+                    "data_type_label": "time_series",
+                    "promql": promql,
+                    "interval": interval,
+                    "alias": "result",
+                }
+            ],
+            "expression": "",
+            "alias": "result",
+            "start_time": start_time,
+            "end_time": end_time,
+            "type": "range",
+            "slimit": 10001,
+            "down_sample_range": "",
+        }
+        series = resource.grafana.graph_unify_query(query_params)["series"]
+        return series
