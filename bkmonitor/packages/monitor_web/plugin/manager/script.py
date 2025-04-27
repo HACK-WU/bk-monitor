@@ -32,6 +32,19 @@ class ScriptPluginManager(PluginManager):
 
     # 获取采集脚本文件
     def fetch_collector_file(self):
+        """
+        file_config={
+            "linux": {
+                "filename": "collector.sh",
+                "script_content_base64": "xxx"
+            },
+            "windows": {
+                "filename": "collector.bat",
+                "script_content_base64": "xxx"
+            }
+        }
+        :return:
+        """
         file_dict = {}
         for os_type, script_info in list(self.version.config.file_config.items()):
             if script_info:

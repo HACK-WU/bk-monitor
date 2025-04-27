@@ -1092,6 +1092,7 @@ class SaveCollectConfigResource(Resource):
         
         功能说明：
             根据不同的采集类型处理插件创建/更新逻辑，返回最终使用的采集器插件
+
         """
         plugin_id = data["plugin_id"]
         # 虚拟日志采集器

@@ -47,6 +47,7 @@ INNER_DIMENSIONS = [
     "bk_collect_config_id",
 ]
 
+# 插件模板路径
 PLUGIN_TEMPLATES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plugin_templates")
 
 
@@ -168,6 +169,7 @@ DEFAULT_TRAP_V3_CONFIG = {
 SNMP_MAX_METRIC_NUM = 500
 MAX_METRIC_NUM = 2000
 
+# 插件反向维度
 PLUGIN_REVERSED_DIMENSION = [
     ("bk_target_ip", _("目标IP")),
     ("bk_target_cloud_id", _("云区域ID")),

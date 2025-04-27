@@ -61,6 +61,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
         (PluginType.K8S, PluginType.K8S),
     )
 
+    # 虚拟插件类型
     VIRTUAL_PLUGIN_TYPE = [PluginType.LOG, PluginType.PROCESS, PluginType.SNMP_TRAP, PluginType.K8S]
 
     plugin_id = models.CharField("插件ID", max_length=64, primary_key=True)
@@ -68,6 +69,7 @@ class CollectorPluginMeta(OperateRecordModelBase):
     bk_supplier_id = models.IntegerField("开发商ID", default=0, blank=True)
     plugin_type = models.CharField("插件类型", max_length=32, choices=PLUGIN_TYPE_CHOICES, db_index=True)
     tag = models.CharField("插件标签", max_length=64, default="")
+    # 标注结果表的分类，比如进程、操作系统等
     label = models.CharField("二级标签", max_length=64, default="")
     is_internal = models.BooleanField("是否内置", default=False)
 

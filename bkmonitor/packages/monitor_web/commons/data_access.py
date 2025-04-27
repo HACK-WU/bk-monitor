@@ -149,30 +149,45 @@ class ResultTable(object):
 class DataAccessor(object):
     """
     申请数据链路资源
+
+    本质就是将数据存储到metadata中
+    metadata中的数据将会与kafka、zookeeper、consul等组件建立连接
     """
 
     def __init__(
         self, bk_biz_id, db_name, tables, etl_config, operator, type_label, source_label, label, data_label: str = None
     ):
         """
-        :param bk_biz_id: 业务ID
-        :param db_name: 数据库名
-        :param tables: ResultTable列表
-        :param etl_config: 清洗方式
-        :param operator: 操作人
+        初始化数据存储对象
+
+        :param bk_biz_id: 业务ID，标识所属业务
+        :param db_name: 数据库名称，将自动转为小写格式
+        :param tables: 包含的ResultTable对象列表
+        :param etl_config: 数据清洗配置方式
+        :param operator: 操作人员标识
+        :param type_label: 数据类型标签，用于分类标识
+        :param source_label: 数据来源标签，标识数据来源系统
+        :param label: 数据对象的自定义标签
+        :param data_label: 数据标签（可选），未指定时默认使用数据库名的小写格式
         """
         self.bk_biz_id = bk_biz_id
         self.db_name = db_name.lower()
+        # 数据标签处理逻辑：当未指定时使用数据库名作为默认值，并统一转为小写
         self.data_label = data_label.lower() if data_label else self.db_name
         self.tables = tables
         self.operator = operator
         self.etl_config = etl_config
+        # 标记对象是否需要更新（初始化时默认不需要修改）
         self.modify = False
-        # 获取table_id与table的映射关系
+        
+        # 构建结果表ID到表对象的映射关系，用于快速查找
         self.tables_info = {self.get_table_id(table): table for table in self.tables}
+        
         self.type_label = type_label
         self.source_label = source_label
         self.label = label
+        
+        # 尝试获取关联的数据ID，若API调用失败则保持为空
         try:
             self.data_id = self.get_data_id()
         except BKAPIError:
@@ -399,16 +414,21 @@ class DataAccessor(object):
 class PluginDataAccessor(DataAccessor):
     def __init__(self, plugin_version, operator: str, data_label: str = None):
         """
-        初始化PluginDataAccessor类的实例。
+        初始化PluginDataAccessor数据访问器实例
 
-        生成一个数据访问器，主要需要将metric_json中各个table中的字段信息(name,monitor_type,type,description等)提取出来，
-        组成一个ResultTableField实例列表，该列表将作为ResultTable.field_instance_list的属性值。
-        每个ResultTable中包含这几个信息，table_name，fields(是一个List[Dict]类型)，description，field_instance_list。
-        这些ResultTable又组成一个列表table_list。
+        参数:
+            plugin_version (PluginVersion): 插件版本对象，包含插件指标配置等版本信息
+            operator (str): 操作者标识符，用于记录数据操作者信息
+            data_label (str, optional): 数据标签，用于标识数据库分类，默认为None
+
+        功能:
+            1. 解析metric_json中的表结构，生成ResultTable列表
+            2. 处理插件维度注入配置，构建维度字段集合
+            3. 根据插件类型生成对应数据库配置
         """
 
         def get_field_instance(field):
-            # 将field字典转化为ResultTableField对象
+            """将原始字段字典转换为标准化的ResultTableField对象"""
             return ResultTableField(
                 field_name=field["name"],
                 tag=field["monitor_type"],
@@ -419,61 +439,59 @@ class PluginDataAccessor(DataAccessor):
                 alias_name=field.get("source_name", ""),
             )
 
+        # 初始化基础配置
         self.metric_json = plugin_version.info.metric_json
         self.enable_field_blacklist = plugin_version.info.enable_field_blacklist
-        # 获取表结构信息
         tables = []
 
+        # 预置字段处理：反向维度字段 + 插件类型特定字段
         add_fields = []
-        # 深拷贝插件反向维度字段名称
         add_fields_names = copy.deepcopy(PLUGIN_REVERSED_DIMENSION)
         plugin_type = plugin_version.plugin.plugin_type
-        # 根据插件类型添加特定维度字段
+
+        # SNMP插件需添加远程采集目标IP字段
         if plugin_type == PluginType.SNMP:
             add_fields_names.append(("bk_target_device_ip", _("远程采集目标IP")))
-        # 获取插件参数配置信息
-        config_json = plugin_version.config.config_json
-        # 保存维度注入字段
-        self.dms_field = []
 
-        # 如果脚本参数是维度注入
+        # 处理维度注入配置参数
+        config_json = plugin_version.config.config_json
+        self.dms_field = []
         for param in config_json:
             if param["mode"] == ParamMode.DMS_INSERT:
+                # 提取维度注入字段并添加到字段集合
                 for dms_key in param["default"].keys():
                     add_fields_names.append((dms_key, dms_key))
                     self.dms_field.append((dms_key, dms_key))
 
-        # 根据添加字段名称列表生成字段信息
+        # 生成预置字段配置
         for name, description in add_fields_names:
             add_fields.append(
                 {"name": name, "description": force_str(description), "monitor_type": "group", "type": "string"}
             )
 
-        # 遍历指标信息，处理每个表格的字段
+        # 构建结果表结构
         for table in self.metric_json:
-            # 获取字段信息
+            # 合并原始字段和预置字段，过滤非激活字段
             fields: List[ResultTableField] = list(
                 map(
                     get_field_instance,
                     [i for i in table["fields"] if i["monitor_type"] == "dimension" or i.get("is_active")],
                 )
             )
-            # 将额外字段信息合并到字段列表中
             fields.extend(list(map(get_field_instance, add_fields)))
-            # 将表格信息添加到表格列表
             tables.append(ResultTable(table_name=table["table_name"], description=table["table_desc"], fields=fields))
 
-        # 根据插件类型和ID生成数据库名称
+        # 生成数据库配置
         db_name = "{}_{}".format(plugin_type, plugin_version.plugin.plugin_id)
-        # 根据插件类型确定ETL配置
-        etl_config = "bk_standard" if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG] else "bk_exporter"
-        # 调用父类初始化方法，创建PluginDataAccessor实例
+        # 确定数据清洗策略
         if plugin_type in [PluginType.SCRIPT, PluginType.DATADOG]:
             etl_config = "bk_standard"
         elif plugin_type == PluginType.K8S:
             etl_config = "bk_standard_v2_time_series"
         else:
             etl_config = "bk_exporter"
+
+        # 调用父类初始化完成最终配置
         super(PluginDataAccessor, self).__init__(
             bk_biz_id=0,
             db_name=db_name,

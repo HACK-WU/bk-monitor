@@ -238,13 +238,13 @@ class CreatePluginResource(Resource):
             plugin_manager.validate_config_info(params["collector_json"], params["config_json"])
 
             try:
-                # 保存插件元信息
+                # 保存插件元信息: CollectorPluginMeta
                 plugin = self.request_serializer.save()
             except IntegrityError:
                 raise PluginIDExist({"msg": plugin_id})
 
             plugin_manager = PluginManagerFactory.get_manager(plugin=plugin)
-            # 创建对应的版本信息
+            # 创建对应的版本信息： PluginVersionHistory
             version, need_debug = plugin_manager.create_version(params)
 
             # 如果是新导入的插件，则需要保存其metric_json
@@ -257,7 +257,6 @@ class CreatePluginResource(Resource):
         params["os_type_list"] = version.os_type_list
         params["need_debug"] = check_skip_debug(need_debug)
         params["signature"] = Signature(version.signature).dumps2yaml() if version.signature else ""
-        params["enable_field_blacklist"] = True
         return params
 
 
@@ -287,7 +286,7 @@ class PluginRegisterResource(Resource):
         4、返回token_list
 
         """
-        # 从请求数据中提取插件ID，并尝试获取插件信息
+        # 插件元数据校验阶段
         self.plugin_id = validated_request_data["plugin_id"]
         plugin = CollectorPluginMeta.objects.filter(plugin_id=self.plugin_id).first()
         if plugin is None:
@@ -301,14 +300,22 @@ class PluginRegisterResource(Resource):
         if version is None:
             raise PluginVersionNotExist
 
+        # 插件管理器初始化
         self.plugin_manager = PluginManagerFactory.get_manager(plugin=plugin, operator=self.operator)
         self.plugin_manager.version = version
 
         # 尝试进行打包、上传和注册操作
         try:
+            # 打包阶段
             tar_name = self.make_package()
+            
+            # 文件上传阶段
             file_name = self.upload_file(tar_name)
+            
+            # 插件注册阶段
             self.register_package(file_name)
+            
+            # 获取并处理插件信息
             plugin_info = api.node_man.plugin_info(name=self.plugin_id, version=version.version)
             token_list = [i["md5"] for i in plugin_info]
             token_list.sort()
@@ -318,6 +325,7 @@ class PluginRegisterResource(Resource):
             if release_version is None or release_version.config_version != config_version:
                 self.register_template(tar_name)
 
+            # 版本状态更新
             version.stage = "debug"
             version.is_packaged = True
             version.save()
@@ -325,7 +333,7 @@ class PluginRegisterResource(Resource):
             logger.exception(e)
             raise RegisterPackageError({"msg": str(e)})
         finally:
-            # 清理临时文件夹
+            # 资源清理：删除临时目录'
             if os.path.exists(self.plugin_manager.tmp_path):
                 shutil.rmtree(self.plugin_manager.tmp_path)
 
@@ -348,38 +356,63 @@ class PluginRegisterResource(Resource):
 
     @step(state="UPLOAD_FILE", message=_lazy("文件正在上传中..."))
     def upload_file(self, tar_name):
+        """上传文件到节点管理服务，支持CEPH和普通存储两种模式
+        
+        Args:
+            tar_name (str): 需要上传的压缩包文件路径
+            
+        Returns:
+            str: 上传成功后返回的文件名称
+            
+        功能说明：
+        根据配置和环境变量自动选择存储方式，计算文件MD5校验码，
+        调用对应的节点管理接口完成文件上传"""
         # 调用节点管理上传文件接口
         with open(tar_name, "rb") as tf:
+            # 计算文件MD5校验码
             md5 = self.get_file_md5(tar_name)
+            
+            # 判断是否使用CEPH对象存储
             if (
                 settings.USE_CEPH
                 and os.getenv("UPLOAD_PLUGIN_VIA_COS", os.getenv("BKAPP_UPLOAD_PLUGIN_VIA_COS", "")) == "true"
             ):
+                # CEPH存储模式：保存到默认存储并调用COS接口
                 default_storage.save(tar_name, tf)
                 result = api.node_man.upload_cos(
                     file_name=tf.name.split("/")[-1], download_url=default_storage.url(tar_name), md5=md5
                 )
             else:
+                # 普通存储模式：直接调用节点管理上传接口
                 result = api.node_man.upload(package_file=tf, md5=md5, module="bkmonitor")
+                
+            # 返回上传成功的文件名
             return result["name"]
 
     @step(state="REGISTER_PACKAGE", message=_lazy("文件正在注册中..."))
     def register_package(self, file_name):
         """
-        注册插件包
-        :param file_name:
-        :return:
+        注册插件包到节点管理系统并轮询任务结果
+
+        :param str file_name: 要注册的插件包文件路径
+        :raises RegisterPackageError: 当注册任务失败或轮询超时时抛出
+        :return: None 本函数没有返回值，执行成功会直接返回，失败会抛出异常
         """
         # 调用插件包注册接口
+        # 发起异步注册请求，获取返回的任务ID用于后续结果查询
         result = api.node_man.register_package(file_name=file_name, is_release=False)
         job_id = result["job_id"]
-        # 最多轮询300次，每次间隔1s
+        
+        # 任务状态轮询控制逻辑
+        # 设置最大轮询次数为300次，每次间隔1秒（最长等待5分钟）
         to_be_continue = 300
         while to_be_continue > 0:
-            # 轮询注册插件包结果
+            # 查询任务注册状态
+            # 根据任务ID向节点管理服务查询当前进度
             result = api.node_man.query_register_task(job_id=job_id)
 
-            # 如果节点管理状态为失败，则Raise错误
+            # 处理任务失败状态
+            # 当服务端返回失败状态时，记录错误日志并终止流程
             if result.get("status") == NodemanRegisterStatus.FAILED:
                 logger.error(
                     "register package task({}) result: {} message: {}".format(
@@ -388,13 +421,16 @@ class PluginRegisterResource(Resource):
                 )
                 raise RegisterPackageError({"msg": result["message"]})
 
+            # 处理任务完成状态
+            # 当检测到任务完成标志时，记录最终结果并退出循环
             if result["is_finish"]:
                 logger.info("register package task({}) result: {}".format(job_id, result))
                 break
             time.sleep(1)
             to_be_continue -= 1
         else:
-            # 轮询超时
+            # 处理轮询超时异常
+            # 当300次轮询后仍未收到完成状态时，抛出业务异常
             raise RegisterPackageError({"msg": _("轮询插件包注册任务超时，请检查节点管理celery是否正常运行")})
 
     @step(state="REGISTER_TEMPLATE", message=_lazy("配置模板正在注册中..."))

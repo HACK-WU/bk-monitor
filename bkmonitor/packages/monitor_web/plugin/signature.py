@@ -98,7 +98,11 @@ def load_plugin_signature_manager(plugin_version):
 
 
 class SignatureObjCollections(object):
-    """manage signature with multiple protocol"""
+    """管理多协议签名对象的集合，提供加载、验证、序列化等功能
+
+       属性:
+           signature_type_info (dict): 签名类型配置字典，定义各类型对应的协议集合
+    """
 
     signature_type_info = {
         "safety": {"default"},
@@ -112,6 +116,15 @@ class SignatureObjCollections(object):
             self.load_from_python(signature_dict)
 
     def load_from_file(self, signature_file_or_path):
+        """从文件对象或文件路径加载YAML格式签名数据
+
+        Args:
+            signature_file_or_path (file|str): 文件对象或文件路径
+
+        Returns:
+            self: 支持链式调用
+        """
+        # 处理文件对象与文件路径两种输入方式
         if hasattr(signature_file_or_path, "read"):
             signature_file = signature_file_or_path
         else:
@@ -125,11 +138,28 @@ class SignatureObjCollections(object):
         return self
 
     def load_from_yaml(self, yaml_content):
+        """解析YAML字符串并加载签名数据
+
+        Args:
+            yaml_content (str): YAML格式的字符串内容
+
+        Returns:
+            self: 支持链式调用
+        """
         signature_dict = yaml.load(yaml_content, Loader=yaml.FullLoader)
         self.load_from_python(signature_dict)
         return self
 
     def load_from_python(self, signature_dict):
+        """加载Python字典格式的签名数据
+
+        Args:
+            signature_dict (dict): 字典格式的签名数据
+
+        Returns:
+            self: 支持链式调用
+        """
+        # 过滤不支持的协议类型，创建签名对象
         for protocol in signature_dict:
             if protocol not in self.supported_protocol:
                 continue
@@ -137,12 +167,32 @@ class SignatureObjCollections(object):
         return self
 
     def dumps2yaml(self):
+        """将当前签名数据序列化为YAML字符串
+
+        Returns:
+            bytes: YAML格式字节串
+        """
         return yaml.safe_dump(self.dumps2python(), default_flow_style=False, allow_unicode=True, encoding="utf-8")
 
     def dumps2python(self):
+        """生成可序列化的Python字典结构
+
+        Returns:
+            dict: 字典结构{协议: 签名信息}
+        """
         return {sig.protocol: sig.signature_info for sig in list(self._signature_dict.values())}
 
     def verificate(self, signature_type, plugin_version):
+        """验证指定签名类型下的所有协议是否有效
+
+        Args:
+            signature_type (str): 签名类型（如"safety"、"official"）
+            plugin_version (str): 需要验证的插件版本号
+
+        Returns:
+            bool: 所有关联协议验证通过时返回True
+        """
+        # 获取指定类型对应的协议集合进行验证
         if signature_type not in self.signature_type_info:
             return False
 
@@ -158,6 +208,14 @@ class SignatureObjCollections(object):
         return True
 
     def iter_verificate(self, plugin_version):
+        """迭代获取所有协议的验证结果
+
+        Args:
+            plugin_version (str): 需要验证的插件版本号
+
+        Yields:
+            tuple: (协议名称, 验证结果) 的元组
+        """
         for protocol in self._signature_dict:
             yield protocol, self._signature_dict[protocol].verificate(plugin_version)
 

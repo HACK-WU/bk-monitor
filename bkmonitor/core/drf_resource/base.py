@@ -275,6 +275,7 @@ class Resource(six.with_metaclass(abc.ABCMeta, object)):
         )
         logger.info(state_message)
 
+        # _task_manager 将会是一个celery task 对象
         if not self._task_manager:
             return
 
