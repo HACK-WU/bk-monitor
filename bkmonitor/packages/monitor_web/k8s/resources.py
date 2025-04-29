@@ -676,9 +676,8 @@ class ResourceTrendResource(Resource):
                 [resource_meta.filter.remove(filter_obj) for filter_obj in tmp_filter_chain]
             promql = " or ".join(promql_list)
         else:
-            # 非workload类型资源，直接添加过滤条件
-            # 过滤出resource_type 为 resource_list 中的数据
-            resource_meta.filter.add(load_resource_filter(resource_type, resource_list))
+            if resource_type != "cluster":
+                resource_meta.filter.add(load_resource_filter(resource_type, resource_list))
             # 不用topk 因为有resource_list
             promql = getattr(resource_meta, f"meta_prom_with_{column}")
 
