@@ -31,8 +31,7 @@ if API_DIR not in RESOURCE_DIRS:
     RESOURCE_DIRS.append(API_DIR)
 
 # 查找resource模块时将会忽略的目录
-RESOURCE_IGNORE_DIRS = getattr(settings, "RESOURCE_IGNORE_DIRS", ["__pycache__", "migrations", "test"])
-
+RESOURCE_IGNORE_DIRS = getattr(settings, "RESOURCE_IGNORE_DIRS",[]) +  ["__pycache__", "migrations", "test"]
 
 class ResourceFinder(BaseFinder):
     def __init__(self, app_names=None, *args, **kwargs):
