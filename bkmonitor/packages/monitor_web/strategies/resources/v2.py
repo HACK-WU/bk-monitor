@@ -2896,6 +2896,7 @@ class GetTargetDetailWithCache(CacheResource):
         target理论上支持多个列表以或关系存在，列表内部亦存在多个对象以且关系存在，
         由于目前产品形态只支持单对象的展示，因此若存在多对象，只取第一个对象返回给前端
         """
+        # 定义字段类型到节点类型的映射关系
         target_type_map = {
             TargetFieldType.host_target_ip: TargetNodeType.INSTANCE,
             TargetFieldType.host_ip: TargetNodeType.INSTANCE,
@@ -2907,6 +2908,8 @@ class GetTargetDetailWithCache(CacheResource):
             TargetFieldType.host_set_template: TargetNodeType.SET_TEMPLATE,
             TargetFieldType.dynamic_group: TargetNodeType.DYNAMIC_GROUP,
         }
+        
+        # 定义字段类型到对象类型的映射关系
         obj_type_map = {
             TargetFieldType.host_target_ip: TargetObjectType.HOST,
             TargetFieldType.host_ip: TargetObjectType.HOST,
@@ -2918,6 +2921,8 @@ class GetTargetDetailWithCache(CacheResource):
             TargetFieldType.host_set_template: TargetObjectType.HOST,
             TargetFieldType.dynamic_group: TargetObjectType.HOST,
         }
+        
+        # 定义字段类型到数据获取方法的映射关系
         info_func_map = {
             TargetFieldType.host_target_ip: resource.commons.get_host_instance_by_ip,
             TargetFieldType.host_ip: resource.commons.get_host_instance_by_ip,
@@ -2936,12 +2941,17 @@ class GetTargetDetailWithCache(CacheResource):
         else:
             target = target[0][0]
 
+        # 目前页面上选择的目标类型，仅支持单一类型，所以所有的filed都是一样的
         field = target.get("field")
         if not field or not target.get("value"):
             return None
 
+        # 构建基础参数模板
         params = {"bk_biz_id": bk_biz_id}
+        
+        # 根据不同目标类型构造请求参数
         if field in [TargetFieldType.host_ip, TargetFieldType.host_target_ip]:
+            # 处理IP类型目标参数构造
             params["ip_list"] = []
             for x in target["value"]:
                 if x.get("bk_host_id"):
@@ -2951,29 +2961,36 @@ class GetTargetDetailWithCache(CacheResource):
                 else:
                     ip = {"ip": x["ip"], "bk_cloud_id": x["bk_cloud_id"]}
                 params["ip_list"].append(ip)
-
             params["bk_biz_ids"] = [bk_biz_id]
+            
         elif field in [
             TargetFieldType.host_set_template,
             TargetFieldType.host_service_template,
             TargetFieldType.service_set_template,
             TargetFieldType.service_service_template,
         ]:
+            # 处理模板类型目标参数构造
             params["bk_obj_id"] = target_type_map[field]
             params["bk_inst_type"] = obj_type_map[field]
             params["bk_inst_ids"] = [inst["bk_inst_id"] for inst in target["value"]]
+            
         elif field == TargetFieldType.dynamic_group:
+            # 处理动态分组类型目标参数构造
             params["dynamic_group_ids"] = [x["dynamic_group_id"] for x in target["value"]]
+            
         else:
+            # 处理拓扑节点类型目标参数构造
             node_list = target.get("value")
             for target_item in node_list:
                 if "bk_biz_id" not in target_item:
                     target_item.update(bk_biz_id=bk_biz_id)
             params["node_list"] = node_list
 
+        # 调用对应接口获取目标详情
         target_detail = info_func_map[field](params)
 
-        # 统计实例数量
+        # 统计实例数量逻辑
+        # 区分IP类型和其他类型采用不同的统计方式
         if field in [TargetFieldType.host_ip, TargetFieldType.host_target_ip]:
             instance_count = len(target_detail)
         else:
@@ -2982,6 +2999,7 @@ class GetTargetDetailWithCache(CacheResource):
                 instances.update(node.get("all_host", []))
             instance_count = len(instances)
 
+        # 返回标准化结果结构
         return {
             "node_type": target_type_map[field],
             "node_count": len(target["value"]),

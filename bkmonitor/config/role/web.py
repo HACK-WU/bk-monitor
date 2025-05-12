@@ -219,6 +219,19 @@ CACHES["default"] = CACHES["db"]
 
 
 def django_redis_cache_config():
+    """
+    获取Django Redis缓存所需环境变量的生成器函数。
+    
+    该函数依次检查REDIS_PASSWORD、REDIS_HOST、REDIS_PORT、REDIS_DB
+    四个环境变量，优先查找带DJANGO_前缀的版本，若未找到则查找原始名称。
+    
+    参数:
+        无
+    返回值:
+        生成器对象:
+            - 当环境变量存在时返回对应的字符串值
+            - 当环境变量均不存在时返回None
+    """
     variable_list = ["REDIS_PASSWORD", "REDIS_HOST", "REDIS_PORT", "REDIS_DB"]
     for variable in variable_list:
         key = f"DJANGO_{variable}"
@@ -228,11 +241,22 @@ def django_redis_cache_config():
             yield os.getenv(key) or os.getenv(variable)
 
 
-# Django Redis Cache 相关配置
+# =====================================================================
+# Django Redis Cache 配置初始化
+# =====================================================================
+
+# 解包生成器结果到Django Redis配置参数
+# 按顺序获取Redis密码、主机地址、端口、数据库编号
 DJANGO_REDIS_PASSWORD, DJANGO_REDIS_HOST, DJANGO_REDIS_PORT, DJANGO_REDIS_DB = list(django_redis_cache_config())
 
+# 判断是否启用Redis缓存（需同时存在主机和端口）
 USE_DJANGO_CACHE_REDIS = DJANGO_REDIS_HOST and DJANGO_REDIS_PORT
+
+# =====================================================================
+# Redis缓存后端配置
+# =====================================================================
 if USE_DJANGO_CACHE_REDIS:
+    # 配置Redis缓存连接参数
     CACHES["redis"] = {
         "BACKEND": "django_redis.cache.RedisCache",
         "LOCATION": "redis://:{}@{}:{}/{}".format(
@@ -243,6 +267,7 @@ if USE_DJANGO_CACHE_REDIS:
             "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
         },
     }
+    # 设置默认缓存和登录数据库缓存为Redis配置
     CACHES["default"] = CACHES["redis"]
     CACHES["login_db"] = CACHES["redis"]
 

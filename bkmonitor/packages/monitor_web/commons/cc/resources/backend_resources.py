@@ -355,13 +355,26 @@ class GetHostInstanceByNodeResource(CacheResource):
         del node_agent_error_count
 
     def perform_request(self, validated_request_data):
-        # 查询拓扑数和节点映射
+        """
+        执行请求处理，补充节点信息并统计相关数据。
+
+        参数:
+            validated_request_data (dict): 验证后的请求数据，包含以下字段：
+                - bk_biz_id (int): 业务ID
+                - node_list (list): 节点列表，每个节点包含基础信息
+                - with_count (bool): 是否需要统计实例数量
+                - with_service_category (bool): 是否需要服务分类信息
+
+        返回:
+            list: 处理后的节点列表，包含补充的路径、标签等信息
+        """
+        # 初始化业务ID和节点列表，并构建拓扑树及节点映射关系
         self.bk_biz_id = validated_request_data["bk_biz_id"]
         self.node_list = validated_request_data["node_list"]
         topo_tree = resource.cc.topo_tree(self.bk_biz_id)
         node_mapping = topo_tree_tools.get_node_mapping(topo_tree)
 
-        # 获取节点的全路径
+        # 遍历节点列表，补充节点名称、全路径信息，并收集关联的模块ID用于后续查询
         for node in self.node_list:
             inst_key = topo_tree_tools.get_inst_key(node)
             # 补充节点名字
@@ -372,7 +385,7 @@ class GetHostInstanceByNodeResource(CacheResource):
             node["module_ids"] = topo_tree_tools.get_module_by_node(node_mapping.get(inst_key))
             self.need_search_module_ids = self.need_search_module_ids | node["module_ids"]
 
-        # 统计主机信息
+        # 当需要统计实例数量时，调用方法获取实例总数
         if validated_request_data["with_count"]:
             self.get_instance_count()
 
@@ -393,6 +406,7 @@ class GetHostInstanceByNodeResource(CacheResource):
                 )
                 module_service_template_info[module.bk_module_id] = module.service_template_id
 
+            # 为节点补充服务分类标签和服务模板信息
             for node in self.node_list:
                 module_ids = node["module_ids"]
                 config_service_categorys = {
@@ -408,7 +422,7 @@ class GetHostInstanceByNodeResource(CacheResource):
                 if node["bk_obj_id"] == "module":
                     node[TargetNodeType.SERVICE_TEMPLATE] = module_service_template_info.get(node["bk_inst_id"])
 
-        # 删除不需要的键
+        # 清理节点中不再需要的module_ids字段
         for node in self.node_list:
             node.pop("module_ids")
 
@@ -606,6 +620,20 @@ class GetNodesByTemplate(CacheResource):
         )
 
     def perform_request(self, data):
+        """
+        执行CMDB节点实例查询请求，根据输入参数获取对应的主机或服务实例数据
+        
+        参数:
+            data: 包含查询参数的字典，必须包含以下键：
+                - bk_inst_ids: 节点实例ID列表
+                - bk_obj_id: 节点对象类型标识
+                - bk_biz_id: 业务ID
+                - bk_inst_type: 实例类型（主机/服务）
+                
+        返回值:
+            result: 查询结果列表，包含主机或服务实例的详细信息
+            当查询失败或无数据时返回空列表
+        """
         bk_inst_ids = data["bk_inst_ids"]
         bk_obj_id = data["bk_obj_id"]
         bk_biz_id = data["bk_biz_id"]
@@ -616,13 +644,17 @@ class GetNodesByTemplate(CacheResource):
         # 如果是需要获得相应动态模板下的主机
         # 获取最底层节点的实例
         template_id_field = ""
+        # 集群模版
         if bk_obj_id == TargetNodeType.SET_TEMPLATE:
             template_id_field = "set_template_id"
             bk_nodes = api.cmdb.get_set(bk_biz_id=bk_biz_id, set_template_ids=bk_inst_ids)
+        # 服务模版
         elif bk_obj_id == TargetNodeType.SERVICE_TEMPLATE:
             template_id_field = "service_template_id"
             bk_nodes = api.cmdb.get_module(bk_biz_id=bk_biz_id, service_template_ids=bk_inst_ids)
 
+        # 构造节点查询参数
+        # 将节点信息转换为标准查询格式
         args = {
             "bk_biz_id": bk_biz_id,
             "node_list": [
@@ -636,6 +668,10 @@ class GetNodesByTemplate(CacheResource):
                 for node in bk_nodes
             ],
         }
+
+        # 根据目标实例类型调用对应的查询方法
+        # 主机类型调用get_host_instance_by_node
+        # 服务类型调用get_service_instance_by_node
         if bk_inst_type == TargetObjectType.HOST:
             result = resource.commons.get_host_instance_by_node(args)
 

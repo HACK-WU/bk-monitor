@@ -62,6 +62,36 @@ def foreach_topo_tree(topo, func=None, topo_link=None, order="asc", *args, **kwa
 def get_node_mapping(topo_tree):
     """
     获取所有节点的映射
+
+    返回格式：
+        "set|82": {
+            "bk_inst_id": 82,
+            "bk_inst_name": "TKE",
+            "bk_obj_id": "set",
+            "bk_obj_name": "集群",
+            "child": [
+                {
+                    "bk_inst_id": 190,
+                    "bk_inst_name": "k8s-node",
+                    "bk_obj_id": "module",
+                    "bk_obj_name": "模块",
+                    "child": [],
+                    "id": "module|190",
+                    "node_link": [
+                        "biz|2",
+                        "attr_test|3066",
+                        "set|82",
+                        "module|190"
+                    ]
+                }
+            ],
+            "id": "set|82",
+            "node_link": [
+                "biz|2",
+                "attr_test|3066",
+                "set|82"
+            ]
+        }
     """
     node_mapping = {}
 
@@ -76,6 +106,8 @@ def get_node_mapping(topo_tree):
 def get_inst_key(node):
     """
     获取节点的键名
+
+    返回格式： "set|82"
     """
     try:
         return "{}|{}".format(node["bk_obj_id"], node["bk_inst_id"])
