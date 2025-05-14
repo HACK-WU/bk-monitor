@@ -51,7 +51,7 @@ def create_actions(
         strategy_id,
         signal,
         alert_ids=None,
-        alerts: List[AlertDocument] = None,
+        alerts: list[AlertDocument] = None,
         severity=None,
         dimensions=None,
         dimension_hash="",
@@ -127,7 +127,7 @@ def create_interval_actions(
         strategy_id,
         signal,
         alert_ids=None,
-        alerts: List[AlertDocument] = None,
+        alerts: list[AlertDocument] = None,
         severity=None,
         dimensions=None,
         dimension_hash="",
@@ -194,7 +194,7 @@ def check_create_poll_action_10_secs():
         logger.info("[get service lock fail] check_create_poll_action. will process later")
         return
     except BaseException as e:  # NOCC:broad-except(设计如此:)
-        logger.exception("[process error] check_create_poll_action, reason：{msg}".format(msg=str(e)))
+        logger.exception(f"[process error] check_create_poll_action, reason：{str(e)}")
         return
 
 
@@ -284,7 +284,7 @@ class CreateIntervalActionProcessor:
         ActionInstance.objects.filter(id__in=self.finished_actions).update(need_poll=False)
 
     def check_finished_actions(self, checked_alerts: list, action_instance):
-        check_key = "{}_{}".format(action_instance.alerts[0], action_instance.action_config_id)
+        check_key = f"{action_instance.alerts[0]}_{action_instance.action_config_id}"
         if check_key in checked_alerts:
             # 增加检测机制，每个alert对应的action类型仅保留一个同类型的周期任务
             self.finished_actions.append(action_instance.id)
@@ -346,7 +346,7 @@ class CreateActionProcessor:
             strategy_id,  # 策略ID
             signal,  # 信号
             alert_ids=None,  # 警报ID列表
-            alerts: List[AlertDocument] = None,  # 警报文档列表
+            alerts: list[AlertDocument] = None,  # 警报文档列表
             severity=None,  # 严重性
             dimensions=None,  # 维度
             dimension_hash="",  # 维度哈希
@@ -468,7 +468,8 @@ class CreateActionProcessor:
             current_timestamp = int(time.time())
             if not alert.is_ack:
                 desc = _("当前告警状态发生变化，系统自动忽略{}的所有通知和处理套餐的执行").format(
-                    ActionSignal.ACTION_SIGNAL_DICT.get(self.signal))
+                    ActionSignal.ACTION_SIGNAL_DICT.get(self.signal)
+                )
             action_log = dict(
                 op_type=AlertLog.OpType.ACTION,
                 alert_id=[alert.id],
@@ -593,6 +594,11 @@ class CreateActionProcessor:
         # 创建推送队列的人员信息
         # todo?
         self.create_message_queue_action(new_actions)
+
+        alert: AlertDocument = self.alerts[0]
+        if alert.is_no_data() and self.signal in [ActionSignal.RECOVERED, ActionSignal.CLOSED]:
+            # 无数据告警恢复和关闭的时候， 只推送消息队列，不发送通知
+            return []
 
         if not actions:
             logger.info(
