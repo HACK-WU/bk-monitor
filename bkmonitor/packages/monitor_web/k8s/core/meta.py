@@ -25,7 +25,7 @@ from bkmonitor.models import (
 from bkmonitor.utils.time_tools import hms_string
 from core.drf_resource import resource
 from monitor_web.k8s.core.filters import ResourceFilter, load_resource_filter
-
+from typing import Dict,List
 
 class FilterCollection:
     """
@@ -272,6 +272,7 @@ class K8sResourceMeta:
                 {
                     "data_source_label": "prometheus",
                     "data_type_label": "time_series",
+                    # promql: topk(page_size,...)
                     "promql": self.meta_prom_by_sort(order_by=order_by, page_size=page_size),
                     "interval": interval,
                     "alias": "result",
@@ -286,28 +287,48 @@ class K8sResourceMeta:
             "down_sample_range": "",
         }
         series = resource.grafana.graph_unify_query(query_params)["series"]
-        # 这里需要排序
-        # 1. 得到最新时间点
-        # 2. 基于最新时间点数据进行排序
+
+
+        # latest_metric_value 最新时间点指标值
+        # line latest_metric_value所在的时间序列
+        # lines=[
+        #   [latest_metric_value,[line]],
+        #   ....
+        # ]
+        # 后续需要通过最新时间点指标值latest_metric_value对每个lines进行排序
+        # 如果是升序排序，则lines.sort(key=lambda x:x[0], reverse=False)
+        # 如果是降序排序，则lines.sort(key=lambda x:x[0], reverse=True)
         lines = []
-        max_data_point = 0
+
+        latest_time_point = 0
+
+        # step1: 遍历所有的数据点，找到最近的时间点
         for line in series:
             if line["datapoints"]:
-                for point in reversed(line["datapoints"]):
-                    if point[0]:
-                        max_data_point = max(max_data_point, point[1])
+                # 获取最新的时间点，不直接选取最后一个数据点，因为可能存在空值
+                latest_time_point=max(latest_time_point, max(line["datapoints"], key=lambda x:x[1] if x[0] else -1))
+                # 旧的写法：
+                # for point in reversed(line["datapoints"]):
+                #     if point[0]:
+                #         max_data_point = max(max_data_point, point[1])
+
+        # step2: 遍历所有的line,判断是否包含最新时间点(latest_time_point)的数据
+        #   - 如果包含，则选取最新时间点的指标值，及其所在时间序列，并将其添加到lines列表中
+        #   - 如果不包含，则最新时间点的指标值设置为0，将其所在时间序列添加到lines列表中
         for line in series:
+            # 实际值
             last_data_points_value:  float | int | None = line["datapoints"][-1][0]
+            # 时间戳
             last_data_points = line["datapoints"][-1][1]
-            if last_data_points == max_data_point:
-                # 如果 len(series) <= page_size，则保留实际值为None的情况
-                # 反之如果大于则对为 None 的情况进行排除
+            if last_data_points == latest_time_point:
+                # 同理，当样本值为None的时候，我们将其值设置为0
                 if len(series) <= page_size:
                     lines.append([last_data_points_value or 0, line])
                 elif last_data_points_value is not None:
                     lines.append([last_data_points_value, line])
             else:
                 lines.append([0, line])
+
         if order_by:
             reverse = order_by.startswith("-")
             lines.sort(key=lambda x: x[0], reverse=reverse)
@@ -342,10 +363,25 @@ class K8sResourceMeta:
         return ":".join(meta_field_list)
 
     def clean_resource_obj(self, obj, series):
+        """
+        清洗资源对象并注入上下文信息
+        
+        参数:
+            obj: 待清洗的资源对象，需包含__dict__属性用于批量更新字段
+            series: 数据序列对象，包含dimensions维度字典和其他元数据
+            
+        返回值:
+            经过维度字段映射转换并注入业务/集群ID的资源对象
+        """
+        # 维度字段映射转换：将dimensions中的原始字段名替换为目标字段名
+        # 通过column_mapping配置的映射关系进行键值迁移
         dimensions = series["dimensions"]
         for origin, target in self.column_mapping.items():
             if origin in dimensions:
                 dimensions[target] = dimensions.pop(origin, None)
+        
+        # 批量注入维度属性到资源对象，并设置上下文业务ID和集群ID
+        # 这两个ID为资源归属定位的关键标识
         obj.__dict__.update(series["dimensions"])
         obj.bk_biz_id = self.bk_biz_id
         obj.bcs_cluster_id = self.bcs_cluster_id
