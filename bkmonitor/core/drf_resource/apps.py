@@ -44,3 +44,45 @@ class DRFResourceConfig(AppConfig):
                 # 如果在${platform}/resources.py里面有相同定义，会重载default.py下的resource
             """
         setup()
+        mock_unify_query()
+
+
+def mock_unify_query():
+    # 是否mock unify query
+    from django.conf import settings
+
+    MOCK_UNIFY_QUERY = getattr(settings, 'MOCK_UNIFY_QUERY', False)
+
+    if MOCK_UNIFY_QUERY:
+        from mock import patch
+        import requests
+        from core.drf_resource import resource, Resource
+
+        import os
+
+        # 从环境变量中获取url
+        url = os.getenv("bkop_url")+  "/query-api/rest/v2/grafana/time_series/unify_query/"
+        cookie = os.getenv("bkop_cookie")
+        x_csrf_token = os.getenv("bkop_x_csrf_token")
+        host=os.getenv("bkop_host")
+        headers = {
+            'X-Csrftoken': 'X-Csrftoken',
+            'Cookie': cookie,
+            'x-csrftoken': x_csrf_token,
+            'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
+            'Content-Type': 'application/json',
+            'Accept': '*/*',
+            'Host': host,
+            'Connection': 'keep-alive'
+        }
+
+        class MockUnifyQuery(Resource):
+            def perform_request(self, params):
+                import  json
+                params = json.dumps(params)
+
+                response = requests.request("POST", url, headers=headers, data=params)
+                return response.json()["data"]
+
+        mock_unify_query = patch.object(resource.grafana, 'graph_unify_query', new=MockUnifyQuery())
+        mock_unify_query.start()

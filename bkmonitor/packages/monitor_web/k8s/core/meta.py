@@ -306,7 +306,7 @@ class K8sResourceMeta:
         for line in series:
             if line["datapoints"]:
                 # 获取最新的时间点，不直接选取最后一个数据点，因为可能存在空值
-                latest_time_point=max(latest_time_point, max(line["datapoints"], key=lambda x:x[1] if x[0] else -1))
+                latest_time_point=max(latest_time_point, max(line["datapoints"], key=lambda x:x[1] if x[0] else -1)[1])
                 # 旧的写法：
                 # for point in reversed(line["datapoints"]):
                 #     if point[0]:
