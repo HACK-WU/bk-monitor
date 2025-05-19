@@ -816,11 +816,9 @@ class K8sClusterMeta(K8sResourceMeta):
     def meta_prom_with_worker_node_count(self):
         """count by(bcs_cluster_id)(kube_node_labels) - count(sum by (bcs_cluster_id, node)(kube_node_role{role=~"master|control-plane"}))"""
         filter_string = self.filter.filter_string()
-        filter_string += ","
-        filter_string += 'role=~"master|control-plane"'
         return f"""(count by(bcs_cluster_id)(kube_node_labels{{{filter_string}}})
          -
-         count(sum by (node)(kube_node_role{{{filter_string}}})))"""
+         count(sum by (node)(kube_node_role{{{filter_string}, role=~"master|control-plane"}})))"""
 
     @property
     def meta_prom_with_node_pod_usage(self):
@@ -1071,7 +1069,7 @@ class NameSpace(dict):
         return self
 
 
-class K8sNamespaceMeta(K8sResourceMeta):
+class K8sNamespaceMeta(K8sResourceMeta, NetworkWithRelation):
     """
     Namespace没有单独的表存储，这里使用Workload表中的namespace字段进行查询
     """

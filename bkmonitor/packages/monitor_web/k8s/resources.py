@@ -518,17 +518,22 @@ class ListK8SResources(Resource):
         # 3.0 基于promql 查询历史上报数据。 确认数据是否达到分页要求
         order_by = validated_request_data["order_by"]
         column = validated_request_data["column"]
+
         if scenario == "network":
-            # 网络场景默认指标，用nw_container_network_receive_bytes_total
-            if not column.startswith("nw_"):
+            column = column if column.startswith("nw_") else "nw_" + column
+
+            if not resource.k8s.get_scenario_metric(scenario="network", metric_id=column, bk_biz_id=bk_biz_id):
+                # 网络场景默认指标，用nw_container_network_receive_bytes_total
                 column = "nw_container_network_receive_bytes_total"
             # 网络场景，pod不需要workload相关信息
             if resource_meta.resource_field == "pod_name":
                 resource_meta.only_fields = ["name", "namespace", "bk_biz_id", "bcs_cluster_id"]
 
-        # 如果是容量场景，则使用容量的指标: node_boot_time_seconds(用以获取node列表)
+
         if scenario == "capacity":
-            column = "node_boot_time_seconds"
+            if not resource.k8s.get_scenario_metric(scenario="capacity", metric_id=column, bk_biz_id=bk_biz_id):
+                # 容量场景默认指标: node_boot_time_seconds(用以获取node列表)
+                column = "node_boot_time_seconds"
 
         order_by = column if order_by == "asc" else f"-{column}"
 
@@ -642,7 +647,7 @@ class ResourceTrendResource(Resource):
         start_time: int = validated_request_data["start_time"]
         end_time: int = validated_request_data["end_time"]
 
-        # 加载资源元信息并设置聚合方法和时间间隔
+        # 1. 基于resource_type 加载对应资源元信息
         resource_meta: K8sResourceMeta = load_resource_meta(resource_type, bk_biz_id, bcs_cluster_id)
         agg_method = validated_request_data["method"]
         resource_meta.set_agg_method(agg_method)
@@ -659,7 +664,7 @@ class ResourceTrendResource(Resource):
 
         # 根据资源类型生成PromQL查询语句
         if resource_type == "workload":
-            # 针对workload类型资源，单独处理命名空间信息
+            # workload 单独处理
             promql_list = []
             for wl in resource_list:
                 # workload 资源，需要带上namespace 信息: blueking|Deployment:bk-monitor-web
@@ -695,7 +700,7 @@ class ResourceTrendResource(Resource):
         for line in series:
             resource_name = resource_meta.get_resource_name(line)
             if resource_type == "workload":
-                # workload类型资源补充命名空间信息
+                # workload 补充namespace
                 resource_name = f"{line['dimensions']['namespace']}|{resource_name}"
 
             # 如果最后一个数据点的时间戳等于最大数据点的时间戳，则只取最后一个数据点,否则不获取datapoints
