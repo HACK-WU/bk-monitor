@@ -12,6 +12,12 @@ specific language governing permissions and limitations under the License.
 from django.apps import AppConfig
 
 from .management.root import setup
+from django.utils.deprecation import MiddlewareMixin
+from django.conf import settings
+import requests
+
+bkop_url = getattr(settings, 'BKOP_URL', '')
+headers = getattr(settings, 'BKOP_HEADERS', {})
 
 
 # AppConfig 相关文档：https://docs.djangoproject.com/zh-hans/5.1/ref/applications/
@@ -44,45 +50,87 @@ class DRFResourceConfig(AppConfig):
                 # 如果在${platform}/resources.py里面有相同定义，会重载default.py下的resource
             """
         setup()
-        mock_unify_query()
+        MOCK_UNIFY_QUERY = getattr(settings, 'MOCK_UNIFY_QUERY', False)
+        if MOCK_UNIFY_QUERY:
+            mock_unify_query()
+            settings.MIDDLEWARE = tuple(
+                list(settings.MIDDLEWARE) + ["core.drf_resource.apps.RequestForwardingMiddleware"])
 
 
 def mock_unify_query():
-    # 是否mock unify query
-    from django.conf import settings
+    from mock import patch
+    from core.drf_resource import resource, Resource
 
-    MOCK_UNIFY_QUERY = getattr(settings, 'MOCK_UNIFY_QUERY', False)
+    url = bkop_url + "/query-api/rest/v2/grafana/time_series/unify_query/"
 
-    if MOCK_UNIFY_QUERY:
-        from mock import patch
-        import requests
-        from core.drf_resource import resource, Resource
+    class MockUnifyQuery(Resource):
+        def perform_request(self, params):
+            import json
+            params = json.dumps(params)
 
-        import os
+            response = requests.request("POST", url, headers=headers, data=params)
+            return response.json()["data"]
 
-        # 从环境变量中获取url
-        url = os.getenv("bkop_url")+  "/query-api/rest/v2/grafana/time_series/unify_query/"
-        cookie = os.getenv("bkop_cookie")
-        x_csrf_token = os.getenv("bkop_x_csrf_token")
-        host=os.getenv("bkop_host")
-        headers = {
-            'X-Csrftoken': 'X-Csrftoken',
-            'Cookie': cookie,
-            'x-csrftoken': x_csrf_token,
-            'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
-            'Content-Type': 'application/json',
-            'Accept': '*/*',
-            'Host': host,
-            'Connection': 'keep-alive'
-        }
+    mock_unify_query = patch.object(resource.grafana, 'graph_unify_query', new=MockUnifyQuery())
+    mock_unify_query.start()
 
-        class MockUnifyQuery(Resource):
-            def perform_request(self, params):
-                import  json
-                params = json.dumps(params)
 
-                response = requests.request("POST", url, headers=headers, data=params)
-                return response.json()["data"]
+class RequestForwardingMiddleware(MiddlewareMixin):
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        path = request.path
+        if path not in self.forwarded_urls:
+            return None
+        response = self.handler(request)
+        return response
 
-        mock_unify_query = patch.object(resource.grafana, 'graph_unify_query', new=MockUnifyQuery())
-        mock_unify_query.start()
+    @property
+    def handler(self):
+        if not hasattr(self, "_handler"):
+            from rest_framework.views import APIView
+            from rest_framework.response import Response
+
+            class InnerView(APIView):
+                def get(self, request, *args, **kwargs):
+                    return self.perform_request(request, *args, **kwargs)
+
+                def post(self, request, *args, **kwargs):
+                    return self.perform_request(request, *args, **kwargs)
+
+                def perform_request(self, request, *args, **kwargs):
+                    if not headers:
+                        response = {
+                            "result": True,
+                            "code": 200,
+                            "message": "error, headers is empty",
+                            "data": []
+                        }
+                        return Response(response)
+
+                    path = request.path
+                    method = request.method.lower()
+
+                    if method == "get":
+                        params = request.GET.dict()
+                    else:
+                        params = request.POST.dict()
+                    response = requests.request(method, bkop_url + path, params=params, headers=headers)
+
+                    if response.status_code != 200:
+                        response = {
+                            "result": False,
+                            "code": response.status_code,
+                            "message": response.text,
+                            "data": []
+                        }
+                        return Response(response)
+                    return Response(response.json())
+
+            self._handler = InnerView().as_view()
+
+        return self._handler
+
+    @property
+    def forwarded_urls(self):
+        if not hasattr(self, "_forwarded_urls"):
+            self._forwarded_urls = getattr(settings, 'FORWARDED_URLS', [])
+        return self._forwarded_urls
