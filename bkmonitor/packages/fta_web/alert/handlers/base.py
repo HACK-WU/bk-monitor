@@ -492,53 +492,69 @@ class BaseQueryHandler:
     def top_n(self, fields: List, size=10, translators: Dict[str, AbstractTranslator] = None, char_add_quotes=True):
         """
         字段值 TOP N 统计
-        :param fields: 需要统计的字段，"+abc" 为升序排列，"-abc" 为降序排列，默认降序排列
-        :param size: 大小
-        :param translators: 翻译配置
-        :param char_add_quotes: 字符字段是否需要加上双引号
-        :return:
+        通过Elasticsearch聚合查询获取指定字段的TOP N分布情况，支持字段排序方式配置、字符字段处理和结果翻译
+        
+        :param fields: 需要统计的字段列表，字段名前可加排序标识：
+                      "+abc" 升序排列，"-abc" 降序排列，默认降序排列
+                      支持特殊字段处理：tags.*字段、duration字段、bk_biz_id字段
+        :param size: 每个字段返回的TOP N数量，默认10，最大不超过10000
+        :param translators: 翻译器字典，用于对聚合结果进行翻译转换
+                           格式：{"字段名": translator实例}
+        :param char_add_quotes: 是否为字符字段的桶值添加双引号，默认True
+        :return: 包含以下结构的字典：
         {
-            "doc_count": 10,
-            "fields": [
+            "doc_count": int,  # 总文档数
+            "fields": list[dict],  # 每个字段的统计结果列表
+            # 单个字段统计结构：
+            {
+                "field": str,  # 原始字段名
+                "is_char": bool,  # 是否为字符字段
+                "bucket_count": int,  # 总桶数（用于分页）
+                "buckets": list[dict],  # TOP N桶列表
+                # 单个桶结构：
                 {
-                    "field": "alert_name",
-                    "bucket_count": 10,
-                    "buckets": [
-                        {
-                            "key": "CPU Usage",
-                            "doc_count": 5
-                        }
-                    ]
+                    "key": str,  # 桶值
+                    "doc_count": int  # 文档计数
                 }
-            ]
+            }
         }
         """
+        # 初始化翻译器字典
         translators = translators or {}
 
+        # 构建并配置搜索对象
+        # 添加过滤条件和查询字符串，设置参数track_total_hits=True保证准确计数
         search_object = self.get_search_object()
         search_object = self.add_conditions(search_object)
         search_object = self.add_query_string(search_object)
         search_object = search_object.params(track_total_hits=True).extra(size=0)
 
-        # 最多不能超过10000个桶
+        # 限制最大桶数量，防止超过ES限制
         size = min(size, 10000)
 
+        # 定义桶计数后缀，用于关联聚合结果
         bucket_count_suffix = ".bucket_count"
 
+        # 为每个字段添加聚合桶配置
+        # 这里会根据字段类型自动处理排序方式和聚合方式
         for field in fields:
             self.add_agg_bucket(search_object.aggs, field, size=size, bucket_count_suffix=bucket_count_suffix)
 
+        # 执行ES搜索查询
         search_result = search_object.execute()
 
+        # 初始化基础结果结构
         result = {
             "doc_count": search_result.hits.total.value,
             "fields": [],
         }
 
+        # 获取所有字符字段列表，用于后续处理
         char_fields = [field_info.field for field_info in self.query_transformer.query_fields if field_info.is_char]
 
-        # 返回结果的数据处理
+        # 处理每个字段的聚合结果
         for field in fields:
+            # 处理无聚合结果的情况
             if not search_result.aggs:
                 result["fields"].append(
                     {
@@ -550,14 +566,18 @@ class BaseQueryHandler:
                 )
                 continue
 
+            # 提取实际字段名（去除排序标识符）
             actual_field = field.strip("-+")
 
+            # 特殊处理tags.*字段：从多层嵌套聚合中提取数据
             if actual_field.startswith("tags."):
                 bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").key.value.value
                 buckets = [
                     {"id": bucket.key, "name": bucket.key, "count": bucket.doc_count}
                     for bucket in getattr(search_result.aggs, field).key.value.buckets
                 ]
+            
+            # 特殊处理duration字段：使用预定义的持续时间选项
             elif actual_field == "duration":
                 bucket_count = len(self.DurationOption.AGG)
                 buckets = [
@@ -568,22 +588,25 @@ class BaseQueryHandler:
                     }
                     for bucket in getattr(search_result.aggs, field).buckets
                 ]
+            
+            # 特殊处理bk_biz_id字段：补充授权业务数据
             elif actual_field == "bk_biz_id" and hasattr(self, "authorized_bizs"):
                 buckets = [
                     {"id": bucket.key, "name": bucket.key, "count": bucket.doc_count}
                     for bucket in getattr(search_result.aggs, field).buckets
                 ]
                 exist_bizs = {int(bucket["id"]) for bucket in buckets}
+                # 补充未出现在聚合结果中的授权业务
                 for bk_biz_id in self.authorized_bizs:
-                    # 数量为0的业务，查不出来，但也需要填充
                     if len(buckets) >= size:
                         break
                     if int(bk_biz_id) in exist_bizs:
                         continue
                     buckets.append({"id": bk_biz_id, "name": bk_biz_id, "count": 0})
                 bucket_count = len(set(self.authorized_bizs) | exist_bizs)
+            
+            # 默认字段处理：提取普通聚合结果
             else:
-                # 桶的总数
                 bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
                 buckets = []
                 for bucket in getattr(search_result.aggs, field).buckets:
@@ -592,15 +615,17 @@ class BaseQueryHandler:
                     else:
                         buckets.append({"id": bucket.key, "name": bucket.key, "count": bucket.doc_count})
 
+            # 应用翻译器转换数据
             if actual_field in translators:
                 translators[actual_field].translate_from_dict(buckets, "id", "name")
 
-            # 对于字符字段，需要将桶的 key 加上双引号
+            # 为字符字段添加双引号
             if char_add_quotes:
                 for bucket in buckets:
                     if actual_field in char_fields or actual_field.startswith("tags."):
                         bucket["id"] = '"{}"'.format(bucket["id"])
 
+            # 组装最终字段结果
             result["fields"].append(
                 {
                     "field": field,
