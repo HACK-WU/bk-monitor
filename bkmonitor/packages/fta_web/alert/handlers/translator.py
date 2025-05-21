@@ -72,31 +72,49 @@ class MetricTranslator(AbstractTranslator):
         super(MetricTranslator, self).__init__(*args, **kwargs)
 
     def translate(self, values: List[str]) -> Dict:
+        """
+        根据给定的指标ID列表查询对应的指标信息，并转换为特定格式的查询数据结构。
+
+        参数:
+            values (List[str]): 需要转换的指标ID列表，每个ID为字符串格式
+
+        返回值:
+            Dict: 字典结构，键为原始指标ID，值为对应的指标字段名称。若未找到对应指标，则值与键相同
+        """
+        # 获取所有指标缓存对象
         metrics = MetricListCache.objects.all()
         queries = []
+
+        # 解析并转换指标ID为查询条件
         for metric_id in values:
             try:
-                metric = parse_metric_id(metric_id)
+                metric = parse_metric_id(metric_id) # type:dict
             except Exception:
-                # 解析失败就跳过
+                # 解析失败的指标ID直接跳过
                 continue
 
+            # 处理索引集ID字段重命名
             if "index_set_id" in metric:
                 metric["related_id"] = metric["index_set_id"]
                 del metric["index_set_id"]
+
             if metric:
                 queries.append(Q(**metric))
 
+        # 当无可查询指标时直接返回空字典
         if not queries:
-            # 没有需要查询的指标，则直接退出
             return {}
 
+        # 合并查询条件并执行过滤
         metrics = metrics.filter(reduce(lambda x, y: x | y, queries))
 
+        # 按业务ID进行二次过滤（如果存在业务ID限制）
         if self.bk_biz_ids:
             metrics = metrics.filter(bk_biz_id__in=self.bk_biz_ids)
 
         metric_translations = {}
+
+        # 构建指标翻译映射表
         for metric in metrics:
             query_data = {
                 "data_source_label": metric.data_source_label,
@@ -105,17 +123,25 @@ class MetricTranslator(AbstractTranslator):
                 "metric_field": metric.metric_field,
                 "data_label": metric.data_label,
             }
+
+            # 处理日志类数据源的索引集ID映射
             if metric.data_source_label == DataSourceLabel.BK_LOG_SEARCH:
                 query_data.update(
                     {
                         "index_set_id": metric.related_id,
                     }
                 )
+            # 处理自定义事件类型的扩展字段
             elif (metric.data_source_label, metric.data_type_label) == (DataSourceLabel.CUSTOM, DataTypeLabel.EVENT):
                 query_data["custom_event_name"] = metric.extend_fields.get("custom_event_name", "")
+
+            # 生成标准化指标ID并建立翻译映射
             metric_id = get_metric_id(**query_data)
             metric_translations.update({metric_id: metric.metric_field_name})
+
+        # 返回最终翻译结果，未匹配的指标ID保留原始值
         return {value: metric_translations.get(value, value) for value in values}
+
 
 
 class StrategyTranslator(AbstractTranslator):
