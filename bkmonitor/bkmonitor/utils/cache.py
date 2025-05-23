@@ -193,10 +193,15 @@ class UsingCache(object):
         若存在，则直接返回缓存内容
         若不存在，则执行函数，并将结果回写到缓存中
         """
-        if settings.ENVIRONMENT == "development":
+        # 查看是否默认开启缓存
+        default_use_cache = getattr(settings, "DEFAULT_USE_CACHE", False)
+
+        # 默认不适用缓存，并且是开发环境，则cache_key为None
+        if not default_use_cache and settings.ENVIRONMENT == "development":
             cache_key = None
         else:
             cache_key = self._cache_key(task_definition, args, kwargs)
+
         if cache_key:
             return_value = self.get_value(cache_key, default=None)
 
