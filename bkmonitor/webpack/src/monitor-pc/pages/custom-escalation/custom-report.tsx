@@ -571,7 +571,7 @@ class CustomReport extends Mixins(authorityMixinCreate(customAuth)) {
             )}
             doc-link={'fromCustomRreporting'}
             link-text={this.$t('采集器安装前往节点管理')}
-            link-url={`${this.$store.getters.bkNodemanHost}#/plugin-manager/list`}
+            link-url={`${this.$store.getters.bkNodeManHost}#/plugin-manager/list`}
           />
           <div class='custom-report-page-content'>
             <div class='content-left-operator'>
