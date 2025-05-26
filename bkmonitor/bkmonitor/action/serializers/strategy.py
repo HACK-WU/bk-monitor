@@ -742,20 +742,52 @@ class UserGroupSlz(serializers.ModelSerializer):
                     break
 
     def to_representation(self, instance):
+        """
+        将用户组实例序列化为包含扩展信息的字典表示
+
+        参数:
+            instance: UserGroup模型实例，包含基础字段和关联关系数据
+
+        返回值:
+            dict: 包含扩展字段的序列化数据字典，包含：
+                - users: 用户组关联的用户列表
+                - channels: 通知渠道列表（默认值处理）
+                - strategy_count: 关联策略数量
+                - rules_count: 关联规则数量
+                - delete_allowed: 删除权限标识
+                - edit_allowed: 编辑权限标识
+                - config_source: 配置来源标识（YAML/UI）
+                - mention_list: 提及对象列表（特殊场景默认值）
+
+        该方法实现用户组数据的增强序列化，主要处理逻辑包括：
+        1. 继承父类序列化结果并进行字段增强
+        2. 补充关联实体数据（用户、策略、规则）
+        3. 添加操作权限判断字段
+        4. 处理特殊场景下的默认提及配置
+        """
         data = super(UserGroupSlz, self).to_representation(instance)
+        # 获取用户组关联的用户列表（通过预加载的group_user_mappings）
         data["users"] = self.group_user_mappings.get(instance.id, [])
+        # 设置通知渠道默认值（当未配置时使用系统默认渠道）
         data["channels"] = data.get("channels") or NoticeChannel.DEFAULT_CHANNELS
+        # 计算关联策略数量（去重统计）
         data["strategy_count"] = len(set(self.strategy_count_of_given_type.get(instance.id, [])))
+        # 计算关联规则数量（去重统计）
         data["rules_count"] = len(set(self.rule_count.get(instance.id, [])))
+        # 判断删除权限：当且仅当无任何关联策略和规则时允许删除
         data["delete_allowed"] = (
-                len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
-                and len(set(self.rule_count.get(instance.id, []))) == 0
+            len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
+            and len(set(self.rule_count.get(instance.id, []))) == 0
         )
+        # 判断编辑权限：业务ID为0的系统内置用户组禁止编辑
         data["edit_allowed"] = instance.bk_biz_id != 0
+        # 标识配置来源：通过app字段判断配置方式（YAML配置文件或UI界面）
         data["config_source"] = "YAML" if instance.app else "UI"
+        # 特殊场景处理：企业微信机器人渠道的默认@配置
         if data["mention_type"] == 0 and not data["mention_list"] and NoticeChannel.WX_BOT in data["channels"]:
             data["mention_list"] = [{"type": "group", "id": "all"}]
         return data
+
 
 
 class PlanNoticeSerializer(serializers.Serializer):
@@ -897,20 +929,53 @@ class UserGroupDetailSlz(UserGroupSlz):
         return super(UserGroupDetailSlz, cls).__new__(cls, *args, **kwargs)
 
     def to_representation(self, instance: UserGroup):
+        """
+        将用户组实例序列化为包含扩展信息的字典对象
+
+        参数:
+            self: UserGroupDetailSlz序列化器实例
+            instance: UserGroup模型实例，待序列化的用户组对象
+
+        返回值:
+            包含用户组详细信息的字典对象，包含：
+            - duty_arranges: 排班配置信息（根据来源选择映射或序列化）
+            - duty_rules_info: 告警规则详情列表
+            - duty_plans: 历史排班计划数据
+            - 策略统计信息（strategy_count/rule_count）
+            - 操作权限标识（delete_allowed/edit_allowed）
+            - 提及用户列表的格式化表示
+
+        该方法扩展了基类的序列化逻辑，主要包含三个功能模块：
+        1. 排班配置动态处理（优先使用预加载映射数据）
+        2. 告警规则信息增强
+        3. 历史数据兼容处理
+        """
         data = super(UserGroupDetailSlz, self).to_representation(instance)
+
+        # 处理排班配置字段（支持两种数据来源模式）：
+        # 1. 当存在预加载的duty_arranges_mapping时优先使用映射数据
+        # 2. 否则回退到直接序列化关联对象
         if self.duty_arranges_mapping:
             data["duty_arranges"] = self.duty_arranges_mapping.get(instance.id, [])
         else:
             data["duty_arranges"] = DutyArrangeSlz(instance.duty_arranges, many=True).data
 
-        # 将对应的规则信息加入到告警组详情中，方便用户用来展示
+        # 构建告警规则详情信息：
+        # 1. 遍历duty_rules字段中的规则ID
+        # 2. 从预加载的规则映射表中提取完整规则信息
+        # 3. 过滤掉不存在于映射表中的无效规则ID
         data["duty_rules_info"] = []
         for rule_id in data["duty_rules"]:
             if rule_id in self.duty_rules_mapping:
                 data["duty_rules_info"].append(self.duty_rules_mapping[rule_id])
 
-        # 以下部分为了兼容历史数据
+        # 历史数据兼容处理模块：
+        # 1. 保留原始排班计划数据结构
+        # 2. 补充策略统计信息用于前端展示
+        # 3. 添加操作权限判断字段
         data["duty_plans"] = DutyPlanSlz(instance.duty_plans, many=True).data
+
+        # 计算关联策略数量（使用集合去重）
         data["strategy_count"] = len(
             set(
                 StrategyActionConfigRelation.objects.filter(user_groups__contains=instance.id).values_list(
@@ -918,13 +983,23 @@ class UserGroupDetailSlz(UserGroupSlz):
                 )
             )
         )
+
+        # 计算关联告警规则数量（使用集合去重）
         data["rule_count"] = len(
-            set(AlertAssignRule.objects.filter(user_groups__contains=instance.id).values_list("id", flat=True))
+            set(
+                AlertAssignRule.objects.filter(user_groups__contains=instance.id).values_list("id", flat=True)
+            )
         )
+
+        # 判断删除权限：当且仅当无关联策略和规则时允许删除
         data["delete_allowed"] = data["strategy_count"] == 0 and data["rule_count"] == 0
+
+        # 判断编辑权限：业务ID为0的系统内置用户组禁止编辑
         data["edit_allowed"] = instance.bk_biz_id != 0
 
+        # 格式化提及用户列表（应用自定义序列化逻辑）
         data["mention_list"] = self.mention_users_representation(data["mention_list"])
+
         return data
 
     def mention_users_representation(self, users):
@@ -952,35 +1027,53 @@ class UserGroupDetailSlz(UserGroupSlz):
 
     def save(self, **kwargs):
         """
-        拆分为三个部分部分
+        保存用户组信息并处理关联的轮值安排及快照计划
+
+        参数:
+            **kwargs: 传递给父类save方法的可选参数
+
+        返回值:
+            保存后的用户组实例对象
+
+        该方法完整执行以下流程：
+        1. 数据预处理：分离 duty_arranges 字段并初始化基础字段
+        2. 核心数据持久化：调用父类方法保存用户组基础信息
+        3. 关联数据处理：创建轮值记录、维护关联关系、更新快照计划
         """
-        # 从验证后的数据中取出'duty_arranges'字段，并将其从原字典中移除
+
+        # 分离 duty_arranges 字段并初始化基础字段
+        # 从验证数据中提取 duty_arranges 并从原数据中移除
         duty_arranges = self.validated_data.pop("duty_arranges")
 
-        # 将'hash'和'snippet'字段设置为空字符串
+        # 清空 hash 和 snippet 字段用于新版本数据生成
         self.validated_data["hash"] = ""
         self.validated_data["snippet"] = ""
 
-        # 默认设置'mention_type'字段为1，表示只要编辑过就设置为1
+        # 设置 mention_type 为 1 表示内容已编辑过
         self.validated_data["mention_type"] = 1
 
-        # step 1: 调用父类的save方法保存用户组信息
+        # 调用父类方法保存用户组基础信息
         super(UserGroupDetailSlz, self).save(**kwargs)
 
-        # step 3: 如果'duty_arranges'字段有内容（即直接通知），则创建并更新轮值记录
-        # 注意：如果是轮值，传的直接是duty_id,轮值规则ID
+        # 处理轮值安排记录
+        # 当存在 duty_arranges 数据时（直接通知场景）：
+        # 1. 删除旧的轮值记录
+        # 2. 批量创建新的轮值记录
         if duty_arranges:
-            # 创建并更新并删除旧的轮值记录
             DutyArrange.bulk_create(duty_arranges, self.instance)
 
-        # step 3: 构建告警组与轮值组的关联
+        # 维护告警组与轮值组的关联关系
         self.save_duty_rule_relations()
 
-        # 管理职责快照和计划,删除旧的轮值快照，创建新的轮值快照以及排班计划
+        # 管理职责快照和排班计划
+        # 1. 删除旧的轮值快照
+        # 2. 创建新的轮值快照
+        # 3. 生成对应的排班计划
         self.manage_duty_snap_and_plan()
 
-        # 返回保存后的实例
+        # 返回持久化后的用户组实例
         return self.instance
+
 
     def save_duty_rule_relations(self):
         # step 1: delete old relations

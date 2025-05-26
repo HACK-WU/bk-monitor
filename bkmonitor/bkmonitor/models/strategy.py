@@ -727,70 +727,88 @@ class DutyArrange(AbstractRecordModel):
     @classmethod
     def bulk_create(cls, duty_arranges, instance):
         """
+        批量创建轮值项并维护轮值规则关联状态
         批量创建轮值项，并删除旧的轮值(不存在当前新传入的关联的告警组(轮值规则ID)的轮值，则为旧的轮值),更新轮值记录，创建新的轮值记录。
+
+        参数:
+            cls: 调用类本身（DutyArrange）
+            duty_arranges: 轮值配置数据列表，每个元素包含轮值规则配置项
+            instance: 关联实例对象，可以是UserGroup或DutyRule类型
+
+        返回值:
+            None: 无显式返回值，通过数据库操作完成状态同步
+
+        执行流程:
+        1. 为轮值项添加顺序字段
+        2. 构建基于哈希值的轮值映射关系
+        3. 根据实例类型过滤现有轮值记录
+        4. 识别需要删除/更新/新增的轮值项
+        5. 执行数据库批量操作维护数据一致性
         """
-        # 遍历duty_arranges列表，为每个元素添加一个"order"键，值为当前索引+1
+        # 为轮值项添加顺序字段
+        # 遍历duty_arranges列表，为每个元素添加"order"键，值为当前索引+1
         for index, duty_arrange in enumerate(duty_arranges):
             duty_arrange["order"] = index + 1
 
-        # 根据每个元素的"hash"键构建一个映射字典，键为"hash"值，值为元素本身
+        # 构建基于哈希值的轮值映射字典
+        # 键为"hash"值，值为完整的轮值配置数据
         duty_arranges = {duty_arrange["hash"]: duty_arrange for duty_arrange in duty_arranges}
 
-        # 获取所有DutyArrange对象
+        # 获取所有DutyArrange对象基础查询集
         existed_duty_queryset = DutyArrange.objects.all()
 
-        # 初始化instance_id_key为"duty_rule_id"
+        # 根据实例类型动态调整过滤条件
         instance_id_key = "duty_rule_id"
-
-        # 判断instance的类型，如果是UserGroup，则过滤user_group_id相关的DutyArrange对象，并更新instance_id_key为"user_group_id"
         if isinstance(instance, UserGroup):
+            # 当处理UserGroup时使用user_group_id过滤
             existed_duty_queryset = existed_duty_queryset.filter(user_group_id=instance.id)
             instance_id_key = "user_group_id"
-        # 如果instance是DutyRule，则过滤duty_rule_id相关的DutyArrange对象
         elif isinstance(instance, DutyRule):
+            # 当处理DutyRule时使用duty_rule_id过滤
             existed_duty_queryset = existed_duty_queryset.filter(duty_rule_id=instance.id)
-        # 如果instance既不是UserGroup也不是DutyRule，则直接返回，避免后续可能的危险操作
         else:
+            # 非法实例类型直接返回避免危险操作
             return
 
-        # 根据hash构建已经存在的轮值记录映射字典
+        # 构建现有轮值记录的哈希映射
         existed_duty_instances = {duty.hash: duty for duty in existed_duty_queryset}
 
-        # 构建一个字典，包含已经存在的轮值记录的hash和对应的duty_arrange
+        # 识别需要更新的现有轮值项
         existed_duty = {
             duty_hash: duty_arrange
             for duty_hash, duty_arrange in duty_arranges.items()
             if duty_hash in existed_duty_instances
         }
 
-        # 获取不在更新列表中的DutyArrange对象的id，准备进行删除操作
+        # 识别需要删除的过期轮值项
         deleted_duty_ids = [duty.id for duty in existed_duty_queryset if duty.hash not in existed_duty]
 
-        # 获取新的轮值安排列表，即那些hash不在已存在记录中的duty_arrange
+        # 识别需要新增的轮值项
         new_duty_arranges = [
-            duty_arrange for duty_hash, duty_arrange in duty_arranges.items() if duty_hash not in existed_duty
+            duty_arrange for duty_hash, duty_arrange in duty_arranges.items()
+            if duty_hash not in existed_duty
         ]
 
-        # 删除旧的轮值安排
+        # 执行数据库批量删除操作
         cls.objects.filter(id__in=deleted_duty_ids).delete()
 
-        # 更新旧的轮值安排
+        # 执行数据库批量更新操作
         for duty_hash, duty_data in existed_duty.items():
             duty = existed_duty_instances[duty_hash]
             duty_data[instance_id_key] = instance.id
-            # 更新duty对象的属性
             for attr, value in duty_data.items():
                 setattr(duty, attr, value)
             duty.save()
 
-        # 创建新的轮值安排实例列表
+        # 执行数据库批量创建操作
         duty_arrange_instances = []
         for duty_arrange in new_duty_arranges:
             duty_arrange[instance_id_key] = instance.id
             duty_arrange_instances.append(cls(**duty_arrange))
-        # 如果有新的轮值安排实例，则批量创建
+
         if duty_arrange_instances:
             cls.objects.bulk_create(duty_arrange_instances)
+
 
 
 class MetricMappingConfigModel(Model):
