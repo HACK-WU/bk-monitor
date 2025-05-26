@@ -50,9 +50,10 @@ class DRFResourceConfig(AppConfig):
                 # 如果在${platform}/resources.py里面有相同定义，会重载default.py下的resource
             """
         setup()
-        MOCK_UNIFY_QUERY = getattr(settings, 'MOCK_UNIFY_QUERY', False)
-        if MOCK_UNIFY_QUERY:
+        if  getattr(settings, 'MOCK_UNIFY_QUERY', False):
             mock_unify_query()
+
+        if getattr(settings, 'BKOP_FORWARDED_REQUEST', False):
             settings.MIDDLEWARE = tuple(
                 list(settings.MIDDLEWARE) + ["core.drf_resource.apps.RequestForwardingMiddleware"])
 
