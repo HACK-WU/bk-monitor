@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,15 +7,15 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import copy
 import json
 import logging
 import time
-from typing import List
 
 from django.conf import settings
 from django.utils.translation import gettext as _
-from MySQLdb import DatabaseError as MysqlDatabaseError
+from pymysql import DatabaseError as MysqlDatabaseError
 from redis.exceptions import RedisError
 
 from alarm_backends.constants import DEFAULT_DEDUPE_FIELDS, NO_DATA_TAG_DIMENSION
@@ -86,7 +85,7 @@ class Alert:
         self._status_changed = False
 
         # 流水日志
-        self.logs: List[dict] = []
+        self.logs: list[dict] = []
 
         # 最新事件
         self.last_event = None
@@ -477,7 +476,7 @@ class Alert:
         return self.severity
 
     @property
-    def dimensions(self) -> List:
+    def dimensions(self) -> list:
         return self.data.get("dimensions", [])
 
     @property
@@ -535,7 +534,7 @@ class Alert:
         # 如果没有这个key则追加
         self.data["dimensions"].append(data)
 
-    def update_key_value_field(self, field_name, new_value: List):
+    def update_key_value_field(self, field_name, new_value: list):
         self.data.setdefault(field_name, [])
         field_value_dict = {item["key"]: item for item in self.data[field_name]}
         new_value_dict = {item["key"]: item for item in new_value}
@@ -617,7 +616,7 @@ class Alert:
     def update_labels(self, value):
         self.data["labels"] = value
 
-    def update_assign_tags(self, value: List):
+    def update_assign_tags(self, value: list):
         """
         更新分派的tags信息
         """
@@ -629,7 +628,7 @@ class Alert:
         self.data["assign_tags"] = list(all_tags.values())
         self.update_top_event_tags(value)
 
-    def update_top_event_tags(self, value: List):
+    def update_top_event_tags(self, value: list):
         if not self.top_event:
             return
         event_tags = {item["key"]: item for item in self.data["event"]["tags"]}
@@ -804,7 +803,7 @@ class Alert:
         return alert
 
     @classmethod
-    def mget(cls, alert_keys: List[AlertKey]) -> List["Alert"]:
+    def mget(cls, alert_keys: list[AlertKey]) -> list["Alert"]:
         """
         批量获取告警，优先从Redis快照获取，没有则从ES获取
         :param alert_keys: 告警标识列表
@@ -900,7 +899,9 @@ class Alert:
 
         if is_blocked:
             # 被熔断，返回熔断日志
-            message = _("告警所属策略在当前窗口期（{window} min）内产生的告警数量({current_count})个，已大于QOS阈值({threshold})，当前告警被流控").format(
+            message = _(
+                "告警所属策略在当前窗口期（{window} min）内产生的告警数量({current_count})个，已大于QOS阈值({threshold})，当前告警被流控"
+            ).format(
                 window=qos_threshold["window"] // 60, current_count=current_count, threshold=qos_threshold["threshold"]
             )
         else:
@@ -915,7 +916,7 @@ class Alert:
     def qos_calc(self, signal, qos_counter=COMPOSITE_QOS_COUNTER, threshold=None, need_incr=True):
         """
         根据信号和QOS规则计算是否超过阈值
-        
+
         :param signal: 信号
         :param qos_counter: qos计数器
         :param threshold: QOS规则
@@ -924,7 +925,7 @@ class Alert:
         """
         # 初始化QOS维度信息，包括策略ID、信号和告警级别
         qos_dimension = dict(strategy_id=self.strategy_id or 0, signal=signal, severity=self.severity)
-        
+
         # 对于没有策略ID的情况，计算告警的MD5值作为维度的一部分
         alert_md5 = ""
         if not self.strategy_id:
@@ -936,39 +937,39 @@ class Alert:
                     severity=self.severity,
                 )
             )
-        
+
         # 更新QOS维度信息，加入告警MD5值
         qos_dimension.update({"alert_md5": alert_md5})
-        
+
         # 根据QOS维度信息获取QOS计数器的键
         qos_counter_key = qos_counter.get_key(**qos_dimension)
-        
+
         # 获取QOS计数器对应的客户端
         client = qos_counter.client
-        
+
         # 如果未提供阈值，则使用默认的阈值
         if threshold is None:
             threshold = {"threshold": settings.QOS_DROP_ACTION_THRESHOLD, "window": settings.QOS_DROP_ACTION_WINDOW}
-        
+
         # 如果阈值为0，表示不做QOS处理，直接返回
         if threshold["threshold"] == 0:
             return False, 0
-        
+
         # 获取QOS窗口时间
         qos_window = threshold["window"]
-        
+
         # 初始化当前计数为1
         current_count = 1
-        
+
         # 如果需要增加计数
         if need_incr:
             # 尝试设置QOS计数器的值为1，如果键不存在则创建
             result = client.set(qos_counter_key, current_count, nx=True, ex=qos_window)
-            
+
             # 如果设置失败（即键已存在），则增加计数器的值
             if not result:
                 current_count = client.incr(qos_counter_key)
-                
+
                 # 检查QOS计数器的过期时间，如果不符合预期则设置过期时间
                 ttl = client.ttl(qos_counter_key)
                 if ttl is None or ttl < 0:
@@ -976,16 +977,18 @@ class Alert:
         else:
             # 如果不需要增加计数，直接获取当前计数器的值
             current_count = int(client.get(qos_counter_key) or 0)
-        
+
         # 返回是否超过阈值的判断和当前计数
         return current_count > threshold["threshold"], current_count
 
     @staticmethod
-    def create_qos_log(alerts: List[str], total_count, qos_actions):
+    def create_qos_log(alerts: list[str], total_count, qos_actions):
         return AlertLog(
             op_type=AlertLog.OpType.ACTION,
             alert_id=alerts,
-            description=_("告警所属策略在当前窗口期（%s min）内产生的处理次数为%s次，已超过QOS阈值(%s)，当前告警的(%s)个处理被抑制")
+            description=_(
+                "告警所属策略在当前窗口期（%s min）内产生的处理次数为%s次，已超过QOS阈值(%s)，当前告警的(%s)个处理被抑制"
+            )
             % (
                 settings.QOS_DROP_ACTION_WINDOW // 60,
                 total_count,
@@ -1073,7 +1076,7 @@ class AlertUIDManager:
 class AlertCache:
     # todo 下面两个可以合并
     @staticmethod
-    def save_alert_to_cache(alerts: List[Alert]):
+    def save_alert_to_cache(alerts: list[Alert]):
         alerts_to_saved = {}
         for alert in alerts:
             current_alert = alerts_to_saved.get(alert.dedupe_md5)
@@ -1102,7 +1105,7 @@ class AlertCache:
         return update_count, finished_count
 
     @staticmethod
-    def save_alert_snapshot(alerts: List[Alert]):
+    def save_alert_snapshot(alerts: list[Alert]):
         if not alerts:
             return 0
 

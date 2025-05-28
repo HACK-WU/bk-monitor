@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 import time
-from typing import Dict, List
 
 from elasticsearch.helpers import BulkIndexError
 from elasticsearch_dsl import Q
@@ -40,7 +39,7 @@ def check_abnormal_alert():
     """
     search = (
         AlertDocument.search(all_indices=True)
-        .filter(Q("term", status=EventStatus.ABNORMAL) & ~Q('term', is_blocked=True))
+        .filter(Q("term", status=EventStatus.ABNORMAL) & ~Q("term", is_blocked=True))
         .source(fields=["id", "strategy_id", "event.bk_biz_id"])
     )
 
@@ -71,7 +70,7 @@ def check_blocked_alert():
     logger.info("[check_blocked_alert] begin %s - %s", start_time, end_time)
     search = (
         AlertDocument.search(start_time=start_time, end_time=end_time)
-        .filter(Q("term", status=EventStatus.ABNORMAL) & Q('term', is_blocked=True))
+        .filter(Q("term", status=EventStatus.ABNORMAL) & Q("term", is_blocked=True))
         .source(fields=["id", "strategy_id", "event.bk_biz_id"])
     )
 
@@ -151,25 +150,45 @@ def check_blocked_alert_finished(alert_keys):
     )
 
 
-def send_check_task(alerts: List[Dict], run_immediately=True):
+def send_check_task(alerts: list[dict], run_immediately=True):
     """
-    生成告警检测任务
-    :param alerts: 告警对象列表
-    :param run_immediately: 是否立即发送一个检查任务
+    生成告警检测任务并调度异步执行
+
+    参数:
+        alerts: 告警对象列表，每个元素包含id和strategy_id等必要字段
+        run_immediately: 布尔值，控制是否立即执行首次检测（默认True）
+
+    返回值:
+        None（空列表输入时直接返回）
+
+    执行流程：
+    1. 告警分组：根据监控周期将告警分组处理
+    2. 任务调度：根据配置周期生成延迟执行任务
+    3. 批量处理：按批次大小限制并发处理数量
+    4. 日志记录：统计并记录不同周期的告警数量
     """
     if not alerts:
         return
 
+    # 按监控周期对告警进行分组，返回{周期: [告警列表]}结构
     alert_ids_with_interval = cal_alerts_check_interval(alerts)
 
+    # 遍历不同监控周期的告警分组
     for check_interval, alerts in alert_ids_with_interval.items():
+        # 初始延迟时间根据立即执行标志确定
         countdown = 0 if run_immediately else check_interval
+
+        # 在基准周期内循环创建延迟任务，实现：
+        # - 15秒周期：每分钟执行4次
+        # - 30秒周期：每分钟执行2次
+        # - 60秒周期：每分钟执行1次
         while countdown < DEFAULT_CHECK_INTERVAL:
-            # 通过创建延时任务来满足1分钟内进行多次检测，其中：
-            # 监控周期<30s，一分钟检测4次
-            # 监控周期<60s，一分钟检测2次
-            # 其他情况，一分钟检测1次
+            # 按批次大小分割告警列表，防止单次处理过多数据
             for index in range(0, len(alerts), BATCH_SIZE):
+                # 异步提交告警处理任务，设置：
+                # - 延迟执行时间
+                # - 任务过期时间（120秒）
+                # - 批量告警键对象列表作为参数
                 handle_alerts.apply_async(
                     countdown=countdown,
                     expires=120,
@@ -180,8 +199,10 @@ def send_check_task(alerts: List[Dict], run_immediately=True):
                         ]
                     },
                 )
+            # 累加当前周期间隔，推进到下一次执行时间点
             countdown += check_interval
 
+    # 记录已发送的告警统计日志，按不同监控周期分类计数
     logger.info(
         "[check_abnormal_alert] alerts(%s/60s, %s/30s, %s/15s) sent to AlertManager",
         len(alert_ids_with_interval[60]),
@@ -191,7 +212,7 @@ def send_check_task(alerts: List[Dict], run_immediately=True):
 
 
 @app.task(ignore_result=True, queue="celery_alert_manager")
-def handle_alerts(alert_keys: List[AlertKey]):
+def handle_alerts(alert_keys: list[AlertKey]):
     """
     处理告警（异步任务）
     """
@@ -221,7 +242,7 @@ def handle_alerts(alert_keys: List[AlertKey]):
     metrics.report_all()
 
 
-def fetch_agg_interval(strategy_ids: List[int]):
+def fetch_agg_interval(strategy_ids: list[int]):
     """
     根据策略ID获取每个策略的聚合周期
     """
@@ -248,28 +269,48 @@ def fetch_agg_interval(strategy_ids: List[int]):
     return agg_interval_by_strategy
 
 
-def cal_alerts_check_interval(alerts: List[Dict]):
+def cal_alerts_check_interval(alerts: list[dict]):
     """
-    计算告警的检查周期
-    监控周期<30s，每15s检查一次
-    监控周期<60s，每30s检查一次
-    其他情况统一每60s检查一次
+    计算告警的检查周期分类
+
+    参数:
+        alerts (List[Dict]): 待处理的告警列表，每个告警字典应包含以下可选字段:
+            - strategy_id (str): 关联的策略ID标识符
+
+    返回值:
+        Dict[int, List[Dict]]: 按检查周期分类的告警字典，结构为:
+        {
+            15: [alert1, alert2],  # 每15秒检查一次的告警列表
+            30: [alert3],          # 每30秒检查一次的告警列表
+            60: [alert4, alert5]   # 每60秒检查一次的告警列表
+        }
+
+    处理逻辑:
+        1. 根据策略ID获取聚合间隔配置
+        2. 按以下规则进行分类：
+           - 聚合间隔<30s → 15s检查周期
+           - 30s≤聚合间隔<60s → 30s检查周期
+           - 其他情况 → 60s检查周期
+        3. 无有效策略配置的告警默认归入60s检查周期
     """
+    # 初始化检查周期分类容器
     check_interval = {
         15: [],
         30: [],
         60: [],
     }
 
+    # 收集所有有效策略ID用于批量查询配置
     strategy_ids = set()
-
     for alert in alerts:
         strategy_id = alert.get("strategy_id")
         if strategy_id:
             strategy_ids.add(strategy_id)
 
+    # 获取策略ID对应的聚合间隔配置
     agg_interval_config = fetch_agg_interval(strategy_ids=list(strategy_ids))
 
+    # 根据策略配置将告警分配到不同检查周期
     for alert in alerts:
         strategy_id = alert.get("strategy_id")
         if not strategy_id or strategy_id not in agg_interval_config:
@@ -284,4 +325,5 @@ def cal_alerts_check_interval(alerts: List[Dict]):
             check_interval[30].append(alert)
         else:
             check_interval[60].append(alert)
+
     return check_interval
