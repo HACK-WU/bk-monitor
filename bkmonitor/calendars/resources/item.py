@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import bisect
 import logging
 from datetime import datetime, timedelta
@@ -465,34 +465,58 @@ class ItemListResource(Resource):
             return value
 
     def perform_request(self, params: dict):
+        """
+        根据查询参数筛选并处理日历事项，返回带状态信息的分天排序列表
+
+        参数:
+            params (dict): 包含以下键的查询参数字典
+                - calendar_ids (List[int]): 日历ID列表，0表示全部日历
+                - search_key (str): 事项名称模糊搜索关键字
+                - bk_tenant_id (str): 租户ID
+                - time_zone (str): 时区标识
+                - start_time (int): 查询时间范围起始时间戳
+                - end_time (int): 查询时间范围结束时间戳
+
+        返回值:
+            List[Dict]: 按日期排序的事项列表，每个元素包含：
+                - today (int): 时间戳格式的日期
+                - list (List[Dict]): 当天事项列表，按开始时间排序，包含状态信息
+        """
         calendar_ids = params["calendar_ids"]
         search_key = params["search_key"]
         validated_data = {}
+        # 构建数据库查询条件
         if 0 not in calendar_ids:
             validated_data["calendar_id__in"] = calendar_ids
         if search_key:
             validated_data["name__icontains"] = search_key
 
         item_dict = {}
+        # 查询基础事项数据
         items = CalendarItemModel.objects.filter(bk_tenant_id=params["bk_tenant_id"], **validated_data)
 
         for item in items:
+            # 时区相关参数处理
             time_zone = params.get("time_zone", item.time_zone)
             offset = get_offset(time_zone)
             repeat = item.repeat
+
+            # 时间戳转换
             item_start_time = timestamp_to_tz_datetime(item.start_time, offset)  # 事项单次开始时间
             item_end_time = timestamp_to_tz_datetime(item.end_time, offset)  # 事项单次结束时间
             start_time = timestamp_to_tz_datetime(params["start_time"], offset)  # 查询范围开始时间
             end_time = timestamp_to_tz_datetime(params["end_time"], offset)  # 查询范围结束时间
-            now = datetime.now().timestamp()  # 此刻的时间，用来计算该事项的状态
+            now = datetime.now().timestamp()  # 当前时间戳用于状态计算
 
-            # 对于一次性的可以直接存入
+            # 非重复事项处理
             if not repeat:
                 if not (end_time < item_start_time or start_time > item_end_time):
                     item_list = item_dict.get(get_day(item_start_time, time_zone), [])
                     item_list.append(item_add_status(item.to_json(time_zone=time_zone), now))
                     item_dict.update({get_day(item_start_time, time_zone): item_list})
                 continue
+
+            # 重复事项参数解析
             freq = repeat["freq"]
             until = repeat["until"] if repeat["until"] else end_time
             interval = repeat["interval"]
@@ -500,6 +524,8 @@ class ItemListResource(Resource):
             exclude_date = repeat["exclude_date"]
             until = timestamp_to_tz_datetime(timestamp=until, offset=offset)  # 事项结束时间
             old_time = item_start_time
+
+            # 调整初始事项时间（处理不符合频率规则的情况）
             if (
                 (freq == ItemFreq.WEEK and (item_start_time.weekday() + 1) % 7 not in every)
                 or (freq == ItemFreq.MONTH and item_start_time.day not in every)
@@ -508,14 +534,15 @@ class ItemListResource(Resource):
                 item_start_time = find_next_start_time(freq, item_start_time, every, interval)
 
             end_time = min(end_time, until)
-            # 1. 如果查询范围的开始时间大于事项的结束时间，则需要找到找下一个循环事项，直到查找到的事项的结束时间大于查询范围的开始时间
+
+            # 时间范围定位：找到第一个符合查询范围的事项
             while start_time > item_end_time:
                 item_start_time = find_next_start_time(freq, item_start_time, every, interval)
                 item_end_time += item_start_time - old_time
                 old_time = item_start_time
             item_end_time += item_start_time - old_time
 
-            # 2. 只要当前事项的开始时间小于查询范围的结束时间，就可以存入事项列表，并且更新当前事项
+            # 事项生成阶段：遍历时间范围内的所有有效事项
             while item_start_time <= end_time:
                 if get_day(item_start_time, time_zone) not in exclude_date:
                     item_list = item_dict.get(get_day(item_start_time, time_zone), [])
@@ -531,6 +558,8 @@ class ItemListResource(Resource):
                 old_time = item_start_time
                 item_start_time = find_next_start_time(freq, item_start_time, every, interval)
                 item_end_time += item_start_time - old_time
+
+        # 结果整理：按日期排序并生成最终列表结构
         item_list = []
         for timestamp in sorted(list(item_dict.keys())):
             item_list.append(
@@ -546,10 +575,7 @@ class GetTimeZoneResource(Resource):
 
     def perform_request(self, validated_request_data):
         return sorted(
-            [
-                {"name": "{}({})".format(name, time_zone), "time_zone": time_zone}
-                for name, time_zone in TIME_ZONE_DICT.items()
-            ],
+            [{"name": f"{name}({time_zone})", "time_zone": time_zone} for name, time_zone in TIME_ZONE_DICT.items()],
             key=lambda time_zone: lazy_pinyin(time_zone["name"]),
         )
 
