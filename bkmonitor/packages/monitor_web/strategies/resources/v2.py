@@ -57,7 +57,7 @@ from bkmonitor.strategy.new_strategy import (
     parse_metric_id,
 )
 from bkmonitor.utils.cache import CacheType
-from bkmonitor.utils.request import get_request_username, get_source_app
+from bkmonitor.utils.request import get_request_tenant_id, get_request_username, get_source_app
 from bkmonitor.utils.time_format import duration_string, parse_duration
 from bkmonitor.utils.user import get_global_user
 from constants.aiops import SDKDetectStatus
@@ -1198,7 +1198,11 @@ class GetStrategyListV2Resource(Resource):
         # 遍历所有告警级别，为每个级别创建信息字典，并添加到告警级别列表中
         for level_id, level_name in all_level.items():
             alert_level_list.append(
-                {"id": level_id, "name": level_name, "count": level_counts.get(level_id, 0)}  # 获取当前级别的策略数量，若不存在则默认为0
+                {
+                    "id": level_id,
+                    "name": level_name,
+                    "count": level_counts.get(level_id, 0),
+                }  # 获取当前级别的策略数量，若不存在则默认为0
             )
 
         # 返回告警级别列表
@@ -3845,7 +3849,7 @@ class GetDevopsStrategyListResource(Resource):
             return {"result": False, "status": 1, "data": [], "message": "无法获取当前用户"}
 
         # 检查用户是否有权限访问指定业务
-        p = Permission(username=username)
+        p = Permission(username=username, bk_tenant_id=get_request_tenant_id())
         # 强制检查权限
         p.skip_check = False
         if not p.is_allowed_by_biz(bk_biz_id, ActionEnum.VIEW_RULE):
