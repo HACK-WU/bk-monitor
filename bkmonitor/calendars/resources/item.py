@@ -495,6 +495,12 @@ class ItemListResource(Resource):
         # 查询基础事项数据
         items = CalendarItemModel.objects.filter(bk_tenant_id=params["bk_tenant_id"], **validated_data)
 
+        calendar_ids = {item.calendar_id for item in items}
+
+        calendars = CalendarModel.objects.filter(id__in=calendar_ids).only("id", "name", "deep_color", "light_color")
+
+        calendars_mapping = {calendar.id: calendar for calendar in calendars}
+
         for item in items:
             # 时区相关参数处理
             time_zone = params.get("time_zone", item.time_zone)
@@ -512,7 +518,9 @@ class ItemListResource(Resource):
             if not repeat:
                 if not (end_time < item_start_time or start_time > item_end_time):
                     item_list = item_dict.get(get_day(item_start_time, time_zone), [])
-                    item_list.append(item_add_status(item.to_json(time_zone=time_zone), now))
+                    item_list.append(
+                        item_add_status(item.to_json(time_zone=time_zone, calendars_mapping=calendars_mapping), now)
+                    )
                     item_dict.update({get_day(item_start_time, time_zone): item_list})
                 continue
 
@@ -547,11 +555,25 @@ class ItemListResource(Resource):
                 if get_day(item_start_time, time_zone) not in exclude_date:
                     item_list = item_dict.get(get_day(item_start_time, time_zone), [])
                     if item_start_time == timestamp_to_tz_datetime(item.start_time, offset):
-                        item_list.append(item_add_status(item.to_json(item_start_time, item_end_time, time_zone), now))
+                        item_list.append(
+                            item_add_status(
+                                item.to_json(
+                                    item_start_time, item_end_time, time_zone, calendars_mapping=calendars_mapping
+                                ),
+                                now,
+                            )
+                        )
                     else:
                         item_list.append(
                             item_add_status(
-                                item.to_json(item_start_time, item_end_time, time_zone, is_first=False), now
+                                item.to_json(
+                                    item_start_time,
+                                    item_end_time,
+                                    time_zone,
+                                    is_first=False,
+                                    calendars_mapping=calendars_mapping,
+                                ),
+                                now,
                             )
                         )
                     item_dict.update({get_day(item_start_time, time_zone): item_list})
