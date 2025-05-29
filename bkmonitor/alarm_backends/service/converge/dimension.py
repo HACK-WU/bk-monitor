@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -31,7 +30,7 @@ from constants.action import (
 logger = logging.getLogger("fta_action.converge")
 
 
-class DimensionHandler(object):
+class DimensionHandler:
     def __init__(
         self,
         dimension,
@@ -158,11 +157,33 @@ class DimensionHandler(object):
 
 
 class DimensionCalculator:
+    """
+    收敛维度计算器类，用于处理告警收敛维度的计算与存储
+
+    类属性:
+        DimensionExpireMinutes: 维度过期时间（秒），基于常量分钟数转换
+        QUEUE_KEY_TEMPLATE: Redis队列键模板，包含实例类型占位符
+    """
+
     DimensionExpireMinutes = CONST_MINUTES * 60
 
     QUEUE_KEY_TEMPLATE = KEY_PREFIX + ".converge.{}"
 
     def __init__(self, related_instance, instance_type=ConvergeType.ACTION, converge_config=None, alerts=None):
+        """
+        初始化收敛计算器
+
+        参数:
+            related_instance: 关联的收敛实例对象
+            instance_type: 实例类型（ACTION/CONVERGE），默认为动作类型
+            converge_config: 收敛配置字典，可选
+            alerts: 告警列表，用于上下文构建
+
+        初始化流程:
+        1. 创建ActionContext上下文对象
+        2. 获取所有收敛维度的初始值
+        3. 若为CONVERGE类型，合并收敛配置中的条件参数
+        """
         self.related_instance = related_instance
         self.instance_type = instance_type
         self.converge_config = converge_config
@@ -175,7 +196,22 @@ class DimensionCalculator:
 
     def calc_dimension(self):
         """
-        收敛维度计算
+        执行收敛维度计算与Redis存储操作
+
+        处理流程:
+        1. 生成基于创建时间的时间戳评分
+        2. 创建Redis管道批量操作
+        3. 遍历所有比较维度进行以下操作：
+           - 跳过空值维度
+           - 标准化维度值为列表格式
+           - 构建Redis存储键
+           - 清理历史过期数据
+           - 添加当前实例数据
+           - 设置键过期时间
+        4. 执行管道命令并返回收敛信息
+
+        返回值:
+            调用compile_converge_info方法生成的收敛结果对象
         """
         score = arrow.get(self.related_instance.create_time).replace(tzinfo="utc").timestamp
         pipeline = FTA_CONVERGE_DIMENSION_KEY.client.pipeline()
@@ -190,15 +226,16 @@ class DimensionCalculator:
                 key = FTA_CONVERGE_DIMENSION_KEY.get_key(
                     strategy_id=getattr(self.related_instance, "strategy_id", 0), dimension=dimension, value=value
                 )
-                # 先清理过期的数据
+                # 清理历史过期数据（一年前至过期间隔前的数据）
                 pipeline.zremrangebyscore(
                     key,
                     arrow.utcnow().replace(years=-1).timestamp,
                     arrow.utcnow().replace(minutes=-self.DimensionExpireMinutes).timestamp,
                 )
-                # 保存的score
-                kwargs = {"{}_{}".format(self.instance_type, str(self.related_instance.id)): score}
+                # 添加当前实例到维度集合
+                kwargs = {f"{self.instance_type}_{str(self.related_instance.id)}": score}
                 pipeline.zadd(key, kwargs)
+                # 重置键过期时间
                 pipeline.expire(key, FTA_CONVERGE_DIMENSION_KEY.ttl)
         pipeline.execute()
         return self.compile_converge_info()
@@ -206,7 +243,27 @@ class DimensionCalculator:
     def calc_sub_converge_dimension(self):
         """
         二级收敛的维度计算
-        :return:
+
+        参数:
+            self: 实例对象，包含以下属性:
+                - related_instance: 关联实例对象，需包含create_time属性
+                - converge_ctx: 收敛上下文信息字典
+                - instance_type: 实例类型标识字符串
+                - DimensionExpireMinutes: 维度过期时间(分钟)
+                - alerts: 告警对象列表(可选)
+
+        返回值:
+            调用compile_converge_info方法返回的组装后的收敛信息字典
+            当维度数据为空时直接返回None
+
+        执行流程:
+        1. 提取关联实例创建时间的时间戳作为评分基准
+        2. 遍历SUB_CONVERGE_DIMENSION维度配置，收集有效维度值
+        3. 使用Redis管道执行以下原子操作：
+           a. 清理指定时间范围内的过期维度数据
+           b. 添加当前实例维度信息到有序集合
+           c. 设置键值过期时间
+        4. 返回组装后的收敛信息
         """
         score = arrow.get(self.related_instance.create_time).replace(tzinfo="utc").timestamp
 
@@ -229,7 +286,7 @@ class DimensionCalculator:
             arrow.utcnow().replace(minutes=-self.DimensionExpireMinutes).timestamp,
         )
         # 保存的score
-        kwargs = {"{}_{}".format(self.instance_type, str(self.related_instance.id)): score}
+        kwargs = {f"{self.instance_type}_{str(self.related_instance.id)}": score}
         pipeline.zadd(sub_converge_key, kwargs)
         pipeline.expire(sub_converge_key, FTA_SUB_CONVERGE_DIMENSION_KEY.ttl)
         pipeline.execute()
@@ -238,7 +295,29 @@ class DimensionCalculator:
     def compile_converge_info(self):
         """
         组装收敛任务信息
-        :return:
+
+        参数:
+            self: 实例对象，包含以下属性:
+                - instance_type: 实例类型标识字符串
+                - converge_config: 收敛配置对象
+                - converge_ctx: 收敛上下文信息字典
+                - related_instance: 关联实例对象，需包含id属性
+                - alerts: 告警对象列表(可选)
+
+        返回值:
+            包含收敛任务信息的字典，结构如下:
+            {
+                "instance_type": 实例类型标识,
+                "converge_config": 收敛配置对象,
+                "converge_context": 收敛上下文字典,
+                "id": 关联实例ID,
+                "alerts": 告警对象字典列表(当存在告警时)
+            }
+
+        执行流程:
+        1. 提取实例基础信息和配置数据
+        2. 将告警对象列表转换为字典表示
+        3. 组装并返回完整的收敛信息字典
         """
         instance_info = {
             "instance_type": self.instance_type,

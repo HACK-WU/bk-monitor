@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,11 +7,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import calendar
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import List
 
 import pytz
 from dateutil.relativedelta import relativedelta
@@ -50,16 +49,38 @@ logger = logging.getLogger("fta_action.run")
 class PushActionProcessor:
     @classmethod
     def push_actions_to_queue(
-            cls, generate_uuid, alerts=None, is_shielded=False, need_noise_reduce=False, notice_config=None
+        cls, generate_uuid, alerts=None, is_shielded=False, need_noise_reduce=False, notice_config=None
     ):
-        """推送处理事件至收敛队列"""
+        """
+        推送处理事件至收敛队列
+
+        参数:
+            cls: 类对象自身（类方法隐式参数）
+            generate_uuid: 字符串，唯一任务标识符，用于关联主任务与子任务
+            alerts: 告警对象列表，待处理的告警事件集合（默认None）
+            is_shielded: 布尔值，是否处于告警屏蔽状态（默认False）
+            need_noise_reduce: 布尔值，是否需要执行降噪处理（默认False）
+            notice_config: 通知配置字典，包含通知方式等元数据（默认None）
+
+        返回值:
+            列表，包含所有推送至队列的动作实例ID列表
+
+        该方法实现事件收敛队列推送的核心流程：
+        1. 异常情况快速失败处理（无告警/被屏蔽/需降噪）
+        2. 父任务驱动的子任务创建机制
+        3. 降噪过滤处理
+        4. 批量队列推送
+        """
+
+        # 处理无告警场景的快速失败逻辑
         if not alerts:
             logger.info(
                 "[create actions]skip to create sub action for generate_uuid(%s) because of no alert",
                 generate_uuid,
             )
             return []
-        # 如果是告警屏蔽，则不创建子任务，记录日志即可
+
+        # 处理告警屏蔽和降噪需求的场景
         if is_shielded or need_noise_reduce:
             logger.info(
                 "[create actions]alert(%s) is shielded(%s) or need_noise_reduce(%s), "
@@ -70,7 +91,7 @@ class PushActionProcessor:
                 generate_uuid,
             )
         else:
-            # 如果没有屏蔽，才创建子任务
+            # 父任务驱动的子任务创建流程
             for action_instance in ActionInstance.objects.filter(generate_uuid=generate_uuid, is_parent_action=True):
                 # 有父任务的事件，先需要创建对应的子任务
                 sub_actions = action_instance.create_sub_actions()
@@ -81,44 +102,69 @@ class PushActionProcessor:
                     "|".join(action_instance.inputs.get("exlude_notice_ways") or []),
                 )
 
+        # 构建待推送的动作实例查询集
         action_instances = ActionInstance.objects.filter(generate_uuid=generate_uuid)
         if need_noise_reduce:
             action_instances = action_instances.filter(is_parent_action=False)
         action_instances = list(action_instances)
+
+        # 执行最终的队列推送操作
         cls.push_actions_to_converge_queue(action_instances, {generate_uuid: alerts}, notice_config)
         return [action.id for action in action_instances]
 
     @classmethod
     def push_actions_to_converge_queue(cls, action_instances, action_alert_relations, notice_config=None):
         """
-        推送告警至收敛汇总队列
+        推送告警至收敛汇总队列并根据配置执行收敛策略
+
+        参数:
+            action_instances: 可迭代的动作实例集合，包含告警处理策略信息
+            action_alert_relations: 字典结构，键为动作实例UUID，值为对应的告警对象列表
+            notice_config: 可选的通知策略配置，默认为None
+
+        返回值:
+            无显式返回值，通过异步任务推送结果到消息队列
+
+        处理流程：
+        1. 遍历所有动作实例进行收敛配置解析
+        2. 根据通知方式（语音/非语音）选择不同处理路径
+        3. 优先从动作策略中提取收敛配置
+        4. 当无策略配置时尝试使用默认通知配置
+        5. 根据是否存在收敛配置分发到执行队列或收敛队列
         """
+
         for action_instance in action_instances:
             converge_config = None
             alerts = action_alert_relations[action_instance.generate_uuid]
 
+            # 处理非语音通知的收敛配置解析
             if action_instance.inputs.get("notice_way") != NoticeWay.VOICE:
-                # 当通知策略是语音通知的时候，不走收敛模块， 通过执行模块进行收敛
-                # 从策略中匹配防御规则
-                # TODO 当没有策略的情况下的告警推送
+                # 语音通知直接跳过收敛流程
+                # 从策略配置中匹配防御规则
+                # TODO 处理无策略配置时的告警推送逻辑
                 strategy = action_instance.strategy
                 if strategy:
                     for action in strategy.get("actions", []) + [strategy.get("notice")]:
                         if action and action["id"] == action_instance.strategy_relation_id:
                             converge_config = action["options"].get("converge_config")
 
+                # 当动作策略未配置收敛时，尝试使用默认通知配置
                 if (
-                        not converge_config
-                        and action_instance.action_plugin.get("plugin_type") == ActionPluginType.NOTICE
-                        and notice_config
+                    not converge_config
+                    and action_instance.action_plugin.get("plugin_type") == ActionPluginType.NOTICE
+                    and notice_config
                 ):
                     converge_config = notice_config.get("options", {}).get("converge_config")
 
+            # 无收敛配置时直接推送到执行队列
             if not converge_config:
-                # 当不存在收敛策略的时候，直接忽略收敛，主要是用于手动操作部分的内容
                 cls.push_action_to_execute_queue(action_instance, alerts)
                 continue
 
+            # 收敛维度计算与异步任务提交
+            # 1. 使用DimensionCalculator计算收敛维度
+            # 2. 通过celery异步执行收敛任务
+            # 3. 记录日志包含关键调试信息
             converge_info = DimensionCalculator(
                 action_instance, converge_config=converge_config, alerts=alerts
             ).calc_dimension()
@@ -138,26 +184,45 @@ class PushActionProcessor:
 
     @classmethod
     def push_action_to_execute_queue(
-            cls, action_instance, alerts=None, countdown=0, callback_func="execute", kwargs=None
+        cls, action_instance, alerts=None, countdown=0, callback_func="execute", kwargs=None
     ):
         """
-        直接推送告警到执行队列
-        :param kwargs:
-        :param callback_func: 处理回调函数
-        :param action_instance: 告警处理动作
-        :param alerts: 告警快照
-        :param countdown: 告警延时
-        :return:
+        直接推送告警到执行队列（支持多种动作类型异步执行）
+
+        参数:
+            cls: 类方法装饰器参数
+            action_instance: 动作实例对象，包含动作ID和插件类型信息
+            alerts: 告警快照数据（可选），用于动作执行时的上下文
+            countdown: 延迟执行时间（秒），控制任务调度延迟
+            callback_func: 回调函数名称，默认为"execute"
+            kwargs: 扩展参数字典（可选），传递额外执行参数
+
+        返回值:
+            None（通过异步任务执行，不直接返回结果）
+
+        该方法实现告警动作的异步调度流程：
+        1. 构建动作执行上下文信息
+        2. 根据插件类型路由到不同执行通道
+        3. 异步任务持久化到消息队列
+        4. 记录调度日志用于后续追踪
         """
         from alarm_backends.service.fta_action.tasks import (
             run_action,
             run_webhook_action,
         )
 
+        # 构建基础动作信息字典
         action_info = {"id": action_instance.id, "function": callback_func, "alerts": alerts}
         if kwargs:
+            # 合并扩展参数到动作信息
             action_info.update({"kwargs": kwargs})
+
+        # 获取动作插件类型
         plugin_type = action_instance.action_plugin["plugin_type"]
+
+        # 根据插件类型选择执行通道：
+        # 1. webhook和消息队列类型使用专用通道
+        # 2. 其他类型使用通用执行通道
         if plugin_type in [
             ActionPluginType.WEBHOOK,
             ActionPluginType.MESSAGE_QUEUE,
@@ -165,6 +230,12 @@ class PushActionProcessor:
             task_id = run_webhook_action.apply_async((plugin_type, action_info), countdown=countdown)
         else:
             task_id = run_action.apply_async((plugin_type, action_info), countdown=countdown)
+
+        # 记录动作调度日志，包含：
+        # - 动作ID
+        # - 插件类型
+        # - 关联告警
+        # - 任务ID（用于追踪异步任务）
         logger.info(
             "[create actions]push queue(execute): action(%s) (%s), alerts(%s), task_id(%s)",
             action_instance.id,
@@ -197,7 +268,7 @@ def to_document(action_instance: ActionInstance, current_time, alerts=None):
 
     converge_info = getattr(action_instance, "converge_info", {})
     action_info = dict(
-        id="{}{}".format(create_timestamp, action_instance.id),
+        id=f"{create_timestamp}{action_instance.id}",
         raw_id=action_instance.id,
         create_time=create_timestamp,
         update_time=int(action_instance.update_time.timestamp()),
@@ -248,7 +319,7 @@ def to_document(action_instance: ActionInstance, current_time, alerts=None):
     return ActionInstanceDocument(**action_info)
 
 
-def get_target_info_from_ctx(action_instance: ActionInstance, alerts: List[AlertDocument]):
+def get_target_info_from_ctx(action_instance: ActionInstance, alerts: list[AlertDocument]):
     """获取目标信息"""
     if action_instance.outputs.get("target_info"):
         return action_instance.outputs["target_info"]
@@ -289,9 +360,9 @@ def need_poll(action_instance: ActionInstance):
     :return:
     """
     if (
-            len(action_instance.alerts) != 1
-            or (action_instance.parent_action_id > 0)
-            or action_instance.inputs.get("notice_type") == ActionNoticeType.UPGRADE
+        len(action_instance.alerts) != 1
+        or (action_instance.parent_action_id > 0)
+        or action_instance.inputs.get("notice_type") == ActionNoticeType.UPGRADE
     ):
         # 只有单告警动作才会存在周期通知
         # 子任务也不需要创建周期通知
@@ -381,7 +452,9 @@ class AlertAssignee:
         @:param notice_type: alert_notice: 告警通知  action_notice： 执行通知配置
         """
         group_notify_items = defaultdict(dict)  # 初始化通知组项的默认字典
-        user_groups = self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups  # 根据用户类型选择用户组
+        user_groups = (
+            self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups
+        )  # 根据用户类型选择用户组
         for user_group in UserGroup.objects.filter(id__in=user_groups):  # 遍历选定的用户组
             group_notify_items[user_group.id] = {  # 设置通知组项
                 "notice_way": self.get_notify_item(getattr(user_group, notice_type, []), self.alert.event.bk_biz_id),
@@ -408,10 +481,10 @@ class AlertAssignee:
     def get_group_users_without_duty(self, user_groups):
         """
         获取不带轮值功能的用户组中的所有用户。
-    
+
         本函数旨在从用户组中筛选出不需要参与轮值的用户组，然后收集这些用户组中的所有用户，
         包括直接指定的用户和属于其他用户组的用户。
-    
+
         :param user_groups: 用户组的列表，用于限定查询范围。
         :return: 一个字典，包含不需要轮值的用户组中的所有用户。
         """
@@ -481,7 +554,7 @@ class AlertAssignee:
             now = time_tools.datetime2str(datetime.now(tz=pytz.timezone(group.timezone)))  # 获取当前时间字符串
             # 过滤出有效的值班计划，并按顺序排序
             for duty_plan in DutyPlan.objects.filter(
-                    user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
+                user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
             ).order_by("order"):
                 rule_id = duty_plan.duty_rule_id  # 获取值班规则的ID
                 group_duty_plans[group.id].setdefault(rule_id, []).append(duty_plan)  # 添加到值班计划字典
@@ -545,11 +618,11 @@ class AlertAssignee:
         return all_assignee
 
     def get_notice_receivers(
-            self,
-            notice_type=NoticeType.ALERT_NOTICE,
-            notice_phase=None,
-            notify_configs=None,
-            user_type=UserGroupType.MAIN,
+        self,
+        notice_type=NoticeType.ALERT_NOTICE,
+        notice_phase=None,
+        notify_configs=None,
+        user_type=UserGroupType.MAIN,
     ):
         """
         根据用户组和告警获取通知方式和对应的处理人元信息

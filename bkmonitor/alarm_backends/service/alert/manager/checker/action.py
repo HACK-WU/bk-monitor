@@ -51,6 +51,7 @@ class ActionHandleChecker(BaseChecker):
         4. 任务触发：符合条件时创建周期执行任务
         5. 状态更新：维护最新的通知处理元数据
         """
+        # todo 为什么没处理要跳过？
         if not alert.is_handled:
             # 预检阶段1：跳过未处理告警的周期检测
             return
@@ -61,12 +62,14 @@ class ActionHandleChecker(BaseChecker):
 
         # 收集通知配置
         notice_relation = alert.strategy.get("notice", {})
+        # 获取到异常动作配置
         actions = [action for action in alert.strategy.get("actions", []) if ActionSignal.ABNORMAL in action["signal"]]
         if notice_relation:
             actions.append(notice_relation)
 
         # 获取周期处理记录
         cycle_handle_record = alert.get_extra_info("cycle_handle_record", {})
+        # 如果不是无数据，也判断为异常
         signal = ActionSignal.NO_DATA if alert.is_no_data() else ActionSignal.ABNORMAL
 
         # 处理每个动作配置
@@ -76,6 +79,7 @@ class ActionHandleChecker(BaseChecker):
             if not relation_record:
                 # 尝试从历史记录中获取
                 relation_record = alert.get_latest_interval_record(action["config_id"], relation_id)
+            # todo 为什么没有处理记录要跳过？
             if not relation_record:
                 continue
 
@@ -177,21 +181,38 @@ class ActionHandleChecker(BaseChecker):
     @staticmethod
     def calc_action_interval(execute_config, execute_times):
         """
-        计算周期任务间隔
-        :param execute_config: 执行参数
-        :param execute_times: 当前是第几次执行
-        :return:
+        计算周期任务间隔时间（单位由配置决定）
+
+        参数:
+            execute_config: dict类型，执行配置字典，包含以下可选键值：
+                - need_poll: bool类型，是否需要轮询（默认True）
+                - notify_interval: int类型，基础通知间隔时间（默认0）
+                - interval_notify_mode: 间隔通知模式（默认IntervalNotifyMode.STANDARD）
+            execute_times: int类型，当前执行次数（从1开始计数）
+
+        返回值:
+            int类型，计算得到的间隔时间（单位与配置一致），返回0表示无需等待
+
+        执行流程说明：
+        1. 快速失败机制：当配置显式禁用轮询时直接返回0
+        2. 基础间隔获取：安全读取配置值并进行类型防护
+        3. 动态间隔计算：根据通知模式应用不同的增长算法
+        4. 指数退避处理：在递增模式下使用2的幂次增长算法
         """
         if execute_config.get("need_poll", True) is False:
+            # 跳过间隔计算直接返回0
             return 0
 
         try:
+            # 获取基础通知间隔时间并进行类型安全转换
             notify_interval = int(execute_config.get("notify_interval", 0))
         except TypeError:
+            # 类型转换失败时使用默认值0
             notify_interval = 0
 
+        # 获取间隔通知模式并应用对应计算策略
         interval_notify_mode = execute_config.get("interval_notify_mode", IntervalNotifyMode.STANDARD)
         if interval_notify_mode == IntervalNotifyMode.INCREASING:
-            # 按照指数级别进行处理
+            # 指数增长模式：间隔时间随执行次数指数级递增（2^(n-1)倍增长）
             notify_interval = int(notify_interval * math.pow(2, execute_times - 1))
         return notify_interval

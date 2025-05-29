@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,8 +7,8 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import time
-from typing import List
 
 from django.utils.functional import cached_property
 from django.utils.translation import gettext as _
@@ -31,135 +30,201 @@ from core.errors.alert import AlertNotFoundError
 
 @registry.register_document
 class AlertDocument(BaseDocument):
+    """
+    告警数据文档模型，用于Elasticsearch存储与检索
+
+    该类定义了告警数据的完整字段结构和索引策略，包含以下核心功能：
+    1. 告警生命周期管理（创建/更新/结束时间）
+    2. 多维度责任人体系（负责人/关注人/升级人）
+    3. 状态流转控制（确认/屏蔽/处理状态）
+    4. 时序数据关联（事件序列/持续时间）
+    5. 多维度过滤与聚合能力（标签/维度属性）
+
+    索引策略采用时间分片方案，支持高效的时间范围查询
+    """
+
     REINDEX_ENABLED = True
     REINDEX_QUERY = Search().filter("term", status=EventStatus.ABNORMAL).to_dict()
 
-    id = field.Keyword(required=True)
-    seq_id = field.Long()
+    id = field.Keyword(required=True)  # 告警唯一标识符（含时间戳+序列号）
+    seq_id = field.Long()  # 序列化ID（用于排序）
 
-    alert_name = field.Text(fields={"raw": field.Keyword()})
-    strategy_id = field.Keyword()
+    alert_name = field.Text(fields={"raw": field.Keyword()})  # 告警名称（全文检索+精确匹配）
+    strategy_id = field.Keyword()  # 关联策略ID
 
-    # 告警创建时间(服务器时间)
-    create_time = Date(format=BaseDocument.DATE_FORMAT)
-    update_time = Date(format=BaseDocument.DATE_FORMAT)
+    # 告警时间体系
+    create_time = Date(format=BaseDocument.DATE_FORMAT)  # 告警创建时间（服务器时间）
+    update_time = Date(format=BaseDocument.DATE_FORMAT)  # 最后更新时间
+    begin_time = Date(format=BaseDocument.DATE_FORMAT)  # 告警开始时间
+    end_time = Date(format=BaseDocument.DATE_FORMAT)  # 告警结束时间
+    latest_time = Date(format=BaseDocument.DATE_FORMAT)  # 最新异常时间
+    first_anomaly_time = Date(format=BaseDocument.DATE_FORMAT)  # 首次异常时间
 
-    # 告警开始时间
-    begin_time = Date(format=BaseDocument.DATE_FORMAT)
-    # 告警结束时间
-    end_time = Date(format=BaseDocument.DATE_FORMAT)
-    # 告警持续的最新时间
-    latest_time = Date(format=BaseDocument.DATE_FORMAT)
-    # 首次异常时间
-    first_anomaly_time = Date(format=BaseDocument.DATE_FORMAT)
+    # 责任人体系字段
+    assignee = field.Keyword(multi=True)  # 主负责人（可多人）
+    appointee = field.Keyword(multi=True)  # 指定处理人
+    supervisor = field.Keyword(multi=True)  # 升级监督人
+    follower = field.Keyword(multi=True)  # 只读关注人
 
-    # 告警负责人，对应页面上的通知人
-    assignee = field.Keyword(multi=True)
+    # 时间统计字段
+    duration = field.Long()  # 持续时间（毫秒）
+    ack_duration = field.Long()  # 确认耗时（毫秒）
 
-    # 指派负责人
-    appointee = field.Keyword(multi=True)
+    # 关联事件对象
+    event = field.Object(doc_class=type("EventInnerDoc", (EventDocument, InnerDoc), {}))  # 最新事件对象
+    severity = field.Integer()  # 严重程度等级
+    status = field.Keyword()  # 当前状态（open/closed/ack等）
 
-    # 升级关注人
-    supervisor = field.Keyword(multi=True)
+    # 状态标志位
+    is_blocked = field.Boolean()  # 是否阻断状态
+    is_handled = field.Boolean()  # 是否已处理
+    is_ack = field.Boolean()  # 是否已确认
+    is_ack_noticed = field.Boolean()  # 确认通知状态
+    ack_operator = field.Keyword()  # 确认操作者
+    is_shielded = field.Boolean()  # 是否被屏蔽
+    shield_left_time = field.Integer()  # 剩余屏蔽时间
+    shield_id = field.Keyword(multi=True)  # 屏蔽规则ID列表
+    handle_stage = field.Keyword(multi=True)  # 处理阶段标记
+    labels = field.Keyword(multi=True)  # 标签集合
 
-    # 关注人, 只可以查看，不可以操作
-    follower = field.Keyword(multi=True)
-
-    # 持续时间
-    duration = field.Long()
-    # 确认时长
-    ack_duration = field.Long()
-
-    # 最新一次 Event
-    event = field.Object(doc_class=type("EventInnerDoc", (EventDocument, InnerDoc), {}))
-    severity = field.Integer()
-    status = field.Keyword()
-
-    is_blocked = field.Boolean()
-
-    is_handled = field.Boolean()
-    is_ack = field.Boolean()
-    # 是否已通知
-    is_ack_noticed = field.Boolean()
-    ack_operator = field.Keyword()
-    is_shielded = field.Boolean()
-    shield_left_time = field.Integer()
-    shield_id = field.Keyword(multi=True)
-    handle_stage = field.Keyword(multi=True)
-    labels = field.Keyword(multi=True)
+    # 分配标签结构
     assign_tags = field.Nested(
         properties={
-            "key": field.Keyword(),
-            "value": field.Text(required=True, fields={"raw": field.Keyword(ignore_above=256)}),
+            "key": field.Keyword(),  # 标签键
+            "value": field.Text(required=True, fields={"raw": field.Keyword(ignore_above=256)}),  # 标签值
         }
     )
 
-    # 下一个状态设置的时间，用于状态流转
-    next_status = field.Keyword()
-    next_status_time = Date(format=BaseDocument.DATE_FORMAT)
+    # 状态流转字段
+    next_status = field.Keyword()  # 下一状态标识
+    next_status_time = Date(format=BaseDocument.DATE_FORMAT)  # 状态切换时间
 
-    # 某个告警只会属于某一个故障，不可能同属于多个故障（否则这多个故障也应该属于一个故障）
-    incident_id = field.Keyword()
-
-    dedupe_md5 = field.Keyword()
+    # 关联实体
+    incident_id = field.Keyword()  # 关联故障ID
+    dedupe_md5 = field.Keyword()  # 去重指纹
 
     class Dimension(InnerDoc):
+        """
+        多维度过滤嵌套文档结构
+
+        定义告警的多维属性标签，支持以下字段：
+        key: 维度键（英文标识）
+        value: 维度值（原始值）
+        display_key: 展示用键名（中文）
+        display_value: 展示用值（中文）
+
+        to_dict方法强制保留空值字段
+        """
+
         key = field.Keyword()
         value = field.Keyword()
         display_key = field.Keyword()
         display_value = field.Keyword()
 
         def to_dict(self):
+            """序列化时保留空字段"""
             return super().to_dict(skip_empty=False)
 
-    dimensions = field.Object(enabled=False, multi=True, doc_class=Dimension)
-
-    # 告警的更多信息，例如：当时的策略快照
-    extra_info = field.Object(enabled=False)
+    dimensions = field.Object(enabled=False, multi=True, doc_class=Dimension)  # 维度集合（禁用全文检索）
+    extra_info = field.Object(enabled=False)  # 扩展信息（策略快照等，禁用全文检索）
 
     class Index:
-        name = "bkfta_alert"
-        settings = {"number_of_shards": 3, "number_of_replicas": 1, "refresh_interval": "1s"}
+        """Elasticsearch索引配置"""
+
+        name = "bkfta_alert"  # 索引名称
+        settings = {  # 索引设置
+            "number_of_shards": 3,  # 分片数
+            "number_of_replicas": 1,  # 副本数
+            "refresh_interval": "1s",  # 刷新间隔
+        }
 
     def get_index_time(self):
+        """
+        获取文档索引时间戳
+
+        返回值:
+            int - 从文档ID解析出的时间戳（秒）
+        """
         return self.parse_timestamp_by_id(self.id)
 
     @classmethod
     def parse_timestamp_by_id(cls, uuid: str) -> int:
         """
-        从 UUID 反解时间戳
+        从UUID格式ID提取时间戳
+
+        参数:
+            uuid: 告警唯一标识（前10位为时间戳）
+
+        返回值:
+            int - Unix时间戳（秒）
         """
         return int(str(uuid)[:10])
 
     @classmethod
     def parse_sequence_by_id(cls, uuid: str) -> int:
         """
-        从 UUID 反解时间戳
+        从UUID格式ID提取序列号
+
+        参数:
+            uuid: 告警唯一标识（第10-20位为序列号）
+
+        返回值:
+            int - 序列号数值
         """
         return int(str(uuid)[10:])
 
     @classmethod
     def get(cls, id) -> "AlertDocument":
         """
-        获取单条告警
+        根据ID获取单条告警记录
+
+        参数:
+            id: 告警唯一标识符
+
+        返回值:
+            AlertDocument实例
+
+        异常:
+            ValueError: ID格式错误
+            AlertNotFoundError: 未找到对应告警
+
+        执行流程:
+        1. 解析ID获取时间戳
+        2. 构建精确查询条件
+        3. 执行ES搜索
+        4. 返回匹配的文档实例
         """
         try:
             ts = cls.parse_timestamp_by_id(id)
         except Exception:
-            raise ValueError("invalid alert_id: {}".format(id))
+            raise ValueError(f"invalid alert_id: {id}")
         hits = cls.search(start_time=ts, end_time=ts).filter("term", id=id).execute().hits
         if not hits:
             raise AlertNotFoundError({"alert_id": id})
         return cls(**hits[0].to_dict())
 
     @classmethod
-    def mget(cls, ids, fields: List = None) -> List["AlertDocument"]:
+    def mget(cls, ids, fields: list = None) -> list["AlertDocument"]:
         """
-        获取多条告警
+        批量获取告警记录
+
+        参数:
+            ids: 告警ID列表（支持字符串/整型）
+            fields: 需要返回的字段列表（None表示返回全部字段）
+
+        返回值:
+            AlertDocument实例列表（按匹配顺序排列）
+
+        执行流程:
+        1. 解析ID时间范围：从ID中提取时间戳确定查询窗口
+        2. 构建查询条件：组合时间范围过滤和ID集合过滤
+        3. 字段裁剪：根据fields参数限制返回字段
+        4. 执行查询：最大返回5000条记录（防止内存溢出）
         """
         if not ids:
             return []
-        # 根据ID的时间区间确定需要查询的索引范围
+
+        # 解析ID时间范围以确定索引查询区间
         start_time = None
         end_time = None
         for id in ids:
@@ -176,11 +241,15 @@ class AlertDocument(BaseDocument):
             else:
                 end_time = max(end_time, ts)
 
+        # 构建带时间范围约束的批量查询条件
         search = cls.search(start_time=start_time, end_time=end_time).filter("terms", id=ids)
 
+        # 应用字段裁剪策略（None表示不裁剪）
         if fields:
+            # .source()方法用于指定返回的字段列表,类似于ORM中的.only()
             search = search.source(fields=fields)
 
+        # 执行查询并转换为文档实例列表
         return [cls(**hit.to_dict()) for hit in search.params(size=5000).scan()]
 
     @classmethod

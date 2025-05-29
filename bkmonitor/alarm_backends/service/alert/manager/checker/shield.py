@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 import time
-from typing import List
 
 from alarm_backends.core.alert import Alert
 from alarm_backends.service.alert.manager.checker.base import BaseChecker
@@ -20,41 +19,13 @@ from bkmonitor.documents import AlertLog
 
 logger = logging.getLogger("alert.manager")
 
-"""
-这个类ShieldStatusChecker主要用于检测和处理告警的屏蔽状态。以下是它的主要功能和职责：
-主要功能
-初始化：
-    接收一个告警列表，并将其存储为字典以方便快速查找。
-    初始化未屏蔽动作列表、需要通知的告警ID列表等。
-    
-屏蔽状态检查：
-    对每个告警进行屏蔽状态的检查。
-    判断告警是否匹配屏蔽规则，并更新告警的屏蔽状态和相关信息。
-    
-处理未屏蔽动作：
-    收集所有未屏蔽的动作，并在适当的时候推送这些动作。
-    处理告警的周期处理记录，确保正确记录每次通知的状态。
-    
-QoS（服务质量）控制：
-    在推送动作之前进行QoS计算，以确保不会因为过多的通知而影响系统性能。
-    记录被QOS策略放弃执行的告警，并生成相应的日志。
-    
-异步任务：
-    使用异步任务队列来推送未屏蔽的动作，以提高系统的响应速度和可靠性。
-
-主要职责
-    维护告警的屏蔽状态：跟踪每个告警是否被屏蔽以及屏蔽的剩余时间。
-    触发解除屏蔽通知：当一个原本被屏蔽的告警不再满足屏蔽条件时，发送解除屏蔽的通知。
-    避免重复通知：通过记录已发送的通知，防止对同一个告警进行重复通知。
-    优化通知效率：通过QoS控制机制，确保在高负载情况下仍能高效且准确地发送重要告警。
-"""
 
 class ShieldStatusChecker(BaseChecker):
     """
     屏蔽状态检测
     """
 
-    def __init__(self, alerts: List[Alert]):
+    def __init__(self, alerts: list[Alert]):
         super().__init__(alerts)  # 初始化父类
         self.unshielded_actions = []  # 存储未屏蔽的动作
         self.need_notify_alerts = []  # 存储需要通知的告警ID
@@ -72,7 +43,7 @@ class ShieldStatusChecker(BaseChecker):
             return
 
         # 获取关联的处理套餐
-        config_id = notice_relation.get("config_id") # 获取配置ID
+        config_id = notice_relation.get("config_id")  # 获取配置ID
         # 获取到关联的通知
         relation_id = notice_relation.get("id")
         # 如果关联的处理套餐和通知都没有获取到，则不用通知
@@ -83,32 +54,42 @@ class ShieldStatusChecker(BaseChecker):
         # 获取当前关联的notice的处理记录
         handle_record = cycle_handle_record.get(str(relation_id))
         if not handle_record:  # 如果处理记录不存在
-            handle_record = alert.get_latest_interval_record(config_id=config_id, relation_id=str(relation_id)) or {}  # 从数据库获取最近一次的通知记录
+            handle_record = (
+                alert.get_latest_interval_record(config_id=config_id, relation_id=str(relation_id)) or {}
+            )  # 从数据库获取最近一次的通知记录
 
         if handle_record and not handle_record.get("is_shielded"):  # 如果最近一次通知没有被屏蔽
-            logger.info("[ignore unshielded action] alert(%s) strategy(%s) 最近一次通知没有被屏蔽, 无需发送接触屏蔽通知", alert.id, alert.strategy_id)
+            logger.info(
+                "[ignore unshielded action] alert(%s) strategy(%s) 最近一次通知没有被屏蔽, 无需发送接触屏蔽通知",
+                alert.id,
+                alert.strategy_id,
+            )
             return  # 直接返回，无需发送解除屏蔽通知
 
         execute_times = handle_record.get("execute_times", 0)  # 获取执行次数
-        self.unshielded_actions.append({  # 将未屏蔽的动作添加到列表中
-            "strategy_id": alert.strategy_id,
-            "signal": alert.status.lower(),
-            "alert_ids": [alert.id],
-            "severity": alert.severity,
-            "relation_id": relation_id,
-            "is_unshielded": True,
-            "execute_times": execute_times,
-        })
+        self.unshielded_actions.append(
+            {  # 将未屏蔽的动作添加到列表中
+                "strategy_id": alert.strategy_id,
+                "signal": alert.status.lower(),
+                "alert_ids": [alert.id],
+                "severity": alert.severity,
+                "relation_id": relation_id,
+                "is_unshielded": True,
+                "execute_times": execute_times,
+            }
+        )
 
         # 更新告警通知处理记录
-        cycle_handle_record.update({
-            str(relation_id): {
-                "last_time": int(time.time()),
-                "is_shielded": False,
-                "latest_anomaly_time": alert.latest_time,
-                "execute_times": execute_times + 1,
+        cycle_handle_record.update(
+            {
+                str(relation_id): {
+                    "last_time": int(time.time()),
+                    "is_shielded": False,
+                    "latest_anomaly_time": alert.latest_time,
+                    "execute_times": execute_times + 1,
+                }
             }
-        })
+        )
         alert.update_extra_info("cycle_handle_record", cycle_handle_record)  # 更新告警的额外信息
         self.need_notify_alerts.append(alert.id)  # 将告警ID添加到需要通知的列表中
         logger.info("[push unshielded action] alert(%s) strategy(%s)", alert.id, alert.strategy_id)
@@ -126,7 +107,9 @@ class ShieldStatusChecker(BaseChecker):
             if alert.is_shielded:  # 如果告警处于屏蔽中
                 if alert.is_recovering():  # 如果告警处于恢复期
                     alert.update_extra_info("ignore_unshield_notice", True)  # 设置忽略解除屏蔽通知的标记
-                    logger.info("[ignore push action] alert(%s) strategy(%s) 告警处于恢复期", alert.id, alert.strategy_id)
+                    logger.info(
+                        "[ignore push action] alert(%s) strategy(%s) 告警处于恢复期", alert.id, alert.strategy_id
+                    )
                 else:  # 如果告警不处于恢复期
                     self.add_unshield_action(alert, notice_relation)  # 推送解除屏蔽通知
             else:  # 如果告警处于未屏蔽状态
@@ -160,9 +143,18 @@ class ShieldStatusChecker(BaseChecker):
                 else:  # 如果达到QOS阈值
                     qos_actions += 1  # 增加QOS放弃执行的数量
                     qos_alerts.append(alert_id)  # 将告警ID添加到被QOS的列表中
-                    logger.info("[action qos triggered] alert(%s) strategy(%s) signal(%s) severity(%s) qos_count: %s", alert_id, action["strategy_id"], action["signal"], action["severity"], current_count)
+                    logger.info(
+                        "[action qos triggered] alert(%s) strategy(%s) signal(%s) severity(%s) qos_count: %s",
+                        alert_id,
+                        action["strategy_id"],
+                        action["signal"],
+                        action["severity"],
+                        current_count,
+                    )
             except BaseException as error:  # 如果发生异常
-                logger.exception("[push actions error] alert(%s) strategy(%s) reason: %s", alert_id, action["strategy_id"], error)
+                logger.exception(
+                    "[push actions error] alert(%s) strategy(%s) reason: %s", alert_id, action["strategy_id"], error
+                )
 
         if qos_alerts:  # 如果有被QOS的事件
             qos_log = Alert.create_qos_log(qos_alerts, current_count, qos_actions)  # 创建QOS日志

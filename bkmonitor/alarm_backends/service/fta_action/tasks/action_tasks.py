@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -50,16 +49,28 @@ logger = logging.getLogger("fta_action.run")
 @app.task(ignore_result=True, queue="celery_running_action")
 def run_action(action_type, action_info):
     """
-    自愈动作的执行入口函数
-    :param action_type: 处理动作类型
-    :param action_info: 处理动作信息，包含事件ID，处理函数，以及对应的回调参数
-                        如：
-                        {"id":1,
-                         "function": "callback",
-                         "kwargs":{"inputs": "xxx"}}
-    :return:
+    自愈动作的执行入口函数，动态加载处理器模块并执行指定操作
+
+    参数:
+        action_type: 动作类型字符串，对应处理器模块路径
+                     当action_info未包含module字段时必填
+        action_info: 动作配置字典，包含以下关键字段：
+                     - id: 动作实例唯一标识(int)
+                     - function: 待执行方法名(str)
+                     - kwargs: 方法参数字典(dict)
+                     - 其他可选字段：alerts(告警数据列表)、module(自定义模块路径)
+
+    返回值:
+        None（当前实现中仅在模块导入失败时提前返回）
+
+    该函数实现自愈动作的完整执行流程：
+    1. 动态加载处理器模块
+    2. 反射调用指定处理方法
+    3. 异常处理与状态更新
+    4. 执行指标采集与上报
     """
-    # import action's call function
+    # 动态导入处理器模块
+    # 模块路径优先使用action_info中的module字段，否则拼接action_type
     module_name = "alarm_backends.service.fta_action.%s.processor" % action_type or action_info.get("module")
     # logger.info("$%s Action start, call back module name %s", action_info["id"], action_type)
     logger.info(f"[run_action_worker] action({action_info['id']}) {action_type} begin import {module_name}")
@@ -72,13 +83,17 @@ def run_action(action_type, action_info):
         )
         return
 
+    # 初始化异常和状态跟踪变量
     exc = None
     action_instance = None
     alert = None
     processor = None
     is_finished = False
     start_time = time.time()
+
+    # 执行处理器方法的核心逻辑
     try:
+        # 创建处理器实例并获取执行方法
         processor: BaseActionProcessor = module.ActionProcessor(action_info["id"], alerts=action_info.get("alerts"))
         # 如果带了执行函数，则执行执行函数，没有的话，直接做执行操作
         func_name = action_info.get("function", "execute")
@@ -86,6 +101,7 @@ def run_action(action_type, action_info):
         # call func
         # logger.info("$%s Action callback: module name %s function %s", action_info["id"], action_type, func_name)
         logger.info(f"[run_action_worker] action({action_info['id']}) action_type({action_type}) call({func_name})")
+        # 执行处理器方法
         func(**action_info.get("kwargs", {}))
     except ActionAlreadyFinishedError as error:
         logger.info(
@@ -98,6 +114,7 @@ def run_action(action_type, action_info):
         logger.exception(
             f"[run_action_worker] action({action_info['id']}) action_type({action_type}) error, %s", str(error)
         )
+        # 更新异常状态和错误信息
         ActionInstance.objects.filter(id=action_info["id"]).update(
             status=ActionStatus.FAILURE,
             failure_type=FailureType.FRAMEWORK_CODE,
@@ -107,7 +124,9 @@ def run_action(action_type, action_info):
         is_finished = True
         exc = error
 
+    # 处理器后置状态处理
     if processor:
+        # 判断动作是否完成
         if getattr(processor, "is_finished", True):
             is_finished = True
             logger.info(f"[run_action_worker] action({action_info['id']}) action_type({action_type}) finished")
@@ -116,6 +135,7 @@ def run_action(action_type, action_info):
                 f"[run_action_worker] action({action_info['id']}) action_type({action_type}) "
                 f"not finished: wait for callback"
             )
+        # 提取处理器上下文数据
         try:
             action_instance = processor.action
             alert = processor.context.get("alert")
@@ -126,6 +146,7 @@ def run_action(action_type, action_info):
                 str(error),
             )
 
+    # 构建监控指标标签
     labels = {
         "bk_biz_id": action_instance.bk_biz_id if action_instance else 0,
         "plugin_type": action_type,
@@ -133,8 +154,12 @@ def run_action(action_type, action_info):
         "signal": action_instance.signal if action_instance else "",
     }
 
+    # 上报执行耗时指标
     metrics.ACTION_EXECUTE_TIME.labels(**labels).observe(time.time() - start_time)
+    # 上报执行次数指标（含异常状态）
     metrics.ACTION_EXECUTE_COUNT.labels(status=metrics.StatusEnum.from_exc(exc), exception=exc, **labels).inc()
+
+    # 动作完成状态处理
     if is_finished and action_instance and not action_instance.is_parent_action:
         # 结束之后统计任务的执行情况
         # 统计是否成功失败的指标，忽略掉主任务（主任务没有真正执行的内容）
@@ -147,6 +172,7 @@ def run_action(action_type, action_info):
         status_labels.update(labels)
         metrics.ACTION_EXECUTE_STATUS_COUNT.labels(**status_labels).inc()
 
+    # 延迟指标统计
     if (
         action_info.get("function", "execute") == "execute"
         and action_instance
@@ -163,6 +189,7 @@ def run_action(action_type, action_info):
             )
         metrics.ACTION_EXECUTE_LATENCY.labels(**labels).observe(latency)
 
+    # 强制上报所有指标
     metrics.report_all()
 
 
@@ -234,7 +261,7 @@ def sync_action_instances_every_10_secs(last_sync_time=None):
         logger.info("[get service lock fail] sync_action_instances_every_10_secs. will process later")
         return
     except BaseException as e:  # NOCC:broad-except(设计如此:)
-        logger.exception("[process error] sync_action_instances_every_10_secs, reason：{msg}".format(msg=str(e)))
+        logger.exception(f"[process error] sync_action_instances_every_10_secs, reason：{str(e)}")
         return
 
 
@@ -361,7 +388,11 @@ def check_timeout_actions():
                         update_time=datetime.now(tz=timezone.utc),
                         status=ActionStatus.FAILURE,
                         failure_type=FailureType.TIMEOUT,
-                        ex_data=dict(message=_("处理执行时间超过套餐配置的最大时长{}分钟, 按失败处理").format(timeout_setting // 60 or 10)),
+                        ex_data=dict(
+                            message=_("处理执行时间超过套餐配置的最大时长{}分钟, 按失败处理").format(
+                                timeout_setting // 60 or 10
+                            )
+                        ),
                     )
                 logger.info("setting actions(%s) to failure because of timeout", len(timeout_actions))
     except LockError:
@@ -369,7 +400,7 @@ def check_timeout_actions():
         logger.info("[get service lock fail] check timeout action. will process later")
         return
     except BaseException as e:  # NOCC:broad-except(设计如此:)
-        logger.exception("[process error] check timeout action, reason：{msg}".format(msg=str(e)))
+        logger.exception(f"[process error] check timeout action, reason：{str(e)}")
         return
 
 
@@ -389,7 +420,7 @@ def execute_demo_actions():
         logger.info("[get service lock fail] run demo action. will process later")
         return
     except BaseException as e:  # NOCC:broad-except(设计如此:)
-        logger.exception("[process error] run demo action, reason：{msg}".format(msg=str(e)))  # NOCC:broad-except(设计如此:)
+        logger.exception(f"[process error] run demo action, reason：{str(e)}")  # NOCC:broad-except(设计如此:)
         return
 
 

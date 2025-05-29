@@ -49,45 +49,93 @@ else:
 
 class RedisDataKey:
     """
-    redis 的Key对象
+    Redis键对象管理类，封装键模板、过期策略及存储后端配置
+
+    属性:
+        key_tpl (str): Redis键模板字符串（必须使用format格式）
+        ttl (int): 键值生存周期（秒）
+        backend (str): Redis连接池标识符
+        is_global (bool): 键作用域类型（True=全局公共键）
+        _cache (RedisProxy): 延迟加载的Redis客户端代理
     """
 
     def __init__(self, key_tpl=None, ttl=None, backend=None, is_global=False, **extra_config):
+        """
+        初始化Redis键配置
+
+        参数:
+            key_tpl (str): Redis键模板字符串（必须）
+            ttl (int): 键值过期时间（必须）
+            backend (str): Redis连接池标识（必须）
+            is_global (bool): 是否为全局键（默认False）
+            extra_config (dict): 扩展配置参数（将作为实例属性存储）
+
+        异常:
+            ValueError: 当缺少key_tpl、ttl或backend任一必填参数时抛出
+        """
         self._cache = None
         if not all([key_tpl, ttl, backend]):
             raise ValueError
-        # key 模板
+        # 存储基础配置
         self.key_tpl = key_tpl
-        # 过期时间
         self.ttl = ttl
-        # 对应cache backend
         self.backend = backend
-        # key 类型 (public/cluster)
         self.is_global = is_global
+        # 注入扩展属性
         for k, v in list(extra_config.items()):
             setattr(self, k, v)
 
     @property
     def client(self):
+        """
+        获取Redis客户端代理（延迟初始化模式）
+
+        返回:
+            RedisProxy: 封装后的Redis连接池实例
+        """
         if self._cache is None:
             self._cache = RedisProxy(self.backend)
         return self._cache
 
     def get_key(self, **kwargs):
+        """
+        生成格式化后的Redis键
+
+        参数:
+            kwargs (dict): 键模板格式化参数
+
+        返回:
+            SimilarStr: 带策略ID扩展属性的字符串对象
+
+        处理流程:
+        1. 使用参数格式化键模板
+        2. 根据作用域添加对应前缀（PUBLIC_KEY_PREFIX/KEY_PREFIX）
+        3. 提取策略ID注入SimilarStr对象属性
+        """
         key = self.key_tpl.format(**kwargs)
 
-        if self.is_global:
-            key_prefix = PUBLIC_KEY_PREFIX
-        else:
-            key_prefix = KEY_PREFIX
+        # 添加键前缀
+        key_prefix = PUBLIC_KEY_PREFIX if self.is_global else KEY_PREFIX
         if not key.startswith(key_prefix):
             key = ".".join([key_prefix, key])
+
+        # 绑定策略上下文
         strategy_id = int(kwargs.get("strategy_id") or 0)
-        key = SimilarStr(key)
-        key.strategy_id = strategy_id
-        return key
+        key_obj = SimilarStr(key)
+        key_obj.strategy_id = strategy_id
+        return key_obj
 
     def expire(self, **key_kwargs):
+        """
+        设置键值过期时间
+
+        参数:
+            key_kwargs (dict): 用于生成键的格式化参数
+
+        注意事项:
+            在pipeline操作中应使用pipeline.expire()代替本方法
+            本方法会直接触发Redis网络请求
+        """
         # 注意在pipeline中使用pipeline调用expire方法，不要调用该对象自身的expire方法
         self.client.expire(self.get_key(**key_kwargs), self.ttl)
 
@@ -150,14 +198,35 @@ class SortedSetKey(RedisDataKey):
 
 def register_key_with_config(config):
     """
-    支持的类型： hash、set、list、sorted_set
-    :param config:
-    :rtype: RedisDataKey
+    根据配置字典动态注册并实例化对应的Redis数据类型键对象
+
+    支持的类型：hash、set、list、sorted_set（需预先定义对应驼峰命名的Key类）
+
+    参数:
+        config (dict): 配置字典，必须包含以下键：
+            - key_type (str): 指定Redis数据类型（取值范围：hash/set/list/sorted_set）
+            - 其他键值对将作为初始化参数传递给目标Key类的构造函数
+
+    返回值:
+        RedisDataKey: 实例化的具体类型对象（实际类型由配置动态决定）
+
+    异常:
+        TypeError: 当配置的key_type不支持或对应类未定义时抛出
+
+    执行流程：
+    1. 从配置中提取key_type字段
+    2. 将下划线命名转换为驼峰命名并拼接Key后缀（如hash -> HashKey）
+    3. 从全局命名空间获取对应类引用
+    4. 使用原始配置字典实例化目标类
     """
     key_type = config["key_type"]
+    # 将下划线命名转换为驼峰命名并获取对应类
+    # key_cls： HashKey、 SetKey、 ListKey、 SortedSetKey、StringKey
     key_cls = globals().get(f"{underscore_to_camel(key_type)}Key")
     if not key_cls:
+        # 未找到对应类时抛出类型错误
         raise TypeError(f"unsupported key type: {key_type}")
+    # 返回实例化的键对象
     return key_cls(**config)
 
 

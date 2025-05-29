@@ -293,13 +293,37 @@ class Alert:
         return False
 
     def get_latest_interval_record(self, config_id, relation_id):
-        # 根据告警ID搜索出对应的action_id
+        """
+        获取指定告警策略的最新动作执行记录
+
+        参数:
+            config_id: 告警动作配置ID，用于过滤关联的动作实例
+            relation_id: 策略关联ID，用于定位具体策略关系
+
+        返回值:
+            dict: 包含以下字段的字典
+                - last_time: 最后结束时间戳（int）
+                - execute_times: 执行次数（int）
+                - is_shielded: 是否屏蔽告警（bool）
+                - latest_anomaly_time: 最新异常时间（int）
+            None: 当不存在有效记录时返回None
+
+        该方法实现以下核心流程：
+        1. 双重数据源检索：优先从ES获取动作ID，降级到数据库查询
+        2. 时间序列过滤：通过创建时间倒序排列获取最新记录
+        3. 安全字段访问：使用dict.get方法避免KeyError异常
+        """
+
+        # 处理空配置ID的边界情况
         if not config_id:
-            # 没有处理记录的config_id，直接返回
             return None
+
+        # 构建基础查询集：筛选需轮询且未轮询的动作实例
         action_queryset = ActionInstance.objects.filter(
             strategy_relation_id=relation_id, need_poll=True, is_polled=False
         )
+
+        # 从ES检索关联动作ID，采用安全字段访问模式
         action_ids = [
             action.raw_id
             for action in ActionInstanceDocument.mget_by_alert(
@@ -308,20 +332,24 @@ class Alert:
                 include={"action_config_id": config_id, "parent_action_id": 0},
             )
         ]
+
+        # 处理ES无结果的边界情况
         if not action_ids:
-            # 如果ES没有检索到，直接返回
             return None
 
+        # 执行最终查询：关联过滤+时间排序+字段裁剪
         action = (
             action_queryset.filter(id__in=action_ids)
             .only("end_time", "execute_times", "inputs", "alerts")
             .order_by("-create_time")
             .first()
         )
+
+        # 处理查询结果为空的边界情况
         if not action:
-            # 如果最近的告警数据不存在，直接返回None
             return None
 
+        # 构造返回结果：包含时间戳转换和默认值处理
         return {
             "last_time": int(action.end_time.timestamp()) if action.end_time else int(time.time()),
             "execute_times": action.execute_times,
@@ -805,20 +833,37 @@ class Alert:
     @classmethod
     def mget(cls, alert_keys: list[AlertKey]) -> list["Alert"]:
         """
-        批量获取告警，优先从Redis快照获取，没有则从ES获取
-        :param alert_keys: 告警标识列表
-        :return: 告警 Alert 对象 列表
+        批量获取告警对象，优先从Redis快照获取，失败后回退到ES存储
+
+        参数:
+            alert_keys: AlertKey对象列表，包含多个告警唯一标识符
+                        每个AlertKey需实现get_snapshot_key方法
+
+        返回值:
+            Alert对象列表，按输入顺序返回对应的告警实例
+            当Redis和ES均未找到时仍会返回空对象吗？需要确认文档说明
+
+        执行流程概述:
+        1. 使用Redis管道批量获取快照数据
+        2. 解析Redis返回的原始数据并构建结果列表
+        3. 记录解析失败和未命中的告警ID
+        4. 通过ES批量查询补充缺失的告警数据
         """
         pipeline = ALERT_SNAPSHOT_KEY.client.pipeline(transaction=False)
         for alert_key in alert_keys:
             pipeline.get(alert_key.get_snapshot_key())
         alerts_snapshot = pipeline.execute()
 
+        # 处理Redis返回的原始数据
+        # 1. 初始化结果容器和未命中记录
+        # 2. 按原始顺序保持结果对应关系
         results = []
-
         alert_ids_not_found = []
 
+        # 解析Redis快照数据
+        # 包含异常处理和数据有效性验证
         for index, alert_json in enumerate(alerts_snapshot):
+            # 缓存没有命中
             if not alert_json:
                 alert_ids_not_found.append(alert_keys[index].alert_id)
                 continue
@@ -829,6 +874,8 @@ class Alert:
                 logger.warning("load alert failed: %s, origin data: %s", e, alert_json)
                 alert_ids_not_found.append(alert_keys[index].alert_id)
 
+        # 通过ES补充查询未命中的告警
+        # 使用批量查询优化网络请求效率
         if alert_ids_not_found:
             for alert_doc in AlertDocument.mget(alert_ids_not_found):
                 results.append(cls(alert_doc.to_dict()))

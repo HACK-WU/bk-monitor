@@ -193,6 +193,9 @@ def send_check_task(alerts: list[dict], run_immediately=True):
                     countdown=countdown,
                     expires=120,
                     kwargs={
+                        # 告警键对象列表，后续优先从缓存中获取到告警，获取失败后再从ES中获取。
+                        # 因为后续告警处理后，告警信息发生变化，会将其更到新缓存。
+                        # 所以优先从缓存中获取，避免使用旧数据。
                         "alert_keys": [
                             AlertKey(alert_id=alert["id"], strategy_id=alert.get("strategy_id"))
                             for alert in alerts[index : index + BATCH_SIZE]
