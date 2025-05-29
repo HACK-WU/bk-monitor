@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,14 +7,15 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import json
 import logging
 import traceback
-from typing import Dict, Tuple
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
+from constants.common import DEFAULT_TENANT_ID
 from metadata.models import (
     DataSource,
     DataSourceOption,
@@ -32,15 +32,15 @@ logger = logging.getLogger("metadata")
 
 class Command(BaseCommand):
     DATA_SOURCE_OPTION_TEMPLATE = {
-        "allow_dimensions_missing": 'true',
-        "is_split_measurement": 'true',
-        "disable_metric_cutter": 'true',
+        "allow_dimensions_missing": "true",
+        "is_split_measurement": "true",
+        "disable_metric_cutter": "true",
     }
 
     BLACKLIST_MUST_FIELD = "metrics_report_path"
     TABLE_OPTION_TEMPLATE = {
-        "enable_default_value": 'false',
-        "is_split_measurement": 'true',
+        "enable_default_value": "false",
+        "is_split_measurement": "true",
     }
 
     DUI = "[\033[32m√\033[0m] "
@@ -61,7 +61,7 @@ class Command(BaseCommand):
     def fail(msg):
         return msg + "\nScript escape"
 
-    def judge_option_data(self, data: Dict, template_data, enable_field_blacklist=False) -> Tuple[str, bool]:
+    def judge_option_data(self, data: dict, template_data, enable_field_blacklist=False) -> tuple[str, bool]:
         correct_flag = True
         result = ""
         for option_key, option_value in template_data.items():
@@ -88,12 +88,13 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         plugin_id = options["plugin_id"]
+        bk_tenant_id = options["bk_tenant_id"]
         if settings.ROLE != "api":
             print(f"try with: ./bin/api_manage.sh check_plugin_status --plugin_id={plugin_id}")
             return
         # 获取 plugin 信息
         try:
-            plugin = CollectorPluginMeta.objects.get(plugin_id=plugin_id)
+            plugin = CollectorPluginMeta.objects.get(plugin_id=plugin_id, bk_tenant_id=bk_tenant_id)
         except CollectorPluginMeta.DoesNotExist:
             print(f"can not find plugin, plugin_id:{plugin_id}")
             return
@@ -136,9 +137,7 @@ class Command(BaseCommand):
             if enable_field_blacklist:
                 if self.BLACKLIST_MUST_FIELD not in data_source_data:
                     db_ds_correct_flag = False
-                    db_result += (
-                        f"\n\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]"
-                    )
+                    db_result += f"\n\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]"
             db_result += "\n" + self.description("resulttableoption 相关信息:")
             rt_data = dict(ResultTableOption.objects.filter(table_id=ts.table_id).values_list("name", "value"))
             db_rt_option_result, db_rt_correct_flag = self.judge_option_data(
@@ -180,7 +179,8 @@ class Command(BaseCommand):
                 if self.BLACKLIST_MUST_FIELD not in consul_data["option"]:
                     consul_ds_correct_flag = False
                     print(
-                        f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]")
+                        f"\t{self.CUO}{self.BLACKLIST_MUST_FIELD}: 该字段不存在[在自动发现下，{self.BLACKLIST_MUST_FIELD}为必需项]"
+                    )
 
             consul_result += "\n" + self.description("resulttableoption 相关信息:")
             consul_rt_option_result, consul_rt_correct_flag = self.judge_option_data(
@@ -225,4 +225,5 @@ class Command(BaseCommand):
             return
 
     def add_arguments(self, parser):
+        parser.add_argument("--bk_tenant_id", type=str, default=DEFAULT_TENANT_ID, help="租户 ID")
         parser.add_argument("--plugin_id", type=str, required=True, help="插件 ID")

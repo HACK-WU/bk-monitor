@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,13 +7,14 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import collections
 import logging
 import random
 import time
 from collections import defaultdict
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
 from django.db.models import Q
 from django.utils.translation import gettext as _
@@ -31,6 +31,7 @@ from bkmonitor.models import QueryConfigModel, StrategyModel
 from bkmonitor.utils.cache import CacheType
 from bkmonitor.utils.common_utils import to_dict
 from bkmonitor.utils.request import get_request_tenant_id
+from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.cmdb import TargetNodeType, TargetObjectType
 from constants.data_source import DataSourceLabel, DataTypeLabel
@@ -136,7 +137,9 @@ class GetObservationSceneStatusList(CacheResource):
     def check_plugin(cls, bk_biz_id: int, plugin_id: str = None, collect_config_id: int = None) -> bool:
         if plugin_id:
             plugin = (
-                CollectorPluginMeta.objects.filter(bk_biz_id__in=[0, bk_biz_id], plugin_id=plugin_id)
+                CollectorPluginMeta.objects.filter(
+                    bk_tenant_id=get_request_tenant_id(), bk_biz_id__in=[0, bk_biz_id], plugin_id=plugin_id
+                )
                 .only("plugin_id", "plugin_type")
                 .first()
             )
@@ -166,7 +169,7 @@ class GetObservationSceneStatusList(CacheResource):
 
         # 日志关键字无数据判断
         if plugin.plugin_type == PluginType.LOG or plugin.plugin_type == PluginType.SNMP_TRAP:
-            event_group_name = "{}_{}".format(plugin.plugin_type, plugin.plugin_id)
+            event_group_name = f"{plugin.plugin_type}_{plugin.plugin_id}"
             group_info = CustomEventGroup.objects.filter(
                 type=EVENT_TYPE.KEYWORDS, bk_biz_id=bk_biz_id, name=event_group_name
             ).first()
@@ -192,12 +195,10 @@ class GetObservationSceneStatusList(CacheResource):
         # 指标无数据判断
         if plugin.plugin_type == PluginType.PROCESS:
             db_name = "process"
-            metric_info = PluginManagerFactory.get_manager(
-                plugin=plugin.plugin_id, plugin_type=plugin.plugin_type
-            ).gen_metric_info()
+            metric_info = PluginManagerFactory.get_manager(plugin=plugin).gen_metric_info()
             metric_json = [table for table in metric_info if table["table_name"] == "perf"]
         else:
-            db_name = "{plugin_type}_{plugin_id}".format(plugin_type=plugin.plugin_type, plugin_id=plugin.plugin_id)
+            db_name = f"{plugin.plugin_type}_{plugin.plugin_id}"
             metric_json = plugin.release_version.info.metric_json
 
         sampling_duration = period * 3  # 计算三个采集周期
@@ -250,7 +251,7 @@ class GetObservationSceneStatusList(CacheResource):
         return (ObservationSceneStatus.NODATA.value, ObservationSceneStatus.SUCCESS.value)[checked]
 
     def collect_scene_view_id__status_map(
-        self, bk_biz_id: int, scene_view_id: str, scene_view_id__status_map: Dict[str, Dict[str, str]]
+        self, bk_biz_id: int, scene_view_id: str, scene_view_id__status_map: dict[str, dict[str, str]]
     ):
         try:
             status: str = self.get_observation_scene_status(bk_biz_id, scene_view_id)
@@ -267,8 +268,8 @@ class GetObservationSceneStatusList(CacheResource):
             scene_view_id__status_map[scene_view_id] = {"status": status}
 
     def perform_request(self, params):
-        scene_view_id__status_map: Dict[str, str] = {}
-        th_list: List[InheritParentThread] = [
+        scene_view_id__status_map: dict[str, str] = {}
+        th_list: list[InheritParentThread] = [
             InheritParentThread(
                 target=self.collect_scene_view_id__status_map,
                 args=(params["bk_biz_id"], scene_view_id, scene_view_id__status_map),
@@ -290,14 +291,14 @@ class GetObservationSceneList(Resource):
 
     @classmethod
     def strategy_count_group_by_table(cls, bk_biz_id: int):
-        strategy_ids: Set[int] = set(StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("id", flat=True))
+        strategy_ids: set[int] = set(StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("id", flat=True))
         query_configs = QueryConfigModel.objects.filter(strategy_id__in=strategy_ids).only("config")
         table_counter = collections.Counter([qc.config.get("result_table_id", "") for qc in query_configs])
         return table_counter
 
     @classmethod
-    def collect_config_count_group_by_biz_plugin(cls, bk_biz_id: int, plugin_ids: List[str]) -> Dict[str, int]:
-        collect_config_metas: List[Dict[str, int]] = (
+    def collect_config_count_group_by_biz_plugin(cls, bk_biz_id: int, plugin_ids: list[str]) -> dict[str, int]:
+        collect_config_metas: list[dict[str, int]] = (
             CollectConfigMeta.objects.filter(bk_biz_id=bk_biz_id, plugin_id__in=plugin_ids)
             .exclude(last_operation=OperationType.STOP)
             .values("bk_biz_id", "plugin_id")
@@ -310,27 +311,27 @@ class GetObservationSceneList(Resource):
         )
 
     @classmethod
-    def get_collect_plugin_list(cls, bk_biz_id: int) -> List[Dict[str, Any]]:
-        plugins: List[CollectorPluginMeta] = (
-            CollectorPluginMeta.objects.filter(bk_biz_id__in=[0, bk_biz_id])
+    def get_collect_plugin_list(cls, bk_biz_id: int) -> list[dict[str, Any]]:
+        bk_tenant_id = bk_biz_id_to_bk_tenant_id(bk_biz_id)
+
+        plugins: list[CollectorPluginMeta] = (
+            CollectorPluginMeta.objects.filter(bk_tenant_id=bk_tenant_id, bk_biz_id__in=[0, bk_biz_id])
             .exclude(plugin_type__in=[PluginType.SNMP_TRAP, PluginType.LOG])
             .only("plugin_id", "label", "plugin_type")
         )
 
-        plugin_ids: List[str] = [plugin.plugin_id for plugin in plugins]
-        table_counter: Dict[str, int] = cls.strategy_count_group_by_table(bk_biz_id)
-        collect_config_counter: Dict[str, int] = cls.collect_config_count_group_by_biz_plugin(bk_biz_id, plugin_ids)
+        plugin_ids: list[str] = [plugin.plugin_id for plugin in plugins]
+        table_counter: dict[str, int] = cls.strategy_count_group_by_table(bk_biz_id)
+        collect_config_counter: dict[str, int] = cls.collect_config_count_group_by_biz_plugin(bk_biz_id, plugin_ids)
 
-        plugin_versions: List[PluginVersionHistory] = (
-            PluginVersionHistory.objects.filter(
-                id__in=CollectorPluginMeta.fetch_id__current_version_id_map(plugin_ids).values()
-            )
+        plugin_versions: list[PluginVersionHistory] = (
+            PluginVersionHistory.objects.filter(bk_tenant_id=bk_tenant_id, plugin_id__in=plugin_ids)
             .select_related("info")
             .only("plugin_id", "info__plugin_display_name")
         )
         plugin_id__current_version_map = {pv.plugin_id: pv for pv in plugin_versions}
 
-        collect_plugin_list: List[Dict[str, Any]] = []
+        collect_plugin_list: list[dict[str, Any]] = []
         for plugin in plugins:
             # 如果存在未停用的采集任务才进行展示
             collect_config_count: int = collect_config_counter.get(f"{bk_biz_id}-{plugin.plugin_id}", 0)
@@ -366,26 +367,26 @@ class GetObservationSceneList(Resource):
                 }
             )
 
-        collect_configs: List[CollectConfigMeta] = list(
+        collect_configs: list[CollectConfigMeta] = list(
             CollectConfigMeta.objects.filter(
                 bk_biz_id=bk_biz_id, collect_type__in=[PluginType.SNMP_TRAP, PluginType.LOG]
-            ).select_related("plugin")
+            )
         )
-        id__event_group_name_map: Dict[int, str] = {}
+        id__event_group_name_map: dict[int, str] = {}
         for collect_config in collect_configs:
             id__event_group_name_map[collect_config.id] = "{}_{}".format(
-                collect_config.plugin.plugin_type, collect_config.plugin.plugin_id
+                collect_config.collect_type, collect_config.plugin_id
             )
 
-        event_group_name__info_map: Dict[str, Dict[str, Any]] = {}
+        event_group_name__info_map: dict[str, dict[str, Any]] = {}
         for event_group_info in CustomEventGroup.objects.filter(
             type=EVENT_TYPE.KEYWORDS, bk_biz_id=bk_biz_id, name__in=id__event_group_name_map.values()
         ).values("name", "table_id"):
             event_group_name__info_map[event_group_info["name"]] = event_group_info
 
         for collect_config in collect_configs:
-            event_group_name: str = "{}_{}".format(collect_config.plugin.plugin_type, collect_config.plugin.plugin_id)
-            group_info: Optional[Dict[str, Any]] = event_group_name__info_map.get(event_group_name)
+            event_group_name: str = f"{collect_config.collect_type}_{collect_config.plugin_id}"
+            group_info: dict[str, Any] | None = event_group_name__info_map.get(event_group_name)
             if not group_info:
                 continue
 
@@ -606,6 +607,7 @@ class GetPluginInfoByResultTable(Resource):
         """
         根据结果表名解析插件场景信息
         """
+        bk_tenant_id = get_request_tenant_id()
         data_label = validated_request_data.get("data_label", "")
         result_table_id = validated_request_data["result_table_id"]
         filter_params = {"bk_biz_id": validated_request_data["bk_biz_id"]}
@@ -616,7 +618,7 @@ class GetPluginInfoByResultTable(Resource):
         # 针对日志等类型的需要通过从DB表获取到table_name
         custom_event = CustomEventGroup.objects.filter(
             Q(bk_biz_id=validated_request_data["bk_biz_id"]) | Q(is_platform=True),
-            bk_tenant_id=get_request_tenant_id(),
+            bk_tenant_id=bk_tenant_id,
             table_id=result_table_id,
         ).first()
         plugin_type = plugin_id = ""
@@ -660,7 +662,7 @@ class GetPluginInfoByResultTable(Resource):
 
             if plugin_id in [PluginType.SNMP_TRAP, PluginType.LOG]:
                 collect_config = CollectConfigMeta.objects.filter(
-                    plugin_id=plugin_id, bk_biz_id=validated_request_data["bk_biz_id"]
+                    bk_tenant_id=bk_tenant_id, plugin_id=plugin_id, bk_biz_id=validated_request_data["bk_biz_id"]
                 ).first()
                 scene_view_id = f"scene_collect_{collect_config.id}"
                 scene_view_name = collect_config.name
@@ -669,7 +671,7 @@ class GetPluginInfoByResultTable(Resource):
                 # 如果没有场景名称， 通过最新发布版本信息来获取
                 scene_view_name = plugin_id
                 plugin_version = PluginVersionHistory.objects.filter(
-                    plugin_id=plugin_id, stage=PluginVersionHistory.Stage.RELEASE
+                    bk_tenant_id=bk_tenant_id, plugin_id=plugin_id, stage=PluginVersionHistory.Stage.RELEASE
                 ).last()
                 if plugin_version:
                     scene_view_name = plugin_version.info.plugin_display_name
@@ -678,7 +680,7 @@ class GetPluginInfoByResultTable(Resource):
                     plugin_id = scene_view_id = ""
                     plugin_type = scene_view_name = ""
         except BaseException as error:
-            logger.warning("decode plugin info by result_table({}) failed, {}".format(result_table_id, str(error)))
+            logger.warning(f"decode plugin info by result_table({result_table_id}) failed, {str(error)}")
 
         return {
             "plugin_id": plugin_id,

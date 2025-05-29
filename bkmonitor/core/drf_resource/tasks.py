@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -9,13 +8,13 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import logging
 from functools import wraps
 
 from celery import shared_task
 from celery.result import AsyncResult
 
+from bkmonitor.utils.tenant import set_local_tenant_id
 from bkmonitor.utils.user import set_local_username
 from core.drf_resource.exceptions import CustomException
 
@@ -23,16 +22,18 @@ logger = logging.getLogger(__name__)
 
 
 @shared_task(bind=True, queue="celery_resource")
-def run_perform_request(self, resource_obj, username, request_data):
+def run_perform_request(self, resource_obj, username: str, bk_tenant_id: str, request_data):
     """
     将resource作为异步任务执行
     :param self: 任务对象
     :param resource_obj: Resource实例
-    :param username: 用户
+    :param request: 请求
     :param request_data: 请求数据
     :return: resource处理后的返回数据
     """
     set_local_username(username)
+    set_local_tenant_id(bk_tenant_id)
+
     resource_obj._task_manager = self
     validated_request_data = resource_obj.validate_request_data(request_data)
     response_data = resource_obj.perform_request(validated_request_data)
@@ -111,11 +112,11 @@ def step(state=None, message=None, data=None):
 
     # 处理不带括号的装饰器用法：@step 等价于 @step()
     if callable(state):
-        real_func = state    # 保存被装饰的原始函数
-        real_state = None    # 重置状态标识为默认值
+        real_func = state  # 保存被装饰的原始函数
+        real_state = None  # 重置状态标识为默认值
     else:
         real_func = None
-        real_state = state   # 显式指定的状态标识
+        real_state = state  # 显式指定的状态标识
 
     def decorate(func):
         """实际装饰器实现，负责包装原始函数"""
@@ -125,10 +126,10 @@ def step(state=None, message=None, data=None):
             """包装器函数，实现状态更新逻辑"""
             # 自动生成步骤标识：优先使用显式state，其次用函数名的大写形式
             _state = real_state or func.__name__.upper()
-            
+
             # 在调用目标函数前更新任务状态
             self.update_state(state=_state, message=message, data=data)
-            
+
             # 执行原始函数并返回结果
             return func(self, *args, **kwargs)
 
@@ -137,4 +138,4 @@ def step(state=None, message=None, data=None):
     # 处理两种装饰器调用方式的统一返回
     if real_func:
         return decorate(real_func)  # 处理不带参数调用的装饰器
-    return decorate                 # 处理带参数调用的装饰器
+    return decorate  # 处理带参数调用的装饰器

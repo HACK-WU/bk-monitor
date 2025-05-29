@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -20,7 +19,6 @@ import tarfile
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict
 from uuid import uuid4
 
 from django.conf import settings
@@ -31,7 +29,7 @@ from rest_framework.exceptions import ValidationError
 
 from bk_dataview.api import get_or_create_org
 from bkmonitor.models import ItemModel, QueryConfigModel, StrategyModel
-from bkmonitor.utils.request import get_request
+from bkmonitor.utils.request import get_request, get_request_tenant_id
 from bkmonitor.utils.text import convert_filename
 from bkmonitor.utils.time_tools import now
 from bkmonitor.utils.user import get_local_username
@@ -83,7 +81,7 @@ class GetAllConfigListResource(Resource):
     """
 
     def __init__(self):
-        super(GetAllConfigListResource, self).__init__()
+        super().__init__()
         self.node_manager = None
         self.collect_config_list = None
         self.strategy_config_list = None
@@ -270,7 +268,7 @@ class ExportPackageResource(Resource):
     """
 
     def __init__(self):
-        super(ExportPackageResource, self).__init__()
+        super().__init__()
         self.collect_config_ids = []
         self.strategy_config_ids = []
         self.view_config_ids = []
@@ -286,7 +284,7 @@ class ExportPackageResource(Resource):
         self.RequestSerializer = ExportPackageRequestSerializer
 
     def perform_request(self, validated_request_data):
-        self.bk_biz_id = validated_request_data.get("bk_biz_id")
+        self.bk_biz_id = validated_request_data["bk_biz_id"]
         self.package_name = "bk_monitor_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
         self.package_path = os.path.join(self.tmp_path, self.package_name)
         self.collect_config_ids = validated_request_data.get("collect_config_ids", [])
@@ -353,7 +351,10 @@ class ExportPackageResource(Resource):
 
         all_collect_ids = list(set(self.collect_config_ids + self.associated_collect_config_list))
         self.associated_plugin_list = list(
-            {config.plugin_id for config in CollectConfigMeta.objects.filter(id__in=all_collect_ids)}
+            {
+                config.plugin_id
+                for config in CollectConfigMeta.objects.filter(bk_biz_id=self.bk_biz_id, id__in=all_collect_ids)
+            }
         )
         associated_plugin = len(self.associated_plugin_list)
         return {
@@ -371,10 +372,10 @@ class ExportPackageResource(Resource):
             return
 
         os.makedirs(os.path.join(self.package_path, "collect_config_directory"))
-        for collect_config_id in all_collect_config_ids:
-            collect_config_meta = CollectConfigMeta.objects.select_related("deployment_config").get(
-                id=collect_config_id
-            )
+        collect_configs = CollectConfigMeta.objects.select_related("deployment_config").filter(
+            bk_biz_id=self.bk_biz_id, id__in=all_collect_config_ids
+        )
+        for collect_config_meta in collect_configs:
             collect_config_detail = {
                 "id": collect_config_meta.id,
                 "name": collect_config_meta.name,
@@ -395,7 +396,7 @@ class ExportPackageResource(Resource):
                 os.path.join(
                     self.package_path,
                     "collect_config_directory",
-                    "{}_{}.json".format(convert_filename(collect_config_file_name), collect_config_id),
+                    f"{convert_filename(collect_config_file_name)}_{collect_config_meta.id}.json",
                 ),
                 "w",
             ) as fs:
@@ -409,7 +410,7 @@ class ExportPackageResource(Resource):
             os.path.join(
                 self.package_path,
                 "csv_files",
-                "{}.csv".format(uuid.uuid4()),
+                f"{uuid.uuid4()}.csv",
             ),
             "w",
             encoding="utf-8-sig",
@@ -422,12 +423,14 @@ class ExportPackageResource(Resource):
     def make_plugin_file(self):
         if not self.associated_plugin_list:
             return
-
+        bk_tenant_id = get_request_tenant_id()
         plugin_file_path = os.path.join(self.package_path, "plugin_directory")
         os.makedirs(plugin_file_path)
         for plugin_id in self.associated_plugin_list:
-            plugin = CollectorPluginMeta.objects.filter(plugin_id=plugin_id).first()
-            plugin_manager = PluginManagerFactory.get_manager(plugin=plugin, tmp_path=plugin_file_path)
+            plugin = CollectorPluginMeta.objects.filter(bk_tenant_id=bk_tenant_id, plugin_id=plugin_id).first()
+            plugin_manager = PluginManagerFactory.get_manager(
+                bk_tenant_id=bk_tenant_id, plugin=plugin, tmp_path=plugin_file_path
+            )
             plugin_manager.version = plugin.current_version
             plugin_manager.make_package(need_tar=False)
 
@@ -449,7 +452,7 @@ class ExportPackageResource(Resource):
                 os.path.join(
                     self.package_path,
                     "view_config_directory",
-                    "{}_{}.json".format(convert_filename(view_config_file_name), uid),
+                    f"{convert_filename(view_config_file_name)}_{uid}.json",
                 ),
                 "w",
             ) as fs:
@@ -472,7 +475,7 @@ class ExportPackageResource(Resource):
                 os.path.join(
                     self.package_path,
                     "strategy_config_directory",
-                    "{}_{}.json".format(convert_filename(strategy_config_file_name), strategy_id),
+                    f"{convert_filename(strategy_config_file_name)}_{strategy_id}.json",
                 ),
                 "w",
             ) as fs:
@@ -605,7 +608,9 @@ class HistoryDetailResource(Resource):
             if config["type"] == ConfigType.STRATEGY and config["import_status"] == ImportDetailStatus.SUCCESS
         ]
 
-        collect_instances = CollectConfigMeta.objects.filter(id__in=collect_ids).select_related("deployment_config")
+        collect_instances = CollectConfigMeta.objects.filter(bk_biz_id=bk_biz_id, id__in=collect_ids).select_related(
+            "deployment_config"
+        )
         strategy_instances = StrategyModel.objects.filter(id__in=strategy_ids)
         item_instances = ItemModel.objects.filter(strategy_id__in=strategy_ids)
         strategy_to_items = {}
@@ -659,7 +664,7 @@ class UploadPackageResource(Resource):
     """
 
     def __init__(self):
-        super(UploadPackageResource, self).__init__()
+        super().__init__()
         self.file_manager = None
         self.file_id = None
         uuid_str = str(uuid4())
@@ -686,8 +691,10 @@ class UploadPackageResource(Resource):
             t = tarfile.open(fileobj=file_instance.file_data.file)
             t.extractall(path=self.parse_path)
         except Exception as e:
-            logger.exception("压缩包解压失败: {}".format(e))
-            raise UploadPackageError({"msg": _("导入文件格式不正确，需要是.tar.gz/.tgz/.tar.bz2/.tbz2等后缀(gzip或bzip2压缩)")})
+            logger.exception(f"压缩包解压失败: {e}")
+            raise UploadPackageError(
+                {"msg": _("导入文件格式不正确，需要是.tar.gz/.tgz/.tar.bz2/.tbz2等后缀(gzip或bzip2压缩)")}
+            )
         finally:
             if t is not None:
                 t.close()
@@ -886,7 +893,7 @@ class ImportConfigResource(Resource):
     """
 
     def __init__(self):
-        super(ImportConfigResource, self).__init__()
+        super().__init__()
         self.uuid_list = []
         self.import_history_instance = None
 
@@ -996,9 +1003,7 @@ class ImportConfigResource(Resource):
 
         # 审计事件上报
         try:
-            event_content = (
-                f"导入{len(collect_config_list)}条采集配置, {len(strategy_config_list)}个策略配置, {len(view_config_list)}个仪表盘"
-            )
+            event_content = f"导入{len(collect_config_list)}条采集配置, {len(strategy_config_list)}个策略配置, {len(view_config_list)}个仪表盘"
             send_frontend_report_event(self, bk_biz_id, username, event_content)
         except Exception as e:
             logger.exception(f"send frontend report event error: {e}")
@@ -1068,7 +1073,7 @@ class AddMonitorTargetResource(Resource):
         # 添加采集配置目标
         target_node_type = taget_node_type_map.get(target_field, TargetNodeType.TOPO)
         params_list = []
-        for instance in CollectConfigMeta.objects.filter(id__in=collect_config_ids):
+        for instance in CollectConfigMeta.objects.filter(id__in=collect_config_ids, bk_biz_id=bk_biz_id):
             params = {
                 "bk_biz_id": bk_biz_id,
                 "id": instance.id,
@@ -1246,7 +1251,7 @@ class ExportConfigToBusinessResource(Resource):
             )
             self.parse_objs.append(parse_obj)
 
-    def create_folder(self, view_config: Dict, org_id: int):
+    def create_folder(self, view_config: dict, org_id: int):
         """创建仪表盘目录"""
         dashboard = view_config.get("dashboard")
 
@@ -1281,7 +1286,7 @@ class ExportConfigToBusinessResource(Resource):
             self.existed_folders.add(folder_title)
             self.existed_folders_info[folder_title] = dashboard["folderId"]
 
-    def change_name_and_biz_id(self, config: Dict):
+    def change_name_and_biz_id(self, config: dict):
         """修改名称和业务ID"""
 
         def change(d):

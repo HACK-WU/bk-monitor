@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,14 +7,16 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
+
+from constants.common import DEFAULT_TENANT_ID
+from metadata.models import DataSource
 from monitor_web.commons.data_access import PluginDataAccessor
 from monitor_web.models import CollectorPluginMeta
-
-from metadata.models import DataSource
 
 logger = logging.getLogger("metadata")
 
@@ -27,9 +28,11 @@ class Command(BaseCommand):
             return
         plugin_id = options["plugin_id"]
         bk_biz_id = options["bk_biz_id"]
+        bk_tenant_id = options["bk_tenant_id"]
+
         # 获取 plugin 信息
         try:
-            plugin = CollectorPluginMeta.objects.get(plugin_id=plugin_id)
+            plugin = CollectorPluginMeta.objects.get(plugin_id=plugin_id, bk_tenant_id=bk_tenant_id)
         except CollectorPluginMeta.DoesNotExist:
             self.stdout.write(f"can not find plugin, plugin_id:{plugin_id}")
             return
@@ -48,3 +51,4 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--plugin_id", type=str, required=True, help="插件 ID")
         parser.add_argument("--bk_biz_id", type=int, required=True, help="业务 ID")
+        parser.add_argument("--bk_tenant_id", type=str, default=DEFAULT_TENANT_ID, help="租户 ID")

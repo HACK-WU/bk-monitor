@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -20,7 +19,7 @@ import stat
 import tarfile
 import time
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from uuid import uuid4
 
 import yaml
@@ -80,11 +79,13 @@ class BasePluginManager:
         self.plugin = plugin
         self.operator = operator
         self.tmp_path = tmp_path
-        self.version: Optional[PluginVersionHistory] = PluginVersionHistory.objects.filter(
-            plugin_id=self.plugin.plugin_id
+        self.version: PluginVersionHistory | None = PluginVersionHistory.objects.filter(
+            bk_tenant_id=self.plugin.bk_tenant_id, plugin_id=self.plugin.plugin_id
         ).last()
 
-    def _update_version_params(self, data, version, current_version, stag=None):
+    def _update_version_params(
+        self, data, version: PluginVersionHistory, current_version: PluginVersionHistory, stag=None
+    ):
         """
         更新插件版本参数
         """
@@ -97,7 +98,9 @@ class BasePluginManager:
         # 如果是官方插件，且当前版本不是官方版本，则删除当前版本的所有历史版本
         if version.is_official:
             if not current_version.is_official:
-                PluginVersionHistory.origin_objects.filter(plugin=version.plugin).delete()
+                PluginVersionHistory.origin_objects.filter(
+                    bk_tenant_id=version.bk_tenant_id, plugin_id=version.plugin_id
+                ).delete()
             version.config_version = data.get("config_version", 1)
             version.info_version = data.get("info_version", 1)
 
@@ -106,7 +109,7 @@ class BasePluginManager:
         version.save()
 
     @classmethod
-    def _update_config(cls, update_config_data: Dict[str, Any], version: PluginVersionHistory):
+    def _update_config(cls, update_config_data: dict[str, Any], version: PluginVersionHistory):
         """
         更新插件config字段
         """
@@ -149,7 +152,7 @@ class BasePluginManager:
         version.stage = "unregister"
         return version
 
-    def validate_config_info(self, collector_info: Dict[str, Any], config_info: List[Dict[str, Any]]) -> None:
+    def validate_config_info(self, collector_info: dict[str, Any], config_info: list[dict[str, Any]]) -> None:
         """
         配置检查
         """
@@ -166,10 +169,10 @@ class BasePluginManager:
         self,
         config_version: int,
         info_version: int,
-        param: Dict[str, Any],
-        host_info: Dict[str, Any],
+        param: dict[str, Any],
+        host_info: dict[str, Any],
         target_nodes=None,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         开始插件调试
         """
@@ -179,7 +182,7 @@ class BasePluginManager:
         停止插件调试
         """
 
-    def query_debug(self, task_id: str) -> Dict[str, Any]:
+    def query_debug(self, task_id: str) -> dict[str, Any]:
         """
         获取调试信息
         """
@@ -206,11 +209,11 @@ class BasePluginManager:
                 "{}_{}.{}".format(self.plugin.plugin_type.lower(), self.plugin.plugin_id, metric_msg["table_name"])
                 for metric_msg in current_version.info.metric_json
             ]
-            append_metric_list_cache.delay(result_table_id_list)
+            append_metric_list_cache.delay(self.plugin.bk_tenant_id, result_table_id_list)
         except Exception as err:
-            logger.error("[update_plugin_metric_cache] error, msg is {}".format(err))
+            logger.error(f"[update_plugin_metric_cache] error, msg is {err}")
 
-    def update_metric(self, data: Dict[str, Any]) -> Tuple[int, int, bool, bool]:
+    def update_metric(self, data: dict[str, Any]) -> tuple[int, int, bool, bool]:
         """
         更新插件指标维度信息
 
@@ -244,7 +247,7 @@ class BasePluginManager:
 
         # 计算新旧指标的MD5哈希用于变更检测
         current_metric_md5, new_metric_md5 = list(map(count_md5, [current_info_obj.metric_json, metric_json]))
-        
+
         # 初始化变更标志
         need_make_package = False
         is_changed = False
@@ -275,7 +278,9 @@ class BasePluginManager:
             new_collector_json = self._get_new_collector_json(current_collector_json, diff_value)
 
             # 检测采集器配置变更
-            current_collector_md5, new_collector_md5 = list(map(count_md5, [current_collector_json, new_collector_json]))
+            current_collector_md5, new_collector_md5 = list(
+                map(count_md5, [current_collector_json, new_collector_json])
+            )
             if current_collector_md5 != new_collector_md5:
                 current_config_version += 1
                 need_make_package = True
@@ -304,14 +309,12 @@ class BasePluginManager:
 
         return current_config_version, current_info_version, is_changed, need_make_package
 
-
-
     @abc.abstractmethod
     def release(
         self,
         config_version: int,
         info_version: int,
-        token: List[str] = None,
+        token: list[str] = None,
         debug: bool = True,
     ) -> PluginVersionHistory:
         """
@@ -322,7 +325,7 @@ class BasePluginManager:
         :param debug: 是否为调试模式
         """
 
-    def create_version(self, data) -> Tuple[PluginVersionHistory, bool]:
+    def create_version(self, data) -> tuple[PluginVersionHistory, bool]:
         version = self.plugin.generate_version(data["config_version"], data["info_version"])
         version.version_log = data.get("version_log", "")
         version.save()
@@ -432,10 +435,10 @@ class BasePluginManager:
     @abc.abstractmethod
     def make_package(
         self,
-        add_files: Dict[str, List[Dict[str, str]]] = None,
-        add_dirs: Dict[str, List[Dict[str, str]]] = None,
+        add_files: dict[str, list[dict[str, str]]] = None,
+        add_dirs: dict[str, list[dict[str, str]]] = None,
         need_tar: bool = True,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         制作插件包，在tmp_path下制作插件包
         :param add_files: 是否有额外文件
@@ -484,7 +487,7 @@ class PluginManager(BasePluginManager):
         """
         :param plugin: CollectorPluginMeta Instance
         """
-        super(PluginManager, self).__init__(plugin, operator, tmp_path)
+        super().__init__(plugin, operator, tmp_path)
 
         self.tmp_path: str = os.path.join(settings.MEDIA_ROOT, "plugin", str(uuid4())) if not tmp_path else tmp_path
         self.filename_list = []
@@ -514,7 +517,7 @@ class PluginManager(BasePluginManager):
         debug_version = self.plugin.get_debug_version(config_version)
         param = {
             "plugin_name": self.plugin.plugin_id,
-            "version": "{}.{}".format(debug_version.config_version, debug_version.info_version),
+            "version": f"{debug_version.config_version}.{debug_version.info_version}",
             "config_ids": config_ids,
             "host_info": host,
         }
@@ -588,7 +591,7 @@ class PluginManager(BasePluginManager):
                 dimension_name.add(dimension["dimension_name"])
         intersection = set(metric_name) & set(dimension_name)
         if metric_name & dimension_name:
-            raise PluginError({"msg": gettext("指标维度存在重名,{}".format(intersection))})
+            raise PluginError({"msg": gettext(f"指标维度存在重名,{intersection}")})
 
     @staticmethod
     def _get_error_message(message):
@@ -699,7 +702,7 @@ class PluginManager(BasePluginManager):
         """
         param = {
             "plugin_name": self.plugin.plugin_id,
-            "plugin_version": "{}_{}".format(config_version, info_version),
+            "plugin_version": f"{config_version}_{info_version}",
             "name": name,
             "version": config_version,
         }
@@ -762,7 +765,7 @@ class PluginManager(BasePluginManager):
         try:
             with open(filename, "rb") as f:
                 file_content = f.read()
-        except IOError:
+        except OSError:
             raise PluginParseError({"msg": gettext("%s文件读取失败") % filename})
 
         try:
@@ -831,7 +834,7 @@ class PluginManager(BasePluginManager):
             config_version = int(version_split[0])
             info_version = int(version_split[1])
         except Exception as e:
-            logger.exception("[ImportPlugin] {} - parse version error: {}".format(self.plugin.plugin_id, e))
+            logger.exception(f"[ImportPlugin] {self.plugin.plugin_id} - parse version error: {e}")
             config_version = info_version = 1
 
         self.version.config_version = config_version
@@ -845,9 +848,7 @@ class PluginManager(BasePluginManager):
             if serializer.is_valid():
                 self.version.info.metric_json = serializer.validated_data
             else:
-                logger.warning(
-                    "[ImportPlugin] {} - metric_json invalid: {}".format(self.plugin.plugin_id, serializer.errors)
-                )
+                logger.warning(f"[ImportPlugin] {self.plugin.plugin_id} - metric_json invalid: {serializer.errors}")
                 self.version.info.metric_json = []
         except (ValueError, TypeError):
             self.version.info.metric_json = []
@@ -864,7 +865,7 @@ class PluginManager(BasePluginManager):
         try:
             self.version.signature = Signature().load_from_yaml(plugin_params.get("signature.yaml")).dumps2python()
         except Exception as e:
-            logger.exception("[ImportPlugin] {} - signature error: {}".format(self.plugin.plugin_id, e))
+            logger.exception(f"[ImportPlugin] {self.plugin.plugin_id} - signature error: {e}")
             self.version.signature = ""
 
         # load version_log
@@ -926,7 +927,9 @@ class PluginManager(BasePluginManager):
         """
         config = CollectorPluginConfig()
         info = CollectorPluginInfo()
-        self.version = PluginVersionHistory(plugin=self.plugin, config=config, info=info)
+        self.version = PluginVersionHistory(
+            bk_tenant_id=self.plugin.bk_tenant_id, plugin_id=self.plugin.plugin_id, config=config, info=info
+        )
         self._parse_info_path()
         self.version.update_diff_fields()
 
@@ -967,7 +970,7 @@ class PluginManager(BasePluginManager):
             api.node_man.release_plugin(
                 {
                     "name": self.plugin.plugin_id,
-                    "version": "{}.{}".format(release_version.config_version, release_version.info_version),
+                    "version": f"{release_version.config_version}.{release_version.info_version}",
                     "md5_list": token,
                 }
             )
@@ -981,7 +984,7 @@ class PluginManager(BasePluginManager):
                 current_version.save()
         except Exception as err:
             # 异常处理：记录日志、回滚版本状态并抛出异常
-            logger.error("[plugin] release plugin {} error, msg is {}".format(self.plugin.plugin_id, str(err)))
+            logger.error(f"[plugin] release plugin {self.plugin.plugin_id} error, msg is {str(err)}")
             self.plugin.rollback_version_status(config_version)
             raise err
         return current_version
@@ -1037,7 +1040,7 @@ class PluginManager(BasePluginManager):
 
                     try:
                         # 渲染模板文件
-                        with open(old_path, "r", encoding="utf-8") as template_file:
+                        with open(old_path, encoding="utf-8") as template_file:
                             content = template_file.read()
                         template = engines["django"].from_string(content)
                         content = template.render(context)

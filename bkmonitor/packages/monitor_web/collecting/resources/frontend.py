@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from functools import partial
 
 from django.utils.translation import gettext as _
@@ -253,11 +253,14 @@ class DeploymentConfigDiffResource(Resource):
     """
 
     class RequestSerializer(serializers.Serializer):
+        bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
         id = serializers.IntegerField(required=True, label="采集配置id")
 
     def perform_request(self, validated_request_data):
         try:
-            collect_config = CollectConfigMeta.objects.get(id=validated_request_data["id"])
+            collect_config = CollectConfigMeta.objects.get(
+                bk_biz_id=validated_request_data["bk_biz_id"], id=validated_request_data["id"]
+            )
         except CollectConfigMeta.DoesNotExist:
             raise CollectConfigNotExist({"msg": validated_request_data["id"]})
 

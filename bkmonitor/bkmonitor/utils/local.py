@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -34,15 +33,12 @@ from contextlib import contextmanager
 try:
     from greenlet import getcurrent as get_ident
 except ImportError:
-    try:
-        from six.moves._thread import get_ident
-    except ImportError:
-        from _thread import get_ident
+    from _thread import get_ident
 
 __all__ = ["local", "Local", "get_ident"]
 
 
-class Localbase(object):
+class Localbase:
     __slots__ = ("__storage__", "__ident_func__")
 
     def __new__(cls, *args, **kwargs):
@@ -57,6 +53,7 @@ class Local(Localbase):
     内部封装了一个嵌套字典：{ ident: {key: value, ...}, ... }
     ident是线程的标识符，key-value就是当前线程中保存的数据
     """
+
     # 定义迭代器方法，返回当前线程/进程的存储项的迭代器
     def __iter__(self):
         ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
@@ -80,7 +77,9 @@ class Local(Localbase):
     # 定义设置属性的方法
     def __setattr__(self, name, value):
         if name in ("__storage__", "__ident_func__"):
-            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))  # 如果设置的属性是只读的，则抛出AttributeError异常
+            raise AttributeError(
+                f"{self.__class__.__name__!r} object attribute '{name}' is read-only"
+            )  # 如果设置的属性是只读的，则抛出AttributeError异常
 
         ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         storage = self.__storage__
@@ -91,7 +90,9 @@ class Local(Localbase):
     # 定义删除属性的方法
     def __delattr__(self, name):
         if name in ("__storage__", "__ident_func__"):
-            raise AttributeError("{!r} object attribute '{}' is read-only".format(self.__class__.__name__, name))  # 如果删除的属性是只读的，则抛出AttributeError异常
+            raise AttributeError(
+                f"{self.__class__.__name__!r} object attribute '{name}' is read-only"
+            )  # 如果删除的属性是只读的，则抛出AttributeError异常
 
         ident = self.__ident_func__()  # 获取当前线程/进程的唯一标识符
         try:
@@ -107,7 +108,6 @@ class Local(Localbase):
 
 
 local = Local()  # 创建Local类的实例
-
 
 
 @contextmanager

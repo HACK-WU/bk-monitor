@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -14,7 +13,6 @@ import os
 import subprocess
 import traceback
 from functools import reduce
-from typing import Tuple
 
 from django.conf import settings
 from django.db import models, transaction
@@ -23,6 +21,7 @@ from django.utils.translation import gettext as _
 
 from bkmonitor.commons.tools import is_ipv6_biz
 from bkmonitor.utils.db.fields import ConfigDataField, JsonField, SymmetricJsonField
+from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id
 from common.log import logger
 from constants.common import DEFAULT_TENANT_ID
 from core.drf_resource import api, resource
@@ -152,7 +151,7 @@ class UptimeCheckNode(OperateRecordModel):
         # 数据验证
         self.validate_data(update)
 
-        super(UptimeCheckNode, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     def delete(self, force=False, *args, **kwargs):
         """
@@ -163,8 +162,10 @@ class UptimeCheckNode(OperateRecordModel):
             tasks = self.tasks.all()
             task_name = ";".join([task.name for task in tasks if (task.status == task.Status.RUNNING)])
             if len(self.tasks.all()) != 0:
-                raise CustomException(_("该节点存在以下运行中的拨测任务：%s，" + _("请先暂停或删除相关联的任务")) % task_name)
-        super(UptimeCheckNode, self).delete(*args, **kwargs)
+                raise CustomException(
+                    _("该节点存在以下运行中的拨测任务：%s，" + _("请先暂停或删除相关联的任务")) % task_name
+                )
+        super().delete(*args, **kwargs)
 
     def validate_data(self, update):
         """
@@ -179,7 +180,9 @@ class UptimeCheckNode(OperateRecordModel):
                 host = api.cmdb.get_host_by_ip(ips=[{"ip": self.ip}], bk_biz_id=self.bk_biz_id)
             if host:
                 if not host[0].bk_host_id:
-                    raise CustomException(_("保存拨测节点失败，主机%(ip)s存在，但无bk_host_id信息".format(**{"ip": self.ip})))
+                    raise CustomException(
+                        _("保存拨测节点失败，主机%(ip)s存在，但无bk_host_id信息".format(**{"ip": self.ip}))
+                    )
                 validate_dict = {"bk_host_id": host[0].bk_host_id}
                 # 如果有 ip 数据，则添加到筛选
                 if host[0].bk_host_innerip:
@@ -255,7 +258,7 @@ class UptimeCheckTaskSubscription(OperateRecordModel):
 
 
 class UptimeCheckTask(OperateRecordModel):
-    class Protocol(object):
+    class Protocol:
         TCP = UptimeCheckProtocol.TCP
         UDP = UptimeCheckProtocol.UDP
         HTTP = UptimeCheckProtocol.HTTP
@@ -268,7 +271,7 @@ class UptimeCheckTask(OperateRecordModel):
         (Protocol.ICMP, "ICMP"),
     )
 
-    class Status(object):
+    class Status:
         NEW_DRAFT = "new_draft"
         RUNNING = "running"
         STOPED = "stoped"
@@ -303,7 +306,7 @@ class UptimeCheckTask(OperateRecordModel):
 
     @property
     def full_table_name(self):
-        return "{}_{}_{}".format(self.bk_biz_id, UPTIME_CHECK_DB, self.protocol.lower())
+        return f"{self.bk_biz_id}_{UPTIME_CHECK_DB}_{self.protocol.lower()}"
 
     def delete(self, *args, **kwargs):
         """
@@ -320,7 +323,7 @@ class UptimeCheckTask(OperateRecordModel):
             self.delete_subscription()
 
         pk = self.pk
-        super(UptimeCheckTask, self).delete(*args, **kwargs)
+        super().delete(*args, **kwargs)
 
         # 在对应的分组中，将此任务剔除
         with transaction.atomic():
@@ -337,7 +340,7 @@ class UptimeCheckTask(OperateRecordModel):
         """
         return "_".join([str(self.bk_biz_id), str(self.pk), "uptimecheckbeat.yml"])
 
-    def get_data_id(self) -> Tuple[bool, str]:
+    def get_data_id(self) -> tuple[bool, str]:
         """
         获取或创建数据ID
         """
@@ -371,7 +374,10 @@ class UptimeCheckTask(OperateRecordModel):
                 params["subscription_id"] = subscription_item[0].subscription_id
                 params["run_immediately"] = True
                 result = api.node_man.update_subscription(params)
-                logger.info(_("订阅任务已更新，订阅ID:%d,任务ID:%d") % (result.get("subscription_id", 0), result.get("task_id", 0)))
+                logger.info(
+                    _("订阅任务已更新，订阅ID:%d,任务ID:%d")
+                    % (result.get("subscription_id", 0), result.get("task_id", 0))
+                )
                 result_list.append(result)
             else:
                 # 否则说明要新增订阅
@@ -530,7 +536,7 @@ class UptimeCheckTask(OperateRecordModel):
                 "params": {
                     "context": {
                         "data_id": data_id,
-                        "max_timeout": "{}ms".format(timeout),
+                        "max_timeout": f"{timeout}ms",
                         "custom_report": "true" if use_custom_report else "false",
                         "send_interval": self.config.get("send_interval"),
                         "tasks": tasks,
@@ -539,8 +545,8 @@ class UptimeCheckTask(OperateRecordModel):
                         "task_id": pk,
                         "bk_biz_id": self.bk_biz_id,
                         "period": "{}s".format(self.config["period"]),
-                        "available_duration": "{}ms".format(available_duration),
-                        "timeout": "{}ms".format(timeout),
+                        "available_duration": f"{available_duration}ms",
+                        "timeout": f"{timeout}ms",
                         "target_port": self.config.get("port"),
                         "response": response_with_prefix,
                         "request": request_with_prefix,
@@ -657,8 +663,8 @@ class UptimeCheckTask(OperateRecordModel):
             )
 
         # 将新拨测任务追加进缓存表中
-        result_table_id_list = ["uptimecheck.{}".format(self.protocol.lower())]
-        append_metric_list_cache.delay(result_table_id_list)
+        result_table_id_list = [f"uptimecheck.{self.protocol.lower()}"]
+        append_metric_list_cache.delay(bk_biz_id_to_bk_tenant_id(self.bk_biz_id), result_table_id_list)
 
         return "success"
 

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -15,7 +14,7 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 
 from bkm_space.validate import validate_bk_biz_id
-from bkmonitor.utils.request import get_request
+from bkmonitor.utils.request import get_request, get_request_tenant_id
 from bkmonitor.utils.serializers import (
     MetricJsonBaseSerializer,
     MetricJsonSerializer,
@@ -107,7 +106,7 @@ class CollectorMetaSerializer(serializers.ModelSerializer, CollectorPluginMixin)
         create_data = {
             key: validated_data.get(key) for key in self.COLLECTOR_PLUGIN_META_FIELDS if validated_data.get(key)
         }
-        plugin = CollectorPluginMeta.objects.create(**create_data)
+        plugin = CollectorPluginMeta.objects.create(bk_tenant_id=get_request_tenant_id(), **create_data)
         return plugin
 
     def update(self, instance, validated_data):

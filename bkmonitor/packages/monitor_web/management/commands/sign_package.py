@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -9,7 +8,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import os
 import shutil
 import tarfile
@@ -19,6 +17,7 @@ import yaml
 from django.core.management import BaseCommand
 from django.utils.translation import gettext as _
 
+from constants.common import DEFAULT_TENANT_ID
 from core.errors.plugin import PluginParseError
 from monitor_web.models.plugin import CollectorPluginMeta
 from monitor_web.plugin.constant import OS_TYPE_TO_DIRNAME
@@ -33,7 +32,8 @@ class Command(BaseCommand):
     """
 
     def add_arguments(self, parser):
-        super(Command, self).add_arguments(parser)
+        super().add_arguments(parser)
+        parser.add_argument("--bk_tenant_id", dest="bk_tenant_id", default=DEFAULT_TENANT_ID, help="bk_tenant_id")
         parser.add_argument("src_path", type=str, help="the source package path")
         parser.add_argument("--dest", dest="dest_path", default=".", help="package dest path")
         parser.add_argument("--protocols", dest="protocols", default="strict,default", help="make an official package?")
@@ -43,6 +43,7 @@ class Command(BaseCommand):
         src_path = kwargs["src_path"]
         dest_path = kwargs["dest_path"]
         protocols = kwargs["protocols"].split(",")
+        bk_tenant_id = kwargs["bk_tenant_id"]
 
         if not kwargs["ver"]:
             config_version, info_version = None, None
@@ -57,7 +58,7 @@ class Command(BaseCommand):
         print("1/4 unzip package")
         with open(src_path, "rb") as tar_obj:
             with tarfile.open(fileobj=tar_obj, mode="r:gz") as tar:
-                print("Package unzip in tmp path: {}".format(tmp_dir))
+                print(f"Package unzip in tmp path: {tmp_dir}")
                 tar.extractall(tmp_dir)
                 filename_list = tar.getnames()
 
@@ -79,7 +80,7 @@ class Command(BaseCommand):
         try:
             with open(meta_yaml_path) as f:
                 meta_content = f.read()
-        except IOError:
+        except OSError:
             raise PluginParseError({"msg": _("meta.yaml不存在，无法解析")})
 
         meta_dict = yaml.load(meta_content, Loader=yaml.FullLoader)
@@ -92,11 +93,13 @@ class Command(BaseCommand):
         else:
             raise PluginParseError({"msg": _("无法解析插件类型")})
 
-        print("Parse success. Plugin ID: {}, Plugin Type: {}".format(plugin_id, plugin_type))
+        print(f"Parse success. Plugin ID: {plugin_id}, Plugin Type: {plugin_type}")
 
         print("3/4 sign package")
         # 3. 根据插件包构造 db 条目，并执行签名
-        import_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=plugin_type, tmp_path=tmp_dir)
+        import_manager = PluginManagerFactory.get_manager(
+            bk_tenant_id=bk_tenant_id, plugin=plugin_id, plugin_type=plugin_type, tmp_path=tmp_dir
+        )
         tmp_version = import_manager.get_tmp_version(config_version=config_version, info_version=info_version)
 
         sig_manager = load_plugin_signature_manager(tmp_version)
@@ -112,6 +115,6 @@ class Command(BaseCommand):
         package_path = os.path.join(import_manager.tmp_path, plugin_id + ".tgz")
         dest = os.path.join(dest_path, "%s-official.tgz" % tmp_version)
         shutil.copyfile(package_path, dest)
-        print("Package is saved in {}".format(dest))
+        print(f"Package is saved in {dest}")
         shutil.rmtree(import_manager.tmp_path)
         print("done!")

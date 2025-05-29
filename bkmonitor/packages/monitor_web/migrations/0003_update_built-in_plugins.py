@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -9,11 +8,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 from django.db import migrations
-
-from monitor_web.migrations.plugin_data.update_plugin_data import update_plugin_data
-from monitor_web.migrations.plugin_data.update_signature import signature2db
 
 
 class Migration(migrations.Migration):
@@ -21,7 +16,4 @@ class Migration(migrations.Migration):
         ("monitor_web", "0002_create_operatesysterm"),
     ]
 
-    operations = [
-        # migrations.RunPython(update_plugin_data),
-        # migrations.RunPython(signature2db),
-    ]
+    operations = []

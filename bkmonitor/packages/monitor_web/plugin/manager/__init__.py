@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -15,7 +14,6 @@ specific language governing permissions and limitations under the License.
 
 
 import os
-from typing import Union
 
 from django.utils.translation import gettext as _
 
@@ -66,10 +64,17 @@ FILE_PLUGINS_FACTORY = {
     CollectorPluginMeta.PluginType.SNMP: PluginFileManager,
 }
 
-class PluginManagerFactory(object):
+
+class PluginManagerFactory:
     @classmethod
-    def get_manager(cls, plugin: Union[int,str, CollectorPluginMeta] = None, plugin_type: str = None, operator="",
-                    tmp_path=None) -> PluginManager:
+    def get_manager(
+        cls,
+        bk_tenant_id=None,
+        plugin: int | str | CollectorPluginMeta = None,
+        plugin_type: str = None,
+        operator="",
+        tmp_path=None,
+    ) -> PluginManager:
         """
         根据插件标识或元数据获取对应类型的插件管理对象
 
@@ -89,15 +94,18 @@ class PluginManagerFactory(object):
         """
         # 检查临时路径是否存在，若提供且不存在则抛出异常
         if tmp_path and not os.path.exists(tmp_path):
-            raise IOError(_("文件夹不存在：%s") % tmp_path)
+            raise OSError(_("文件夹不存在：%s") % tmp_path)
 
         # 处理插件元数据：当输入为ID时尝试查询数据库，不存在则创建新实例
         if not isinstance(plugin, CollectorPluginMeta):
+            if not bk_tenant_id:
+                raise ValueError("bk_tenant_id is required when PluginManagerFactory.get_manager")
+
             plugin_id = plugin
             try:
-                plugin = CollectorPluginMeta.objects.get(plugin_id=plugin)
+                plugin = CollectorPluginMeta.objects.get(bk_tenant_id=bk_tenant_id, plugin_id=plugin)
             except CollectorPluginMeta.DoesNotExist:
-                plugin = CollectorPluginMeta(plugin_id=plugin_id, plugin_type=plugin_type)
+                plugin = CollectorPluginMeta(bk_tenant_id=bk_tenant_id, plugin_id=plugin_id, plugin_type=plugin_type)
 
         # 验证插件类型合法性
         plugin_type = plugin.plugin_type
@@ -115,7 +123,7 @@ class PluginManagerFactory(object):
         return plugin_manager_cls(plugin, operator, tmp_path)
 
 
-class PluginFileManagerFactory(object):
+class PluginFileManagerFactory:
     @classmethod
     def get_manager(cls, plugin_type=None):
         """

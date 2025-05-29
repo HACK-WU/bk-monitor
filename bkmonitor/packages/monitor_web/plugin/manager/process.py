@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,8 +7,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-
-from typing import List
 
 from django.utils.translation import gettext as _
 
@@ -21,7 +18,7 @@ from monitor_web.plugin.manager import BuiltInPluginManager
 from monitor_web.plugin.serializers import ProcessSerializer
 
 
-class BuildInProcessDimension(object):
+class BuildInProcessDimension:
     """内置进程采集维度"""
 
     dimension_info_map = {
@@ -40,7 +37,7 @@ class BuildInProcessDimension(object):
         self.field_name_description = self.dimension_info_map.get(field_name, field_name)
 
 
-class BuildInProcessMetric(object):
+class BuildInProcessMetric:
     """
     内置进程采集指标
     """
@@ -115,7 +112,7 @@ class ProcessPluginManager(BuiltInPluginManager):
         "port": {"metric_list": ["alive"], "dimensions": ["listen_address", "listen_port", "process_name", "pid"]},
     }
 
-    def gen_metric_info(self) -> List[dict]:
+    def gen_metric_info(self) -> list[dict]:
         metrics = []
         for table_name, field_info in self.metric_info.items():
             field_list = []
@@ -181,7 +178,7 @@ class ProcessPluginManager(BuiltInPluginManager):
 
     @staticmethod
     def get_table_id(ts_name):
-        return "process.{}".format(ts_name)
+        return f"process.{ts_name}"
 
     def get_table(self, ts_name):
         return api.metadata.get_result_table(table_id=self.get_table_id(ts_name))
@@ -214,8 +211,10 @@ class ProcessPluginManager(BuiltInPluginManager):
             pass
 
     def create_version(self, data):
-        version, need_debug = super(ProcessPluginManager, self).create_version(data)
-        plugin = CollectorPluginMeta.objects.get(plugin_id=version.plugin.plugin_id)
+        version, need_debug = super().create_version(data)
+        plugin = CollectorPluginMeta.objects.get(
+            bk_tenant_id=version.plugin.bk_tenant_id, plugin_id=version.plugin.plugin_id
+        )
         plugin_manager = self.__class__(plugin, self.operator)
         plugin_manager.release_collector_plugin(version)
         return version, need_debug

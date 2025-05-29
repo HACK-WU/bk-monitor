@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,7 +7,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-
 
 import re
 
@@ -95,8 +93,10 @@ class LogPluginManager(BuiltInPluginManager):
         return self._create_version(data, event_list)
 
     def _create_version(self, data, event_list):
-        version, need_debug = super(LogPluginManager, self).create_version(data)
-        plugin = CollectorPluginMeta.objects.get(plugin_id=version.plugin.plugin_id)
+        version, need_debug = super().create_version(data)
+        plugin = CollectorPluginMeta.objects.get(
+            bk_tenant_id=version.plugin.bk_tenant_id, plugin_id=version.plugin.plugin_id
+        )
         plugin_manager = self.__class__(plugin, self.operator)
         plugin_manager.release_collector_plugin(version)
         plugin_manager.create_result_table(
@@ -110,7 +110,7 @@ class LogPluginManager(BuiltInPluginManager):
         return self._update_version(data, event_list)
 
     def _update_version(self, data, event_list):
-        version, need_debug = super(LogPluginManager, self).update_version(data)
+        version, need_debug = super().update_version(data)
         self.release_collector_plugin(version)
         self.modify_result_table(version, event_list)
         return version, need_debug
@@ -182,13 +182,15 @@ class LogPluginManager(BuiltInPluginManager):
         )
         return group_info
 
-    def delete_result_table(self, current_version):
+    def delete_result_table(self, current_version: PluginVersionHistory):
         with transaction.atomic():
             access = EventDataAccessor(current_version, self.operator)
             event_group_id = access.delete_result_table()
             CustomEventGroup.objects.filter(bk_event_group_id=event_group_id).delete()
             CustomEventItem.objects.filter(bk_event_group_id=event_group_id).delete()
-            PluginVersionHistory.origin_objects.filter(plugin=current_version.plugin).delete()
+            PluginVersionHistory.origin_objects.filter(
+                bk_tenant_id=current_version.bk_tenant_id, plugin_id=current_version.plugin_id
+            ).delete()
             current_version.plugin.delete()
 
     def _get_debug_config_context(self, config_version, info_version, param, target_nodes):

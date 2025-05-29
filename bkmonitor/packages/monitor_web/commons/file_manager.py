@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -13,20 +12,20 @@ import hashlib
 import os
 import shutil
 import tarfile
-from typing import Union
 
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.utils.translation import gettext as _
 
+from bkmonitor.utils.request import get_request_tenant_id
 from monitor_web.models.file import UploadedFileInfo
 from monitor_web.models.plugin import CollectorPluginMeta
 
 
-class BaseFileManager(object):
+class BaseFileManager:
     TYPE = ""
 
-    def __init__(self, file: Union[UploadedFileInfo, int]):
+    def __init__(self, file: UploadedFileInfo | int):
         self._file_content = None
         if isinstance(file, UploadedFileInfo):
             _file = file
@@ -179,14 +178,14 @@ class PluginFileManager(BaseFileManager):
         plugin_id = kwargs.get("plugin_id")
         if plugin_id:
             try:
-                plugin_meta = CollectorPluginMeta.objects.get(plugin_id=plugin_id)
-                return super(PluginFileManager, cls).save_file(
+                plugin_meta = CollectorPluginMeta.objects.get(bk_tenant_id=get_request_tenant_id(), plugin_id=plugin_id)
+                return super().save_file(
                     file_data=file_data, file_name=file_name, is_dir=False, plugin_id=plugin_meta.plugin_id
                 )
             except CollectorPluginMeta.DoesNotExist:
                 raise FileManagerException(_("非法的plugin_id"))
 
-        return super(PluginFileManager, cls).save_file(file_data, file_name, False)
+        return super().save_file(file_data, file_name, False)
 
     @classmethod
     def save_plugin(cls, file_data, file_path):
@@ -218,7 +217,7 @@ class FileManagerException(Exception):
     def __init__(self, error=None):
         if error is None:
             error = _("文件操作异常")
-        super(FileManagerException, self).__init__(error)
+        super().__init__(error)
 
 
 def walk(storage, top="/", topdown=False, onerror=None):
@@ -226,7 +225,7 @@ def walk(storage, top="/", topdown=False, onerror=None):
     listing directories."""
     try:
         dirs, nondirs = storage.listdir(top)
-    except os.error as err:
+    except OSError as err:
         if onerror is not None:
             onerror(err)
         return
@@ -235,7 +234,6 @@ def walk(storage, top="/", topdown=False, onerror=None):
         yield top, dirs, nondirs
     for name in dirs:
         new_path = os.path.join(top, name)
-        for x in walk(storage, new_path):
-            yield x
+        yield from walk(storage, new_path)
     if not topdown:
         yield top, dirs, nondirs

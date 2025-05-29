@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -10,6 +9,7 @@ specific language governing permissions and limitations under the License.
 """
 
 from bkmonitor.utils import shortuuid
+from bkmonitor.utils.request import get_request_tenant_id
 from bkmonitor.views import serializers
 from core.drf_resource import resource
 from core.drf_resource.base import Resource
@@ -27,7 +27,9 @@ class GetTrapCollectorPluginResource(Resource):
             class SnmpTrapSlz(serializers.Serializer):
                 class AuthInfoSlz(serializers.Serializer):
                     security_name = serializers.CharField(required=False, label="安全名")
-                    context_name = serializers.CharField(required=False, label="上下文名称", default="", allow_blank=True)
+                    context_name = serializers.CharField(
+                        required=False, label="上下文名称", default="", allow_blank=True
+                    )
                     security_level = serializers.CharField(required=False, label="安全级别")
                     authentication_protocol = serializers.CharField(
                         required=False, label="验证协议", default="", allow_blank=True
@@ -35,8 +37,12 @@ class GetTrapCollectorPluginResource(Resource):
                     authentication_passphrase = serializers.CharField(
                         required=False, label="验证口令", default="", allow_blank=True
                     )
-                    privacy_protocol = serializers.CharField(required=False, label="隐私协议", default="", allow_blank=True)
-                    privacy_passphrase = serializers.CharField(required=False, label="私钥", default="", allow_blank=True)
+                    privacy_protocol = serializers.CharField(
+                        required=False, label="隐私协议", default="", allow_blank=True
+                    )
+                    privacy_passphrase = serializers.CharField(
+                        required=False, label="私钥", default="", allow_blank=True
+                    )
                     authoritative_engineID = serializers.CharField(required=False, label="设备ID")
 
                 server_port = serializers.IntegerField(required=True, label="trap服务端口")
@@ -56,6 +62,7 @@ class GetTrapCollectorPluginResource(Resource):
         id = serializers.IntegerField(required=False, label="采集配置ID")
 
     def perform_request(self, validated_request_data):
+        bk_tenant_id = get_request_tenant_id()
         plugin_id = validated_request_data["plugin_id"]
         label = validated_request_data["label"]
         bk_biz_id = validated_request_data["bk_biz_id"]
@@ -63,11 +70,15 @@ class GetTrapCollectorPluginResource(Resource):
         yaml = validated_request_data["params"]["snmp_trap"]["yaml"]
         if "id" not in validated_request_data:
             plugin_id = "trap_" + str(shortuuid.uuid())
-            plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=PluginType.SNMP_TRAP)
+            plugin_manager = PluginManagerFactory.get_manager(
+                bk_tenant_id=bk_tenant_id, plugin=plugin_id, plugin_type=PluginType.SNMP_TRAP
+            )
             params = plugin_manager.get_params(plugin_id, bk_biz_id, label, snmp_trap=snmp_trap, yaml=yaml)
             resource.plugin.create_plugin(params)
         else:
-            plugin_manager = PluginManagerFactory.get_manager(plugin=plugin_id, plugin_type=PluginType.SNMP_TRAP)
+            plugin_manager = PluginManagerFactory.get_manager(
+                bk_tenant_id=bk_tenant_id, plugin=plugin_id, plugin_type=PluginType.SNMP_TRAP
+            )
             params = plugin_manager.get_params(plugin_id, bk_biz_id, label, snmp_trap=snmp_trap, yaml=yaml)
             plugin_manager.update_version(params)
 

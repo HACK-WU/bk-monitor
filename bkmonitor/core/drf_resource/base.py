@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -9,17 +8,15 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import abc
 import logging
 
-import six
 from django.db import models
 from django.utils.translation import gettext as _
 from opentelemetry import trace
 from opentelemetry.trace.status import Status, StatusCode
 
-from bkmonitor.utils.request import get_request_username
+from bkmonitor.utils.request import get_request_tenant_id, get_request_username
 from bkmonitor.utils.thread_backend import ThreadPool
 from core.drf_resource.exceptions import CustomException, record_exception
 from core.drf_resource.tasks import run_perform_request
@@ -67,7 +64,7 @@ Resource的执行流程：
 """
 
 
-class Resource(six.with_metaclass(abc.ABCMeta, object)):
+class Resource(metaclass=abc.ABCMeta):
     RequestSerializer = None
     ResponseSerializer = None
 
@@ -174,7 +171,7 @@ class Resource(six.with_metaclass(abc.ABCMeta, object)):
             is_valid_request = request_serializer.is_valid()
             if not is_valid_request:
                 logger.error(
-                    "Resource[{}] 请求参数格式错误：%s".format(self.get_resource_name()),
+                    f"Resource[{self.get_resource_name()}] 请求参数格式错误：%s",
                     format_serializer_errors(request_serializer),
                 )
                 raise CustomException(
@@ -296,7 +293,10 @@ class Resource(six.with_metaclass(abc.ABCMeta, object)):
         """
         执行celery异步任务（高级）
         """
-        async_task = run_perform_request.apply_async(args=(self, get_request_username(), request_data), **kwargs)
+        username = get_request_username()
+        bk_tenant_id = get_request_tenant_id()
+
+        async_task = run_perform_request.apply_async(args=(self, username, bk_tenant_id, request_data), **kwargs)
         return {"task_id": async_task.id}
 
     @classmethod
