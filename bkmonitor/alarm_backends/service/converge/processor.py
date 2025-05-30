@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import collections
 import copy
 import hashlib
@@ -52,11 +52,46 @@ class ConvergeLockError(BaseException):
         pass
 
 
-class ConvergeProcessor(object):
+class ConvergeProcessor:
     InstanceModel = {ConvergeType.CONVERGE: ConvergeInstance, ConvergeType.ACTION: ActionInstance}
 
     def __init__(self, converge_config, instance_id, instance_type, converge_context=None, alerts=None):
-        """ """
+        """
+        收敛处理器基类，用于处理告警收敛的核心逻辑
+        "converge_config": {
+            "count": 1,
+            "condition": [
+                {
+                    "dimension": "strategy_id",
+                    "value": [
+                        "self"
+                    ]
+                }
+            ],
+            "timedelta": 60,
+            "is_enabled": true,
+            "converge_func": "collect",
+            "need_biz_converge": true,
+            "sub_converge_config": {
+                "timedelta": 60,
+                "count": 2,
+                "condition": [
+                    {
+                        "dimension": "bk_biz_id",
+                        "value": ["self"]
+                    }
+                ],
+                "converge_func": "collect_alarm"
+            }
+        }
+
+        初始化流程说明：
+        1. 基础属性初始化与实例加载
+        2. 收敛配置合法性校验（启用状态/必要字段/数值范围）
+        3. 时间窗口计算（基础时间范围与最大扩展范围）
+        4. 收敛维度提取与安全长度限制
+
+        """
 
         self.status = converge_context.get("status", "") if converge_context else ""
         self.comment = ""
@@ -71,13 +106,13 @@ class ConvergeProcessor(object):
         self.need_unlock = False
         self.instance_model = self.InstanceModel[instance_type]
         try:
-            self.instance = self.instance_model.objects.get(id=instance_id)
+            self.instance: ConvergeInstance | ActionInstance | None = self.instance_model.objects.get(id=instance_id)
         except Exception as error:
-            print("pytest|get {} converge instance({})  failed {}".format(instance_type, instance_id, str(error)))
+            print(f"pytest|get {instance_type} converge instance({instance_id})  failed {str(error)}")
             raise
         if instance_id == 12:
             print("start to debug")
-        print("pytest|get {} converge instance({})  finished".format(instance_type, instance_id))
+        print(f"pytest|get {instance_type} converge instance({instance_id})  finished")
         self.alerts = alerts
         self.origin_converge_config = copy.deepcopy(converge_config)
         self.context = converge_context
@@ -147,22 +182,50 @@ class ConvergeProcessor(object):
 
     def set_converge_count_and_timedelta(self, converge_config):
         """
-        设置默认收敛策略
+        设置默认收敛策略配置参数
+
+        参数:
+            converge_config (dict): 收敛策略配置字典，包含以下可能字段：
+                - timedelta (int): 时间窗口阈值（秒）
+                - count (int): 触发次数阈值
+                - condition (list): 收敛维度条件列表，每个元素包含：
+                    * dimension (str): 维度名称
+                    * value (list): 需要匹配的值列表
+
+        返回值:
+            dict: 更新后的收敛策略配置字典，包含完整的收敛参数配置
+
+        该方法根据实例类型实现两种收敛策略配置：
+        1. 动作类型实例(ConvergeType.ACTION)：
+           - 通知类动作特殊处理：设置2分钟时间窗口，单次触发阈值
+           - 自动补充缺失的收敛维度条件
+        2. 收敛类型实例(ConvergeType.CONVERGE)：
+           - 使用全局配置的多策略收集窗口和阈值
         """
         if self.instance_type == ConvergeType.ACTION:
+            # 处理动作类型实例的收敛配置
             if self.instance.action_config["plugin_type"] == ActionPluginType.NOTICE:
+                # 通知类动作特殊配置：
+                # 1. 设置2分钟时间窗口（CONST_MINUTES*2）
+                # 2. 单次触发阈值（count=1）
+                # 3. 添加notice_info维度收敛条件（若存在上下文信息）
                 converge_config["timedelta"] = CONST_MINUTES * 2
                 converge_config["count"] = 1
                 if self.context.get("notice_info"):
                     # 如果不存在notice_info维度信息，可能是老数据，保留原来的收敛维度
                     converge_config["condition"] = [{"dimension": "notice_info", "value": ["self"]}]
+
             elif not converge_config.get("condition"):
-                # 其他处理套餐没有condition的，补充一下
+                # 对于没有指定收敛条件的其他动作类型：
+                # 补充默认的action_info维度收敛条件
                 converge_config["condition"] = [{"dimension": "action_info", "value": ["self"]}]
 
         if self.instance_type == ConvergeType.CONVERGE:
+            # 处理收敛类型实例：
+            # 使用全局配置的多策略收集窗口和阈值参数
             converge_config["timedelta"] = settings.MULTI_STRATEGY_COLLECT_WINDOW
             converge_config["count"] = settings.MULTI_STRATEGY_COLLECT_THRESHOLD
+
         return converge_config
 
     def get_converge_context(self):
@@ -189,6 +252,8 @@ class ConvergeProcessor(object):
             shielder = AlertShieldConfigShielder(alert)
             if shielder.is_matched():
                 return True, shielder
+
+        return False, None
 
     def converge_alarm(self):
         """run converge by converge_config"""
@@ -253,6 +318,38 @@ class ConvergeProcessor(object):
             client.decr(self.lock_key)
 
     def run_converge(self):
+        """
+        执行收敛处理的核心流程控制方法
+
+        参数:
+            self: 包含以下关键属性的对象实例
+                - instance_type: 收敛类型(ConvergeType.ACTION/CONVERGE)
+                - instance: 收敛实例对象，包含状态(status)、执行次数(execute_times)等属性
+                - converge_config: 收敛配置字典，包含收敛方法(converge_func)等配置项
+                - dimension: 收敛维度标识
+                - start_time: 收敛开始时间戳
+                - end_timestamp: 收敛结束时间戳
+                - alerts: 关联告警列表
+                - shield_manager: 屏蔽管理器实例
+                - is_illegal: 布尔值表示是否非法收敛状态
+
+        返回值:
+            ActionStatus.SKIPPED: 表示任务被跳过
+            ActionStatus.SHIELD: 表示任务被屏蔽
+            False: 表示无需进行收敛
+            其他情况返回收敛执行结果状态
+
+        抛出异常:
+            ActionAlreadyFinishedError: 当检测到已结束的收敛实例时抛出
+
+        该方法实现完整的收敛处理流程，包含：
+        1. 屏蔽状态优先级校验
+        2. 任务状态有效性验证
+        3. 分布式锁获取控制
+        4. 收敛逻辑执行调度
+        5. 执行结果状态处理
+        6. 收敛日志记录
+        """
         # 告警屏蔽优先级最高，如果屏蔽了，则都不需要处理，直接不做收敛
         if self.instance_type == ConvergeType.ACTION:
             if self.instance.status in ActionStatus.END_STATUS:
@@ -267,7 +364,7 @@ class ConvergeProcessor(object):
                 is_shielded, shielder = self.shield_manager.shield(self.instance, self.alerts)
                 if is_shielded:
                     # 如果告警是处理屏蔽状态的，直接忽略
-                    logger.info("action({}) shielded".format(self.instance_id))
+                    logger.info(f"action({self.instance_id}) shielded")
                     self.converge_config["description"] = "Stop to converge because of shielded"
                     shield_detail = extended_json.loads(shielder.detail)
                     self.instance.outputs = {"shield": {"type": shielder.type, "detail": shield_detail}}
@@ -285,7 +382,7 @@ class ConvergeProcessor(object):
             # 如果为二级收敛并且结束，直接抛出完成的异常
             raise ActionAlreadyFinishedError(
                 {
-                    "action_id": "{}-{}".format(self.instance_id, self.instance_type),
+                    "action_id": f"{self.instance_id}-{self.instance_type}",
                     "action_status": ActionStatus.SUCCESS,
                 }
             )
@@ -380,7 +477,7 @@ class ConvergeProcessor(object):
         if isinstance(value, list):
             if len(value) >= 4:
                 h = hashlib.md5(value).hexdigest()[:5]
-                value = [value[0], "{}.{}".format(h, len(value) - 2), value[-1]]
+                value = [value[0], f"{h}.{len(value) - 2}", value[-1]]
             dimension_value = ",".join(map(str, value))
         else:
             dimension_value = value
@@ -409,7 +506,7 @@ class ConvergeProcessor(object):
             for index, value in enumerate(values):
                 if value == "self":
                     values[index] = self.context.get(key, "")
-                converge_dimension.append("|{}:{}".format(key, self.get_dimension_value(values[index])))
+                converge_dimension.append(f"|{key}:{self.get_dimension_value(values[index])}")
             self.converge_config["converged_condition"][key] = [
                 value[0] if isinstance(value, list) else value for value in values
             ]
@@ -419,26 +516,55 @@ class ConvergeProcessor(object):
         return dimension[:safe_length]
 
     def push_to_queue(self):
-        """update status in DB && push into queue"""
+        """
+        更新实例状态并根据状态类型推送到对应处理队列
+
+        参数:
+            self: 包含以下属性的对象实例
+                - status: 当前动作状态（ActionStatus枚举）
+                - instance: 动作实例对象（ActionInstance类型）
+                - comment: 状态更新附带信息（字符串）
+                - ex_data: 扩展数据字段
+                - execute_times: 执行次数计数器
+
+        返回值:
+            None: 当处理动作处于结束状态时直接返回
+            其他情况通过队列推送继续处理流程
+
+        执行流程说明：
+        1. 根据状态确定结束时间
+        2. 更新ActionInstance对象的状态和元数据
+        3. 根据状态类型决定推送至收敛队列或动作队列
+        """
         end_time = datetime.now(tz=timezone.utc) if self.status in ActionStatus.END_STATUS else None
+
+        # 处理ActionInstance状态更新逻辑
         if isinstance(self.instance, ActionInstance):
-            # 如果是处理动作的收敛，需要更新处理动作的状态和对象
+            # 更新实例核心状态字段
             self.instance.status = self.status if self.status else ActionStatus.CONVERGED
             self.instance.outputs = {"message": self.comment}
             self.instance.end_time = end_time
             self.instance.update_time = end_time
+
+            # 特殊状态处理：需要轮询检测
             if end_time:
                 self.instance.need_poll = need_poll(self.instance)
+
+            # 持久化存储状态变更
             self.instance.save(
                 update_fields=["outputs", "status", "end_time", "update_time", "need_poll", "ex_data", "execute_times"]
             )
+
+            # 提前终止处理：已到达结束状态
             if self.instance.status in ActionStatus.END_STATUS:
                 return
 
+        # 等待状态处理：重新推入收敛队列
         if self.status == ActionStatus.SLEEP:
-            # 如果还在等待中的收敛，则重新推入收敛队列, 1分钟之后再做收敛检测
+            # 收敛队列重推逻辑：1分钟后再次检测
             self.push_converge_queue()
         else:
+            # 常规动作处理：推入动作执行队列
             self.push_to_action_queue()
 
     def push_to_action_queue(self):

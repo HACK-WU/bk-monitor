@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import json
 
 from django.utils.translation import gettext_lazy as _lazy
@@ -67,11 +67,17 @@ CONVERGE_FUNCTION = {
 }
 
 CONVERGE_FUNCTION_DESCRIPTION = {
-    ConvergeFunction.SKIP_WHEN_SUCCESS: _lazy("触发规则后，如果当前策略存在其他的告警已经处理成功，则跳过当前告警的处理"),
+    ConvergeFunction.SKIP_WHEN_SUCCESS: _lazy(
+        "触发规则后，如果当前策略存在其他的告警已经处理成功，则跳过当前告警的处理"
+    ),
     ConvergeFunction.SKIP_WHEN_PROCEED: _lazy("触发规则后，如果当前策略存在其他正在处理的告警，则跳过当前告警的处理"),
-    ConvergeFunction.WAIT_WHEN_PROCEED: _lazy("触发规则后，如果当前策略存在其他正在处理的告警，则等其他告警处理完成后再继续处理当前告警"),
+    ConvergeFunction.WAIT_WHEN_PROCEED: _lazy(
+        "触发规则后，如果当前策略存在其他正在处理的告警，则等其他告警处理完成后再继续处理当前告警"
+    ),
     ConvergeFunction.SKIP_WHEN_EXCEED: _lazy("触发规则后，超出数量的告警将不进行处理"),
-    ConvergeFunction.DEFENSE: _lazy("触发规则后，对于每个处理动作，都会产生一个审批单据，让负责人审批决定是否需要执行，如同意则继续执行，拒绝或者超时30分钟未审批则直接收敛不处理"),
+    ConvergeFunction.DEFENSE: _lazy(
+        "触发规则后，对于每个处理动作，都会产生一个审批单据，让负责人审批决定是否需要执行，如同意则继续执行，拒绝或者超时30分钟未审批则直接收敛不处理"
+    ),
     ConvergeFunction.COLLECT: _lazy("触发规则后，超出数量的告警将不进行处理，并发送汇总通知"),
 }
 
@@ -112,6 +118,7 @@ CONVERGE_FUNC_CHOICES = [
     (function, desc) for function, desc in CONVERGE_FUNCTION.items()
 ] + HIDDEN_CONVERGE_FUNCTION_CHOICES
 
+# 默认的收敛维度
 CONVERGE_DIMENSION = {
     "strategy_id": _lazy("策略"),
     "alert_name": _lazy("告警名称"),
@@ -128,6 +135,7 @@ CONVERGE_DIMENSION = {
     "alarm_attr_id": _lazy("告警特性"),
 }
 
+# 所有的收敛维度
 ALL_CONVERGE_DIMENSION = {
     "dimensions": _lazy("维度"),
     "strategy_id": _lazy("策略"),
@@ -366,9 +374,17 @@ VARIABLES = [
             {"name": "alarm.begin_timestamp", "desc": _lazy("告警开始时间戳"), "example": "1970-01-01 00:00:00"},
             {"name": "alarm.duration", "desc": _lazy("告警持续时间(秒)"), "example": "130"},
             {"name": "alarm.duration_string", "desc": _lazy("告警持续时间字符串"), "example": "2m 10s"},
-            {"name": "alarm.description", "desc": _lazy("告警内容"), "example": "AVG(CPU使用率) >= 95.0%, 当前值96.317582%"},
+            {
+                "name": "alarm.description",
+                "desc": _lazy("告警内容"),
+                "example": "AVG(CPU使用率) >= 95.0%, 当前值96.317582%",
+            },
             {"name": "alarm.target_string", "desc": _lazy("告警目标"), "example": "127.0.1.10,127.0.1.11"},
-            {"name": "alarm.dimension_string", "desc": _lazy("告警维度(除目标)"), "example": _lazy("磁盘=C,主机名=xxx")},
+            {
+                "name": "alarm.dimension_string",
+                "desc": _lazy("告警维度(除目标)"),
+                "example": _lazy("磁盘=C,主机名=xxx"),
+            },
             {"name": "alarm.collect_count", "desc": _lazy("汇总事件数量"), "example": "10"},
             {"name": "alarm.notice_from", "desc": _lazy("消息来源"), "example": _lazy("蓝鲸监控")},
             {"name": "alarm.company", "desc": _lazy("企业标识"), "example": _lazy("蓝鲸")},
@@ -540,6 +556,15 @@ class ActionDisplayStatus:
 
 
 class ActionStatus:
+    """
+    动作状态定义类，包含任务执行的全生命周期状态标识
+
+    该类集中管理所有动作状态常量，并定义状态分组用于流程控制：
+    - 状态常量：定义17种原子状态标识符
+    - 状态分组：按业务逻辑划分的6类状态集合
+    - 转换规则：通过集合运算实现状态流转校验
+    """
+
     RECEIVED = "received"
     WAITING = "waiting"
     CONVERGING = "converging"
@@ -559,15 +584,24 @@ class ActionStatus:
     UNAUTHORIZED = "unauthorized"
     CHECKING = "checking"
 
-    # 执行中的状态
+    # 执行中的状态集合，包含任务生命周期中持续运行的中间状态
+    # 包含状态：已接收、等待中、汇聚中、休眠中、已汇聚、运行中
     PROCEED_STATUS = [RECEIVED, WAITING, CONVERGING, SLEEP, CONVERGED, RUNNING]
 
+    # 最终状态集合，表示任务执行的终止状态
+    # 包含状态：成功、部分成功、失败、部分失败、已跳过、防护状态
     END_STATUS = [SUCCESS, PARTIAL_SUCCESS, FAILURE, PARTIAL_FAILURE, SKIPPED, SHIELD]
 
+    # 可执行状态集合，表示任务可以被调度执行的状态
+    # 包含状态：已接收、已汇聚、运行中、重试中
     CAN_EXECUTE_STATUS = [RECEIVED, CONVERGED, RUNNING, RETRYING]
 
+    # 忽略状态集合，表示需要被过滤的特殊状态
+    # 包含状态：运行中、休眠中、已跳过、防护状态
     IGNORE_STATUS = {RUNNING, SLEEP, SKIPPED, SHIELD}
 
+    # 可同步状态集合，表示支持结果同步的状态
+    # 包含等待中、汇聚中、休眠中、已汇聚、运行中、成功、部分成功、部分失败、失败、已跳过、防护状态
     CAN_SYNC_STATUS = [
         WAITING,
         CONVERGING,
@@ -581,6 +615,9 @@ class ActionStatus:
         SKIPPED,
         SHIELD,
     ]
+
+    # 采集同步状态集合，表示需要收集同步结果的状态
+    # 包含状态：等待中、运行中、成功、部分成功、失败、已跳过
     COLLECT_SYNC_STATUS = [WAITING, RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILURE, SKIPPED]
 
 

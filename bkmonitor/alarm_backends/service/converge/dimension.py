@@ -10,7 +10,6 @@ specific language governing permissions and limitations under the License.
 
 import json
 import logging
-
 import arrow
 
 from alarm_backends.constants import CONST_MINUTES
@@ -26,6 +25,8 @@ from constants.action import (
     SUB_CONVERGE_DIMENSION,
     ConvergeType,
 )
+from bkmonitor.documents import AlertDocument
+from bkmonitor.models import ActionInstance
 
 logger = logging.getLogger("fta_action.converge")
 
@@ -43,9 +44,22 @@ class DimensionHandler:
         converged_condition=None,
     ):
         """
-        :param dimension: the result key for redis
-        :param condition: dict {"dimension_key": ["dimension_value", ]}
-        :param start_timestamp: start time's timestamp
+        初始化维度处理器
+
+        参数:
+            dimension: str, 用于Redis存储的维度键名
+            condition: dict, 维度过滤条件，格式{"维度键":["维度值1","维度值2"]}
+            start_timestamp: int, 查询起始时间戳（秒级）
+            instance_id: str, 当前实例唯一标识符
+            end_timestamp: int, 查询结束时间戳（秒级），默认为当前时间
+            instance_type: ConvergeType, 实例类型（ACTION/CONVERGE）
+            strategy_id: int, 关联策略ID
+            converged_condition: dict, 收敛条件配置
+
+        功能:
+            1. 初始化基础查询参数
+            2. 设置默认结束时间为当前时间
+            3. 记录初始化日志（包含实例ID和条件信息）
         """
         self.dimension = dimension
         self.condition = condition
@@ -59,9 +73,18 @@ class DimensionHandler:
 
     def get_by_condition(self):
         """
-        :return related_id_list: actions(matched condition) event_id_list
-        """
+        根据维度条件获取关联事件ID列表
 
+        返回值:
+            list, 符合条件的事件ID集合
+
+        处理流程:
+            1. 判断实例类型是否为二级收敛
+            2. 二级收敛调用专用获取方法
+            3. 普通收敛使用Pipeline批量查询
+            4. 构造多个ZRangeByScore查询命令
+            5. 执行管道查询并返回结果
+        """
         keys_length = {}
         if self.instance_type == ConvergeType.CONVERGE:
             # 如果是二级收敛，获取方法不一致
@@ -78,6 +101,22 @@ class DimensionHandler:
         return self.calc_converge_results(keys_length, pipeline_results)
 
     def calc_converge_results(self, keys_length, converge_results):
+        """
+        计算收敛结果的交集
+
+        参数:
+            keys_length: dict, 各维度键的查询次数统计
+            converge_results: list, 管道查询原始结果
+
+        返回值:
+            set, 所有维度条件的交集结果
+
+        处理步骤:
+            1. 按维度键分割查询结果
+            2. 合并同一维度键的所有结果
+            3. 对所有维度结果取交集
+            4. 记录结果统计日志
+        """
         index = 0
         all_key_results = []
         for length in keys_length.values():
@@ -169,9 +208,43 @@ class DimensionCalculator:
 
     QUEUE_KEY_TEMPLATE = KEY_PREFIX + ".converge.{}"
 
-    def __init__(self, related_instance, instance_type=ConvergeType.ACTION, converge_config=None, alerts=None):
+    def __init__(
+        self,
+        related_instance: ActionInstance,
+        instance_type=ConvergeType.ACTION,
+        converge_config=None,
+        alerts: AlertDocument | None = None,
+    ):
         """
         初始化收敛计算器
+        "converge_config": {
+            "count": 1,
+            "condition": [
+                {
+                    "dimension": "strategy_id",
+                    "value": [
+                        "self"
+                    ]
+                }
+            ],
+            "timedelta": 60,
+            "is_enabled": true,
+            "converge_func": "collect",
+            "need_biz_converge": true,
+            "sub_converge_config": {
+                "timedelta": 60,
+                "count": 2,
+                "condition": [
+                    {
+                        "dimension": "bk_biz_id",
+                        "value": [
+                            "self"
+                        ]
+                    }
+                ],
+                "converge_func": "collect_alarm"
+            }
+        }
 
         参数:
             related_instance: 关联的收敛实例对象
@@ -201,7 +274,7 @@ class DimensionCalculator:
         处理流程:
         1. 生成基于创建时间的时间戳评分
         2. 创建Redis管道批量操作
-        3. 遍历所有比较维度进行以下操作：
+        3. 遍历所有维度进行以下操作：
            - 跳过空值维度
            - 标准化维度值为列表格式
            - 构建Redis存储键

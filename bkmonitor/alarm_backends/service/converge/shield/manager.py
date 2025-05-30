@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,14 +7,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-from typing import List
 
 from bkmonitor.models import ActionInstance
 from bkmonitor.documents import AlertDocument
 from .shielder import AlertShieldConfigShielder, AlarmTimeShielder, GlobalShielder
 
 
-class ShieldManager(object):
+class ShieldManager:
     """
     屏蔽管理
     """
@@ -23,11 +21,25 @@ class ShieldManager(object):
     Shielders = (AlertShieldConfigShielder, AlarmTimeShielder)
 
     @classmethod
-    def shield(cls, action_instance: ActionInstance, alerts: List[dict] = None):
+    def shield(cls, action_instance: ActionInstance, alerts: list[dict] = None):
         """
-        屏蔽
-        :param alerts: 告警的快照
-        :param action_instance: 告警
+        屏蔽处理核心逻辑，按优先级依次执行全局屏蔽检测和各类屏蔽策略匹配
+
+        参数:
+            action_instance: ActionInstance对象，包含策略ID和关联告警ID列表
+            alerts: 告警快照数据列表，默认为None时将从ES获取完整告警数据
+
+        返回值:
+            tuple (bool, Shielder)
+            - 第一个元素表示是否匹配屏蔽规则
+            - 第二个元素为匹配的屏蔽器实例或None
+
+        执行流程:
+        1. 全局屏蔽策略优先级最高，匹配则直接返回
+        2. 告警数据优先使用传入快照，缺失时通过mget批量获取
+        3. 按屏蔽器注册顺序依次匹配：
+           - AlertShieldConfigShielder逐条检查告警策略匹配
+           - AlarmTimeShielder检查时间范围匹配
         """
         # 先做全局屏蔽的检测
         global_shielder = GlobalShielder()
@@ -40,6 +52,7 @@ class ShieldManager(object):
         else:
             alerts = AlertDocument.mget(ids=action_instance.alerts)
 
+        # 依次执行各类屏蔽策略匹配
         for shielder_cls in cls.Shielders:
             if shielder_cls == AlertShieldConfigShielder:
                 for alert in alerts:

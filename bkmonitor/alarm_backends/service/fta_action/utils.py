@@ -113,7 +113,12 @@ class PushActionProcessor:
         return [action.id for action in action_instances]
 
     @classmethod
-    def push_actions_to_converge_queue(cls, action_instances, action_alert_relations, notice_config=None):
+    def push_actions_to_converge_queue(
+        cls,
+        action_instances: list[ActionInstance],
+        action_alert_relations: dict[str, AlertDocument],
+        notice_config=None,
+    ):
         """
         推送告警至收敛汇总队列并根据配置执行收敛策略
 

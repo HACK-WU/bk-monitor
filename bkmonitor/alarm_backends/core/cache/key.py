@@ -888,6 +888,7 @@ FTA_DIMENSION_NOTICE_COLLECT_KEY = register_key_with_config(
     }
 )
 
+# 故障自愈收敛维度存储
 FTA_CONVERGE_DIMENSION_KEY = register_key_with_config(
     {
         "label": "[fta_converge]自愈收敛维度存储",
@@ -898,6 +899,7 @@ FTA_CONVERGE_DIMENSION_KEY = register_key_with_config(
     }
 )
 
+# 故障自愈二级收敛维度存储
 FTA_SUB_CONVERGE_DIMENSION_KEY = register_key_with_config(
     {
         "label": "[fta_converge]自愈二级收敛维度存储",
@@ -908,6 +910,7 @@ FTA_SUB_CONVERGE_DIMENSION_KEY = register_key_with_config(
     }
 )
 
+# 故障自愈二级收敛锁
 FTA_SUB_CONVERGE_DIMENSION_LOCK_KEY = register_key_with_config(
     {
         "label": "[fta_converge]自愈二级收敛锁",

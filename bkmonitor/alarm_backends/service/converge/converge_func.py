@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import copy
 import logging
 
@@ -36,45 +36,80 @@ class ConvergeFunc:
         converge_config=None,
         biz_converge_existed=False,
     ):
+        """
+        初始化收敛函数处理上下文
+
+        参数:
+            current_instance: 当前操作实例对象，可以是动作实例或收敛实例
+            matched_related_ids: 匹配到的相关实例ID列表
+            is_new: 布尔值标识是否为新创建实例
+            converge_instance: 收敛实例对象（ConvergeInstance类型）
+            converge_config: 可选的收敛配置字典，默认为None
+            biz_converge_existed: 业务收敛实例是否存在标志，默认False
+
+        返回值:
+            None
+        """
         self.current_instance = current_instance
         self.instance_id = self.current_instance.id
         self.matched_related_ids = matched_related_ids
         self.converge_instance = converge_instance
         self.instance_type = ConvergeType.ACTION
+
+        # 根据实例类型确定处理类型
         if isinstance(self.current_instance, ConvergeInstance):
             self.instance_type = ConvergeType.CONVERGE
+
         self.is_new = is_new
         self.converge_config = converge_config
         self.biz_converge_existed = biz_converge_existed
 
     def skip_when_success(self):
         """
-        成功后跳过
+        成功后跳过判定方法
 
-        触发规则后，如果有满足规则的其他告警自愈成功，则跳过当前告警。
-        失败的话则继续自愈处理。
+        参数:
+            self: 自愈规则执行上下文对象，包含以下关键属性:
+                - instance_type: 收敛类型标识(ConvergeType枚举)
+                - instance_id: 当前实例唯一标识
+                - converge_instance: 收敛策略实例对象
 
-        可用于实现失败重试。
+        返回值:
+            - ActionStatus.SKIPPED: 表示需要跳过当前自愈操作
+            - ActionStatus.SLEEP: 表示存在进行中的依赖操作
+            - False: 表示需要继续执行自愈操作
+
+        执行流程:
+        1. 排除二级收敛类型的特殊处理逻辑
+        2. 查询关联收敛实例的执行历史记录
+        3. 根据执行状态判断是否满足跳过条件
+        4. 处理失败重试场景下的状态转换逻辑
         """
         if self.instance_type == ConvergeType.CONVERGE:
-            # 二级收敛的，不做成功后跳过
+            # 二级收敛类型特殊处理逻辑
+            # 记录不支持跳过操作的实例信息
             logger.info("$%s:%s type of converge is not supported", self.instance_id, self.instance_type)
             return False
 
         other_converged_instances = get_executed_actions(self.converge_instance.id)
         if not other_converged_instances:
+            # 未查询到关联执行记录的情况
+            # 记录无可用参考实例的调试信息
             logger.info("$%s:%s not other_converge_instances", self.instance_id, self.instance_type)
             return False
 
+        # 检查是否存在成功完成的关联实例
+        # 若存在成功实例则返回跳过状态码
         if other_converged_instances.filter(status=ActionStatus.SUCCESS).exists():
-            # 如果有成功，直接忽略
             return ActionStatus.SKIPPED
 
+        # 排除失败和休眠状态后的存在性检查
+        # 存在进行中的操作时返回休眠状态码
         if other_converged_instances.exclude(status__in=[ActionStatus.FAILURE, ActionStatus.SLEEP]).exists():
-            # 等待的告警处理如果还在执行中
             return ActionStatus.SLEEP
 
-        # 等待的告警处理失败，不收敛
+        # 默认返回不跳过状态
+        # 表示需要继续执行自愈处理
         return False
 
     def approve_when_failed(self):
