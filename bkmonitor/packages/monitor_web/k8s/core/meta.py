@@ -204,6 +204,14 @@ class K8sResourceMeta:
         self.agg_interval = ""
         self.set_agg_method()
 
+    @property
+    def bcs_cluster_id_filter(self):
+        for f_uid, f_obj in self.filter.filters.items():
+            if f_uid.startswith("bcs_cluster_id"):
+                filter_string = f"bcs_cluster_id={f_obj.filter_string().split('=')[1]}"
+                return filter_string
+        return ""
+
     def set_agg_interval(self, start_time, end_time):
         """设置聚合查询的间隔"""
         if self.method == "count":
@@ -754,7 +762,7 @@ class K8sClusterMeta(K8sResourceMeta):
                 f"({self.agg_method}_over_time(kube_pod_container_resource_requests{{{filter_string}}}[1m:]))"
                 " / "
                 f"on (pod) group_left() count by (pod)"
-                f'(kube_pod_status_phase{{{filter_string},phase!="Evicted"}}))'
+                f'(kube_pod_status_phase{{{self.bcs_cluster_id_filter},phase!="Evicted"}}))'
                 " / "
                 f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
             )
@@ -763,7 +771,7 @@ class K8sClusterMeta(K8sResourceMeta):
             f"(kube_pod_container_resource_requests{{{filter_string}}})"
             " / "
             f"on (pod) group_left() count by (pod)"
-            f'(kube_pod_status_phase{{{filter_string},phase!="Evicted"}}))'
+            f'(kube_pod_status_phase{{{self.bcs_cluster_id_filter},phase!="Evicted"}}))'
             " / "
             f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
         )
@@ -810,7 +818,7 @@ class K8sClusterMeta(K8sResourceMeta):
                 f"({self.agg_method}_over_time(kube_pod_container_resource_requests{{{filter_string}}}[1m:]))"
                 " / "
                 f"on (pod) group_left() count by (pod)"
-                f'(kube_pod_status_phase{{{filter_string},phase!="Evicted"}}))'
+                f'(kube_pod_status_phase{{{self.bcs_cluster_id_filter},phase!="Evicted"}}))'
                 "/"
                 f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
             )
@@ -819,7 +827,7 @@ class K8sClusterMeta(K8sResourceMeta):
             f"(kube_pod_container_resource_requests{{{filter_string}}})"
             " / "
             f"on (pod) group_left() count by (pod)"
-            f'(kube_pod_status_phase{{{filter_string},phase!="Evicted"}}))'
+            f'(kube_pod_status_phase{{{self.bcs_cluster_id_filter},phase!="Evicted"}}))'
             "/"
             f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
         )
@@ -1010,14 +1018,6 @@ class K8sNodeMeta(K8sResourceMeta):
             f"/"
             f"{self.tpl_prom_with_nothing('node_memory_MemTotal_bytes', filter_string=filter_string)}))"
         )
-
-    @property
-    def bcs_cluster_id_filter(self):
-        for f_uid, f_obj in self.filter.filters.items():
-            if f_uid.startswith("bcs_cluster_id"):
-                filter_string = f"bcs_cluster_id={f_obj.filter_string().split('=')[1]}"
-                return filter_string
-        return ""
 
     @property
     def meta_prom_with_node_pod_usage(self):
