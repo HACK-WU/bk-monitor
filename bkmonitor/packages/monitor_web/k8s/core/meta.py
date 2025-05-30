@@ -25,7 +25,7 @@ from bkmonitor.models import (
 from bkmonitor.utils.time_tools import hms_string
 from core.drf_resource import resource
 from monitor_web.k8s.core.filters import ResourceFilter, load_resource_filter
-from typing import Dict,List
+
 
 class FilterCollection:
     """
@@ -36,7 +36,7 @@ class FilterCollection:
 
     def __init__(self, meta: "K8sResourceMeta"):
         # filters={fileter_uid: resource_filter_obj}
-        self.filters: Dict[str, ResourceFilter] = dict()
+        self.filters: dict[str, ResourceFilter] = dict()
         self.meta = meta
         self.query_set = meta.resource_class.objects.all().order_by("id")
         if meta.only_fields:
@@ -288,7 +288,6 @@ class K8sResourceMeta:
         }
         series = resource.grafana.graph_unify_query(query_params)["series"]
 
-
         # latest_metric_value 最新时间点指标值
         # line latest_metric_value所在的时间序列
         # lines=[
@@ -306,7 +305,9 @@ class K8sResourceMeta:
         for line in series:
             if line["datapoints"]:
                 # 获取最新的时间点，不直接选取最后一个数据点，因为可能存在空值
-                latest_time_point=max(latest_time_point, max(line["datapoints"], key=lambda x:x[1] if x[0] else -1)[1])
+                latest_time_point = max(
+                    latest_time_point, max(line["datapoints"], key=lambda x: x[1] if x[0] else -1)[1]
+                )
                 # 旧的写法：
                 # for point in reversed(line["datapoints"]):
                 #     if point[0]:
@@ -317,7 +318,7 @@ class K8sResourceMeta:
         #   - 如果不包含，则最新时间点的指标值设置为0，将其所在时间序列添加到lines列表中
         for line in series:
             # 实际值
-            last_data_points_value:  float | int | None = line["datapoints"][-1][0]
+            last_data_points_value: float | int | None = line["datapoints"][-1][0]
             # 时间戳
             last_data_points = line["datapoints"][-1][1]
             if last_data_points == latest_time_point:
@@ -365,11 +366,11 @@ class K8sResourceMeta:
     def clean_resource_obj(self, obj, series):
         """
         清洗资源对象并注入上下文信息
-        
+
         参数:
             obj: 待清洗的资源对象，需包含__dict__属性用于批量更新字段
             series: 数据序列对象，包含dimensions维度字典和其他元数据
-            
+
         返回值:
             经过维度字段映射转换并注入业务/集群ID的资源对象
         """
@@ -379,7 +380,7 @@ class K8sResourceMeta:
         for origin, target in self.column_mapping.items():
             if origin in dimensions:
                 dimensions[target] = dimensions.pop(origin, None)
-        
+
         # 批量注入维度属性到资源对象，并设置上下文业务ID和集群ID
         # 这两个ID为资源归属定位的关键标识
         obj.__dict__.update(series["dimensions"])
@@ -812,6 +813,7 @@ class K8sClusterMeta(K8sResourceMeta):
         filter_string += ","
         filter_string += 'role=~"master|control-plane"'
         return f"""count by (bcs_cluster_id)(sum by (bcs_cluster_id)(kube_node_role{{{filter_string}}}))"""
+
     @property
     def meta_prom_with_worker_node_count(self):
         """count by(bcs_cluster_id)(kube_node_labels) - count(sum by (bcs_cluster_id, node)(kube_node_role{role=~"master|control-plane"}))"""
@@ -891,10 +893,12 @@ class K8sNodeMeta(K8sResourceMeta):
 
     @property
     def meta_prom_with_node_cpu_capacity_ratio(self):
+        # 过滤被标记为已驱逐的Pod
         filter_string = self.filter.filter_string()
         filter_string = ",".join([filter_string] + ['resource="cpu"'])
         return (
-            f"{self.tpl_prom_with_nothing('kube_pod_container_resource_requests', filter_string=filter_string)}"
+            f"sum ({self.tpl_prom_with_nothing('kube_pod_container_resource_requests', filter_string=filter_string)}"
+            f'on (pod) group_right() count by (pod)(kube_pod_status_phase{{{filter_string},phase!=""}}))'
             f"/"
             f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
         )
@@ -937,7 +941,8 @@ class K8sNodeMeta(K8sResourceMeta):
         filter_string = self.filter.filter_string()
         filter_string = ",".join([filter_string] + ['resource="memory"'])
         return (
-            f"{self.tpl_prom_with_nothing('kube_pod_container_resource_requests', filter_string=filter_string)}"
+            f"sum({self.tpl_prom_with_nothing('kube_pod_container_resource_requests', filter_string=filter_string)}"
+            f'on (pod) group_right() count by (pod)(kube_pod_status_phase{{{filter_string},phase!=""}}))'
             f"/"
             f"{self.tpl_prom_with_nothing('kube_node_status_allocatable', filter_string=filter_string)}"
         )
