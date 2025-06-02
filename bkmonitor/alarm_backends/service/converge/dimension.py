@@ -104,13 +104,6 @@ class DimensionHandler:
         """
         计算收敛结果的交集
 
-        参数:
-            keys_length: dict, 各维度键的查询次数统计
-            converge_results: list, 管道查询原始结果
-
-        返回值:
-            set, 所有维度条件的交集结果
-
         处理步骤:
             1. 按维度键分割查询结果
             2. 合并同一维度键的所有结果
@@ -269,7 +262,7 @@ class DimensionCalculator:
 
     def calc_dimension(self):
         """
-        执行收敛维度计算与Redis存储操作
+        计算收敛维度与Redis存储操作
 
         处理流程:
         1. 生成基于创建时间的时间戳评分
@@ -286,9 +279,12 @@ class DimensionCalculator:
         返回值:
             调用compile_converge_info方法生成的收敛结果对象
         """
+        # 使用创建时间作为评分
         score = arrow.get(self.related_instance.create_time).replace(tzinfo="utc").timestamp
         pipeline = FTA_CONVERGE_DIMENSION_KEY.client.pipeline()
+        # 获取到用于收敛匹配时使用的维度列表，其维度本身就是告警的中的某个字段信息
         for dimension in COMPARED_CONVERGE_DIMENSION.keys():
+            # 获取到该维度的值
             values = self.converge_ctx.get(dimension)
             if values is None or not str(values):
                 continue
@@ -296,6 +292,8 @@ class DimensionCalculator:
             if not isinstance(values, (list, set)):
                 values = [str(values)]
             for value in values:
+                # value本身就包含了告警的相关信息
+                # 所以这里的key本身也就包含了告警及其对应策略的信息
                 key = FTA_CONVERGE_DIMENSION_KEY.get_key(
                     strategy_id=getattr(self.related_instance, "strategy_id", 0), dimension=dimension, value=value
                 )
@@ -306,6 +304,7 @@ class DimensionCalculator:
                     arrow.utcnow().replace(minutes=-self.DimensionExpireMinutes).timestamp,
                 )
                 # 添加当前实例到维度集合
+                #  键值对格式为：{实例类型_实例ID: 时间戳}
                 kwargs = {f"{self.instance_type}_{str(self.related_instance.id)}": score}
                 pipeline.zadd(key, kwargs)
                 # 重置键过期时间

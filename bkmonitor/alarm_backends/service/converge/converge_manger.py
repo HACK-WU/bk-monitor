@@ -112,7 +112,7 @@ class ConvergeManager:
                 False表示处理失败或不满足条件
 
         处理流程:
-        1. 检查现有收敛实例
+        1. 检查现有收敛实例，存在返回True
         2. 获取匹配的告警ID列表
         3. 创建新收敛实例（如满足条件）
         4. 子收敛队列处理（如配置启用）
@@ -280,15 +280,34 @@ class ConvergeManager:
 
     @classmethod
     def end_converge_by_id(cls, converge_id, conv_instance=None):
+        """
+        终止指定ID的收敛实例及其关联的多级收敛实例
+
+        参数:
+            converge_id: 收敛实例的唯一标识符（数据库主键）
+            conv_instance: 可选的ConvergeInstance实例，若未提供则自动查询数据库获取
+
+        返回值:
+            None: 该方法通过副作用修改数据库记录，不返回具体值
+
+        该方法实现完整的收敛终止流程，包含以下核心步骤：
+        1. 日志记录当前操作的收敛ID
+        2. 惰性加载收敛实例（首次访问时从数据库获取）
+        3. 更新终止时间并修正维度字段（仅当实例存在且未终止时）
+        4. 递归终止多级收敛关联的所有子实例
+        5. 最终记录终止完成日志
+        """
         logger.info("conv_instance end by id %s", converge_id)
         if conv_instance is None:
+            # 从数据库获取收敛实例（惰性加载模式）
             conv_instance = ConvergeInstance.objects.get(id=converge_id)
         if conv_instance and not conv_instance.end_time:
+            # 持久化终止时间和修正后的维度信息
             conv_instance.end_time = datetime.now(tz=timezone.utc)
             conv_instance.dimension = cls.get_fixed_dimension(conv_instance.dimension)
             conv_instance.save(update_fields=["end_time", "dimension"])
         if conv_instance.converge_type == ConvergeType.CONVERGE:
-            # 如果是多级收敛，需要关闭掉其他的收敛
+            # 处理多级收敛终止逻辑（递归关闭关联收敛实例）
             for conv_id in ConvergeRelation.objects.filter(converge_id=converge_id).values_list(
                 "related_id", flat=True
             ):

@@ -162,7 +162,6 @@ class Converge(BaseContextObject):
     @cached_property
     def action_info(self):
         """
-
         :return:
         """
         return f"{self.strategy_id}_{self.signal}_{self.action_id}"

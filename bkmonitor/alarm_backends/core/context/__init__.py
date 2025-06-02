@@ -109,30 +109,58 @@ class ActionContext(object):
         notice_way=None,
         dynamic_kwargs=None,
     ):
+        """
+        初始化告警处理上下文对象
+        
+        参数:
+            action: 主动作实例对象，包含基础通知配置
+            related_actions: 相关动作实例列表，用于收敛处理
+            alerts: 关联的告警文档对象列表
+            use_alert_snap: 是否强制使用缓存快照标志位
+            notice_way: 通知渠道覆盖参数，默认使用动作配置
+            dynamic_kwargs: 动态上下文参数字典
+            
+        该方法完成以下核心初始化流程：
+        1. 基础属性初始化与动作上下文加载
+        2. 通知渠道自动协商与配置
+        3. 动态参数注入与覆盖
+        4. 关联对象格式标准化处理
+        """
         self.action: ActionInstance = action
         self.user_content = ""
         self.limit = False
         self.converge_type = ConvergeType.ACTION
         self.mention_users = {}
+        
+        # 加载动作上下文属性并特殊处理通知相关字段
         if self.action:
             for attr, value in self.action.get_context().items():
                 if attr in ["notice_way", "notice_receiver"]:
                     value = value[0] if isinstance(value, list) else value
                 setattr(self, attr, value)
+        
+        # 设置默认通知方式并协商通知渠道
         if not hasattr(self, "notice_way"):
             setattr(self, "notice_way", notice_way or NoticeWay.WEIXIN)
         self.notice_channel, self.notice_way = self.get_notice_channel()
+        
+        # 注入动态参数上下文
         dynamic_kwargs = dynamic_kwargs if dynamic_kwargs else {}
         for attr, value in dynamic_kwargs.items():
             setattr(self, attr, value)
+            
+        # 处理关联动作与收敛类型判定
         self.all_related_actions = related_actions
         self.converge_type = ConvergeType.ACTION if len(self.related_action_ids) == 1 else self.converge_type
+        
+        # 标准化警报文档格式
         self.related_alerts = (
             [alert if isinstance(alert, AlertDocument) else AlertDocument(**alert) for alert in alerts]
             if alerts
             else []
         )
-        # 是否强制使用缓存
+        
+        # 是否强制使用缓存快照标志位
         self.use_alert_snap = use_alert_snap
 
     def get_notice_channel(self):

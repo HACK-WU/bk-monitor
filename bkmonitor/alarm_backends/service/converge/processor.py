@@ -183,6 +183,7 @@ class ConvergeProcessor:
     def set_converge_count_and_timedelta(self, converge_config):
         """
         设置默认收敛策略配置参数
+        修改dimension的值为notice_info或者actions_info，以便后续进行匹配
 
         参数:
             converge_config (dict): 收敛策略配置字典，包含以下可能字段：
@@ -217,7 +218,7 @@ class ConvergeProcessor:
 
             elif not converge_config.get("condition"):
                 # 对于没有指定收敛条件的其他动作类型：
-                # 补充默认的action_info维度收敛条件
+                # 设置默认的action_info维度收敛条件
                 converge_config["condition"] = [{"dimension": "action_info", "value": ["self"]}]
 
         if self.instance_type == ConvergeType.CONVERGE:
@@ -229,7 +230,15 @@ class ConvergeProcessor:
         return converge_config
 
     def get_converge_context(self):
-        """根据实例对象获取到收敛上下文"""
+        """
+        根据实例对象获取到收敛上下文
+
+        参数:
+            self: 当前对象实例
+
+        返回值:
+            None: 上下文数据存储在self.context属性中
+        """
         if self.instance_type == ConvergeType.ACTION:
             self.context = ActionContext(self.instance, [], alerts=self.alerts).converge_context.get_dict(
                 ALL_CONVERGE_DIMENSION.keys()
@@ -238,13 +247,28 @@ class ConvergeProcessor:
             self.context = self.instance.converge_config["converged_condition"]
 
     def is_parent_action(self):
-        """收敛对象是否为虚拟主任务"""
+        """
+        判断当前实例是否为虚拟主任务
+
+        参数:
+            self: 当前对象实例
+
+        返回值:
+            bool: 是否为虚拟主任务
+        """
         return self.instance_type == ConvergeType.ACTION and self.instance.is_parent_action
 
     def is_alert_shield(self):
         """
-        当前告警是否屏蔽
-        :return:
+        检查当前告警是否被屏蔽
+
+        参数:
+            self: 当前对象实例
+
+        返回值:
+            tuple: (是否屏蔽, 屏蔽器实例)
+                - bool: True表示存在屏蔽
+                - Shielder: 匹配的屏蔽器实例或None
         """
         for alert in self.alerts:
             # 关联多告警的内容，只要有其中一个不满足条件，直接就屏蔽
@@ -256,12 +280,22 @@ class ConvergeProcessor:
         return False, None
 
     def converge_alarm(self):
-        """run converge by converge_config"""
+        """
+        执行告警收敛主流程，包含异常处理和状态更新
 
+        参数:
+            self: 当前对象实例
+
+        异常:
+            ConvergeLockError: 获取并发锁失败时抛出
+            ActionAlreadyFinishedError: 动作已结束异常
+            StrategyNotFound: 策略未找到异常
+        """
         try:
+            # 主流程执行
             self.status = self.run_converge()
             self.comment = self.converge_config.get("description")
-            # 收敛之后，推送至处理队列或者重新推送至收敛队列
+            # 收敛后队列处理
             self.push_to_queue()
         except ConvergeLockError as error:
             raise error
@@ -269,6 +303,7 @@ class ConvergeProcessor:
             logger.info("run action converge(%s) failed: %s", self.instance_id, str(error))
             return
         except StrategyNotFound:
+            # 策略异常处理逻辑
             logger.info(
                 "run action converge(%s) skip: strategy(%s) not found", self.instance_id, self.instance.strategy_id
             )
@@ -279,6 +314,7 @@ class ConvergeProcessor:
             self.push_to_queue()
             return
         except BaseException:
+            # 未知异常处理逻辑
             logger.exception(
                 "run converge failed: [%s]",
                 self.converge_config,
@@ -290,6 +326,15 @@ class ConvergeProcessor:
             self.unlock()
 
     def lock(self):
+        """
+        获取并发锁，控制并行收敛数量
+
+        参数:
+            self: 当前对象实例
+
+        异常:
+            ConvergeLockError: 当并发数超过限制时抛出
+        """
         client = ACTION_CONVERGE_KEY_PROCESS_LOCK.client
         parallel_converge_count = max(int(self.converge_count) // 2, 1)
         self.lock_key = ACTION_CONVERGE_KEY_PROCESS_LOCK.get_key(dimension=self.dimension)
@@ -310,6 +355,12 @@ class ConvergeProcessor:
         self.need_unlock = True
 
     def unlock(self):
+        """
+        释放已获取的并发锁
+
+        参数:
+            self: 当前对象实例
+        """
         if self.need_unlock is False:
             return
         client = ACTION_CONVERGE_KEY_PROCESS_LOCK.client
@@ -436,6 +487,9 @@ class ConvergeProcessor:
     def get_dimension_lock(self):
         """
         获取收敛维度锁
+
+        异常:
+            ConvergeLockError: 当获取锁失败时抛出异常
         """
         try:
             self.lock()
@@ -446,6 +500,15 @@ class ConvergeProcessor:
             raise error
 
     def need_get_lock(self, conv_inst: ConvergeInstance = None):
+        """
+        判断是否需要获取收敛锁
+
+        参数:
+            conv_inst (ConvergeInstance): 收敛实例对象，默认为None
+
+        返回:
+            bool: 是否需要获取锁
+        """
         if conv_inst is None:
             # 不存在converge_inst的时候，
             return True
@@ -459,7 +522,12 @@ class ConvergeProcessor:
             return True
 
     def is_sleep_timeout(self):
-        """check wether timeout for 'sleep' status"""
+        """
+        检查睡眠状态是否超时
+
+        返回:
+            bool: 当前实例是否处于超时状态
+        """
         if self.instance_type != ConvergeType.ACTION:
             return False
 
@@ -473,6 +541,14 @@ class ConvergeProcessor:
     def get_dimension_value(self, value):
         """
         获取指定维度的哈希值
+
+        参数:
+            value (any): 维度原始值，支持列表或其他类型
+
+        返回:
+            str: 处理后的维度字符串
+
+        注：当value为列表且长度>=4时，执行特殊压缩处理逻辑
         """
         if isinstance(value, list):
             if len(value) >= 4:
@@ -486,19 +562,33 @@ class ConvergeProcessor:
     def get_dimension(self, safe_length=0):
         """
         通过收敛条件中配置的收敛规则获取到维度信息
+
+        参数:
+            safe_length (int): 返回维度字符串的安全长度限制，默认为0
+
+        返回:
+            str: 经过SHA1哈希处理的维度字符串，按safe_length截断
+
+        注：该方法主要处理以下核心逻辑：
+            1. 合并原始和当前收敛配置的维度条件
+            2. 替换维度值中的'self'为上下文实际值
+            3. 生成SHA1哈希标识的维度字符串
         """
         converge_dimension = ["#%s" % self.converge_config["converge_func"]]
         self.converge_config["converged_condition"] = {}
         dimension_conditions = {
             condition["dimension"]: condition for condition in self.converge_config.get("condition")
         }
-        # 同步原始设置的key
+        # 合并原始配置和当前配置的维度条件，并保持有序排列
         dimension_conditions.update(
             {condition["dimension"]: condition for condition in self.origin_converge_config.get("condition", [])}
         )
         dimension_conditions = collections.OrderedDict(sorted(dimension_conditions.items()))
 
-        # 这里需要去重
+        # 遍历所有维度条件，执行以下操作：
+        # 1. 替换'self'为上下文实际值
+        # 2. 生成维度键值对
+        # 3. 存储收敛配置的维度条件
         for dimension_condition in dimension_conditions.values():
             # replace "self" to real value
             key = dimension_condition["dimension"]
@@ -568,7 +658,27 @@ class ConvergeProcessor:
             self.push_to_action_queue()
 
     def push_to_action_queue(self):
-        """push alarm to action queue"""
+        """
+        将告警事件推送到动作执行队列
+
+        参数:
+            self: 包含以下属性的对象实例
+                - instance_type: 实例类型（ConvergeType）
+                - instance_id: 实例唯一标识
+                - status: 当前动作状态（ActionStatus）
+                - alerts: 告警信息集合
+                - context: 上下文信息
+                - instance: 动作实例对象
+                - alerts: 告警数据
+
+        返回值:
+            None: 直接返回，通过消息队列异步处理
+
+        注：该方法主要处理以下核心逻辑：
+            1. 根据插件类型选择不同的执行策略
+            2. 构建任务参数并提交到消息队列
+            3. 记录推送指标数据
+        """
         logger.info("converge: ready to push to action queue %s instance id %s", self.instance_type, self.instance_id)
         if self.instance_type != ConvergeType.ACTION:
             # 非动作类的事件，仅仅是为了做收敛，不做具体的事件处理
@@ -622,6 +732,26 @@ class ConvergeProcessor:
         ).inc()
 
     def push_converge_queue(self):
+        """
+        将收敛实例重新推送到收敛队列
+
+        参数:
+            self: 包含以下属性的对象实例
+                - origin_converge_config: 原始收敛配置
+                - instance_id: 实例唯一标识
+                - instance_type: 实例类型（ConvergeType）
+                - context: 上下文信息
+                - alerts: 告警数据
+                - sleep_time: 等待时间间隔
+
+        返回值:
+            None: 直接返回，通过异步任务处理
+
+        注：该方法主要执行以下核心逻辑：
+            1. 构建异步任务参数
+            2. 提交收敛任务到消息队列
+            3. 记录推送指标数据
+        """
         # 如果还在等待中的收敛，则重新推入收敛队列, 1分钟之后再做收敛检测
         from alarm_backends.service.converge.tasks import run_converge
 

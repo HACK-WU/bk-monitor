@@ -142,8 +142,8 @@ ALL_CONVERGE_DIMENSION = {
     "alert_name": _lazy("告警名称"),
     "bk_biz_id": _lazy("业务"),
     "alert_level": _lazy("告警级别"),
-    "signal": _lazy("告警信号"),
-    "notice_receiver": _lazy("通知人员"),
+    "signae_receiver": _lazy("通知人员"),
+    "noticl": _lazy("告警信号"),
     "notice_way": _lazy("通知方式"),
     "group_notice_way": _lazy("带组员类型的通知方式"),
     "alert_info": _lazy("告警信息"),
@@ -668,7 +668,7 @@ ACTION_END_STATUS = [
     ActionStatus.SHIELD,
 ]
 
-
+# 通知方式
 class NoticeWay:
     SMS = "sms"
     MAIL = "mail"
@@ -697,7 +697,7 @@ class NoticeWay:
         "bkchat|mail": _lazy("蓝鲸信息流(邮件)"),
     }
 
-
+# 通知渠道
 class NoticeChannel:
     USER = "user"
     WX_BOT = "wxwork-bot"
@@ -714,7 +714,7 @@ class NoticeChannel:
 
 BKCHAT_TRIGGER_TYPE_MAPPING = {"WEWORK_BOT": NoticeWay.WX_BOT, "EMAIL": NoticeWay.MAIL, "MINI_PROGRAM": "mini_program"}
 
-
+# 通知方式对应的渠道
 class NoticeWayChannel:
     MAPPING = {
         NoticeWay.SMS: NoticeChannel.USER,
@@ -726,7 +726,7 @@ class NoticeWayChannel:
         NoticeWay.BK_CHAT: NoticeChannel.BK_CHAT,
     }
 
-
+# 通知类型
 class NoticeType:
     """# NOCC:function-redefined(工具误报:没有重复定义)
     策略通知的类型
