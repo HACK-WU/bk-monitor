@@ -112,7 +112,7 @@ class ActionHandleChecker(BaseChecker):
             )
             alert.update_extra_info("cycle_handle_record", cycle_handle_record)
 
-    def check_interval_matched_actions(self, last_execute_info, action_config, alert):
+    def check_interval_matched_actions(self, last_execute_info, action_config, alert: Alert):
         """
         判断周期间隔是否已经达到，用于控制告警动作的执行频率
 
@@ -158,7 +158,7 @@ class ActionHandleChecker(BaseChecker):
         notify_interval = self.calc_action_interval(execute_config, last_execute_info["execute_times"])
         # 时间间隔条件验证：
         # 1. 间隔必须大于0
-        # 2. 当前时间必须超过上次执行时间+间隔
+        # 2. 当前时间必须超过上次执行时间+间隔，防止过早触发
         if notify_interval <= 0 or last_execute_info["last_time"] + notify_interval > int(time.time()):
             return False
 

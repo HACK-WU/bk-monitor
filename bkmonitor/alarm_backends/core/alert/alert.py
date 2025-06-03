@@ -68,7 +68,7 @@ class Alert:
     CLOSE_WINDOW_SIZE = 60 * 60
     RECOVER_WINDOW_SIZE = 0
 
-    def __init__(self, data):
+    def __init__(self, data: dict):
         self.data = data
 
         self.data_id = None

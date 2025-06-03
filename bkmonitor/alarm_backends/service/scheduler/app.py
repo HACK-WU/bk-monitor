@@ -7,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import os
 import random
 
@@ -35,7 +36,7 @@ try:
 except Exception as e:
     import sys
 
-    print("django setup failed: {}".format(e))
+    print(f"django setup failed: {e}")
     sys.exit(-1)
 
 
@@ -125,7 +126,7 @@ def rabbitmq_conf():
         )
         if not get_cluster().is_default():
             broker_transport_options = {
-                "queue_name_prefix": "{}-".format(get_cluster().name),
+                "queue_name_prefix": f"{get_cluster().name}-",
             }
 
         beat_max_loop_interval = 60
@@ -168,7 +169,7 @@ def rabbitmq_conf():
                 redis_port,
                 redis_db,
             )
-            redbeat_redis_url = "redis://:{}@{}:{}/0".format(redis_password, redis_host, redis_port)
+            redbeat_redis_url = f"redis://:{redis_password}@{redis_host}:{redis_port}/0"
 
     return RabbitmqConf
 
@@ -176,6 +177,9 @@ def rabbitmq_conf():
 app = Celery("backend")
 app.config_from_object(rabbitmq_conf())
 
+if getattr(settings, "CELERY_ALWAYS_SYNC", False):
+    app.conf.task_always_eager = True
+    app.conf.task_eager_propagates = True
 
 # 任务执行时间统计
 celery_app_timer(app)
@@ -195,7 +199,7 @@ TASK_ROOT_MODULES = [
 DISCOVER_DIRS = []
 for MODULE in TASK_ROOT_MODULES:
     for m in package_contents(MODULE):
-        file_name = "{}.{}".format(MODULE, m)
+        file_name = f"{MODULE}.{m}"
         if os.path.isdir(os.path.join(settings.BASE_DIR, file_name.replace(".", os.sep))):
             DISCOVER_DIRS.append(file_name)
 
@@ -227,20 +231,20 @@ class PeriodicTask(Task):
     compat = True
 
     def __init__(self):
-        if not hasattr(self, 'run_every'):
-            raise NotImplementedError('Periodic tasks must have a run_every attribute')
+        if not hasattr(self, "run_every"):
+            raise NotImplementedError("Periodic tasks must have a run_every attribute")
         self.run_every = maybe_schedule(self.run_every, self.relative)
-        super(PeriodicTask, self).__init__()
+        super().__init__()
 
     @classmethod
     def on_bound(cls, _app):
         _app.conf.beat_schedule[cls.name] = {
-            'task': cls.name,
-            'schedule': cls.run_every,
-            'args': (),
-            'kwargs': {},
-            'options': cls.options or {},
-            'relative': cls.relative,
+            "task": cls.name,
+            "schedule": cls.run_every,
+            "args": (),
+            "kwargs": {},
+            "options": cls.options or {},
+            "relative": cls.relative,
         }
 
 

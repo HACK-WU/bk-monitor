@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,17 +7,13 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import os
 
 from celery import Celery, platforms
 from celery.signals import beat_init, setup_logging
 from django.conf import settings
 from django.db import close_old_connections
-
-try:
-    from local_settings import CELERY_ALWAYS_ASYNC
-except ImportError:
-    CELERY_ALWAYS_ASYNC = True
 
 # http://docs.celeryproject.org/en/latest/userguide/daemonizing.html#running-the-worker-with-superuser-privileges-root
 # for root start celery
@@ -34,13 +29,15 @@ app.config_from_object("config.celery.config:Config")
 # Load task modules from all registered Django app configs.
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
-if not CELERY_ALWAYS_ASYNC:
-    app.conf.update(task_always_eager=True, task_eager_propagates=True)  # 同步执行所有任务  # 同步时异常直接抛出
+# 是否同步执行celery 任务
+if getattr(settings, "CELERY_ALWAYS_SYNC", False):
+    app.conf.task_always_eager = True
+    app.conf.task_eager_propagates = True
 
 
 @app.task(bind=True)
 def debug_task(self):
-    print(f'Request: {self.request!r}')
+    print(f"Request: {self.request!r}")
 
 
 @setup_logging.connect
