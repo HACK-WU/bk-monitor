@@ -192,7 +192,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
                 last_operation=OperationType.CREATE,
                 operation_result=OperationResult.PREPARING,
                 collect_type=config["collect_type"],
-                plugin=plugin_obj,
+                plugin_id=plugin_obj.plugin_id,
                 target_object_type=config["target_object_type"],
                 label=config["label"],
             )

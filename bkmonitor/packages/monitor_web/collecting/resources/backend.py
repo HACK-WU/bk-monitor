@@ -1030,7 +1030,7 @@ class SaveCollectConfigResource(Resource):
                 last_operation=OperationType.CREATE,
                 operation_result=OperationResult.PREPARING,
                 collect_type=data["collect_type"],
-                plugin=collector_plugin,
+                plugin_id=collector_plugin.plugin_id,
                 target_object_type=data["target_object_type"],
                 label=data["label"],
             )
