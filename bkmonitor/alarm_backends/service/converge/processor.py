@@ -465,7 +465,7 @@ class ConvergeProcessor:
 
         converge_func = ConvergeFunc(
             self.instance,
-            converge_manager.match_alarm_id_list,
+            converge_manager.match_action_id_list,
             converge_manager.is_created,
             converge_instance,
             self.converge_config,

@@ -73,7 +73,7 @@ class ConvergeManager:
         self.is_created = False  # 收敛实例是否创建
         self.start_time = start_time
         self.end_timestamp = end_timestamp
-        self.match_alarm_id_list = []
+        self.match_action_id_list = []
         self.converge_instance = self.get_converge_instance(start_time)
         self.start_timestamp = int(self.start_time.timestamp())
         self.biz_converge_existed = False
@@ -128,9 +128,9 @@ class ConvergeManager:
             )
             return True
 
-        # 获取关联的告警ID列表
-        self.match_alarm_id_list = self.get_related_ids()
-        matched_count = len(self.match_alarm_id_list)
+        # 获取关联的动作实例ID列表
+        self.match_action_id_list = self.get_related_ids()
+        matched_count = len(self.match_action_id_list)
 
         if not self.converge_instance and matched_count >= int(self.converge_config["count"]):
             # 创建新收敛实例：满足数量阈值且不存在现有实例
@@ -464,16 +464,16 @@ class ConvergeManager:
 
         # 统计恢复逻辑处理
         # 仅当当前实例为已创建状态且存在匹配告警ID列表时执行
-        if self.is_created and self.match_alarm_id_list:
+        if self.is_created and self.match_action_id_list:
             # 获取其他已收敛实例集合
             other_converged_instances = list_other_converged_instances(
-                self.match_alarm_id_list, self.instance, self.instance_type
+                self.match_action_id_list, self.instance, self.instance_type
             )
 
             # 针对动作实例的特殊过滤处理
             if self.instance_type == ConvergeType.ACTION:
                 other_converged_instances = (
-                    ActionInstance.objects.filter(id__in=self.match_alarm_id_list)
+                    ActionInstance.objects.filter(id__in=self.match_action_id_list)
                     .exclude(status__in=[ActionStatus.RECEIVED, ActionStatus.SLEEP, ActionStatus.WAITING])
                     .exclude(id=self.instance.id)
                 )
