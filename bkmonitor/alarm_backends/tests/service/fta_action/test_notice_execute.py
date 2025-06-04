@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import base64
 import copy
 import json
@@ -18,7 +18,7 @@ from json import JSONDecodeError
 from unittest.mock import MagicMock, patch
 
 import fakeredis
-import mock
+from unittest import mock
 import pytest
 import pytz
 from django.conf import settings
@@ -380,7 +380,10 @@ def register_builtin_plugins():
                     },
                 },
                 "plugin_url": {
-                    "mapping": {"url": "{{itsm_site_url}}/#/project/service/new/basic?project_id=0", "tips": "前往流程服务"}
+                    "mapping": {
+                        "url": "{{itsm_site_url}}/#/project/service/new/basic?project_id=0",
+                        "tips": "前往流程服务",
+                    }
                 },
                 "detail": {
                     "name": "提单信息",
@@ -557,7 +560,7 @@ def notice_template():
             "\n{{content.content}}\n{{content.current_value}}\n{{content.biz}}\n"
             "{{content.target}}\n{{content.dimension}}\n{{content.detail}}\n"
             "{{content.related_info}}",
-            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - " "{{alarm.name}}{{alarm.display_type}}",
+            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - {{alarm.name}}{{alarm.display_type}}",
         },
         {
             "signal": "recovered",
@@ -566,7 +569,7 @@ def notice_template():
             "{{content.content}}\n{{content.current_value}}\n{{content.biz}}\n"
             "{{content.target}}\n{{content.dimension}}\n{{content.detail}}\n"
             "{{content.related_info}}",
-            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - {{alarm.name}}" "{{alarm.display_type}}",
+            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - {{alarm.name}}{{alarm.display_type}}",
         },
         {
             "signal": "closed",
@@ -575,7 +578,7 @@ def notice_template():
             "{{content.content}}\n{{content.current_value}}\n{{content.biz}}\n"
             "{{content.target}}\n{{content.dimension}}\n{{content.detail}}\n"
             "{{content.related_info}}",
-            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - {{alarm.name}}" "{{alarm.display_type}}",
+            "title_tmpl": "【{{level_name}}】{{business.bk_biz_name}} - {{alarm.name}}{{alarm.display_type}}",
         },
     ]
 
@@ -904,7 +907,7 @@ class TestActionProcessor(TransactionTestCase):
                 "is_effective": 1,
                 "start_time": time_tools.datetime2str(datetime.now(tz=local_timezone)),
                 "finished_time": time_tools.datetime2str(datetime.now(tz=local_timezone) + timedelta(hours=1)),
-                "work_times": [{'start_time': today_begin, 'end_time': today_end}],
+                "work_times": [{"start_time": today_begin, "end_time": today_end}],
                 "order": 1,
                 "users": [
                     {"id": "admin", "display_name": "admin", "logo": "", "type": "user"},
@@ -917,7 +920,7 @@ class TestActionProcessor(TransactionTestCase):
                 "finished_time": "",
                 "is_effective": 1,
                 "order": 2,
-                "work_times": [{'start_time': today_begin, 'end_time': today_end}],
+                "work_times": [{"start_time": today_begin, "end_time": today_end}],
                 "users": [{"id": "lisa", "display_name": "xxxxx", "logo": "", "type": "user"}],
             },
         ]
@@ -1652,7 +1655,8 @@ class TestActionProcessor(TransactionTestCase):
         actions0 = create_actions(1, "abnormal", alerts=[alert])
         self.assertEqual(len(actions0), 1)
         self.assertEqual(
-            ActionInstance.objects.get(id=actions0[0]).get_content()["text"], '达到通知告警的执行条件【告警触发时】，当前通知人员为空'
+            ActionInstance.objects.get(id=actions0[0]).get_content()["text"],
+            "达到通知告警的执行条件【告警触发时】，当前通知人员为空",
         )
         group.alert_notice[0]["time_range"] = "00:00--23:59"
         group.save()
@@ -1681,7 +1685,7 @@ class TestActionProcessor(TransactionTestCase):
             severity=action.alert_level,
             dimensions=action.dimensions,
             dimension_hash=action.dimension_hash,
-            relation_id=action.strategy_relation_id,
+            action_id=action.strategy_relation_id,
             execute_times=alert.extra_info["cycle_handle_record"]["1"]["execute_times"],
         )
         self.assertEqual(len(actions1), 6)
@@ -1797,7 +1801,7 @@ class TestActionProcessor(TransactionTestCase):
             ActionSignal.ABNORMAL,
             [alert.id],
             severity=alert.severity,
-            relation_id=1,
+            action_id=1,
             execute_times=1,
         )
         self.assertEqual(len(actions1), 6)
@@ -1819,7 +1823,7 @@ class TestActionProcessor(TransactionTestCase):
             [alert.id],
             alerts=[alert.to_document()],
             severity=alert.severity,
-            relation_id=1,
+            action_id=1,
             execute_times=1,
         )
         self.assertEqual(len(actions), 0)
@@ -1832,7 +1836,7 @@ class TestActionProcessor(TransactionTestCase):
             ActionSignal.ABNORMAL,
             [alert.id],
             severity=alert.severity,
-            relation_id=1,
+            action_id=1,
             execute_times=2,
         )
         self.assertEqual(len(actions), 1)
@@ -1890,7 +1894,10 @@ class TestActionProcessor(TransactionTestCase):
                 {
                     "id": 1,
                     "config_id": 4444,  # 套餐ID
-                    "signal": ["abnormal", "recovered"],  # 触发信号，abnormal-异常，recovered-恢复，closed-关闭, no_data-无数据时
+                    "signal": [
+                        "abnormal",
+                        "recovered",
+                    ],  # 触发信号，abnormal-异常，recovered-恢复，closed-关闭, no_data-无数据时
                     "user_groups": [group.id],  # 告警组ID，提交时请与通知中设置的告警组保持一致
                     "options": {
                         "converge_config": {
@@ -1980,7 +1987,10 @@ class TestActionProcessor(TransactionTestCase):
                 {
                     "id": 1,
                     "config_id": 4444,  # 套餐ID
-                    "signal": ["abnormal", "recovered"],  # 触发信号，abnormal-异常，recovered-恢复，closed-关闭, no_data-无数据时
+                    "signal": [
+                        "abnormal",
+                        "recovered",
+                    ],  # 触发信号，abnormal-异常，recovered-恢复，closed-关闭, no_data-无数据时
                     "user_groups": [group.id],  # 告警组ID，提交时请与通知中设置的告警组保持一致
                     "options": {
                         "converge_config": {
@@ -2019,7 +2029,10 @@ class TestActionProcessor(TransactionTestCase):
         j_ap.action.status = "running"
         j_ap.create_task()
         self.assertEqual(j_ap.action.status, "failure")
-        self.assertEqual(j_ap.action.ex_data["message"], "执行创建job任务出错，获取当前告警策略配置的告警组用户为空，无法执行处理套餐")
+        self.assertEqual(
+            j_ap.action.ex_data["message"],
+            "执行创建job任务出错，获取当前告警策略配置的告警组用户为空，无法执行处理套餐",
+        )
 
         action_config_patch.stop()
         mget_alert_patch.stop()
@@ -2092,7 +2105,9 @@ class TestActionProcessor(TransactionTestCase):
         content_template_path = "notice/abnormal/action/mail_content.jinja"
         render_content = AlarmNoticeTemplate(content_template_path).render(context)
         self.assertTrue(
-            _("用户配置的通知模板渲染失败，默认使用系统内置模板，渲染失败可能是使用了不正确的语法，具体请查看策略配置{}").format(alert_context.alarm.strategy_url)
+            _(
+                "用户配置的通知模板渲染失败，默认使用系统内置模板，渲染失败可能是使用了不正确的语法，具体请查看策略配置{}"
+            ).format(alert_context.alarm.strategy_url)
             in render_content
         )
 
@@ -2185,9 +2200,7 @@ class TestActionProcessor(TransactionTestCase):
         context = alert_context.get_dictionary()
         context["alarm"].log_related_info = "testtesttest"
         content_template_path = "notice/abnormal/action/markdown_content.jinja"
-        context[
-            "content_template"
-        ] = """#test title#12345
+        context["content_template"] = """#test title#12345
 {{content.level}}
 {{content.begin_time}}
 {{content.time}}
@@ -3568,7 +3581,7 @@ class TestActionProcessor(TransactionTestCase):
             "begin_time": datetime.now(tz=timezone.utc),
             "end_time": datetime.now(tz=timezone.utc) + timedelta(hours=1),
             "dimension_config": {
-                'bk_target_ip': [{'bk_host_id': 281, 'bk_target_ip': '127.0.0.1', 'bk_target_cloud_id': 0}]
+                "bk_target_ip": [{"bk_host_id": 281, "bk_target_ip": "127.0.0.1", "bk_target_cloud_id": 0}]
             },
             "cycle_config": {"type": 1, "week_list": [], "day_list": [], "begin_time": "", "end_time": ""},
         }
@@ -3611,7 +3624,7 @@ class TestActionProcessor(TransactionTestCase):
             "scope_type": "ip",
             "begin_time": datetime.now(tz=timezone.utc),
             "end_time": datetime.now(tz=timezone.utc) + timedelta(hours=1),
-            "dimension_config": {'bk_topo_node': [{'bk_obj_id': 'module', 'bk_inst_id': 8}]},
+            "dimension_config": {"bk_topo_node": [{"bk_obj_id": "module", "bk_inst_id": 8}]},
             "cycle_config": {"type": 1, "week_list": [], "day_list": [], "begin_time": "", "end_time": ""},
         }
 
@@ -3958,11 +3971,13 @@ class TestActionProcessor(TransactionTestCase):
         self.alert_info["extra_info"].update(strategy=strategy_dict)
 
         alert_doc = AlertDocument(**self.alert_info)
-        with patch("bkmonitor.documents.AlertDocument.mget", MagicMock(return_value=[alert_doc])), patch(
-            "bkmonitor.documents.AlertDocument.get", MagicMock(return_value=alert_doc)
-        ), patch(
-            "alarm_backends.core.cache.action_config.ActionConfigCacheManager.get_action_config_by_id",
-            MagicMock(return_value=strategy_dict.pop("notice_action_config", {})),
+        with (
+            patch("bkmonitor.documents.AlertDocument.mget", MagicMock(return_value=[alert_doc])),
+            patch("bkmonitor.documents.AlertDocument.get", MagicMock(return_value=alert_doc)),
+            patch(
+                "alarm_backends.core.cache.action_config.ActionConfigCacheManager.get_action_config_by_id",
+                MagicMock(return_value=strategy_dict.pop("notice_action_config", {})),
+            ),
         ):
             alert_doc.strategy_id = strategy_dict["id"]
             alert = Alert(data=alert_doc.to_dict())
@@ -4549,7 +4564,7 @@ class TestNoiseReduce(TestCase):
                 "is_effective": 1,
                 "start_time": time_tools.datetime2str(datetime.now(tz=pytz.timezone(timezone))),
                 "finished_time": time_tools.datetime2str(datetime.now(tz=pytz.timezone(timezone)) + timedelta(hours=1)),
-                "work_times": [{'start_time': today_begin, 'end_time': today_end}],
+                "work_times": [{"start_time": today_begin, "end_time": today_end}],
                 "order": 1,
                 "users": [{"id": "admin", "display_name": "admin", "logo": "", "type": "user"}],
             }

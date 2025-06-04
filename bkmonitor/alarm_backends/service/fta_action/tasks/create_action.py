@@ -131,7 +131,7 @@ def create_interval_actions(
     severity=None,
     dimensions=None,
     dimension_hash="",
-    relation_id=None,
+    action_id=None,
     execute_times=0,
 ):
     """
@@ -145,7 +145,7 @@ def create_interval_actions(
         severity: 告警严重级别（可选）
         dimensions: 告警维度信息（可选）
         dimension_hash: 维度哈希值（可选）
-        relation_id: 关联ID（可选）
+        action_id:  策略与处理套餐的关联ID，这里就是action的ID（可选）,后续用于过滤操作
         execute_times: 执行次数计数器（默认0）
 
     返回值:
@@ -169,14 +169,15 @@ def create_interval_actions(
     }
 
     alert_id = alerts[0].id if alerts else alert_ids[0]
-    logger.info("do create polled actions for alert(%s), relation_id(%s)", alert_id, relation_id)
+    # 配置的间隔通知模式，这里对应的就是“polled actions” 循环动作
+    logger.info("do create polled actions for alert(%s), relation_id(%s)", alert_id, action_id)
 
     # 执行动作创建核心流程
     # 包含指标计时、处理器调用和结果日志记录
     try:
         with metrics.ACTION_CREATE_PROCESS_TIME.labels(**public_labels).time():
             actions = CreateActionProcessor(
-                strategy_id, signal, alert_ids, alerts, severity, dimensions, dimension_hash, relation_id, execute_times
+                strategy_id, signal, alert_ids, alerts, severity, dimensions, dimension_hash, action_id, execute_times
             ).do_create_actions()
         logger.info("create polled actions(%s) for alert(%s)", len(actions), alert_id)
     except BaseException as e:
@@ -302,7 +303,7 @@ class CreateIntervalActionProcessor:
                     severity=action_instance.alert_level,
                     dimensions=action_instance.dimensions,
                     dimension_hash=action_instance.dimension_hash,
-                    relation_id=action_instance.strategy_relation_id,
+                    action_id=action_instance.strategy_relation_id,
                     execute_times=action_instance.execute_times,
                 )
                 self.polled_actions.append(action_id)
@@ -368,7 +369,6 @@ class CreateIntervalActionProcessor:
 
 
 class CreateActionProcessor:
-    # 初始化CreateActionProcessor类的实例
     def __init__(
         self,
         strategy_id,  # 策略ID
@@ -378,39 +378,85 @@ class CreateActionProcessor:
         severity=None,  # 严重性
         dimensions=None,  # 维度
         dimension_hash="",  # 维度哈希
-        relation_id=None,  # 关联ID
+        action_id=None,  # 后续用于过滤action
         execute_times=0,  # 执行次数
         is_unshielded=False,  # 是否为解除屏蔽
         notice_type=ActionNoticeType.NORMAL,  # 通知类型
     ):
-        self.strategy_id = strategy_id  # 设置策略ID
-        self.signal = signal  # 设置信号
-        alert_ids = alert_ids or [alert.id for alert in alerts]  # 如果alert_ids为空，则从alerts中提取警报ID
-        # 生成告警标识列表，用于从Redis或ES中批量获取告警
+        """
+        初始化告警处理上下文对象
+
+        参数:
+            strategy_id: 策略唯一标识符
+            signal: 触发动作的原始信号
+            alert_ids: 可选的警报ID列表
+            alerts: 可选的警报文档对象列表
+            severity: 告警严重等级
+            dimensions: 多维数据标签集合
+            dimension_hash: 维度组合唯一标识
+            action_id: 动作关联唯一标识
+            execute_times: 当前执行次数计数器
+            is_unshielded: 屏蔽状态标志位
+            notice_type: 通知消息类型枚举
+
+        该构造函数主要完成以下核心初始化流程：
+        1. 基础属性赋值
+        2. 警报数据预加载与过滤
+        3. 策略配置加载
+        4. 运行时状态初始化
+        """
+
+        # 基础属性初始化
+        self.strategy_id = strategy_id
+        self.signal = signal
+
+        # 警报标识处理
+        # 优先使用显式传入的警报ID列表，否则从警报文档中提取
+        alert_ids = alert_ids or [alert.id for alert in alerts]
+
+        # 构建分布式存储访问键
+        # 生成用于从Redis/ES批量获取告警的复合键列表
         alert_keys = [AlertKey(alert_id=alert_id, strategy_id=self.strategy_id) for alert_id in alert_ids]
-        # 从Redis或ES中批量获取告警
+
+        # 分布式存储批量读取
+        # 通过mget接口一次性获取所有关联告警对象
         self.alert_objs = {alert.id: alert for alert in Alert.mget(alert_keys)}
-        # 过滤出有效的警报文档
+
+        # 有效告警过滤
+        # 根据执行次数和动作ID筛选可处理的警报文档
         self.alerts = [
             AlertDocument(**alert.data)
             for alert in self.alert_objs.values()
-            if alert.is_valid_handle(execute_times, relation_id)
+            if alert.is_valid_handle(execute_times, action_id)
         ]
-        self.is_alert_shielded = False  # 初始化警报是否被屏蔽的状态
-        self.shield_detail = ""  # 初始化屏蔽详情
-        self.alert_ids = alert_ids  # 设置警报ID列表
-        self.severity = severity or self.alerts[0].severity  # 设置严重性，如果未提供则使用第一个警报的严重性
-        self.dimensions = dimensions  # 设置维度
-        self.dimension_hash = dimension_hash  # 设置维度哈希
-        self.relation_id = relation_id  # 设置关联ID
-        self.execute_times = execute_times  # 设置执行次数
-        self.is_unshielded = is_unshielded  # 设置是否未屏蔽
-        # 获取策略配置，如果没有则使用第一个警报的策略或空字典
+
+        # 运行时状态初始化
+        self.is_alert_shielded = False
+        self.shield_detail = ""
+        self.alert_ids = alert_ids
+
+        # 严重等级继承处理
+        # 使用显式传入值或默认取首个有效告警的等级
+        self.severity = severity or self.alerts[0].severity
+
+        # 上下文属性赋值
+        self.dimensions = dimensions
+        self.dimension_hash = dimension_hash
+        self.relation_id = action_id
+        self.execute_times = execute_times
+        self.is_unshielded = is_unshielded
+
+        # 策略配置加载
+        # 优先加载最新策略配置，降级使用有效告警的策略
         self.strategy = Strategy(strategy_id).config or (self.alerts[0].strategy if self.alerts else {})
-        self.generate_uuid = self.get_generate_uuid()  # 生成UUID
-        self.noise_reduce_result = False  # 初始化降噪结果
-        self.notice = {}  # 初始化通知
-        self.notice_type = notice_type  # 设置通知类型
+
+        #  生产uuid,本次执行产生的ActionInstance将会拥有相同的uuid
+        self.generate_uuid = self.get_generate_uuid()
+
+        # 通知系统初始化
+        self.noise_reduce_result = False
+        self.notice = {}
+        self.notice_type = notice_type
 
     def get_generate_uuid(self):
         # 生成UUID的方法
@@ -497,11 +543,11 @@ class CreateActionProcessor:
     def is_alert_status_valid(self, alert):
         """
         判断当前告警是否需要执行
+
         不进行告警分派的两种情况：
             1.信号为已确认，并且已经进行了告警通知
             2.告警为已确认，或者告警状态发生了变化（如果告警状态与信号不一致，则告警状态发生了改变）
-        :param alert:
-        :return:
+
         """
         # 在传入信号是确认情况下，如果告警已经通知过了，那么就不用再进行告警分派，否则需要进行告警分派
         # 信号不是已确认，需要进行其他情况的判断
@@ -647,10 +693,12 @@ class CreateActionProcessor:
         1. 基础校验与日志记录
         2. 获取处理配置与用户分组
         3. 告警分派与负责人管理
-        4. 动作实例创建与批量持久化
-        5. 状态更新与日志记录
+        4. 动作实例ActionInstance创建与批量持久化
+        5. 将告警推送到处理队列，执行动作处理逻辑
+        6. 状态更新与日志记录
         """
-        # 创建任务
+        # 基础校验与日志记录模块
+        # 检查告警列表是否为空并记录日志
         if not self.alerts:
             logger.info(
                 "[create actions] failed: empty alerts(%s), strategy_id(%s), signal(%s)",
@@ -671,19 +719,22 @@ class CreateActionProcessor:
             self.relation_id,
         )
 
-        # 获取到关联的处理套餐，对并通知动作进行降噪处理
+        # 配置获取与预处理模块
+        # 获取关联处理配置并进行降噪处理
         actions = self.get_action_relations()
         new_actions: list[ActionInstance] = []
-        # 获取告警的屏蔽状态，以及屏蔽配置ID列表
+        # 获取告警屏蔽状态及屏蔽配置ID列表
         self.is_alert_shielded, shield_ids = self.get_alert_shield_result()
-        # 创建推送队列的人员信息
+        # 创建消息队列通知动作
         self.create_message_queue_action(new_actions)
 
         alert: AlertDocument = self.alerts[0]
+        # 无数据告警特殊处理逻辑
         if alert.is_no_data() and self.signal in [ActionSignal.RECOVERED, ActionSignal.CLOSED]:
-            # 无数据告警恢复和关闭的时候， 只推送消息队列，不发送通知
+            # 无数据告警恢复和关闭时仅推送消息队列，不发送通知
             return []
 
+        # 处理配置有效性检查
         if not actions:
             logger.info(
                 "[create actions]ignore: empty config for signal(%s), strategy(%s), alerts %s",
@@ -693,40 +744,43 @@ class CreateActionProcessor:
             )
             return new_actions
 
-        # 从缓存中获取到关联处理套餐
+        # 缓存加载模块
+        # 从缓存获取处理套餐配置
         action_configs = {
             str(action["config_id"]): ActionConfigCacheManager.get_action_config_by_id(action["config_id"])
             for action in actions
         }
         origin_action_ids = list(action_configs.keys())
 
-        # 插件不会有很多项，直接拉全量的数据即可
+        # 插件加载模块
+        # 获取全量动作插件信息
         action_plugins = {
             str(plugin["id"]): plugin for plugin in ActionPluginSlz(instance=ActionPlugin.objects.all(), many=True).data
         }
 
-        # 告警套餐实例列表
-        action_instances = []
-        # 告警受理人，对应页面上的被通知人，初步猜测就是固定轮值的被通知人
-        alerts_assignee = {}
-        # 被指派的负责人，初步猜测是告警分派后的负责人
-        alerts_appointee = {}
-        # 通知升级关主人
-        alerts_supervisor = {}
-        # 关主人，只能查看不能操作
-        alerts_follower = {}
+        # 数据初始化模块
+        action_instances = []  # 告警套餐实例列表
+        # 初始化各类用户组字典
+        alerts_assignee = {}  # 告警受理人（固定轮值被通知人）
+        alerts_appointee = {}  # 被指派负责人
+        alerts_supervisor = {}  # 升级负责人
+        alerts_follower = {}  # 关注人（只读）
 
-        # 根据用户组信息获取人员
+        # 核心处理流程模块
         alert_logs = []
         qos_alerts = []
         current_qos_count = 0
+
+        # 告警遍历处理循环
         for alert in self.alerts:
             alert_dict = alert.to_dict()
+            # 初始化各类用户组字段
             alerts_assignee[alert.id] = alert_dict.get("assignee") or []
             alerts_appointee[alert.id] = alert_dict.get("appointee") or []
             alerts_supervisor[alert.id] = alert_dict.get("supervisor") or []
             alerts_follower[alert.id] = alert_dict.get("follower") or []
-            # 进行告警分派
+
+            # 告警状态有效性校验
             if not self.is_alert_status_valid(alert):
                 # 所有的通知，需要判断信号是否为有效状态
                 continue
@@ -744,14 +798,13 @@ class CreateActionProcessor:
                 # 告警分派异常, 搜索日志: [alert assign error]
                 continue
             if not assignee_manager.is_matched and not self.strategy_id:
-                # 第三方告警如果没有适配到的规则，直接忽略
+                # 第三方告警如果没有适配到的规则，且没有对应的策略ID，直接忽略
+                # 没有策略ID，那么也没有对应的action,后续没有处理的必要
                 continue
 
             if self.notice_type == ActionNoticeType.UPGRADE:
-                # 获取告警升级负责人
-                supervisors = assignee_manager.get_supervisors()
-                # 获取告警升级关注人
-                followers = assignee_manager.get_supervisors(user_type=UserGroupType.FOLLOWER)
+                supervisors = assignee_manager.get_supervisors()  # 升级通知处理分支
+                followers = assignee_manager.get_supervisors(user_type=UserGroupType.FOLLOWER)  # 告警升级关注人
                 # 没有告警升级负责人直接忽略
                 if not supervisors:
                     logger.info("ignore to send supervise notice for alert(%s) due to empty supervisor", alert.id)
@@ -762,12 +815,10 @@ class CreateActionProcessor:
                     logger.info("ignore to send supervise notice for alert(%s) due to notice qos", alert.id)
                     continue
             else:
-                # 获取告警负责人
-                assignees = assignee_manager.get_assignees()
-                # 获取告警关注人
-                followers = assignee_manager.get_assignees(user_type=UserGroupType.FOLLOWER)
+                assignees = assignee_manager.get_assignees()  # 常规通知处理分支
+                followers = assignee_manager.get_assignees(user_type=UserGroupType.FOLLOWER)  # 告警关注人
 
-            # 获取告警相关的负责人并去重
+            # 用户组合并与去重处理
             alerts_assignee[alert.id] = self.get_alert_related_users(assignees + supervisors, alerts_assignee[alert.id])
 
             # 告警负责人字段，替换为当前的负责人
@@ -781,7 +832,7 @@ class CreateActionProcessor:
             # 告警关注人
             alerts_follower[alert.id] = self.get_alert_related_users(followers, alerts_follower[alert.id])
 
-            # 循环创建处理套餐
+            # 动作实例创建循环
             for action in actions + itsm_actions:
                 action_config = action_configs.get(str(action["config_id"]))
                 # 处理套餐无效则跳过
@@ -804,10 +855,12 @@ class CreateActionProcessor:
                 alert_log = assignee_manager.match_manager.get_alert_log()
                 if alert_log:
                     alert_logs.append(AlertLog(**alert_log))
-        # 清理缓存
+
+        # 资源清理模块
         AssignCacheManager.clear()
+
+        # 批量持久化处理模块
         if action_instances:
-            # 批量创建处理套餐
             ActionInstance.objects.bulk_create(action_instances)
             # 推送处理事件至收敛队列，并返回处理套餐ID列表
             new_actions.extend(
@@ -821,6 +874,7 @@ class CreateActionProcessor:
                 )
             )
 
+        # 日志记录模块
         logger.info(
             "[create actions]do_create_actions finished, strategy_id %s, alerts %s, signal %s, created actions(%s) %s",
             self.strategy_id,
@@ -931,16 +985,29 @@ class CreateActionProcessor:
 
     def create_message_queue_action(self, new_actions: list):
         """
-        创建推送k队列的处理记录
-        :param new_actions: 新的任务列表
-        :return:
+        创建消息队列推送动作实例并加入执行队列
+
+        参数:
+            new_actions: 新增的动作实例ID列表，用于后续批量处理
+
+        返回值:
+            None（无显式返回值，通过参数new_actions传递结果）
+
+        该方法实现消息队列推送动作的完整创建流程：
+        1. 环境配置校验（消息队列开关和DSN配置）
+        2. 告警屏蔽状态处理逻辑
+        3. 动作实例创建与关联属性设置
+        4. 动作实例入队执行队列
+        5. 动作ID回填至任务列表
         """
+        # 检查消息队列功能是否启用（前置条件校验）
         need_message_queue = settings.ENABLE_MESSAGE_QUEUE and settings.MESSAGE_QUEUE_DSN
         if not need_message_queue:
             return
 
+        # 处理告警屏蔽状态的特殊逻辑
         if self.is_alert_shielded and not settings.ENABLE_PUSH_SHIELDED_ALERT:
-            # 当前告警处于屏蔽状态并且不允许推送屏蔽告警，直接忽略
+            # 当前告警处于屏蔽状态且配置禁止推送时，记录日志并终止流程
             logger.info(
                 "[create actions]ignore push message queue for shielded alert(%s)"
                 " because config[ENABLE_PUSH_SHIELDED_ALERT] is %s",
@@ -949,6 +1016,7 @@ class CreateActionProcessor:
             )
             return
 
+        # 创建消息队列类型的动作实例
         plugin_type = ActionPluginType.MESSAGE_QUEUE
         action_instance = ActionInstance.objects.create(
             alerts=self.alert_ids,
@@ -959,6 +1027,8 @@ class CreateActionProcessor:
             dimensions=self.dimensions or [],
             action_plugin={"plugin_type": plugin_type},
         )
+
+        # 将动作实例推送到执行队列并记录实例ID
         PushActionProcessor.push_action_to_execute_queue(action_instance, self.alerts)
         new_actions.append(action_instance.id)
 

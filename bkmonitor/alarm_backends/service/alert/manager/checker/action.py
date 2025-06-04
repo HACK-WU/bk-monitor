@@ -45,11 +45,15 @@ class ActionHandleChecker(BaseChecker):
             None: 始终返回None，通过side effect修改alert对象状态
 
         处理流程概要：
-        1. 预检阶段：验证告警处理状态和策略有效性
-        2. 动作配置收集：整合通知关系和异常动作配置
-        3. 周期记录处理：检查并更新历史执行记录
-        4. 任务触发：符合条件时创建周期执行任务
-        5. 状态更新：维护最新的通知处理元数据
+        1.告警没有被处理过的，告警告警没有策略的，直接返回，不进行处理
+        2.获取到异常的action配置
+        3.循环处理action配置
+            - 获取action的处理记录，不存在处理记录则跳过
+            - 获取action的config配置，根据config配置，判断当前是否符合处理时间间隔要求，不符合跳过
+            - 创建周期性告警处理action（异步）
+            - 更新action处理记录
+        4.更新告警的处理记录
+
         """
         # todo 为什么没处理要跳过？
         if not alert.is_handled:
@@ -74,11 +78,11 @@ class ActionHandleChecker(BaseChecker):
 
         # 处理每个动作配置
         for action in actions:
-            relation_id = str(action["id"])
-            relation_record = cycle_handle_record.get(relation_id)
+            action_id = str(action["id"])
+            relation_record = cycle_handle_record.get(action_id)
             if not relation_record:
                 # 尝试从历史记录中获取
-                relation_record = alert.get_latest_interval_record(action["config_id"], relation_id)
+                relation_record = alert.get_latest_interval_record(action["config_id"], action_id)
             # todo 为什么没有处理记录要跳过？
             if not relation_record:
                 continue
@@ -95,14 +99,14 @@ class ActionHandleChecker(BaseChecker):
                 signal,
                 [alert.id],
                 severity=alert.severity,
-                relation_id=int(relation_id),
+                action_id=int(action_id),
                 execute_times=execute_times,
             )
 
             # 更新周期处理记录
             cycle_handle_record.update(
                 {
-                    str(relation_id): {
+                    str(action_id): {
                         "last_time": int(time.time()),
                         "is_shielded": alert.is_shielded,
                         "latest_anomaly_time": alert.latest_time,

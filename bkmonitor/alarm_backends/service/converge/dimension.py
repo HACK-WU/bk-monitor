@@ -267,13 +267,13 @@ class DimensionCalculator:
         处理流程:
         1. 生成基于创建时间的时间戳评分
         2. 创建Redis管道批量操作
-        3. 遍历所有维度进行以下操作：
-           - 跳过空值维度
-           - 标准化维度值为列表格式
-           - 构建Redis存储键
-           - 清理历史过期数据
-           - 添加当前实例数据
-           - 设置键过期时间
+        3. 遍历用于匹配的收敛维度：
+           - 从收敛上下文中获取对应维度值
+           - 根据策略ID，维度以及维度值生成key-value，格式为：
+             - key: f"fta_action.converge.{strategy_id}.{dimension}.{value}"
+             - value: f"{instance_type}_{action_instance_id}:{score}"
+           - 清理过期key
+           - 添加新key-value
         4. 执行管道命令并返回收敛信息
 
         返回值:

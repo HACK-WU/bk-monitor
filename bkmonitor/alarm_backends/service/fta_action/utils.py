@@ -69,7 +69,7 @@ class PushActionProcessor:
         1. 异常情况快速失败处理（无告警/被屏蔽/需降噪）
         2. 父任务驱动的子任务创建机制
         3. 降噪过滤处理
-        4. 批量队列推送
+        4. 将actions推送至收敛队列
         """
 
         # 处理无告警场景的快速失败逻辑
@@ -108,7 +108,7 @@ class PushActionProcessor:
             action_instances = action_instances.filter(is_parent_action=False)
         action_instances = list(action_instances)
 
-        # 执行最终的队列推送操作
+        # 将actions推送至收敛队列
         cls.push_actions_to_converge_queue(action_instances, {generate_uuid: alerts}, notice_config)
         return [action.id for action in action_instances]
 
@@ -132,10 +132,9 @@ class PushActionProcessor:
 
         处理流程：
         1. 遍历所有动作实例进行收敛配置解析
-        2. 根据通知方式（语音/非语音）选择不同处理路径
-        3. 优先从动作策略中提取收敛配置
-        4. 当无策略配置时尝试使用默认通知配置
-        5. 根据是否存在收敛配置分发到执行队列或收敛队列
+            - 动作类型是语音通知则跳过收敛流程，直接推送到执行队列
+            -非语音通知则计算,用于维度维度匹配的key-value,并存到缓存中
+            -执行收敛逻辑（异步）
         """
 
         for action_instance in action_instances:

@@ -91,6 +91,7 @@ class ConvergeFunc:
             logger.info("$%s:%s type of converge is not supported", self.instance_id, self.instance_type)
             return False
 
+        # 查询是否存在关联此收敛的，action实例,不存在则没有做关联，也就是第一次执行，直接返回False
         other_converged_instances = get_executed_actions(self.converge_instance.id)
         if not other_converged_instances:
             # 未查询到关联执行记录的情况
@@ -98,8 +99,7 @@ class ConvergeFunc:
             logger.info("$%s:%s not other_converge_instances", self.instance_id, self.instance_type)
             return False
 
-        # 检查是否存在成功完成的关联实例
-        # 若存在成功实例则返回跳过状态码
+        # 存做则检查动作是否成功，如果成功则跳过
         if other_converged_instances.filter(status=ActionStatus.SUCCESS).exists():
             return ActionStatus.SKIPPED
 

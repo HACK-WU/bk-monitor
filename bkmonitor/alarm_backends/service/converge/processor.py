@@ -14,6 +14,7 @@ import hashlib
 import logging
 from copy import deepcopy
 from datetime import datetime, timedelta
+from typing import Literal
 
 from django.conf import settings
 from django.utils import timezone
@@ -40,6 +41,8 @@ from constants.action import (
     ActionPluginType,
     ActionStatus,
     ConvergeType,
+    action_instance_id,
+    converge_instance_id,
 )
 from core.errors.alarm_backends import ActionAlreadyFinishedError, StrategyNotFound
 from core.prometheus import metrics
@@ -55,7 +58,14 @@ class ConvergeLockError(BaseException):
 class ConvergeProcessor:
     InstanceModel = {ConvergeType.CONVERGE: ConvergeInstance, ConvergeType.ACTION: ActionInstance}
 
-    def __init__(self, converge_config, instance_id, instance_type, converge_context=None, alerts=None):
+    def __init__(
+        self,
+        converge_config,
+        instance_id: action_instance_id | converge_instance_id,
+        instance_type: Literal["action", "converge"],
+        converge_context=None,
+        alerts=None,
+    ):
         """
         收敛处理器基类，用于处理告警收敛的核心逻辑
         "converge_config": {
@@ -158,10 +168,11 @@ class ConvergeProcessor:
             logger.warning("$%s illegal converge_config : count %s <= 0", instance_id, self.converge_count)
             return
 
-        # converge_range 设置了最大的收敛延时窗口，则用最大的时间窗口，否则用timedelta作为时间收敛窗口
+        # 将单位转换为分钟
         self.converge_timedelta = int(self.converge_config["timedelta"]) // CONST_MINUTES
         self.max_converge_timedelta = int(self.converge_config.get("max_timedelta") or 0) // CONST_MINUTES
 
+        # 使用实例创建前的几分钟作为开始时间
         self.start_time = self.instance.create_time - timedelta(
             minutes=self.max_converge_timedelta or self.converge_timedelta
         )

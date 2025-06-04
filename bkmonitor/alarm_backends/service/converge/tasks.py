@@ -10,25 +10,34 @@ specific language governing permissions and limitations under the License.
 
 import logging
 import time
+from typing import Literal
 
 from django.db import OperationalError
 
 from alarm_backends.constants import CONST_HALF_MINUTE
 from alarm_backends.service.scheduler.app import app
 from core.prometheus import metrics
+from constants.action import action_instance_id, converge_instance_id
 
 logger = logging.getLogger("fta_action.converge")
 
 
 @app.task(ignore_result=True, queue="celery_converge")
-def run_converge(converge_config, instance_id, instance_type, converge_context=None, alerts=None, retry_times=0):
+def run_converge(
+    converge_config,
+    instance_id: action_instance_id | converge_instance_id,
+    instance_type: Literal["action", "converge"],
+    converge_context=None,
+    alerts=None,
+    retry_times=0,
+):
     """
     执行收敛动作的主函数，包含异常处理和自动重试机制
 
     参数:
         converge_config: 收敛策略配置对象，包含收敛规则和阈值设置
-        instance_id: 收敛对象唯一标识符（字符串/整型）
-        instance_type: 收敛对象类型标识（字符串）
+        instance_id: 对象唯一标识符（整型）
+        instance_type: 对象类型标识（字符串）
         converge_context: 可选参数，收敛上下文数据字典
         alerts: 可选参数，告警快照数据列表
         retry_times: 当前重试次数计数器（整型，默认0次）

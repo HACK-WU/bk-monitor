@@ -12,6 +12,7 @@ import logging
 import random
 import time
 from datetime import datetime, timezone
+from typing import Literal
 
 from django.utils.translation import gettext as _
 
@@ -43,8 +44,8 @@ class ConvergeManager:
         converge_config,
         dimension,
         start_time,
-        instance,
-        instance_type=ConvergeType.ACTION,
+        instance: ActionInstance | ConvergeInstance,
+        instance_type: Literal["action", "converge"] = ConvergeType.ACTION,
         end_timestamp=None,
         alerts=None,
     ):
@@ -132,6 +133,10 @@ class ConvergeManager:
         self.match_action_id_list = self.get_related_ids()
         matched_count = len(self.match_action_id_list)
 
+        # 假设设置的count=5
+        # 第一次进行故障自愈，创建了一次，此时matched_count=1。由于没有到达count的要求直接返回False,也就是不进行收敛。
+        # 后面也就不会进行收敛函数进行判断。
+        # 当到第五次执行后，满足match_count=5，后面才会对收敛函数进行判断，比如“成功后跳过”
         if not self.converge_instance and matched_count >= int(self.converge_config["count"]):
             # 创建新收敛实例：满足数量阈值且不存在现有实例
             logger.info("__begin to create converge_instance by %s __", self.instance.id)
@@ -403,6 +408,9 @@ class ConvergeManager:
             # 数据库访问异常时安全降级
             converge_instance = None
 
+        # start_time 是基于实例创建时间和收敛配置的时间窗口计算得出的最早有效时间
+        # 而action先创建，然后才有converge，所以理论上converge的创建时间一定大于start_time
+        # 所以如果start_time大于converge的创建时间，说明该实例已经过期
         if converge_instance and start_time and converge_instance.create_time < start_time:
             # 检测到过期收敛实例，记录日志并终止该实例
             logger.info(
@@ -418,7 +426,7 @@ class ConvergeManager:
         self.converge_instance = converge_instance
         return self.converge_instance
 
-    def connect_converge(self, status=ConvergeStatus.SKIPPED):
+    def connect_converge(self, status: str | bool = ConvergeStatus.SKIPPED):
         """
         关联告警实例到收敛实例并处理相关状态更新
 

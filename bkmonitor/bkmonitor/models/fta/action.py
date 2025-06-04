@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import json
 import logging
 import time
@@ -239,7 +239,7 @@ class ActionPlugin(AbstractRecordModel):
             try:
                 url_info = self.perform_resource_request("plugin_url", **kwargs)
             except BKAPIError as error:
-                logger.warning("failed to get_plugin_template_create_url: {}".format(error))
+                logger.warning(f"failed to get_plugin_template_create_url: {error}")
                 url_info = None
             url_info = url_info[0] if url_info else {}
         else:
@@ -565,7 +565,9 @@ class ActionInstance(AbstractRecordModel):
                 kwargs["url"] = "{bk_itsm_host}#/ticket/detail?id={ticket_id}".format(
                     bk_itsm_host=settings.BK_ITSM_HOST, ticket_id=approve_info.get("id")
                 )
-        content_template = content_template or _("%s执行{{status_display}}") % self.action_config.get("name", _("处理套餐"))
+        content_template = content_template or _("%s执行{{status_display}}") % self.action_config.get(
+            "name", _("处理套餐")
+        )
         text = Jinja2Renderer.render(content_template, kwargs)
 
         content = {
@@ -595,7 +597,7 @@ class ActionInstance(AbstractRecordModel):
 
     @property
     def es_action_id(self):
-        return "{}{}".format(int(self.create_time.timestamp()), self.id)
+        return f"{int(self.create_time.timestamp())}{self.id}"
 
     def insert_alert_log(self, description=None, content_template="", notice_way_display=""):
         if self.parent_action_id or not self.alerts or self.signal == ActionSignal.COLLECT:
@@ -682,10 +684,10 @@ class ConvergeInstance(AbstractRecordModel):
         ("network-attack", "success"),
         ("network-quality", "success"),
         ("host-quality", "success"),
-        ("analyze", u"success"),
-        ("collect_alarm", u"success"),
-        ("defence", u"danger"),
-        ("convergence", u"primary"),  # 优先显示主告警的状态
+        ("analyze", "success"),
+        ("collect_alarm", "success"),
+        ("defence", "danger"),
+        ("convergence", "primary"),  # 优先显示主告警的状态
     )
 
     NOTIFY_STATUSES = (
@@ -798,6 +800,7 @@ class ConvergeRelation(models.Model):
 
     id = models.BigAutoField("主键", primary_key=True)
     converge_id = models.BigIntegerField(null=False, blank=False, db_index=True)
+    # 关联的action ID
     related_id = models.BigIntegerField(null=False, blank=False, db_index=True)
     related_type = models.CharField(
         null=False,
@@ -842,7 +845,7 @@ class ConvergeRelation(models.Model):
         return ConvergeInstance.objects.get(id=self.related_id)
 
     def __unicode__(self):
-        return "Inc-{} | relate_instance-{}({})".format(self.converge_id, self.relate_instance.id, self.relate_instance)
+        return f"Inc-{self.converge_id} | relate_instance-{self.relate_instance.id}({self.relate_instance})"
 
 
 class StrategyActionConfigRelation(AbstractRecordModel):

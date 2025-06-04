@@ -9,6 +9,7 @@ specific language governing permissions and limitations under the License.
 """
 
 import json
+from typing import NewType
 
 from django.utils.translation import gettext_lazy as _lazy
 
@@ -150,7 +151,7 @@ ALL_CONVERGE_DIMENSION = {
     "notice_info": _lazy("通知信息"),
     "action_info": _lazy("告警套餐信息"),
 }
-
+# 用于匹配的收敛维度
 COMPARED_CONVERGE_DIMENSION = {
     "alert_info": _lazy("告警信息"),
     "notice_info": _lazy("通知信息"),
@@ -545,6 +546,10 @@ class ConvergeType:
     ACTION = "action"
 
 
+action_instance_id = NewType("action_instance_id", int)
+converge_instance_id = NewType("converge_instance_id", int)
+
+
 class ActionDisplayStatus:
     RUNNING = "running"
     SUCCESS = "success"
@@ -668,6 +673,7 @@ ACTION_END_STATUS = [
     ActionStatus.SHIELD,
 ]
 
+
 # 通知方式
 class NoticeWay:
     SMS = "sms"
@@ -697,6 +703,7 @@ class NoticeWay:
         "bkchat|mail": _lazy("蓝鲸信息流(邮件)"),
     }
 
+
 # 通知渠道
 class NoticeChannel:
     USER = "user"
@@ -714,6 +721,7 @@ class NoticeChannel:
 
 BKCHAT_TRIGGER_TYPE_MAPPING = {"WEWORK_BOT": NoticeWay.WX_BOT, "EMAIL": NoticeWay.MAIL, "MINI_PROGRAM": "mini_program"}
 
+
 # 通知方式对应的渠道
 class NoticeWayChannel:
     MAPPING = {
@@ -725,6 +733,7 @@ class NoticeWayChannel:
         NoticeWay.WX_BOT: NoticeChannel.WX_BOT,
         NoticeWay.BK_CHAT: NoticeChannel.BK_CHAT,
     }
+
 
 # 通知类型
 class NoticeType:
