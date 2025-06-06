@@ -24,7 +24,17 @@ class CollectPluginCollector(BaseCollector):
     def collect_plugin(self):
         return CollectorPluginMeta.objects.filter(bk_biz_id__in=list(self.biz_info.keys()))
 
-    @register(labelnames=("bk_biz_id", "bk_biz_name", "label", "plugin_type", "is_public", "is_support_remote"))
+    @register(
+        labelnames=(
+            "bk_tenant_id",
+            "bk_biz_id",
+            "bk_biz_name",
+            "label",
+            "plugin_type",
+            "is_public",
+            "is_support_remote",
+        )
+    )
     def collect_plugin_count(self, metric: Metric):
         """
         插件数
@@ -41,7 +51,7 @@ class CollectPluginCollector(BaseCollector):
                 is_support_remote=collect_plugin.current_version.config.is_support_remote,
             ).inc()
 
-    @register(labelnames=("bk_biz_id", "bk_biz_name", "plugin_type", "env"))
+    @register(labelnames=("bk_tenant_id", "bk_biz_id", "bk_biz_name", "plugin_type", "env"))
     def collect_plugin_env_count(self, metric: Metric):
         """
         各环境插件数
