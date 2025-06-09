@@ -901,7 +901,11 @@ class ImportConfigResource(Resource):
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
         uuid_list = serializers.ListField(required=True, label="配置的uuid")
         import_history_id = serializers.IntegerField(required=False, label="导入历史ID")
-        is_overwrite_mode = serializers.BooleanField(required=False, label="是否覆盖", default=False)
+        # 覆盖模式下，如果存在同名的策略、告警组、处理套餐将会被覆盖。
+        # 非覆盖模式下，如果存在同名的策略、告警组、处理套餐，将会给名称加上"_clone"后缀，然后新建。
+        is_overwrite_mode = serializers.BooleanField(
+            required=False, label="是否覆盖同名的策略、告警组、处理套餐", default=False
+        )
 
     def perform_request(self, validated_request_data):
         """
