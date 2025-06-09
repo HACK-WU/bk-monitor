@@ -55,6 +55,7 @@ def get_agent_status(bk_biz_id: int, hosts: list[Host]) -> dict[int, int]:
         interval=60,
         metrics=[{"field": "usage", "method": "AVG", "alias": "A"}],
         table="system.cpu_summary",
+        #  group_by=["bk_host_id"] if is_ipv6_biz(bk_biz_id) else ["bk_target_ip", "bk_target_cloud_id"],
         group_by=["bk_host_id", "bk_target_ip", "bk_target_cloud_id"],
     )
     query = UnifyQuery(data_sources=[data_source], bk_biz_id=bk_biz_id, expression="a")
@@ -68,8 +69,10 @@ def get_agent_status(bk_biz_id: int, hosts: list[Host]) -> dict[int, int]:
             continue
 
         bk_host_id = None
+        #  if is_ipv6_biz(bk_biz_id) and record.get("bk_host_id"):
         if record.get("bk_host_id"):
             bk_host_id = int(record["bk_host_id"])
+        #  elif not is_ipv6_biz(bk_biz_id) and record.get("bk_target_ip") and record.get("bk_target_cloud_id") is not None:
         elif record.get("bk_target_ip") and record.get("bk_target_cloud_id") is not None:
             bk_host_id = ip_to_host_id.get((record["bk_target_ip"], int(record["bk_target_cloud_id"])))
 
