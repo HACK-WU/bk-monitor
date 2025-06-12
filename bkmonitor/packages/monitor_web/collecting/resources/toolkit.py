@@ -274,7 +274,9 @@ class ListRelatedStrategy(Resource):
 
         # 1.拿到所有指标的collect_config_ids
         related_metrics = []
-        metrics = MetricListCache.objects.filter(bk_biz_id__in=[0, validated_request_data["bk_biz_id"]])
+        metrics = MetricListCache.objects.filter(
+            bk_tenant_id=get_request_tenant_id(), bk_biz_id__in=[0, validated_request_data["bk_biz_id"]]
+        )
 
         # 2.找到要删除的采集配置对应的指标
         for metric in metrics:

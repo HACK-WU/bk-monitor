@@ -111,6 +111,7 @@ def get_panels(view: SceneViewModel) -> list[dict]:
 
         # 查询所有维度字段
         metric_cache: MetricListCache | None = MetricListCache.objects.filter(
+            bk_tenant_id=bk_tenant_id,
             data_source_label=DataSourceLabel.BK_MONITOR_COLLECTOR,
             data_type_label=DataTypeLabel.TIME_SERIES,
             result_table_id=table_id,

@@ -154,12 +154,14 @@ class HostApiAuthChecker(BaseApiAuthChecker):
     def query_configs_check(self, query_configs):
         # 增加主机指标范围校验
         host_metrics = MetricListCache.objects.filter(
+            bk_tenant_id=self.bk_tenant_id,
             bk_biz_id__in=[0, self.bk_biz_id],
             result_table_label="os",
             data_source_label="bk_monitor",
             data_type_label="time_series",
         ).values_list("metric_field", flat=True)
         process_metrics = MetricListCache.objects.filter(
+            bk_tenant_id=self.bk_tenant_id,
             bk_biz_id__in=[0, self.bk_biz_id],
             result_table_id="system.proc",
             data_source_label="bk_monitor",
