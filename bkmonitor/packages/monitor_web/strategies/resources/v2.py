@@ -3,7 +3,7 @@ import logging
 import operator
 import re
 import time
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import reduce
@@ -1567,7 +1567,7 @@ class GetStrategyV2Resource(Resource):
         except StrategyModel.DoesNotExist:
             raise ValidationError(_("策略({})不存在").format(params["id"]))
 
-        strategy_obj = Strategy.from_models([strategy])[0]
+        strategy_obj = Strategy.from_models([strategy])[0]  # type: Strategy
         strategy_obj.restore()
         config = strategy_obj.to_dict()
 
@@ -2392,6 +2392,7 @@ class UpdatePartialStrategyV2Resource(Resource):
     def update_dict_recursive(src, dst):
         """
         递归合并字典
+        将 dst 合并到 src中
         :param src: {"a": {"c": 2, "d": 1}, "b": 2}
         :param dst: {"a": {"c": 1, "f": {"zzz": 2}}, "c": 3, }
         :return: {'a': {'c': 1, 'd': 1, 'f': {'zzz': 2}}, 'b': 2, 'c': 3}
@@ -2560,7 +2561,26 @@ class UpdatePartialStrategyV2Resource(Resource):
         action_configs: dict[int, ActionConfig],
     ):
         """
-        更新告警通知
+         更新策略告警通知配置并同步关联动作配置
+
+        参数:
+            strategy: Strategy对象，包含当前策略的完整配置信息
+            notice: dict类型的新通知配置数据，可能包含append_keys字段
+            relations: 动作配置关联关系映射表，key为策略ID，value为关联对象列表
+            action_configs: 动作配置字典，key为动作ID，value为具体配置对象
+
+        返回值:
+            四元素元组包含：
+            - 关联关系模型类(StrategyActionConfigRelation)
+            - 需持久化的字段列表(["user_groups", "options"])
+            - 动作实例列表(所有关联动作的实例对象)
+            - 额外创建/更新的数据列表(用于批量保存)
+
+        该方法实现完整的通知配置更新流程，包含：
+        1. 新旧通知配置的字段合并（支持列表字段追加）
+        2. 通知基础配置的原子更新
+        3. 关联动作配置的同步更新
+        4. 批量持久化数据准备
 
         ```pyhon
         notice["append_keys"]: List[str] # 追加逻辑的字段
@@ -2587,18 +2607,25 @@ class UpdatePartialStrategyV2Resource(Resource):
         """
         old_notice = strategy.notice.to_dict()
         new_notice = deepcopy(notice)
-        # 判断是否进行追加操作
+
+        # 处理字段追加逻辑：合并新旧通知中的列表字段并去重
+        # 通过append_keys指定的字段将执行合并操作而非覆盖
         if new_notice.get("append_keys"):
             for key in new_notice.get("append_keys", []):
                 if new_notice.get(key):
                     if type(new_notice[key]) is list:
                         [new_notice[key].append(i) for i in old_notice.get(key) if i not in new_notice[key]]
-
+            # 因为old_notice中没有append_keys字段,所以需要删除,避免影响后续的合并操作
             new_notice.pop("append_keys")
 
-        UpdatePartialStrategyV2Resource.update_dict_recursive(old_notice, new_notice)
-        strategy.notice = NoticeRelation(strategy.id, **old_notice)
-        # 同步当前的通知时间和通知组
+        # 执行字典递归更新（深度合并新旧配置）
+        updated_notice = UpdatePartialStrategyV2Resource.update_dict_recursive(old_notice, new_notice)
+
+        # 构建新的通知关系对象并更新策略对象
+        strategy.notice = NoticeRelation(strategy.id, **updated_notice)
+
+        # 同步更新所有关联动作的通知时间窗口和通知组配置
+        # 保证策略级配置与动作级配置的一致性
         for action in strategy.actions:
             action.user_groups = strategy.notice.user_groups
             action.options.update(
@@ -2608,8 +2635,13 @@ class UpdatePartialStrategyV2Resource(Resource):
                 }
             )
 
+        # 准备批量持久化数据（包含创建和更新操作）
         extra_create_or_update_datas = strategy.bulk_save_notice(relations, action_configs)
-        return (
+
+        update_info = namedtuple(
+            "update_info", ["update_module", "update_keys", "update_objs", "extra_create_or_update_datas"]
+        )
+        return update_info(
             StrategyActionConfigRelation,
             ["user_groups", "options"],
             [action.instance for action in strategy.actions],
@@ -2639,19 +2671,40 @@ class UpdatePartialStrategyV2Resource(Resource):
         return None, [], []
 
     @staticmethod
-    def get_relations(strategy_ids: list[int]):
+    def get_relations(strategy_ids: list[int]) -> tuple[list[int], dict[int, list[StrategyActionConfigRelation]]]:
+        """
+        获取策略与动作配置的关系映射及关联配置ID集合
+
+        参数:
+            strategy_ids: 策略ID列表，用于查询关联的动作配置关系
+
+        返回值:
+            tuple: 包含两个元素的元组
+                - action_config_ids: 所有关联的动作配置ID列表
+                - relations: 按策略ID分组的策略动作配置关系字典，键为策略ID，值为对应的关系对象列表
+
+        该方法实现以下核心逻辑：
+        1. 查询指定策略ID集合的通知类型关联关系
+        2. 构建策略ID到关系对象的映射字典
+        3. 收集所有关联的动作配置ID
+        """
         action_config_ids = set()
         relations: dict[int, list[StrategyActionConfigRelation]] = defaultdict(list)
+
+        # 查询所有关联的通知类型策略动作配置关系
         related_query = StrategyActionConfigRelation.objects.filter(
             strategy_id__in=strategy_ids, relate_type=StrategyActionConfigRelation.RelateType.NOTICE
         )
+
+        # 遍历查询结果，构建关系映射并收集配置ID
         for relation in related_query:
             relations[relation.strategy_id].append(relation)
             action_config_ids.add(relation.config_id)
+
         return list(action_config_ids), relations
 
     @staticmethod
-    def get_action_configs(action_config_ids: list[int]):
+    def get_action_configs(action_config_ids: list[int]) -> dict[int, ActionConfig]:
         action_query = ActionConfig.objects.filter(id__in=action_config_ids)
         action_configs: dict[int, ActionConfig] = {}
         for action_config in action_query:
@@ -2665,8 +2718,50 @@ class UpdatePartialStrategyV2Resource(Resource):
         updates_data: DefaultDict[str, dict[str, any]],
         create_datas: DefaultDict[str, dict[str, any]],
     ):
+        """
+        处理扩展数据的创建与更新操作，根据配置类型分类存储到对应数据结构
+
+        参数:
+            extra_create_or_update_datas: 包含创建和更新数据的字典，格式为:
+                {
+                    "update_data": list[dict],  # 需要更新的数据列表
+                    "create_data": list[dict]   # 需要创建的数据列表
+                }
+            key: 字符串类型的标识符，用于生成存储键值的后缀
+            updates_data: 存储更新操作的容器，格式为:
+                DefaultDict({
+                    "extra_{key}_config": {  # 配置类型数据
+                        "cls": Type,          # 类型对象
+                        "keys": list,         # 键值列表
+                        "objs": list          # 实例对象列表
+                    },
+                    "extra_{key}_relation": { # 关系类型数据
+                        "cls": Type,
+                        "keys": list,
+                        "objs": list
+                    }
+                })
+            create_datas: 存储创建操作的容器，格式为:
+                DefaultDict({
+                    "extra_{key}_config": {  # 配置类型数据
+                        "cls": Type,
+                        "objs": list
+                    },
+                    "extra_{key}_relation": { # 关系类型数据
+                        "cls": Type,
+                        "objs": list
+                    }
+                })
+
+        返回值:
+            None - 该函数通过修改传入的updates_data和create_datas容器实现数据存储
+        """
+        # 提取更新数据列表和创建数据列表
         extra_update_datas = extra_create_or_update_datas.get("update_data", [])
         extra_create_datas = extra_create_or_update_datas.get("create_data", [])
+
+        # 处理更新数据：根据数据类型分类存储到updates_data容器
+        # 区分ActionConfig和StrategyActionConfigRelation两种配置类型
         for update_data in extra_update_datas:
             if update_data["cls"] is ActionConfig:
                 updates_data[f"extra_{key}_config"]["cls"] = update_data["cls"]
@@ -2677,6 +2772,8 @@ class UpdatePartialStrategyV2Resource(Resource):
                 updates_data[f"extra_{key}_relation"]["keys"] = update_data["keys"]
                 updates_data[f"extra_{key}_relation"]["objs"].extend(update_data["objs"])
 
+        # 处理创建数据：根据数据类型分类存储到create_datas容器
+        # 仅需处理ActionConfig和StrategyActionConfigRelation两种类型
         for data in extra_create_datas:
             if data["cls"] is ActionConfig:
                 create_datas[f"extra_{key}_config"]["cls"] = data["cls"]
@@ -2686,21 +2783,46 @@ class UpdatePartialStrategyV2Resource(Resource):
                 create_datas[f"extra_{key}_relation"]["objs"].extend(data["objs"])
 
     def perform_request(self, params):
+        """
+        执行策略更新请求的处理流程，包含配置更新、历史记录、状态重置等核心操作
+
+        参数:
+            params: 包含业务参数的字典对象，必须包含以下键：
+                bk_biz_id: 业务ID(int)
+                edit_data: 待更新的配置数据(dict)
+                ids: 待更新策略ID列表(list)
+
+        返回值:
+            返回成功更新的策略ID列表(params["ids"])
+
+        该方法实现完整的策略更新流程，包含以下核心步骤：
+        1. 初始化参数和基础数据结构
+        2. 查询策略对象及其关联配置
+        3. 处理策略配置更新的核心逻辑
+        4. 执行批量数据库操作
+        5. 记录操作历史
+        6. 重置AsCode相关配置
+        """
         bk_biz_id = params["bk_biz_id"]
         config: dict = params["edit_data"]
         username = get_global_user()
         strategy_ids = params["ids"]
         strategies = StrategyModel.objects.filter(bk_biz_id=bk_biz_id, id__in=strategy_ids)
 
+        # 获取策略关联的动作配置ID和关联关系
         action_config_ids, relations = self.get_relations(strategy_ids)
+        # 查询对应的动作配置详情
         action_configs = self.get_action_configs(action_config_ids)
 
+        # 初始化创建和更新数据容器
         create_datas = defaultdict(lambda: {"cls": None, "objs": []})
         updates_data = defaultdict(lambda: {"cls": None, "keys": [], "objs": []})
         updates_data["update_time"]["cls"] = StrategyModel
         updates_data["update_time"]["keys"] = ["update_time", "update_user"]
         update_time = datetime.datetime.now(tz=pytz.timezone(settings.TIME_ZONE))
         history = []
+
+        # 处理策略配置更新的核心逻辑
         for strategy in Strategy.from_models(strategies):
             affect_history_data = False
             for key, value in config.items():
@@ -2722,8 +2844,8 @@ class UpdatePartialStrategyV2Resource(Resource):
                 if key in ("is_enabled",):
                     affect_history_data = True
 
+            # 处理智能监控SDK状态重置逻辑
             if affect_history_data:
-                # 对于影响历史依赖的配置，如果使用的是智能监控SDK，还需要重置状态触发重新拉取历史依赖的逻辑
                 for item in strategy.items:
                     if getattr(item.query_configs[0], "intelligent_detect", None) and item.query_configs[
                         0
@@ -2731,9 +2853,11 @@ class UpdatePartialStrategyV2Resource(Resource):
                         item.query_configs[0].intelligent_detect["status"] = SDKDetectStatus.PREPARING
                         item.query_configs[0].save()
 
+            # 更新策略基础信息
             strategy.instance.update_time = update_time
             strategy.instance.update_user = username
             updates_data["update_time"]["objs"].append(strategy.instance)
+            # 构建操作历史记录
             history.append(
                 StrategyHistoryModel(
                     create_user=username,
@@ -2743,15 +2867,18 @@ class UpdatePartialStrategyV2Resource(Resource):
                 )
             )
 
+        # 执行批量数据库更新操作
         for update_data in updates_data.values():
             update_data["cls"].objects.bulk_update(update_data["objs"], update_data["keys"])
 
+        # 执行批量数据库创建操作
         for create_data in create_datas.values():
             create_data["cls"].objects.bulk_create(create_data["objs"])
 
+        # 持久化操作历史记录
         StrategyHistoryModel.objects.bulk_create(history)
 
-        # 编辑后需要重置AsCode相关配置
+        # 重置AsCode相关配置
         strategies.update(hash="", snippet="")
 
         return params["ids"]

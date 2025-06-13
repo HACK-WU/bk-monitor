@@ -825,10 +825,12 @@ class NoticeRelation(BaseActionRelation):
     def bulk_save(self, relations: dict[int, list[RelationModel]], action_configs: dict[int, ActionConfig]):
         """
         根据配置新建或更新关联记录,循环结束后批量创建或更新
+        参数类型强制与基类保持一致：action_configs为ActionConfig字典
         """
         action_relations = relations.get(self.strategy_id, [])
         create_or_update_datas = {"create_data": [], "update_data": []}
         username = get_global_user() or "unknown"
+
         for action_relation in action_relations:
             if self.id == action_relation.id:
                 config_id = action_relation.config_id
@@ -1838,7 +1840,30 @@ class Strategy(AbstractConfig):
 
     def to_dict(self, convert_dashboard: bool = True) -> dict:
         """
-        转换为JSON字典
+        转换为JSON字典格式的策略配置信息
+
+        参数:
+            convert_dashboard (bool): 是否转换仪表盘来源配置，默认为True。
+                当为True时会尝试将仪表盘配置转换为标准查询配置，
+                否则仅保留原始仪表盘元数据。
+
+        返回值:
+            dict: 包含完整策略配置信息的字典对象，包含以下核心字段：
+                - id: 策略ID
+                - version: 策略版本
+                - items: 指标项列表（已序列化）
+                - detects: 检测规则列表
+                - actions: 动作配置列表
+                - notice: 通知配置
+                - from_dashboard: 仪表盘来源配置（当适用时）
+                - 其他基础属性字段...
+
+        该方法实现完整的策略序列化流程，包含：
+        1. 优先级组键确定逻辑
+        2. 基础配置字典构建
+        3. 指标表达式自动补全
+        4. 仪表盘来源策略适配
+        5. 配置有效性验证与降级处理
         """
         if self.priority is None:
             priority_group_key = ""
@@ -1848,6 +1873,7 @@ class Strategy(AbstractConfig):
             else:
                 priority_group_key = self.get_priority_group_key(self.bk_biz_id, self.items)
 
+        # 构建基础配置字典，包含策略核心字段和关联对象序列化数据
         config = {
             "id": self.id,
             "version": self.version,
@@ -1875,16 +1901,19 @@ class Strategy(AbstractConfig):
             "edit_allowed": self.source != DATALINK_SOURCE,
         }
 
+        # 自动填充metric_type字段（取第一个指标项的类型）
         config["metric_type"] = config["items"][0]["metric_type"] if config["items"] else ""
 
+        # 补全空表达式的指标项（使用查询配置别名拼接）
         for item in config["items"]:
             if item["expression"]:
                 continue
             item["expression"] = " + ".join([query_config["alias"] for query_config in item["query_configs"]])
 
-        # grafana来源策略适配
+        # Grafana来源策略适配处理
         query_config = self.items[0].query_configs[0]
         if query_config.data_source_label == DataSourceLabel.DASHBOARD and convert_dashboard:
+            # 构建仪表盘来源元数据
             config["from_dashboard"] = {
                 "dashboard_uid": query_config.dashboard_uid,
                 "panel_id": query_config.panel_id,
@@ -1894,23 +1923,25 @@ class Strategy(AbstractConfig):
             }
 
             try:
+                # 尝试转换仪表盘面板查询配置
                 converted_config = self._get_dashboard_panel_query_config(query_config)
             except ValidationError as e:
+                # 转换失败时的降级处理
                 config["is_invalid"] = True
                 config["invalid_type"] = StrategyModel.InvalidType.INVALID_DASHBOARD_PANEL
                 config["from_dashboard"]["valid"] = False
                 config["from_dashboard"]["message"] = str(e.detail[0])
-
-                # 使用快照配置
+                # 使用快照配置作为备选方案
                 converted_config = query_config.snapshot_config
 
+            # 应用转换后的配置到指标项
             item = config["items"][0]
             item["query_configs"] = converted_config["query_configs"]
             item["expression"] = converted_config["expression"]
             item["functions"] = converted_config["functions"]
             item["target"] = converted_config["target"]
 
-            # 重新生成 metric_id 字段
+            # 重新生成metric_id字段
             for query_config in item["query_configs"]:
                 qc = QueryConfig(strategy_id=self.id, item_id=item["id"], **query_config)
                 query_config["metric_id"] = qc.get_metric_id()
@@ -1924,13 +1955,13 @@ class Strategy(AbstractConfig):
         信息到每个配置的特定操作中。
 
         参数:
-        - configs (List[Dict]): 包含配置信息的列表，每个配置是一个字典，必须包含"id"和"actions"键，
-          以及"notice"键，其中"actions"和"notice"的值是包含"user_groups"键的字典列表。
-        - with_detail (bool): 是否包含用户组的详细信息，默认为False，仅包含基本信息。
+            - configs (List[Dict]): 包含配置信息的列表，每个配置是一个字典，必须包含"id"和"actions"键，
+              以及"notice"键，其中"actions"和"notice"的值是包含"user_groups"键的字典列表。
+            - with_detail (bool): 是否包含用户组的详细信息，默认为False，仅包含基本信息。
 
         返回:
-        该方法没有返回值，但它会直接修改传入的configs参数，为每个配置的每个操作和通知添加
-        "user_group_list"键，该键的值是一个包含用户组信息的列表。
+            该方法没有返回值，但它会直接修改传入的configs参数，为每个配置的每个操作和通知添加
+            "user_group_list"键，该键的值是一个包含用户组信息的列表。
         """
         # 提取所有配置的ID
         strategy_ids = [config["id"] for config in configs]
@@ -2399,7 +2430,7 @@ class Strategy(AbstractConfig):
         self.notice.save()
 
     @transaction.atomic
-    def bulk_save_notice(self, relations, action_configs):
+    def bulk_save_notice(self, relations: dict[int, list[RelationModel]], action_configs: dict[int, ActionConfig]):
         """保存actions配置,循环结束后批量创建或更新."""
         self.reuse_exists_records(
             RelationModel,
@@ -2822,13 +2853,27 @@ class Strategy(AbstractConfig):
         """
         数据模型转换为策略对象
 
-        :param strategies: 策略模型列表或QuerySet，包含要转换为策略对象的数据模型。
-        :return: List["Strategy"]策略对象列表
+        参数:
+            strategies: 策略模型列表或QuerySet，包含要转换为策略对象的数据模型。
+                        支持两种输入类型：
+                        1. 原生Python列表的StrategyModel实例
+                        2. Django QuerySet查询集对象
+
+        返回值:
+            List["Strategy"] - 策略领域对象列表，包含完整的策略配置信息
+
+        处理流程包含以下核心步骤：
+        1. 数据预加载优化：根据策略数量选择全量/条件查询策略相关配置
+        2. 数据结构转换：将ORM查询结果转换为策略对象所需的字典结构
+        3. 关联对象构建：创建策略关联的监控项、检测规则、通知配置等子对象
+        4. 策略实例化：将数据模型转换为包含完整业务逻辑的策略领域对象
         """
         # 提取所有策略的ID
         strategy_ids = [s.id for s in strategies]
 
-        # 当接收到大量策略模型时，为了避免查询数据库时带来的巨大开销，采用全量查询的方式。
+        # 根据策略数量选择查询策略：
+        # 当策略数量超过500时采用全量查询避免多次数据库交互
+        # 否则使用条件过滤查询获取精确数据集
         if len(strategy_ids) > 500:
             item_query = ItemModel.objects.all()
             detect_query = DetectModel.objects.all()
@@ -2837,6 +2882,7 @@ class Strategy(AbstractConfig):
             label_query = StrategyLabel.objects.all()
             related_query = RelationModel.objects.all()
         else:
+            # 构建策略相关配置的条件查询集
             # 监控配置项
             item_query = ItemModel.objects.filter(strategy_id__in=strategy_ids)
             # 检测配置模型
@@ -2850,8 +2896,10 @@ class Strategy(AbstractConfig):
             # 策略响应动作配置关联表
             related_query = RelationModel.objects.filter(strategy_id__in=strategy_ids)
 
-        # 将查询结果整理为字典，便于后续根据策略ID快速查找
-        # {strategy_id: [strategy_model]}
+        # 将查询结果整理为字典结构：
+        # 1. 按策略ID建立关联映射
+        # 2. 支持O(1)时间复杂度的快速查找
+        # 3. 维护多对一关系的数据结构
         items: dict[int, list[ItemModel]] = defaultdict(list)
         for item in item_query:
             items[item.strategy_id].append(item)
@@ -2872,7 +2920,10 @@ class Strategy(AbstractConfig):
         for label in label_query:
             labels[label.strategy_id].append(label.label_name.strip("/"))
 
-        # 策略关联的自愈套餐及告警组配置
+        # 策略关联配置处理：
+        # 1. 收集所有关联配置ID用于后续查询
+        # 2. 按类型分组存储通知和动作配置
+        # 3. 维护配置ID集合用于批量查询
         action_config_ids = set()
         actions: dict[int, list[RelationModel]] = defaultdict(list)
         notices: dict[int, list[RelationModel]] = defaultdict(list)
@@ -2883,17 +2934,24 @@ class Strategy(AbstractConfig):
                 actions[action.strategy_id].append(action)
             action_config_ids.add(action.config_id)
 
-        # 查询关联自愈套餐
+        # 根据关联配置ID数量选择查询策略：
+        # 当配置数量超过500时采用全量查询
+        # 否则使用精确ID过滤查询
         action_config_ids = list(action_config_ids)
         if len(action_config_ids) > 500:
             action_query = ActionConfig.objects.all()
         else:
             action_query = ActionConfig.objects.filter(id__in=action_config_ids)
+
+        # 构建配置ID到配置对象的映射字典
         action_configs: dict[int, ActionConfig] = {}
         for action_config in action_query:
             action_configs[action_config.id] = action_config
 
-        # 根据查询和处理结果，创建策略对象
+        # 策略对象构建阶段：
+        # 1. 逐个转换策略模型为领域对象
+        # 2. 建立关联对象关系树
+        # 3. 维护原始模型引用
         records = []
         for strategy in strategies:
             record = Strategy(
@@ -2918,7 +2976,11 @@ class Strategy(AbstractConfig):
                 instance=strategy,
             )
 
-            # 为策略对象的items、actions、detects和notice属性赋值
+            # 构建关联对象实例：
+            # 1. 监控项及其子组件（算法、查询配置）
+            # 2. 动作关联配置
+            # 3. 检测规则
+            # 4. 通知配置（默认空对象处理）
             record.items = Item.from_models(items[strategy.id], algorithms, query_configs)
             record.actions = ActionRelation.from_models(actions[strategy.id], action_configs)
             record.detects = Detect.from_models(detects[strategy.id])
