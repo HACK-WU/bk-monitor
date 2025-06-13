@@ -924,7 +924,7 @@ class ActionRelation(BaseActionRelation):
                 ]
                 return data
 
-            enable_delay = serializers.IntegerField(required=True)
+            enable_delay = serializers.IntegerField(required=False, default=0)
 
         options = OptionsSerializer()
 
