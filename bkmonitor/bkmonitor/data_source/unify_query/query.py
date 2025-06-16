@@ -28,8 +28,10 @@ from bkmonitor.data_source.unify_query.functions import (
     CpAggMethods,
     add_expression_functions,
 )
+from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import time_interval_align
+from constants.common import DEFAULT_TENANT_ID
 from constants.data_source import (
     DataSourceLabel,
     DataTypeLabel,
@@ -53,12 +55,26 @@ class UnifyQuery:
         bk_biz_id: int | None,
         data_sources: list[DataSource],
         expression: str,
-        functions: list = None,
+        functions: list | None = None,
+        bk_tenant_id: str | None = None,
     ):
         self.functions = [] if functions is None else functions
         # 不传业务指标时传 0，为 None 时查询所有业务
         self.bk_biz_id = bk_biz_id
         self.data_sources = data_sources
+
+        # 如果未传入租户ID，则根据业务ID获取租户ID
+        if not bk_tenant_id and bk_biz_id:
+            bk_tenant_id = bk_biz_id_to_bk_tenant_id(bk_biz_id)
+        self.bk_tenant_id = bk_tenant_id
+        if not bk_tenant_id:
+            logger.warning("get_unify_query_tenant_id is None")
+            bk_tenant_id = DEFAULT_TENANT_ID
+
+        # 设置租户ID
+        for data_source in self.data_sources:
+            data_source.set_bk_tenant_id(bk_tenant_id)
+
         self.expression = expression
 
     @cached_property
