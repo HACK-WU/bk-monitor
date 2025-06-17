@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from collections import defaultdict
 from datetime import datetime
-from typing import Dict
 
 import arrow
 import pytz
@@ -59,7 +58,7 @@ from core.errors.user_group import DutyRuleNameExist, UserGroupNameExist
 
 class DateTimeField(serializers.CharField):
     def run_validators(self, value):
-        super(DateTimeField, self).run_validators(value)
+        super().run_validators(value)
         if value:
             try:
                 datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
@@ -74,15 +73,15 @@ class HandOffSettingsSerializer(serializers.Serializer):
 
     def to_internal_value(self, data):
         self.initial_data = data
-        return super(HandOffSettingsSerializer, self).to_internal_value(data)
+        return super().to_internal_value(data)
 
     def validate_date(self, value):
         if self.initial_data.get("rotation_type") == RotationType.WEEKLY and value not in set(
-                IsoWeekDay.WEEK_DAY_RANGE
+            IsoWeekDay.WEEK_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
         if self.initial_data.get("rotation_type") == RotationType.MONTHLY and value not in set(
-                MonthDay.MONTH_DAY_RANGE
+            MonthDay.MONTH_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -97,7 +96,7 @@ class HandOffSettingsSerializer(serializers.Serializer):
 
 class HandOffField(serializers.JSONField):
     def run_validators(self, value):
-        super(HandOffField, self).run_validators(value)
+        super().run_validators(value)
         if value:
             handoff_slz = HandOffSettingsSerializer(data=value)
             handoff_slz.is_valid(raise_exception=True)
@@ -105,8 +104,9 @@ class HandOffField(serializers.JSONField):
 
 class UserSerializer(serializers.Serializer):
     id = serializers.CharField(required=True, label="通知对象ID")
-    type = serializers.ChoiceField(required=True, choices=(("user", _("用户")), ("group", _("用户组"))),
-                                   label="通知对象类别")
+    type = serializers.ChoiceField(
+        required=True, choices=(("user", _("用户")), ("group", _("用户组"))), label="通知对象类别"
+    )
 
 
 class ExcludeSettingsSerializer(serializers.Serializer):
@@ -139,19 +139,19 @@ class DutyTimeSerializer(serializers.Serializer):
 
     def to_internal_value(self, data):
         self.initial_data = data
-        return super(DutyTimeSerializer, self).to_internal_value(data)
+        return super().to_internal_value(data)
 
     def validate_work_days(self, value):
         value_set = set(value)
         if (
-                self.initial_data.get("work_type") == RotationType.WEEKLY
-                and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
+            self.initial_data.get("work_type") == RotationType.WEEKLY
+            and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
 
         if (
-                self.initial_data.get("work_type") == RotationType.MONTHLY
-                and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
+            self.initial_data.get("work_type") == RotationType.MONTHLY
+            and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -182,16 +182,16 @@ class BackupSerializer(serializers.Serializer):
 class DutyBaseInfoSlz(serializers.ModelSerializer):
     def __init__(self, instance=None, data=empty, **kwargs):
         self.user_list = kwargs.pop("user_list", {})
-        super(DutyBaseInfoSlz, self).__init__(instance, data, **kwargs)
+        super().__init__(instance, data, **kwargs)
 
     def __new__(cls, *args, **kwargs):
         duty_instances = args[0] if args else kwargs.get("instance", [])
         duty_instances = duty_instances or []
-        if isinstance(duty_instances, (DutyPlan, DutyArrange)):
+        if isinstance(duty_instances, DutyPlan | DutyArrange):
             duty_instances = [duty_instances]
         all_members = cls.get_all_members(duty_instances)
         if not all_members:
-            return super(DutyBaseInfoSlz, cls).__new__(cls, *args, **kwargs)
+            return super().__new__(cls, *args, **kwargs)
 
         # 新增 notice_user_detail 标记，获取用户中文名
         request = get_request(peaceful=True)
@@ -203,19 +203,19 @@ class DutyBaseInfoSlz(serializers.ModelSerializer):
                 )["results"]
                 kwargs["user_list"] = {user["username"]: user["display_name"] for user in user_list}
             except BaseException as error:
-                logger.info("query list users error %s" % str(error))
-        return super(DutyBaseInfoSlz, cls).__new__(cls, *args, **kwargs)
+                logger.info(f"query list users error {str(error)}")
+        return super().__new__(cls, *args, **kwargs)
 
     @classmethod
     def get_all_members(cls, instances):
         raise NotImplementedError("position NotImplementedError")
 
     @staticmethod
-    def get_all_recievers() -> Dict[str, Dict[str, Dict]]:
+    def get_all_recievers() -> dict[str, dict[str, dict]]:
         """
         获取用户组具体的用户
         """
-        receivers: Dict[str, Dict[str, Dict]] = defaultdict(dict)
+        receivers: dict[str, dict[str, dict]] = defaultdict(dict)
         try:
             for item in resource.notice_group.get_receiver():
                 receiver_type = item["id"]
@@ -252,7 +252,7 @@ class DutyBaseInfoSlz(serializers.ModelSerializer):
         return return_users
 
     @cached_property
-    def all_users(self) -> Dict[str, Dict[str, Dict]]:
+    def all_users(self) -> dict[str, dict[str, dict]]:
         """
         接收人信息
         """
@@ -309,6 +309,9 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
 
     @classmethod
     def get_all_members(cls, duty_arranges):
+        """
+        获取所有成员的用户ID
+        """
         all_members = []
         for duty_arrange in duty_arranges:
             all_members.extend([user["id"] for user in duty_arrange.users if user["type"] == "user"])
@@ -318,7 +321,7 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
         return all_members
 
     def to_representation(self, instance):
-        data = super(DutyArrangeSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
         # 添加直接通知的用户
         data["users"] = self.users_representation(data["users"])
         # 添加轮值用户
@@ -331,7 +334,7 @@ class DutyArrangeSlz(DutyBaseInfoSlz):
 
     def to_internal_value(self, data):
         self.initial_data = data
-        ret = super(DutyArrangeSlz, self).to_internal_value(data)
+        ret = super().to_internal_value(data)
         # 添加hash字段
         ret = self.calc_hash(ret)
         return ret
@@ -387,7 +390,7 @@ class DutyPlanSlz(DutyBaseInfoSlz):
         return all_members
 
     def to_representation(self, instance):
-        data = super(DutyPlanSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
         data["is_active"] = instance.is_active_plan()
         data["users"] = self.users_representation(data["users"])
         return data
@@ -434,7 +437,7 @@ class DutyRuleSlz(serializers.ModelSerializer):
 
     def __init__(self, instance=None, data=empty, **kwargs):
         self.rule_group_dict = kwargs.pop("rule_group_dict", {})
-        super(DutyRuleSlz, self).__init__(instance, data, **kwargs)
+        super().__init__(instance, data, **kwargs)
 
     def __new__(cls, *args, **kwargs):
         if kwargs.get("many", False):
@@ -444,7 +447,7 @@ class DutyRuleSlz(serializers.ModelSerializer):
         return super().__new__(cls, *args, **kwargs)
 
     def to_representation(self, instance):
-        data = super(DutyRuleSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
         # 获取到user_groups
         data["user_groups"] = list(set(self.rule_group_dict.get(instance.id, [])))
         data["user_groups_count"] = len(data["user_groups"])
@@ -496,7 +499,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
         duty_arranges = self.validated_data.pop("duty_arranges", [])
         # DutyRule Model保存的仅仅是元数据信息，轮值安排需要单独保存
         # 这一步就是保存元数据信息
-        super(DutyRuleDetailSlz, self).save(**kwargs)
+        super().save(**kwargs)
 
         # 批量创建轮值安排
         DutyArrange.bulk_create(duty_arranges, self.instance)
@@ -523,7 +526,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
         return self.instance
 
     def to_internal_value(self, data):
-        ret = super(DutyRuleDetailSlz, self).to_internal_value(data)
+        ret = super().to_internal_value(data)
         # 生成hash字段，
         ret = self.calc_hash(ret)
         return ret
@@ -543,7 +546,7 @@ class DutyRuleDetailSlz(DutyRuleSlz):
         return internal_data
 
     def to_representation(self, instance):
-        data = super(DutyRuleDetailSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
         # 获取到关联的告警组ID
         data["user_groups"] = list(
             set(DutyRuleRelation.objects.filter(duty_rule_id=instance.id).values_list("user_group_id", flat=True))
@@ -584,7 +587,7 @@ class PreviewSerializer(serializers.Serializer):
         参数转换
         """
         self.initial_data = data
-        internal_data = super(PreviewSerializer, self).to_internal_value(data)
+        internal_data = super().to_internal_value(data)
         # 数据返回增加对应的存储记录
         internal_data["instance"] = self.get_instance(internal_data) if internal_data.get("id") else None
         # 如果是预览的话，可以随便设置一个名字
@@ -597,15 +600,15 @@ class PreviewSerializer(serializers.Serializer):
         if isinstance(value, dict):
             value["name"] = "[demo] for preview"
         if self.initial_data.get(
-                "source_type", self.SourceType.API
+            "source_type", self.SourceType.API
         ) == self.SourceType.API and not self.initial_data.get("config"):
             # 如果数据来源是API，并且不带配置信息返回错误
-            raise ValidationError(detail='params config is required when resource type is API')
+            raise ValidationError(detail="params config is required when resource type is API")
         return value
 
     def validate_source_type(self, value):
         if value == self.SourceType.DB and not self.initial_data.get("id"):
-            raise ValidationError(detail='field(id) is required when preview config is from DB')
+            raise ValidationError(detail="field(id) is required when preview config is from DB")
         return value
 
     def get_instance(self, internal_data):
@@ -663,7 +666,7 @@ class UserGroupSlz(serializers.ModelSerializer):
         self.strategy_count_of_given_type = kwargs.pop("strategy_count_of_given_type", {})
         self.strategy_count_of_all = kwargs.pop("strategy_count_of_all", {})
         self.rule_count = kwargs.pop("rule_count", {})
-        super(UserGroupSlz, self).__init__(instance=instance, data=data, **kwargs)
+        super().__init__(instance=instance, data=data, **kwargs)
 
     def __new__(cls, *args, **kwargs):
         request = kwargs.get("context", {}).get("request")
@@ -680,7 +683,7 @@ class UserGroupSlz(serializers.ModelSerializer):
                 kwargs["rule_count"] = get_user_group_assign_rules(user_group_ids)
                 kwargs["strategy_count_of_given_type"] = kwargs["strategy_count_of_all"]
 
-        return super(UserGroupSlz, cls).__new__(cls, *args, **kwargs)
+        return super().__new__(cls, *args, **kwargs)
 
     @staticmethod
     def get_group_users_without_duty(groups, group_user_mappings):
@@ -765,7 +768,7 @@ class UserGroupSlz(serializers.ModelSerializer):
         3. 添加操作权限判断字段
         4. 处理特殊场景下的默认提及配置
         """
-        data = super(UserGroupSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
         # 获取用户组关联的用户列表（通过预加载的group_user_mappings）
         data["users"] = self.group_user_mappings.get(instance.id, [])
         # 设置通知渠道默认值（当未配置时使用系统默认渠道）
@@ -787,7 +790,6 @@ class UserGroupSlz(serializers.ModelSerializer):
         if data["mention_type"] == 0 and not data["mention_list"] and NoticeChannel.WX_BOT in data["channels"]:
             data["mention_list"] = [{"type": "group", "id": "all"}]
         return data
-
 
 
 class PlanNoticeSerializer(serializers.Serializer):
@@ -900,7 +902,7 @@ class UserGroupDetailSlz(UserGroupSlz):
     def __init__(self, instance=None, data=empty, **kwargs):
         self.duty_arranges_mapping = kwargs.pop("duty_arranges_mapping", {})
         self.duty_rules_mapping = kwargs.pop("duty_rules", {})
-        super(UserGroupDetailSlz, self).__init__(instance=instance, data=data, **kwargs)
+        super().__init__(instance=instance, data=data, **kwargs)
 
     def __new__(cls, *args, **kwargs):
         if kwargs.get("many", False):
@@ -926,7 +928,7 @@ class UserGroupDetailSlz(UserGroupSlz):
             for item in duty_arranges:
                 duty_arranges_mapping[item["user_group_id"]].append(item)
             kwargs["duty_arranges_mapping"] = duty_arranges_mapping
-        return super(UserGroupDetailSlz, cls).__new__(cls, *args, **kwargs)
+        return super().__new__(cls, *args, **kwargs)
 
     def to_representation(self, instance: UserGroup):
         """
@@ -950,7 +952,7 @@ class UserGroupDetailSlz(UserGroupSlz):
         2. 告警规则信息增强
         3. 历史数据兼容处理
         """
-        data = super(UserGroupDetailSlz, self).to_representation(instance)
+        data = super().to_representation(instance)
 
         # 处理排班配置字段（支持两种数据来源模式）：
         # 1. 当存在预加载的duty_arranges_mapping时优先使用映射数据
@@ -986,9 +988,7 @@ class UserGroupDetailSlz(UserGroupSlz):
 
         # 计算关联告警规则数量（使用集合去重）
         data["rule_count"] = len(
-            set(
-                AlertAssignRule.objects.filter(user_groups__contains=instance.id).values_list("id", flat=True)
-            )
+            set(AlertAssignRule.objects.filter(user_groups__contains=instance.id).values_list("id", flat=True))
         )
 
         # 判断删除权限：当且仅当无关联策略和规则时允许删除
@@ -1014,7 +1014,7 @@ class UserGroupDetailSlz(UserGroupSlz):
             user_list = {user["username"]: user["display_name"] for user in user_list}
         except Exception as error:
             # 有异常打印日志，默认为空，不做翻译
-            logger.exception("query list users error %s" % str(error))
+            logger.exception(f"query list users error {str(error)}")
             user_list = {}
         all_users = DutyBaseInfoSlz.get_all_recievers()
         return DutyBaseInfoSlz.translate_user_display(users, all_users, user_list)
@@ -1023,7 +1023,7 @@ class UserGroupDetailSlz(UserGroupSlz):
         validated_data["hash"] = ""
         validated_data["snippet"] = ""
         validated_data["mention_type"] = 1
-        return super(UserGroupDetailSlz, self).update(instance, validated_data)
+        return super().update(instance, validated_data)
 
     def save(self, **kwargs):
         """
@@ -1053,7 +1053,7 @@ class UserGroupDetailSlz(UserGroupSlz):
         self.validated_data["mention_type"] = 1
 
         # 调用父类方法保存用户组基础信息
-        super(UserGroupDetailSlz, self).save(**kwargs)
+        super().save(**kwargs)
 
         # 处理轮值安排记录
         # 当存在 duty_arranges 数据时（直接通知场景）：
@@ -1073,7 +1073,6 @@ class UserGroupDetailSlz(UserGroupSlz):
 
         # 返回持久化后的用户组实例
         return self.instance
-
 
     def save_duty_rule_relations(self):
         # step 1: delete old relations
