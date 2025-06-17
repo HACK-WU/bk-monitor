@@ -315,6 +315,7 @@ class NodeManInstaller(BaseInstaller):
             task_id = result["task_id"]
 
             # 卸载旧订阅任务
+            api.node_man.switch_subscription(subscription_id=last_version.subscription_id, action="disable")
             api.node_man.run_subscription(
                 subscription_id=last_version.subscription_id,
                 actions={step["id"]: "UNINSTALL" for step in subscription_params["steps"]},
@@ -510,6 +511,7 @@ class NodeManInstaller(BaseInstaller):
 
         # 卸载并删除节点管理订阅任务
         if subscription_id:
+            api.node_man.switch_subscription(subscription_id=subscription_id, action="disable")
             subscription_params = self._get_deploy_params(self.collect_config.deployment_config)
             api.node_man.run_subscription(
                 subscription_id=subscription_id,
