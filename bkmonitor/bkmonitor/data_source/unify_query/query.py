@@ -370,6 +370,7 @@ class UnifyQuery:
             "order_by": order_by or ["-time"],
             "step": f"{step}s",
             "space_uid": self.space_uid,
+            "bk_tenant_id": self.bk_tenant_id,
         }
 
         # 时间范围处理

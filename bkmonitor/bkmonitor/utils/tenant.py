@@ -20,6 +20,15 @@ def get_local_tenant_id() -> str | None:
 def space_uid_to_bk_tenant_id(space_uid: str) -> str:
     """
     空间 转换为 租户ID
+
+    Args:
+        space_uid: 空间UID
+
+    Returns:
+        str: 租户ID
+
+    Raises:
+        ValueError: convert space_uid to bk_tenant_id failed
     """
     space: Space | None = SpaceApi.get_space_detail(space_uid=space_uid)
     if not space:
@@ -30,6 +39,15 @@ def space_uid_to_bk_tenant_id(space_uid: str) -> str:
 def bk_biz_id_to_bk_tenant_id(bk_biz_id: int) -> str:
     """
     业务ID 转换为 租户ID
+
+    Args:
+        bk_biz_id: 业务ID
+
+    Returns:
+        str: 租户ID
+
+    Raises:
+        ValueError: convert bk_biz_id to bk_tenant_id failed
     """
     space: Space | None = SpaceApi.get_space_detail(bk_biz_id=bk_biz_id)
     if not space:
