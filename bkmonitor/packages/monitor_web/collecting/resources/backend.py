@@ -432,20 +432,45 @@ class CollectConfigDetailResource(Resource):
                 params[item["mode"]][item["name"]] = bool(value)
 
     def perform_request(self, validated_request_data):
+        """
+        执行采集配置请求处理，获取并转换采集目标信息
+
+        参数:
+            validated_request_data: 经过验证的请求数据字典，包含：
+                - bk_biz_id: 业务ID
+                - id: 采集配置ID
+
+        返回值:
+            包含完整采集配置信息的字典对象，主要字段：
+                - id: 配置ID
+                - name: 配置名称
+                - target_nodes: 目标节点信息
+                - plugin_info: 插件版本详情
+                - target: 解析后的采集目标
+                - 订阅信息及时间戳等元数据
+
+        该方法实现以下核心流程：
+        1. 获取采集配置元数据
+        2. 根据目标节点类型调用不同资源接口
+        3. 处理模板/动态分组等特殊场景
+        4. 构建包含敏感信息转换的响应数据
+        """
         bk_biz_id = validated_request_data["bk_biz_id"]
         config_id = validated_request_data["id"]
         try:
+            # 获取采集配置元数据（包含部署配置）
             collect_config_meta = CollectConfigMeta.objects.select_related("deployment_config").get(
                 id=config_id, bk_biz_id=bk_biz_id
             )
         except CollectConfigMeta.DoesNotExist:
             raise CollectConfigNotExist({"msg": config_id})
 
-        # 请求IP选择器接口，获取采集目标
+        # 根据目标节点类型选择不同的采集目标获取方式
         if (
             collect_config_meta.target_object_type == TargetObjectType.HOST
             and collect_config_meta.deployment_config.target_node_type == TargetNodeType.INSTANCE
         ):
+            # 主机直连实例场景：通过IP列表获取主机实例
             target_result = resource.commons.get_host_instance_by_ip(
                 {
                     "bk_biz_id": collect_config_meta.bk_biz_id,
@@ -457,6 +482,7 @@ class CollectConfigDetailResource(Resource):
             collect_config_meta.target_object_type == TargetObjectType.HOST
             and collect_config_meta.deployment_config.target_node_type == TargetNodeType.TOPO
         ):
+            # 拓扑节点场景：标准化节点信息后获取主机实例
             node_list = []
             for item in collect_config_meta.deployment_config.target_nodes:
                 item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
@@ -471,6 +497,7 @@ class CollectConfigDetailResource(Resource):
             TargetNodeType.SERVICE_TEMPLATE,
             TargetNodeType.SET_TEMPLATE,
         ]:
+            # 模板场景：获取模板实例名称并构建目标结果
             target_result = []
             templates = {
                 template["bk_inst_id"]: template["bk_inst_name"]
@@ -490,6 +517,7 @@ class CollectConfigDetailResource(Resource):
             collect_config_meta.target_object_type == TargetObjectType.HOST
             and collect_config_meta.deployment_config.target_node_type == TargetNodeType.DYNAMIC_GROUP
         ):
+            # 动态分组场景：调用CMDB接口查询动态分组主机
             bk_inst_ids = []
             for item in collect_config_meta.deployment_config.target_nodes:
                 bk_inst_ids.append(item["bk_inst_id"])
@@ -501,6 +529,7 @@ class CollectConfigDetailResource(Resource):
             )
 
         else:
+            # 服务实例场景：标准化节点信息后获取服务实例
             node_list = []
             for item in collect_config_meta.deployment_config.target_nodes:
                 item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
@@ -508,10 +537,15 @@ class CollectConfigDetailResource(Resource):
             target_result = resource.commons.get_service_instance_by_node(
                 {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
             )
+
+        # 获取插件版本信息
         config_version = collect_config_meta.deployment_config.plugin_version.config_version
         release_version = collect_config_meta.plugin.get_release_ver_by_config_ver(config_version)
-        # 密码转为非明文
+
+        # 敏感信息处理：密码字段脱敏转换
         self.password_convert(collect_config_meta)
+
+        # 构建最终响应数据
         result = {
             "id": collect_config_meta.id,
             "deployment_id": collect_config_meta.deployment_config_id,
@@ -1032,7 +1066,7 @@ class SaveCollectConfigResource(Resource):
                 collect_type=data["collect_type"],
                 plugin_id=collector_plugin.plugin_id,
                 target_object_type=data["target_object_type"],
-                label=data["label"],
+                label=data["label"],  # 采集对象类型，比如操作系统，服务模块等等
             )
             data["operation"] = OperationType.CREATE
 
@@ -1061,7 +1095,27 @@ class SaveCollectConfigResource(Resource):
 
     @staticmethod
     def update_password_inplace(data: dict, config_meta: "CollectConfigMeta") -> None:
-        """将密码参数的值替换为实际值。"""
+        """
+        将密码参数的值替换为实际值，支持插件和采集器两种模式的密码处理。
+
+        参数:
+            data: 包含参数数据的字典，结构需包含"params"键，其值为包含"plugin"和"collector"
+                  键的嵌套字典，用于存储待更新的密码参数值
+            config_meta: CollectConfigMeta对象，包含插件配置元数据和部署配置信息，
+                         用于获取参数定义和默认值
+
+        返回值:
+            None: 直接修改传入的data字典对象，不返回新对象
+
+        执行流程:
+        1. 从插件当前版本配置中提取参数定义
+        2. 从部署配置中获取已存储的实际参数值
+        3. 遍历参数定义表，筛选需要处理的密码类型字段
+        4. 根据参数模式（插件/采集器）执行差异化处理：
+           - 插件模式：未修改密码时参数值为None
+           - 采集器模式：未修改密码时参数值为布尔类型
+        5. 对无效输入值进行兜底处理，优先使用部署参数值，其次使用默认值
+        """
         config_params = config_meta.plugin.current_version.config.config_json
         deployment_params = config_meta.deployment_config.params
 
@@ -1073,10 +1127,11 @@ class SaveCollectConfigResource(Resource):
             param_mode = "plugin" if param["mode"] != "collector" else "collector"
             received_password = data["params"][param_mode].get(param_name)
 
-            # mode 为 "plugin" 时，如果密码不改变，不会传入，获取到 None
-            # mode 为 "collector" 时，如果密码不改变，传入值为 bool 类型（由详情接口返回的）
-            # 这两种情况要替换为实际值（默认值兜底）
-            if isinstance(received_password, (type(None), bool)):
+            # 处理密码参数的两种特殊场景：
+            # 1. 插件模式下未修改密码（值为None）
+            # 2. 采集器模式下未修改密码（值为布尔类型）
+            # 这两种情况都需要用实际存储值或默认值进行兜底替换
+            if isinstance(received_password, type(None) | bool):
                 default_password = param["default"]
                 actual_password = deployment_params[param_mode].get(param_name, default_password)
                 data["params"][param_mode][param_name] = actual_password
@@ -1216,6 +1271,25 @@ class UpgradeCollectPluginResource(Resource):
         realtime = serializers.BooleanField(required=False, default=False, label=_("是否实时刷新缓存"))
 
     def perform_request(self, data):
+        """
+        执行采集配置升级操作的核心方法
+
+        参数:
+            data: 包含升级参数的字典对象，必须包含以下字段：
+                - realtime: 布尔值，是否实时刷新采集配置缓存
+                - id: 采集配置ID
+                - bk_biz_id: 业务ID
+                - params: 升级参数字典
+
+        返回值:
+            升级操作的执行结果（具体类型由installer.upgrade决定）
+
+        执行流程说明:
+        1. 根据realtime标志决定是否强制刷新采集配置缓存
+        2. 从数据库获取采集配置并更新密码字段
+        3. 创建采集安装器实例并执行升级操作
+        4. 构建指标缓存表ID列表并触发异步缓存更新任务
+        """
         # 判断是否需要实时刷新缓存
         if data["realtime"]:
             # 调用 collect_config_list 接口刷新采集配置的缓存，避免外部调接口可能会无法更新插件
@@ -1224,6 +1298,7 @@ class UpgradeCollectPluginResource(Resource):
             )
 
         try:
+            # 从数据库获取采集配置并更新密码字段
             collect_config = CollectConfigMeta.objects.select_related("deployment_config").get(
                 pk=data["id"], bk_biz_id=data["bk_biz_id"]
             )
@@ -1235,7 +1310,7 @@ class UpgradeCollectPluginResource(Resource):
         installer = get_collect_installer(collect_config)
         result = installer.upgrade(data["params"])
 
-        # 升级采集配置，主动更新指标缓存表
+        # 构建指标缓存表ID列表并触发异步缓存更新任务
         result_table_id_list = [
             "{}_{}.{}".format(collect_config.collect_type.lower(), collect_config.plugin_id, metric_msg["table_name"])
             for metric_msg in collect_config.plugin.current_version.info.metric_json

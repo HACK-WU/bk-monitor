@@ -226,21 +226,49 @@ class CollectConfigMeta(OperateRecordModelBase):
         result = resource.commons.get_label_msg(self.label)
         return "{}-{}".format(result["first_label_name"], result["second_label_name"])
 
-    def operate_type(self, diff_result):
+    def operate_type(self, diff_result) -> str | None:
+        """
+        根据采集类型和差异结果判断操作类型
+
+        参数:
+            diff_result (dict): 包含配置差异信息的字典，必须包含以下键：
+                - plugin_version: 插件版本差异信息
+                - remote_collecting_host: 远程采集主机差异信息
+                - params: 参数配置差异信息
+                - nodes: 节点配置差异信息
+
+        返回值:
+            str: 操作类型，可能的取值为：
+                - "update": 表示需要更新配置
+                - "rebuild": 表示需要重建采集任务
+
+        该方法实现操作类型决策逻辑：
+        1. 日志/SNMP_TRAP采集类型强制更新
+        2. 插件版本/采集主机变更或无订阅ID时重建
+        3. 参数/节点配置变更或存在目标节点时更新
+        """
+
+        # 特殊采集类型直接返回更新
         if self.collect_type == self.CollectType.LOG or self.collect_type == self.CollectType.SNMP_TRAP:
             return "update"
+
+        # 判断是否需要重建采集任务
         if (
             diff_result["plugin_version"]["is_modified"]
             or diff_result["remote_collecting_host"]["is_modified"]
             or (not self.deployment_config.subscription_id)
         ):
             return "rebuild"
+
+        # 判断是否需要更新配置
         elif (
             diff_result["params"]["is_modified"]
             or diff_result["nodes"]["is_modified"]
             or self.deployment_config.target_nodes
         ):
             return "update"
+
+        return None
 
     @property
     def data_id(self):
@@ -374,7 +402,31 @@ class DeploymentConfigVersion(OperateRecordModelBase):
 
     def show_diff(self, target_config):
         """
-        比对两个版本的配置，并返回差异点
+        比对当前配置与目标配置的差异，返回详细的差异分析结果
+
+        参数:
+            target_config: 目标配置对象，需包含以下属性：
+                - plugin_version: 插件版本信息
+                - params: 采集参数配置
+                - remote_collecting_host: 远程采集主机信息
+                - target_nodes: 节点列表
+                - target_node_type: 节点类型
+
+        返回值:
+            dict: 包含四个维度的差异分析结果：
+                - plugin_version: 插件版本差异信息
+                - params: 采集参数差异信息
+                - remote_collecting_host: 远程主机差异信息
+                - nodes: 节点列表差异详情，包含新增/更新/删除/未变化的节点列表
+
+        处理流程：
+        1. 初始化差异分析结果结构
+        2. 优先检测插件版本变化（版本变化会导致全量更新）
+        3. 根据节点类型/远程主机/参数变化情况分类处理：
+           - 节点类型或远程主机变化：触发全量替换
+           - 参数变化：标记节点为更新状态
+           - 无关键变化：执行节点级精确比对
+        4. 生成最终差异统计结果
         """
         diff_result = {
             "plugin_version": {
@@ -400,6 +452,8 @@ class DeploymentConfigVersion(OperateRecordModelBase):
                 "unchanged": [],  # 不变的节点
             },
         }
+
+        # 插件版本变化时触发全量更新
         if diff_result["plugin_version"]["is_modified"]:
             diff_result["nodes"]["updated"] = self.target_nodes
             diff_result["nodes"]["is_modified"] = True
@@ -407,6 +461,7 @@ class DeploymentConfigVersion(OperateRecordModelBase):
 
         old_config_nodes = self.target_nodes[:]
 
+        # 节点类型或远程主机变化时触发全量替换
         if (
             target_config.target_node_type != self.target_node_type
             or target_config.remote_collecting_host != target_config.remote_collecting_host
@@ -414,6 +469,7 @@ class DeploymentConfigVersion(OperateRecordModelBase):
             diff_result["nodes"]["added"] = target_config.target_nodes
             diff_result["nodes"]["removed"] = self.target_nodes
         else:
+            # 执行节点级精确比对
             for new_node in target_config.target_nodes:
                 for old_node in self.target_nodes:
                     if new_node == old_node:
@@ -432,6 +488,7 @@ class DeploymentConfigVersion(OperateRecordModelBase):
 
         # 没被匹配过的剩余的老节点，则为需要删除的节点
         diff_result["nodes"]["removed"] = old_config_nodes
+        # 判断是否存在任何节点变化
         diff_result["nodes"]["is_modified"] = any(
             [diff_result["nodes"]["added"], diff_result["nodes"]["updated"], diff_result["nodes"]["removed"]]
         )

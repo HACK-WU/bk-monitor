@@ -7,10 +7,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import copy
 import itertools
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 from django.conf import settings
 from django.db import transaction
@@ -51,7 +52,7 @@ class NodeManInstaller(BaseInstaller):
         self._topo_tree = topo_tree
         self._topo_links = None
 
-    def _get_topo_links(self) -> Dict[str, List[TopoNode]]:
+    def _get_topo_links(self) -> dict[str, list[TopoNode]]:
         """
         获取拓扑链路
         """
@@ -76,16 +77,31 @@ class NodeManInstaller(BaseInstaller):
     def _create_plugin_collecting_steps(self, target_version: DeploymentConfigVersion, data_id: str):
         """
         创建插件采集步骤配置
+
+        参数:
+            target_version (DeploymentConfigVersion): 部署配置版本对象，包含插件参数和目标节点信息
+            data_id (str): 数据ID，用于标识采集数据源的唯一标识符
+
+        返回值:
+            由PluginManager.get_deploy_steps_params返回的部署步骤参数配置
+
+        该方法实现以下核心功能：
+        1. 维度注入参数处理：解析配置参数中的DMS注入规则并生成模板变量
+        2. 插件类型适配：根据插件类型（PROCESS/通用）生成对应的采集配置
+        3. 标准标签注入：为采集配置注入CMDB实例相关的标准标签
+        4. 配置参数组装：整合订阅ID等元数据生成最终部署参数
         """
         plugin_manager = PluginManagerFactory.get_manager(plugin=self.plugin)
         config_params = copy.deepcopy(target_version.params)
 
-        # 获取维度注入参数
+        # 解析维度注入参数（DMS_INSERT模式）
+        # 从插件版本配置中提取维度注入规则，生成Jinja2模板变量
+        # 支持主机、服务、自定义三种维度类型，分别对应不同的模板语法
         config_json = target_version.plugin_version.config.config_json
         dms_insert_params = {}
         for param in config_json:
             if param["mode"] == ParamMode.DMS_INSERT:
-                param_value = config_params["plugin"].get(param['name'])
+                param_value = config_params["plugin"].get(param["name"])
                 for dms_key, dms_value in list(param_value.items()):
                     if param["type"] == "host":
                         dms_insert_params[dms_key] = "{{ " + f"cmdb_instance.host.{dms_value} or '-'" + " }}"
@@ -94,19 +110,19 @@ class NodeManInstaller(BaseInstaller):
                             "{{ " + f"cmdb_instance.service.labels['{dms_value}'] or '-'" + " }}"
                         )
                     elif param["type"] == "custom":
-                        # 自定义维度k， v 注入
+                        # 自定义维度k，v 注入
                         dms_insert_params[dms_key] = dms_value
 
+        # 插件类型适配处理
+        # 根据插件类型生成差异化的采集配置参数
         if self.plugin.plugin_type == PluginType.PROCESS:
-            # processbeat 配置
-            # processbeat 采集不需要dataid
+            # PROCESS插件专用配置（processbeat）
+            # 特殊处理采集周期单位、超时参数、进程匹配规则等字段
             config_params["collector"].update(
                 {
                     "taskid": str(self.collect_config.id),
                     "namespace": self.plugin.plugin_id,
-                    # 采集周期带上单位 `s`
-                    "period": f"{config_params['collector']['period']}s",
-                    # 采集超时时间
+                    "period": f"{config_params['collector']['period']}s",  # 添加秒级单位后缀
                     "timeout": f"{config_params['collector'].get('timeout', 60)}",
                     "max_timeout": f"{config_params['collector'].get('timeout', 60)}",
                     "dataid": str(plugin_manager.perf_data_id),
@@ -115,9 +131,10 @@ class NodeManInstaller(BaseInstaller):
                     "process_name": config_params["process"].get("process_name", ""),
                     "exclude_pattern": config_params["process"]["exclude_pattern"],
                     "port_detect": config_params["process"]["port_detect"],
-                    # 维度注入能力
                     "extract_pattern": config_params["process"].get("extract_pattern", ""),
                     "pid_path": config_params["process"]["pid_path"],
+                    # 标准标签注入配置
+                    # 包含主机信息、拓扑信息、业务信息等CMDB关联字段
                     "labels": {
                         "$for": "cmdb_instance.scope",
                         "$item": "scope",
@@ -143,7 +160,8 @@ class NodeManInstaller(BaseInstaller):
                 }
             )
         else:
-            # bkmonitorbeat通用配置参数
+            # 通用插件配置（bkmonitorbeat）
+            # 处理基础采集参数和标签注入配置
             config_params["collector"].update(
                 {
                     "task_id": str(self.collect_config.id),
@@ -152,10 +170,11 @@ class NodeManInstaller(BaseInstaller):
                     "config_version": "1.0",
                     "namespace": self.plugin.plugin_id,
                     "period": str(config_params["collector"]["period"]),
-                    # 采集超时时间
                     "timeout": f"{config_params['collector'].get('timeout', 60)}",
                     "max_timeout": f"{config_params['collector'].get('timeout', 60)}",
                     "dataid": str(data_id),
+                    # 标准标签注入配置
+                    # 包含服务实例信息、维度注入模板等扩展字段
                     "labels": {
                         "$for": "cmdb_instance.scope",
                         "$item": "scope",
@@ -181,7 +200,9 @@ class NodeManInstaller(BaseInstaller):
                     },
                 }
             )
+        # 注入订阅ID元数据
         config_params["subscription_id"] = target_version.subscription_id
+        # 调用插件管理器生成部署步骤参数
         return plugin_manager.get_deploy_steps_params(
             target_version.plugin_version, config_params, target_version.target_nodes
         )
@@ -213,16 +234,38 @@ class NodeManInstaller(BaseInstaller):
 
         return subscription_params
 
-    def _deploy(self, target_version: DeploymentConfigVersion) -> Dict:
+    def _deploy(self, target_version: DeploymentConfigVersion) -> dict:
         """
-        部署插件采集
+        部署插件采集的核心方法，处理订阅任务的创建/更新/替换流程
+
+        参数:
+            target_version (DeploymentConfigVersion): 目标部署配置版本对象，包含部署所需的所有配置信息
+
+        返回值:
+            Dict: 包含节点变更信息的字典，格式为：
+                {
+                    "nodes": {
+                        "is_modified": bool,  # 是否发生节点变更
+                        "added": List[Dict],    # 新增的节点列表
+                        "removed": List[Dict],  # 移除的节点列表
+                        "unchanged": List[Dict],# 未变更的节点列表
+                        "updated": List[Dict]   # 更新的节点列表
+                    }
+                }
+
+        执行流程说明:
+        1. 检查现有部署配置有效性并确定操作类型
+        2. 根据操作类型执行订阅任务的创建/更新/替换
+        3. 管理自动巡检开关状态
+        4. 持久化部署版本信息
         """
+        # 检查现有部署配置有效性
         if self.collect_config.deployment_config_id and self.collect_config.deployment_config_id != target_version.pk:
             last_version: DeploymentConfigVersion = self.collect_config.deployment_config
         else:
             last_version = None
 
-        # 判断是否需要重建订阅任务
+        # 分析配置差异并确定操作类型
         if last_version and last_version.subscription_id:
             diff_result = last_version.show_diff(target_version)
             operate_type = self.collect_config.operate_type(diff_result)
@@ -238,17 +281,19 @@ class NodeManInstaller(BaseInstaller):
                 }
             }
 
+        # 获取部署参数并处理不同操作类型
         subscription_params = self._get_deploy_params(target_version)
+        # operate_type 为 None 时，表示无需操作
         if not operate_type:
             subscription_id = last_version.subscription_id
             task_id = None
         elif operate_type == "create":
-            # 新建订阅任务
+            # 创建新订阅任务
             result = api.node_man.create_subscription(**subscription_params)
             subscription_id = result["subscription_id"]
             task_id = result["task_id"]
         elif operate_type == "update":
-            # 更新上一次订阅任务
+            # 更新现有订阅任务
             update_params = {
                 "subscription_id": last_version.subscription_id,
                 "scope": {
@@ -262,26 +307,27 @@ class NodeManInstaller(BaseInstaller):
             result = api.node_man.update_subscription(**update_params)
             subscription_id = last_version.subscription_id
             task_id = result.get("task_id", None)
+        # operate_type 为 rebuild 时，表示需要替换旧订阅任务
         else:
-            # 新建订阅任务
+            # 替换旧订阅任务
             result = api.node_man.create_subscription(**subscription_params)
             subscription_id = result["subscription_id"]
             task_id = result["task_id"]
 
-            # 卸载上一次订阅任务
+            # 卸载旧订阅任务
             api.node_man.run_subscription(
                 subscription_id=last_version.subscription_id,
                 actions={step["id"]: "UNINSTALL" for step in subscription_params["steps"]},
             )
             api.node_man.delete_subscription(subscription_id=last_version.subscription_id)
 
-        # 启动自动巡检
+        # 管理自动巡检开关状态
         if settings.IS_SUBSCRIPTION_ENABLED:
             api.node_man.switch_subscription(subscription_id=subscription_id, action="enable")
         else:
             api.node_man.switch_subscription(subscription_id=subscription_id, action="disable")
 
-        # 更新部署记录及采集配置
+        # 持久化部署版本信息
         target_version.subscription_id = subscription_id
         if task_id:
             target_version.task_ids = [task_id]
@@ -311,10 +357,35 @@ class NodeManInstaller(BaseInstaller):
                 debug=False,
             )
 
-    def install(self, install_config: Dict, operation: Optional[str]) -> Dict:
+    def install(self, install_config: dict, operation: str | None) -> dict:
         """
-        首次安装插件采集
-        install_config: {
+        执行插件采集的首次安装操作，包含版本校验、配置部署和状态更新流程
+
+        参数:
+            install_config: 安装配置字典，包含以下必要字段：
+                - target_node_type: 目标节点类型（如INSTANCE）
+                - target_nodes: 目标节点列表
+                - params: 采集参数配置，包含collector和plugin子配置
+                - remote_collecting_host: 远程采集主机配置
+                - name: 采集任务名称
+                - label: 采集任务标签
+            operation: 可选操作类型标识，用于覆盖默认操作类型记录
+
+        返回值:
+            包含以下字段的字典对象：
+            - diff_node: 部署差异节点信息
+            - can_rollback: 是否允许回滚（非首次创建时为True）
+            - id: 采集配置主键ID
+            - deployment_id: 部署配置版本主键ID
+
+        该方法实现完整的安装流程控制：
+        1. 版本兼容性校验（升级检测）
+        2. 插件包版本发布处理
+        3. 部署配置版本创建与关联
+        4. 采集配置状态更新
+        5. 部署差异计算与结果返回
+
+         install_config: {
             "target_node_type": "INSTANCE",
             "target_nodes": [],
             "params": {
@@ -327,15 +398,18 @@ class NodeManInstaller(BaseInstaller):
             "name": "",
             "label": ""
         }
+
         """
+
         # 判断该采集是否需要升级，如果需要升级则抛出异常
         if self.collect_config.pk and self.collect_config.need_upgrade:
             raise CollectConfigNeedUpgrade({"msg": self.collect_config.name})
 
+        # 版本发布处理流程
         release_version = self.plugin.packaged_release_version
         self._release_package(release_version)
 
-        # 创建新的部署记录
+        # 部署配置版本创建阶段
         deployment_config_params = {
             "plugin_version": release_version,
             "target_node_type": install_config["target_node_type"],
@@ -348,26 +422,28 @@ class NodeManInstaller(BaseInstaller):
         }
         new_version = DeploymentConfigVersion.objects.create(**deployment_config_params)
 
-        # 如果是新建的采集配置，需要先保存以生成采集配置ID
+        # 新建采集配置的特殊处理
         if not self.collect_config.pk:
             self.collect_config.deployment_config = new_version
             self.collect_config.save()
 
-        # 部署插件采集
+        # 执行插件部署核心操作
         diff_node = self._deploy(new_version)
 
-        # 更新采集配置
+        # 采集配置状态更新流程
         self.collect_config.operation_result = OperationResult.PREPARING
 
-        # 如果有指定操作类型，则更新为指定操作类型
+        # 操作类型标识处理逻辑
         if operation:
             self.collect_config.last_operation = operation
         else:
             self.collect_config.last_operation = OperationType.EDIT if self.collect_config.pk else OperationType.CREATE
+
+        # 部署配置关联更新
         self.collect_config.deployment_config = new_version
         self.collect_config.save()
 
-        # 如果是首次创建，更新部署配置关联的采集配置ID
+        # 首次创建场景的配置补全
         if not new_version.config_meta_id:
             new_version.config_meta_id = self.collect_config.pk
             new_version.save()
@@ -379,7 +455,7 @@ class NodeManInstaller(BaseInstaller):
             "deployment_id": new_version.pk,
         }
 
-    def upgrade(self, params: Dict) -> Dict:
+    def upgrade(self, params: dict) -> dict:
         """
         升级插件采集
         """
@@ -445,7 +521,7 @@ class NodeManInstaller(BaseInstaller):
         DeploymentConfigVersion.objects.filter(config_meta_id=self.collect_config.id).delete()
         self.collect_config.delete()
 
-    def rollback(self, target_version: Union[int, DeploymentConfigVersion, None] = None):
+    def rollback(self, target_version: int | DeploymentConfigVersion | None = None):
         """
         回滚插件采集
         """
@@ -545,7 +621,7 @@ class NodeManInstaller(BaseInstaller):
         )
         self.collect_config.deployment_config.save()
 
-    def run(self, action: str = None, scope: Dict[str, Any] = None):
+    def run(self, action: str = None, scope: dict[str, Any] = None):
         """
         执行插件采集
         :param ACTION: 操作类型 INSTALL/UNINSTALL/START/STOP
@@ -576,7 +652,7 @@ class NodeManInstaller(BaseInstaller):
 
         api.node_man.run_subscription(**params)
 
-    def retry(self, instance_ids: List[int] = None):
+    def retry(self, instance_ids: list[int] = None):
         """
         重试插件采集，如果没有指定实例，则啊重试失败的实例
         """
@@ -618,7 +694,7 @@ class NodeManInstaller(BaseInstaller):
         self.collect_config.operation_result = OperationResult.PREPARING
         self.collect_config.save()
 
-    def revoke(self, instance_ids: List[int] = None):
+    def revoke(self, instance_ids: list[int] = None):
         """
         终止采集任务
         """
@@ -633,7 +709,7 @@ class NodeManInstaller(BaseInstaller):
         api.node_man.revoke_subscription(**params)
 
     @staticmethod
-    def _get_instance_step_log(instance_result: Dict[str, Any]):
+    def _get_instance_step_log(instance_result: dict[str, Any]):
         """
         获取实例下发阶段性日志
         """
@@ -644,7 +720,7 @@ class NodeManInstaller(BaseInstaller):
                         return "{}-{}".format(step["node_name"], sub_step["node_name"])
         return ""
 
-    def _process_nodeman_task_result(self, task_result: List[Dict[str, Any]]):
+    def _process_nodeman_task_result(self, task_result: list[dict[str, Any]]):
         """
         处理节点管理任务结果
         {
@@ -764,7 +840,7 @@ class NodeManInstaller(BaseInstaller):
 
         return instances
 
-    def status(self, diff=False) -> List[Dict[str, Any]]:
+    def status(self, diff=False) -> list[dict[str, Any]]:
         """
         状态查询
         :param diff: 是否显示差异
@@ -778,7 +854,7 @@ class NodeManInstaller(BaseInstaller):
 
         # 差异比对/不比对数据结构
         current_version: DeploymentConfigVersion = self.collect_config.deployment_config
-        last_version: Optional[DeploymentConfigVersion] = current_version.last_version
+        last_version: DeploymentConfigVersion | None = current_version.last_version
 
         # 将模板转换为节点
         template_to_nodes = defaultdict(list)
@@ -794,7 +870,7 @@ class NodeManInstaller(BaseInstaller):
 
             template_ids = [node["bk_inst_id"] for node in current_version.target_nodes]
             topo_nodes = opt_mapping[current_node_type]["api"](
-                bk_biz_id=self.collect_config.bk_biz_id, **{f'{opt_mapping[current_node_type]["field"]}s': template_ids}
+                bk_biz_id=self.collect_config.bk_biz_id, **{f"{opt_mapping[current_node_type]['field']}s": template_ids}
             )
             for node in topo_nodes:
                 template_id = getattr(node, opt_mapping[current_node_type]["field"])
@@ -877,7 +953,7 @@ class NodeManInstaller(BaseInstaller):
                 # 动态分组
                 if current_node_type == TargetNodeType.DYNAMIC_GROUP:
                     nodes[f"{diff_node['bk_inst_id']}"] = {"diff_type": diff_type, "child": []}
-                    dynamic_group_ids.append(diff_node['bk_inst_id'])
+                    dynamic_group_ids.append(diff_node["bk_inst_id"])
                     continue
 
                 # 主机节点
@@ -975,7 +1051,7 @@ class NodeManInstaller(BaseInstaller):
 
         return list(diff_mapping.values())
 
-    def instance_status(self, instance_id: str) -> Dict[str, Any]:
+    def instance_status(self, instance_id: str) -> dict[str, Any]:
         """
         获取实例状态详情
         """
