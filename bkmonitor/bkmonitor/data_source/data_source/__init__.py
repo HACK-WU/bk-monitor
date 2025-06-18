@@ -984,6 +984,27 @@ class TimeSeriesDataSource(DataSource):
     def to_unify_query_config(self) -> list[dict]:
         """
         生成统一查询配置
+
+        将原始查询参数转换为标准化的查询配置列表，适配不同数据源的查询需求。
+        处理过滤条件转换、指标聚合方法映射、时间序列参数配置等核心逻辑。
+
+        参数:
+            self: 包含查询上下文的实例对象，需包含以下属性：
+                - filter_dict: 原始过滤条件字典
+                - where: 原始条件语句
+                - metrics: 指标配置列表
+                - data_source_label: 数据源标签
+                - table: 原始表名
+                - time_field: 时间字段
+                - group_by: 分组字段列表
+                - time_offset: 时间偏移量
+                - time_shift: 时间偏移标志
+                - interval: 聚合间隔
+                - time_aggregation: 时间聚合配置
+                - function: 函数参数列表
+
+        返回:
+            list[dict]: 标准化查询配置列表，每个字典对应一个指标的完整查询配置
         """
         # 查询条件格式转换，融合filter_dic和条件语句
         conditions = {"field_list": [], "condition_list": []}
@@ -995,6 +1016,9 @@ class TimeSeriesDataSource(DataSource):
             "eq": "contains",
             "neq": "ncontains",
         }
+
+        # 将原始过滤条件转换为统一字段条件格式
+        # 处理操作符映射和值格式标准化
         for condition in _filter_dict_to_conditions(self.filter_dict, self.where):
             if conditions["field_list"]:
                 conditions["condition_list"].append(condition.get("condition", "and"))
@@ -1002,28 +1026,36 @@ class TimeSeriesDataSource(DataSource):
             value = condition["value"] if isinstance(condition["value"], list) else [condition["value"]]
             value = [str(v) for v in value]
             operator = operator_mapping.get(condition["method"], condition["method"])
+
+            # 对包含类操作符进行正则转义处理
             if operator in ["include", "exclude"]:
                 value = [re.escape(v) for v in value]
+
             conditions["field_list"].append({"field_name": condition["key"], "value": value, "op": operator})
+
+        # 处理空值转换
         for con in conditions["field_list"]:
             if None in con["value"]:
                 con["value"].remove(None)
                 con["value"].append("")
 
         query_list = []
+
+        # 遍历指标配置生成独立查询配置
         for metric in self.metrics:
+            # 数据表名标准化处理
             if self.data_source_label == DataSourceLabel.BK_DATA:
-                # 计算平台表名大小写敏感
                 table = self.table
             else:
                 table = self.table.lower()
 
-            # 如果接入了数据平台，且是cmdb level表的查询，则需要去除后缀
+            # 特殊表名后缀处理逻辑
             if settings.IS_ACCESS_BK_DATA and self.is_cmdb_level_query(
                 where=self.where, filter_dict=self.filter_dict, group_by=self.group_by
             ):
                 table, _, _ = table.partition("_cmdb_level")
 
+            # 构建基础查询配置框架
             query: dict[str, Any] = {
                 "table_id": self.data_label or table,
                 "time_aggregation": {},
@@ -1038,20 +1070,23 @@ class TimeSeriesDataSource(DataSource):
                 "offset_forward": self.time_offset > 0,
             }
 
+            # 指标聚合方法映射与时间聚合配置
             if metric.get("method") and metric["method"] != AGG_METHOD_REAL_TIME:
                 method = metric["method"].lower()
 
-                # 分位数method特殊处理
+                # 分位数方法特殊处理逻辑
                 cp_agg_method = CpAggMethods.get(method)
                 if cp_agg_method:
                     query["time_aggregation"]["vargs_list"] = cp_agg_method.vargs_list
                     query["time_aggregation"]["position"] = cp_agg_method.position
                     method = cp_agg_method.method
 
+                # 标准聚合方法映射
                 if method.lower() in AggMethods:
                     method_mapping = {"avg": "mean"}
                     method = AggMethods[method].method
                 else:
+                    # 时序聚合函数特殊处理
                     method_mapping = {"avg": "mean", "count": "sum"}
                     query["time_aggregation"].update(
                         {
@@ -1060,6 +1095,7 @@ class TimeSeriesDataSource(DataSource):
                         }
                     )
 
+                # 构建时间聚合函数配置
                 time_aggregation_func = {"method": method_mapping.get(method, method), "dimensions": self.group_by}
 
                 if query["time_aggregation"].get("vargs_list"):
@@ -1067,14 +1103,16 @@ class TimeSeriesDataSource(DataSource):
 
                 query["function"].append(time_aggregation_func)
 
-            # 解析函数参数
+            # 函数参数解析与合并
             time_aggregation, functions = self._parse_function_params()
             if time_aggregation:
                 query["time_aggregation"].update(time_aggregation)
             query["function"].extend(functions)
 
+            # 保留必要输出字段
             query["keep_columns"] = ["_time", query["reference_name"], *self.group_by]
             query_list.append(query)
+
         return query_list
 
     def _is_system_disk(self):
