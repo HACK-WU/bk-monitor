@@ -23,7 +23,6 @@ from luqum.tree import FieldGroup, OrOperation, Phrase, SearchField, Word
 
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument, AlertLog
 from bkmonitor.models import ActionInstance, ConvergeRelation, MetricListCache, Shield
-from bkmonitor.models.fta.action import ActionConfig
 from bkmonitor.strategy.new_strategy import get_metric_id
 from bkmonitor.utils.ip import exploded_ip
 from bkmonitor.utils.request import get_request_tenant_id
@@ -155,20 +154,6 @@ class AlertQueryTransformer(BaseQueryTransformer):
                     if display == node.value:
                         node.value = str(value)
 
-            # 用于支持对处理套餐名称的查询
-            elif search_field_name == "id" and context.get("search_field_origin_name") in [
-                "action_name",
-                _("处理套餐名称"),
-            ]:
-                action_config_ids = ActionConfig.objects.filter(name=node.value).values_list("id", flat=True)
-                alert_id_ids = ActionInstance.objects.filter(action_config_id__in=action_config_ids).values_list(
-                    "alerts", flat=True
-                )
-                alert_ids = list(chain.from_iterable(alert_id_ids))
-                node = FieldGroup(OrOperation(*[Word(str(alert_id)) for alert_id in alert_ids or [0]]))
-                context = {"ignore_search_field": True, "ignore_word": True}
-
-            # 特殊处理动作ID字段：从动作实例提取关联告警ID
             elif search_field_name == "id" and context.get("search_field_origin_name") in [
                 "action_id",
                 _("处理记录ID"),
