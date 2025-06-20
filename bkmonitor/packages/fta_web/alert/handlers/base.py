@@ -138,10 +138,18 @@ class BaseQueryTransformer(BaseTreeTransformer):
 
         参数:
             cls: 当前类，用于创建转换对象实例
-            query_string: 原始查询字符串，需要被解析转换的输入
+            query_string: 原始查询字符串，需要被解析转换的输入。
+                          空字符串将直接返回空结果，无需处理
 
         返回:
-            str: 转换后的ES查询DSL字符串或重整后的查询字符串。当存在嵌套字段时返回DSL，否则返回优化后的查询字符串
+            str: 转换后的ES查询DSL字符串或优化后的查询字符串。
+                 当存在嵌套字段时返回DSL格式，否则返回重整后的查询字符串
+
+        该方法实现完整的查询字符串转换流程，包含：
+        1. PromQL语法预处理
+        2. 查询语法树解析
+        3. 嵌套字段特殊处理
+        4. 查询语句格式重整
         """
 
         def parse_query_string_node(_transform_obj, _query_string):
@@ -152,24 +160,31 @@ class BaseQueryTransformer(BaseTreeTransformer):
             except ParseError as e:
                 raise QueryStringParseError({"msg": e})
 
+        # 处理空输入情况
         if not query_string:
             return ""
+
         transform_obj = cls()
 
+        # 处理PromQL特殊语法
+        # 包含promql语句时需要特殊转换处理，可能触发语法错误
         if is_include_promql(query_string):
-            # 包含promql语句，可能会报语法错误，需要尝试转换
             query_string = cls.convert_metric_id(query_string)
+
+        # 解析生成查询语法树
+        # 使用自定义语法解析器进行节点转换
         query_tree = parse_query_string_node(transform_obj, query_string)
 
-        # 处理嵌套字段的特殊转换逻辑
+        # 嵌套字段特殊处理逻辑
+        # 当存在嵌套字段时需要转换为DSL模式（query_string兼容性限制）
         if getattr(transform_obj, "has_nested_field", False) and cls.doc_cls:
-            # 如果有嵌套字段，就不能用 query_string 查询了，需要转成 dsl（dsl 模式并不能完全兼容 query_string，只是折中方案）
             schema_analyzer = SchemaAnalyzer(cls.doc_cls._index.to_dict())
             es_builder = QueryBuilder(**schema_analyzer.query_builder_options())
             dsl = es_builder(query_tree)
             return dsl
 
-        # 手动修改后的语法数可能会有一些空格丢失的问题，因此需要对树的头尾进行重整
+        # 查询语句格式重整
+        # 修复语法树转换过程中导致的空格丢失问题
         query_tree = auto_head_tail(query_tree)
 
         return str(query_tree)
@@ -378,7 +393,20 @@ class BaseQueryHandler:
 
     def add_query_string(self, search_object: Search, query_string: str = None):
         """
-        处理 query_string
+        处理并添加查询字符串到Elasticsearch搜索对象
+
+        参数:
+            search_object: Elasticsearch DSL Search对象，用于构建查询
+            query_string: 原始查询字符串（可选），默认使用self.query_string
+
+        返回值:
+            包含查询条件的Search对象
+
+        该方法实现完整的查询字符串处理流程：
+        1. 查询字符串初始化：优先使用传入参数，否则使用实例属性
+        2. 字符串预处理：依次执行阶段处理和指标处理逻辑
+        3. DSL转换：将文本查询转换为Elasticsearch DSL结构
+        4. 查询构建：根据DSL类型选择query_string或filter查询方式
         """
         query_string = self.query_string if query_string is None else query_string
         query_string = process_stage_string(query_string)
@@ -387,10 +415,10 @@ class BaseQueryHandler:
         if query_string.strip():
             query_dsl = self.query_transformer.transform_query_string(query_string)
             if isinstance(query_dsl, str):
-                # 如果 query_dsl 是字符串，就使用 query_string 查询
+                # 使用query_string查询方式构建查询条件
                 search_object = search_object.query("query_string", query=query_dsl)
             else:
-                # 如果 query_dsl 是字典，就使用 filter 查询
+                # 使用filter查询方式构建结构化查询
                 search_object = search_object.query(query_dsl)
         return search_object
 
@@ -492,17 +520,37 @@ class BaseQueryHandler:
 
     @classmethod
     def handle_hit(cls, hit):
+        """
+        处理Elasticsearch查询结果的数据清洗与字段映射
+
+        参数:
+            cls: 调用该方法的类对象
+            hit: Elasticsearch查询结果对象，可以是字典或包含to_dict()方法的对象
+
+        返回值:
+            dict: 包含清洗后数据的字典对象，结构根据query_transformer配置决定
+
+        执行流程:
+        1. 统一数据格式转换（字典化处理）
+        2. 空字段配置快速返回优化
+        3. 固定字段映射与值转换
+        """
+        # 统一数据格式转换
         if isinstance(hit, dict):
             data = hit
         else:
             data = hit.to_dict()
 
+        # 短路处理：当无字段映射需求时直接返回原始数据
         if not cls.query_transformer.query_fields:
             return data
 
         cleaned_data = {}
 
-        # 固定字段
+        # 固定字段映射处理
+        # 遍历配置字段并执行以下操作：
+        # 1. 获取字段原始名称
+        # 2. 通过字段定义的get_value_by_es_field方法进行值转换
         for field in cls.query_transformer.query_fields:
             cleaned_data[field.field] = field.get_value_by_es_field(data)
         return cleaned_data
@@ -581,7 +629,7 @@ class BaseQueryHandler:
         """
         字段值 TOP N 统计
         通过Elasticsearch聚合查询获取指定字段的TOP N分布情况，支持字段排序方式配置、字符字段处理和结果翻译
-        
+
         :param fields: 需要统计的字段列表，字段名前可加排序标识：
                       "+abc" 升序排列，"-abc" 降序排列，默认降序排列
                       支持特殊字段处理：tags.*字段、duration字段、bk_biz_id字段
@@ -664,7 +712,7 @@ class BaseQueryHandler:
                     {"id": bucket.key, "name": bucket.key, "count": bucket.doc_count}
                     for bucket in getattr(search_result.aggs, field).key.value.buckets
                 ]
-            
+
             # 特殊处理duration字段：使用预定义的持续时间选项
             elif actual_field == "duration":
                 bucket_count = len(self.DurationOption.AGG)
@@ -676,7 +724,7 @@ class BaseQueryHandler:
                     }
                     for bucket in getattr(search_result.aggs, field).buckets
                 ]
-            
+
             # 特殊处理bk_biz_id字段：补充授权业务数据
             elif actual_field == "bk_biz_id" and hasattr(self, "authorized_bizs"):
                 buckets = [
@@ -692,7 +740,7 @@ class BaseQueryHandler:
                         continue
                     buckets.append({"id": bk_biz_id, "name": bk_biz_id, "count": 0})
                 bucket_count = len(set(self.authorized_bizs) | exist_bizs)
-            
+
             # 默认字段处理：提取普通聚合结果
             else:
                 bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value

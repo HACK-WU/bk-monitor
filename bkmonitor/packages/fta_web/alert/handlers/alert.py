@@ -143,16 +143,45 @@ class AlertQueryTransformer(BaseQueryTransformer):
     ]
 
     def visit_word(self, node, context):
+        """
+        处理搜索词节点的转换与翻译逻辑
+
+        参数:
+            node: 当前处理的语法树节点对象，包含原始搜索值
+            context: 上下文字典，包含搜索字段配置信息：
+                - ignore_word: 布尔值，是否跳过当前节点处理
+                - search_field_name: 当前搜索字段名称
+                - search_field_origin_name: 原始搜索字段名称（带国际化标识）
+
+        返回值:
+            生成器产出处理后的语法树节点，可能包含：
+            - 原始节点直接传递
+            - 转换后的字段值
+            - 组合查询条件节点
+            - 空结果占位符(如[0])
+
+        该方法实现搜索条件的多维度转换：
+        1. 字段值翻译：将展示值转换为存储值
+        2. 特殊字段处理：动作ID/收敛ID解析
+        3. IPv6地址标准化
+        4. 无字段名时的模糊匹配处理
+        """
         if context.get("ignore_word"):
+            # 跳过处理模式：直接传递节点到通用访问器处理
             yield from self.generic_visit(node, context)
         else:
             # 获取搜索字段的名字
             search_field_name = context.get("search_field_name")
+
+            # 处理字段值翻译场景：将展示值转换为存储值
+            # 例如：将"致命"转换为对应的数值编码"1"
             if search_field_name in self.VALUE_TRANSLATE_FIELDS:
                 for value, display in self.VALUE_TRANSLATE_FIELDS[search_field_name]:
                     # 尝试将匹配翻译值，并转换回原值
                     if display == node.value:
                         node.value = str(value)
+
+            # 特殊处理动作ID字段：从动作实例提取关联告警ID
             elif search_field_name == "id" and context.get("search_field_origin_name") in [
                 "action_id",
                 _("处理记录ID"),
@@ -160,15 +189,19 @@ class AlertQueryTransformer(BaseQueryTransformer):
                 # 处理动作ID不是告警的标准字段，需要从动作ID中提取出告警ID，再将其作为查询条件
                 action_id = node.value
                 try:
-                    action = ActionInstanceDocument.get(action_id)
+                    action = ActionInstanceDocument.get(action_id)  # type: ActionInstanceDocument
                     if action:
                         alert_ids = action.alert_id
                     else:
+                        # 从数据库中获取到关联的告警ID
+                        # action_id的后10位是ActionInstance的ID
                         alert_ids = ActionInstance.objects.get(id=str(action_id)[10:]).alerts
                 except Exception:
                     alert_ids = []
                 node = FieldGroup(OrOperation(*[Word(str(alert_id)) for alert_id in alert_ids or [0]]))
                 context = {"ignore_search_field": True, "ignore_word": True}
+
+            # 特殊处理收敛ID字段：从收敛记录提取关联告警ID
             elif search_field_name == "id" and context.get("search_field_origin_name") in [
                 "converge_id",
                 _("收敛记录ID"),
@@ -189,9 +222,16 @@ class AlertQueryTransformer(BaseQueryTransformer):
                     alert_ids = []
                 node = FieldGroup(OrOperation(*[Word(str(alert_id)) for alert_id in alert_ids or [0]]))
                 context = {"ignore_search_field": True, "ignore_word": True}
+
+            # IPv6地址标准化处理：展开压缩格式并添加引号包裹
             elif search_field_name == "event.ipv6":
                 ip = exploded_ip(node.value.strip('"'))
                 node.value = f'"{ip}"'
+
+            # 无明确字段名时的模糊匹配处理：
+            # 1. 尝试匹配所有字段的翻译值
+            # 2. 构建组合查询条件
+            # 3. 未匹配到时添加引号包裹
             elif not search_field_name:
                 for key, choices in self.VALUE_TRANSLATE_FIELDS.items():
                     origin_value = None
@@ -264,11 +304,20 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
         没有恢复的告警不受start_time和end_time限制
 
-        :param start_time: 查询起始时间戳（可选，默认使用实例的start_time）
-        :param end_time: 查询结束时间戳（可选，默认使用实例的end_time）
-        :param is_time_partitioned: 是否启用时间分区查询（默认False）
-        :param is_finaly_partition: 是否为最终时间分区（仅在is_time_partitioned=True时生效）
-        :return: 构建完成的elasticsearch查询对象
+        参数说明:
+            start_time: 查询起始时间戳（可选，默认使用实例的start_time）
+            end_time: 查询结束时间戳（可选，默认使用实例的end_time）
+            is_time_partitioned: 是否启用时间分区查询（默认False）
+            is_finaly_partition: 是否为最终时间分区（仅在is_time_partitioned=True时生效）
+
+        返回值:
+            构建完成的elasticsearch查询对象
+
+        该方法实现以下核心功能：
+        1. 参数优先级处理：优先使用传入参数，否则回退到实例变量
+        2. 时间范围过滤：支持时间分区模式和普通模式的双分支处理逻辑
+        3. 多维条件组合：包含业务维度、用户维度、状态维度的复合过滤条件
+        4. 字段存在性验证：强制要求某些字段必须存在的过滤条件
         """
         # 参数初始化：优先使用传入参数，否则使用实例变量
         start_time = start_time or self.start_time
@@ -397,10 +446,21 @@ class AlertQueryHandler(BaseBizQueryHandler):
         """
         执行原始搜索并返回搜索结果与DSL字典
 
+        参数:
+            show_overview (bool): 是否添加概览信息处理逻辑，默认False
+            show_aggs (bool): 是否添加聚合分析逻辑，默认False
+            show_dsl (bool): 是否返回DSL查询字典，默认False
+
         返回:
             tuple: 包含两个元素的元组
-                - SearchResult: 搜索结果对象
-                - dict/None: 当show_dsl=True时返回DSL字典，否则返回None
+                - SearchResult: 封装完整搜索结果的对象
+                - dict/None: 当show_dsl=True时返回DSL查询字典，否则返回None
+
+        该方法实现完整的搜索执行流程，包含：
+        1. 构建基础搜索对象：添加条件、查询语句、排序和分页
+        2. 根据参数动态扩展搜索功能（概览/聚合）
+        3. 执行最终搜索并跟踪总匹配数
+        4. 条件性返回DSL查询结构
         """
         # 构建基础搜索对象：添加条件、查询语句、排序和分页
         search_object = self.get_search_object()
@@ -426,8 +486,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return search_result, None
 
     def search(self, show_overview=False, show_aggs=False, show_dsl=False):
-        """搜索告警并返回格式化结果
-        Returns:
+        """
+        搜索告警并返回格式化结果
+
+        参数:
+            show_overview (bool): 是否包含统计概览信息
+            show_aggs (bool): 是否包含聚合数据
+            show_dsl (bool): 是否包含原始查询DSL语句
+
+        返回值:
             dict: 结构化的告警搜索结果，包含以下字段：
                 - alerts (list): 格式化后的告警列表
                 - total (int): 匹配的告警总数
@@ -435,10 +502,18 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 - aggs (dict): 聚合数据（当show_aggs=True时存在）
                 - dsl (str): 原始查询DSL语句（当show_dsl=True时存在）
 
-        Raises:
+        异常:
             Exception: 当搜索过程中发生错误时抛出，异常对象会包含已处理的结果数据
+
+        该方法实现完整的告警搜索流程，包含：
+        1. 原始搜索执行与异常处理
+        2. 搜索结果格式化处理
+        3. 多维度字段翻译（业务/策略/分类/插件）
+        4. 条件性扩展信息注入
+        5. 异常数据回填与抛出
         """
         exc = None
+
         # 执行原始搜索并处理异常情况
         try:
             search_result, dsl = self.search_raw(show_overview, show_aggs, show_dsl)
@@ -474,6 +549,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
         if dsl:
             result["dsl"] = dsl
 
+        # 异常情况下注入数据并重新抛出
         if exc:
             exc.data = result
             raise exc
@@ -708,7 +784,26 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return search_object
 
     def add_overview(self, search_object):
-        # 总览聚合
+        """
+        为搜索对象添加多维度聚合分析配置，用于生成数据概览统计信息
+
+        参数:
+            search_object: Elasticsearch搜索对象，包含查询条件和聚合配置
+                          类型通常为elasticsearch_dsl.search.Search或兼容对象
+
+        返回值:
+            添加聚合配置后的搜索对象，支持链式调用
+
+        聚合适配逻辑说明：
+        1. status与is_shielded的嵌套聚合：统计不同状态下的条目屏蔽分布
+           - 外层按状态分组（active/inactive等）
+           - 内层按是否屏蔽分组（布尔值聚合）
+        2. mine过滤聚合：统计当前用户关联条目（包含经办人或指派人身份）
+        3. assignee/appointee/follower专项过滤：分别统计当前用户作为经办人、
+           指派人、关注者的条目数量
+        """
+
+        # 总览聚合：创建状态与屏蔽状态的双维度统计
         search_object.aggs.bucket("status", "terms", field="status").bucket(
             "is_shielded",
             "terms",
@@ -716,17 +811,43 @@ class AlertQueryHandler(BaseBizQueryHandler):
             missing=False,
             size=10000,
         )
+        # 禁用中的状态聚合（历史保留配置）
         # search_object.aggs.bucket("status", "terms", field="status")
+
+        # 用户关联条目统计：包含经办人或指派人身份的过滤聚合
         search_object.aggs.bucket(
             "mine", "filter", (Q("term", assignee=self.request_username) | Q("term", appointee=self.request_username))
         )
 
+        # 专项身份统计：分别创建经办人、指派人、关注者的独立过滤聚合
         search_object.aggs.bucket("assignee", "filter", {"term": {"assignee": self.request_username}})
         search_object.aggs.bucket("appointee", "filter", {"term": {"appointee": self.request_username}})
         search_object.aggs.bucket("follower", "filter", {"term": {"follower": self.request_username}})
+
         return search_object
 
     def add_aggs(self, search_object):
+        """
+        添加高级筛选聚合配置到Elasticsearch搜索对象
+
+        参数:
+            search_object: Elasticsearch DSL搜索对象，包含当前查询的聚合配置
+
+        返回值:
+            修改后的Elasticsearch DSL搜索对象，包含新增的聚合配置
+
+        该方法实现以下聚合配置：
+        1. 初始化基础聚合容器
+        2. 添加多维度terms聚合：
+           - 告警严重程度（severity）
+           - 事件数据类型（event.data_type）带默认分类
+           - 事件分类（event.category）带最大分类数限制
+        3. 添加复合条件过滤聚合：
+           - 屏蔽状态过滤
+           - 确认状态过滤（排除已屏蔽记录）
+           - 处理状态过滤（双重否定条件）
+           - 阻断状态过滤
+        """
         # 高级筛选聚合
         search_object.aggs.bucket("severity", "terms", field="severity")
         search_object.aggs.bucket("data_type", "terms", field="event.data_type", missing=DataTypeLabel.EVENT)
@@ -752,9 +873,21 @@ class AlertQueryHandler(BaseBizQueryHandler):
     @classmethod
     def handle_operator(cls, alerts):
         """
-        处理人转换
-        :param alerts:
-        :return:
+        处理告警操作者信息填充，分离已确认和已屏蔽告警进行专项处理
+
+        参数:
+            alerts (list): 告警数据列表，每个元素为包含告警元数据的字典对象
+                必须包含字段: id(str), is_ack(bool), is_shielded(bool)
+                可选字段: shield_id(list), ack_operator(str), shield_operator(set)
+
+        返回值:
+            None: 直接修改输入列表中每个告警对象的操作者字段
+
+        执行流程:
+        1. 初始化告警分类容器
+        2. 遍历告警列表进行基础字段初始化
+        3. 按确认状态和屏蔽状态分类处理
+        4. 调用专项处理方法填充操作者信息
         """
         ack_alerts = {}
         shield_alerts = {}
@@ -773,6 +906,20 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_ack_operator(cls, ack_alerts):
+        """
+        处理已确认告警的操作者信息填充
+
+        参数:
+            ack_alerts (dict): 已确认告警字典，键为告警ID，值为告警对象
+
+        返回值:
+            None: 直接修改ack_alerts中每个告警对象的ack_operator字段
+
+        处理逻辑:
+        1. 批量获取确认日志
+        2. 构建告警ID到操作者的映射表
+        3. 为每个确认告警填充对应操作者
+        """
         ack_logs = AlertLog.get_ack_logs(list(ack_alerts.keys()))
         alert_operators = {}
         for ack_log in ack_logs:
@@ -783,6 +930,20 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_shield_operator(cls, shield_alerts):
+        """
+        处理已屏蔽告警的操作者信息填充
+
+        参数:
+            shield_alerts (dict): 已屏蔽告警字典，键为告警ID，值为告警对象
+
+        返回值:
+            None: 直接修改shield_alerts中每个告警对象的shield_operator集合
+
+        处理流程:
+        1. 收集所有关联的屏蔽策略ID
+        2. 建立屏蔽策略ID到告警的反向映射
+        3. 批量查询屏蔽策略并填充创建者信息
+        """
         shield_ids = []
         shield_alert_relation = defaultdict(list)
         for alert in shield_alerts.values():
@@ -799,6 +960,25 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_aggs(cls, search_result):
+        """
+        处理搜索结果的聚合分析
+
+        参数:
+            search_result (dict): 包含原始搜索结果的数据字典
+
+        返回值:
+            list: 包含四个元素的聚合结果列表，依次为：
+                - 严重度分布聚合结果
+                - 阶段分布聚合结果
+                - 数据类型分布聚合结果
+                - 分类分布聚合结果
+
+        聚合维度:
+        1. 告警严重度统计
+        2. 处理阶段分布
+        3. 数据类型统计
+        4. 告警分类分布
+        """
         agg_result = [
             cls.handle_aggs_severity(search_result),
             cls.handle_aggs_stage(search_result),
@@ -967,19 +1147,38 @@ class AlertQueryHandler(BaseBizQueryHandler):
     @classmethod
     def clean_document(cls, doc: AlertDocument, exclude: list = None) -> dict:
         """
-        清洗告警数据，填充空字段
+        清洗告警数据并填充标准化字段
+
+        参数:
+            cls: 当前类引用，包含查询转换器配置
+            doc: AlertDocument实例，原始告警数据对象
+            exclude: 需要排除的字段列表，默认不排除任何字段
+
+        返回值:
+            dict类型，包含清洗后的标准化告警数据字典
+
+        执行流程:
+            1. 应用查询转换器映射规则处理固定字段
+            2. 移除系统保留字段action_id
+            3. 补充业务展示字段和格式化数据
+            4. 根据参数排除指定字段
         """
         data = doc.to_dict()
         cleaned_data = {}
 
-        # 固定字段
+        # 固定字段处理：
+        # 通过查询转换器定义的字段映射规则提取数据
+        # 将ES存储结构转换为接口需要的扁平化结构
         for field in cls.query_transformer.query_fields:
             cleaned_data[field.field] = field.get_value_by_es_field(data)
 
-        # 去掉无用字段
+        # 系统保留字段清理：
+        # 移除内部流转使用的action_id字段
         cleaned_data.pop("action_id", None)
 
-        # 额外字段
+        # 业务展示字段补充：
+        # 添加格式化展示字段和计算字段
+        # 包含时间格式化、维度解析、关联信息等扩展数据
         cleaned_data.update(
             {
                 # "strategy_name": doc.strategy.get("name") if doc.strategy else None,
@@ -999,10 +1198,13 @@ class AlertQueryHandler(BaseBizQueryHandler):
             }
         )
 
+        # 动态字段排除：
+        # 根据调用参数移除指定字段（如敏感信息或非必要字段）
+        # 使用安全pop方法避免KeyError异常
         if exclude:
-            # 剔除指定字段
             for field in exclude:
                 cleaned_data.pop(field, None)
+
         return cleaned_data
 
     @classmethod
