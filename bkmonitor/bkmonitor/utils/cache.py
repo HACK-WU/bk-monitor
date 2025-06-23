@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -15,7 +14,8 @@ import logging
 import time
 import zlib
 from time import monotonic
-from typing import Any, Callable, Optional
+from typing import Any
+from collections.abc import Callable
 
 from django.conf import settings
 from django.core.cache import cache, caches
@@ -35,7 +35,7 @@ except Exception:
     mem_cache = cache
 
 
-class UsingCache(object):
+class UsingCache:
     min_length = 15
     preset = 6
     key_prefix = "web_cache"
@@ -47,7 +47,7 @@ class UsingCache(object):
         user_related=None,
         compress=True,
         is_cache_func=lambda res: True,
-        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+        func_key_generator=lambda func: f"{func.__module__}.{func.__name__}",
     ):
         """
         :param cache_type: 缓存类型
@@ -103,12 +103,12 @@ class UsingCache(object):
         # 检查using_cache_type是否为有效的缓存类型，如果不是则抛出异常
         if using_cache_type:
             if not isinstance(using_cache_type, CacheTypeItem):
-                raise TypeError("param 'cache_type' must be an" "instance of <utils.cache.CacheTypeItem>")
+                raise TypeError("param 'cache_type' must be aninstance of <utils.cache.CacheTypeItem>")
 
         # 返回确定的缓存类型
         return using_cache_type
 
-    def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
+    def _cache_key(self, task_definition: Callable, args, kwargs) -> str | None:
         # 新增根据用户openid设置缓存key
         # lang = "en" if translation.get_language() == "en" else "zh-hans"
         if self.using_cache_type:
@@ -167,7 +167,7 @@ class UsingCache(object):
             try:
                 value = json.dumps(value)
             except Exception:
-                logger.exception("[Cache]不支持序列化的类型: %s" % type(value))
+                logger.exception(f"[Cache]不支持序列化的类型: {type(value)}")
                 return False
 
             if len(value) > self.min_length:
@@ -184,7 +184,7 @@ class UsingCache(object):
             except Exception:
                 request_path = ""
             # 缓存出错不影响主流程
-            logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
+            logger.exception(f"存缓存[key:{key}]时报错：{e}\n value: {value!r}\nurl: {request_path}")
 
     def _cached(self, task_definition: Callable, args, kwargs):
         """
@@ -269,7 +269,7 @@ class UsingCache(object):
 using_cache = UsingCache
 
 
-class CacheTypeItem(object):
+class CacheTypeItem:
     """
     缓存类型定义
     """
@@ -290,7 +290,7 @@ class CacheTypeItem(object):
         return CacheTypeItem(self.key, timeout, self.user_related, self.label)
 
 
-class CacheType(object):
+class CacheType:
     """
     缓存类型选项
     >>>@using_cache(CacheType.DATA(60 * 60))
@@ -325,9 +325,10 @@ class CacheType(object):
     DEVOPS = CacheTypeItem(key="devops", timeout=60 * 5, label="蓝盾接口相关", user_related=False)
     GRAFANA = CacheTypeItem(key="grafana", timeout=60 * 5, label="仪表盘相关", user_related=False)
     SCENE_VIEW = CacheTypeItem(key="scene_view", timeout=60 * 1, label="观测场景相关", user_related=False)
+    DB_CACHE = CacheTypeItem(key="db_cache", timeout=60 * 3, label="db缓存", user_related=False)
 
 
-class InstanceCache(object):
+class InstanceCache:
     @classmethod
     def instance(cls, *args, **kwargs):
         if not hasattr(cls, "_instance"):
