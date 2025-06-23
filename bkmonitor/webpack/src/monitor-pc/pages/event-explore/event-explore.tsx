@@ -88,6 +88,7 @@ interface IEvent {
   onCommonWhereChange: (where: IWhereItem[]) => void;
   onShowResidentBtnChange?: (v: boolean) => void;
   onEventSourceTypeChange: (v: ExploreSourceTypeEnum[]) => void;
+  onSetRouteParams: (otherQuery: Record<string, any>) => void;
 }
 @Component
 export default class EventExplore extends tsc<
@@ -310,6 +311,11 @@ export default class EventExplore extends tsc<
   @Emit('favorite')
   handleFavorite(isEdit: boolean) {
     return isEdit;
+  }
+
+  @Emit('setRouteParams')
+  setRouteParams(otherQuery = {}) {
+    return otherQuery;
   }
 
   handleModeChange(mode: EMode) {
@@ -615,6 +621,7 @@ export default class EventExplore extends tsc<
                   onClearSearch={this.handleClearSearch}
                   onConditionChange={this.handleConditionChange}
                   onSearch={this.updateQueryConfig}
+                  onSetRouteParams={this.setRouteParams}
                   onShowEventSourcePopover={this.handleShowEventSourcePopover}
                 />
               </div>
