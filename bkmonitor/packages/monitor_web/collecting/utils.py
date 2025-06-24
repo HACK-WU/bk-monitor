@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from core.drf_resource import api
 
 
@@ -22,13 +22,35 @@ def chunks(lst, n):
 
 
 def fetch_sub_statistics(config_data_list):
+    """
+    获取订阅配置统计信息并建立ID映射关系
+
+    参数:
+        config_data_list (List[ConfigObject]): 配置对象列表，要求每个对象包含deployment_config属性，
+                                            且deployment_config需包含subscription_id字段
+
+    返回值:
+        Tuple[Dict[int, ConfigObject], List[Dict]]: 包含两个元素的元组
+            - subscription_id_config_map: 订阅ID到配置对象的映射字典
+            - collect_statistics_data: 节点管理接口返回的统计信息列表，包含所有分组的统计数据
+
+    处理流程:
+    1. 构建订阅ID与配置对象的映射关系
+    2. 将订阅ID按20个一组分批请求统计信息
+    3. 合并所有批次的统计结果
+    """
+
+    # 建立订阅ID到配置对象的映射关系
+    # 过滤条件: 仅保留包含有效subscription_id的配置项
     subscription_id_config_map = {
         config.deployment_config.subscription_id: config
         for config in config_data_list
         if config.deployment_config.subscription_id
     }
 
-    # 避免对节点管理造成巨大压力，这里分组请求，每组20份
+    # 分批请求节点管理统计信息
+    # 采用批量请求方式减少单次请求压力，每组最多20个订阅ID
+    # 请求参数格式: [{"subscription_id_list": [id1,id2,...]}, ...]
     collect_statistics_data = api.node_man.fetch_subscription_statistic.bulk_request(
         [
             {"subscription_id_list": subscription_id_group}
@@ -36,6 +58,8 @@ def fetch_sub_statistics(config_data_list):
         ],
         ignore_exceptions=True,
     )
+    # 将分组返回的统计结果展平为单一列表
+    # 示例输入: [[group1_data], [group2_data]] -> 输出: [group1_data, group2_data]
     collect_statistics_data = [item for group in collect_statistics_data for item in group]
 
     return subscription_id_config_map, collect_statistics_data

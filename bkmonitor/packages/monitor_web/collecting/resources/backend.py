@@ -80,17 +80,36 @@ class CollectConfigListResource(Resource):
         page = serializers.IntegerField(required=False, default=1, label="页数")
         limit = serializers.IntegerField(required=False, default=10, label="大小")
 
-    def get_realtime_data(self, config_data_list):
+    def get_realtime_data(self, config_data_list: list[CollectConfigMeta]):
         """
-        获取节点管理订阅实时状态
-        :param config_data_list: 采集配置数据列表
-        :return: self.realtime_data
+        获取节点管理订阅实时状态并更新采集配置状态
+
+        参数:
+            config_data_list: 采集配置数据列表，包含采集插件配置和状态信息
+
+        返回值:
+            self.realtime_data: 字典类型，存储订阅ID对应的实例状态统计信息
+                {
+                    "subscription_id": {
+                        "error_instance_count": 错误实例数,
+                        "total_instance_count": 总实例数,
+                        "pending_instance_count": 挂起实例数,
+                        "running_instance_count": 运行中实例数
+                    }
+                }
+
+        执行流程:
+        1. 获取订阅状态统计信息并构建配置映射
+        2. 处理常规采集配置的状态更新
+        3. 特殊处理K8S插件采集配置的状态
+        4. 批量更新发生状态变化的配置对象
         """
 
         subscription_id_config_map, statistics_data = fetch_sub_statistics(config_data_list)
         updated_configs = []
 
-        # 节点管理返回的状态数量
+        # 处理常规采集配置的状态数据
+        # 遍历每个订阅状态统计结果，计算各状态实例数量
         for subscription_status in statistics_data:
             status_number = {}
             for status_result in subscription_status.get("status", []):
@@ -108,7 +127,7 @@ class CollectConfigListResource(Resource):
             }
             self.realtime_data.update({subscription_status["subscription_id"]: subscription_status_data})
 
-            # 更新任务状态
+            # 根据实例状态确定操作结果状态
             config = subscription_id_config_map[subscription_status["subscription_id"]]
             if not config:
                 continue
@@ -121,7 +140,7 @@ class CollectConfigListResource(Resource):
             else:
                 operation_result = OperationResult.WARNING
 
-            # 更新缓存
+            # 构建缓存数据并记录需要更新的配置
             cache_data = {
                 "error_instance_count": subscription_status_data.get("error_instance_count", 0),
                 "total_instance_count": subscription_status_data.get("total_instance_count", 0),
@@ -131,9 +150,10 @@ class CollectConfigListResource(Resource):
                 config.operation_result = operation_result
                 updated_configs.append(config)
 
-        # 更新k8s插件采集配置的状态
+        # 处理K8S插件采集配置的特殊状态逻辑
+        # 仅处理处于准备或部署中的K8S插件配置
         for collect_config in config_data_list:
-            # 跳过非k8s插件
+            # todo 可以优化，批量查询
             if collect_config.plugin.plugin_type != PluginType.K8S:
                 continue
 
@@ -152,6 +172,7 @@ class CollectConfigListResource(Resource):
                         error_count += 1
                     total_count += 1
 
+            # 根据实例状态确定K8S插件的操作结果状态
             if error_count == total_count:
                 operation_result = OperationResult.FAILED
             elif running_count + pending_count != 0:
@@ -161,7 +182,7 @@ class CollectConfigListResource(Resource):
             else:
                 operation_result = OperationResult.WARNING
 
-            # 更新缓存
+            # 构建缓存数据并记录需要更新的K8S配置
             cache_data = {
                 "error_instance_count": error_count,
                 "total_instance_count": total_count,
@@ -171,6 +192,7 @@ class CollectConfigListResource(Resource):
                 collect_config.operation_result = operation_result
                 updated_configs.append(collect_config)
 
+        # 批量更新所有状态发生变化的配置对象
         CollectConfigMeta.objects.bulk_update(updated_configs, ["cache_data", "operation_result"])
 
     def update_cache_data(self, config: CollectConfigMeta):
@@ -262,6 +284,39 @@ class CollectConfigListResource(Resource):
         ).exists()
 
     def perform_request(self, validated_request_data):
+        """
+        执行采集配置查询请求的主处理逻辑
+
+        参数:
+            validated_request_data: dict类型，包含经过验证的请求参数，结构示例：
+                {
+                    "bk_biz_id": int, 业务ID
+                    "refresh_status": bool, 是否刷新状态
+                    "search": dict, 搜索条件
+                    "order": str, 排序字段
+                    "page": int, 分页页码
+                    "limit": int, 分页大小
+                }
+
+        返回值:
+            dict: 包含以下键值对的响应数据
+                - type_list: 采集类型选项列表
+                - config_list: 处理后的采集配置数据列表
+                - total: 总记录数
+
+        该方法实现完整的采集配置查询流程，包含：
+        1. 多条件动态查询构建
+        2. 业务权限校验与数据过滤
+        3. 实时状态刷新处理
+        4. 结果数据组装与排序
+        5. 插件类型元数据补充
+        """
+
+        # 构建动态查询条件
+        # 处理status/task_status字段的JSON内容匹配
+        # 处理need_upgrade字段的布尔值匹配
+        # 处理fuzzy字段的模糊搜索
+        # 处理常规字段的精确匹配
         bk_tenant_id = get_request_tenant_id()
         bk_biz_id = validated_request_data.get("bk_biz_id")
         refresh_status = validated_request_data.get("refresh_status")
@@ -291,14 +346,17 @@ class CollectConfigListResource(Resource):
             .order_by("-id")
         )
 
+        # 获取空间信息并构建业务ID映射
         all_space_list = SpaceApi.list_spaces()
         bk_biz_id_space_dict = {space.bk_biz_id: space for space in all_space_list}
 
+        # 查询全局插件元数据
         global_plugins = CollectorPluginMeta.objects.filter(bk_tenant_id=bk_tenant_id, bk_biz_id=0).values(
             "plugin_type", "plugin_id"
         )
 
-        # bk_biz_id可以为空，为空则按用户拥有的业务查询
+        # 业务权限校验与插件ID过滤
+        # 处理单业务场景和全业务场景的差异化逻辑
         plugin_ids = []
         user_biz_ids = []
         try:
@@ -334,8 +392,10 @@ class CollectConfigListResource(Resource):
         except BKAPIError as e:
             logger.error(f"get data source error: {e}")
 
+        # 应用最终过滤条件
         config_list = config_list.filter(Q(plugin_id__in=plugin_ids) | Q(bk_biz_id__in=user_biz_ids))
 
+        # 处理分页逻辑
         total = len(config_list)
         if total == 0:
             return {"type_list": [], "config_list": [], "total": 0}
@@ -346,13 +406,14 @@ class CollectConfigListResource(Resource):
         else:
             config_data_list = list(config_list)
 
+        # 尝试刷新实时状态数据
         if refresh_status:
             try:
                 self.get_realtime_data(config_data_list)
             except Exception:
-                # 尝试实时获取，获取失败就用缓存数据
-                pass
+                pass  # 失败时保留缓存数据
 
+        # 组装最终响应数据
         search_list = []
         for item in config_data_list:
             status = self.get_status(item)
@@ -387,7 +448,7 @@ class CollectConfigListResource(Resource):
                 }
             )
 
-        # 排序
+        # 处理自定义排序逻辑
         if order:
             reverse = False
             if order.startswith("-"):
@@ -397,9 +458,9 @@ class CollectConfigListResource(Resource):
             try:
                 search_list.sort(key=lambda x: x[order], reverse=reverse)
             except KeyError:
-                pass
+                pass  # 忽略无效排序字段
 
-        # 获取插件类型
+        # 补充采集类型元数据
         type_list = [{"id": item[0], "name": item[1]} for item in COLLECT_TYPE_CHOICES]
 
         return {"type_list": type_list, "config_list": search_list, "total": total}
