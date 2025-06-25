@@ -763,6 +763,7 @@ def access_aiops_by_strategy_id(strategy_id):
         .values(*value_fields)
         .query.sql_with_params()
     )
+    params = params[:-1]
     strategy_sql = sql_format_params(sql=sql, params=params)
 
     # 6.2 设置聚合维度和条件，用于构建数据流
@@ -1110,7 +1111,7 @@ def access_aiops_multivariate_anomaly_detection_by_bk_biz_id(bk_biz_id, need_acc
             .values(*sql_build_params["value_fields"])
             .query.sql_with_params()
         )
-
+        params = params[:-1]
         scene_sql = sql_format_params(sql=sql, params=params)
 
         # flow创建
@@ -1293,6 +1294,7 @@ def access_host_anomaly_detect_by_strategy_id(strategy_id: str):
             .values(*sql_build_params["value_fields"])
             .query.sql_with_params()
         )
+        params = params[:-1]
         scene_sql = sql_format_params(sql=sql, params=params)
 
         # 3.3 创建并启动主机异常检测数据流
