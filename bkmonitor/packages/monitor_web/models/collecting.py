@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 from typing import Optional
 
 from django.db import models
+from django.conf import settings
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy as _lazy
 
@@ -277,15 +278,17 @@ class CollectConfigMeta(OperateRecordModelBase):
             return "update"
 
         # 判断是否需要重建采集任务
-        if (
-            diff_result["plugin_version"]["is_modified"]
-            or diff_result["remote_collecting_host"]["is_modified"]
-            or (not self.deployment_config.subscription_id)
-        ):
+        if diff_result["remote_collecting_host"]["is_modified"] or (not self.deployment_config.subscription_id):
             return "rebuild"
 
-        # 判断是否需要更新配置
-        elif (
+        if diff_result["plugin_version"]["is_modified"]:
+            # 判断是否需要使用update模式进行插件升级
+
+            if self.deployment_config.bk_biz_id in settings.COLLECTING_UPGRADE_WITH_UPDATE_BIZ:
+                return "update"
+            return "rebuild"
+
+        if (
             diff_result["params"]["is_modified"]
             or diff_result["nodes"]["is_modified"]
             or self.deployment_config.target_nodes
