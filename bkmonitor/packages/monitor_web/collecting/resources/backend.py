@@ -226,19 +226,44 @@ class CollectConfigListResource(Resource):
         return conf
 
     def get_status(self, conf):
-        # 判断采集配置是否处于自动下发中，返回采集配置状态和任务状态
+        """
+        获取采集配置的当前状态信息，包含配置状态、任务状态及运行中任务列表
+
+        参数:
+            conf: 配置对象，需包含以下属性：
+                - deployment_config.subscription_id: 订阅ID用于状态查询
+                - config_status: 当前配置状态
+                - task_status: 当前任务状态
+
+        返回值:
+            dict: 包含三个键值对的状态信息：
+                - config_status: 配置状态（Status.AUTO_DEPLOYING 或原始配置状态）
+                - task_status: 任务状态（TaskStatus.AUTO_DEPLOYING 或原始任务状态）
+                - running_tasks: 自动部署中的任务列表（自动部署时返回实时数据，否则为空列表）
+
+        执行流程：
+        1. 通过订阅ID构建状态查询键
+        2. 检查实时数据中是否存在自动下发中的任务
+        3. 根据检查结果构建对应状态响应
+        4. 更新配置对象的缓存数据字段
+        5. 保存配置对象（跳过用户更新字段）
+        """
         status_key = conf.deployment_config.subscription_id
         if self.realtime_data.get(status_key) and self.realtime_data.get(status_key).get("is_auto_deploying"):
+            # 构建自动下发中的状态响应
             status = {
                 "config_status": Status.AUTO_DEPLOYING,
                 "task_status": TaskStatus.AUTO_DEPLOYING,
                 "running_tasks": self.realtime_data.get(status_key).get("auto_running_tasks"),
             }
         else:
+            # 构建常规状态响应
             status = {"config_status": conf.config_status, "task_status": conf.task_status, "running_tasks": []}
 
+        # 更新配置对象的缓存状态字段
         conf = self.update_cache_data_item(conf, "status", conf.config_status)
         conf = self.update_cache_data_item(conf, "task_status", conf.task_status)
+        # 保存配置对象并更新缓存数据字段
         conf.save(not_update_user=True, update_fields=["cache_data"])
         return status
 

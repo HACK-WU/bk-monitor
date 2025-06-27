@@ -122,19 +122,43 @@ class CollectConfigMeta(OperateRecordModelBase):
     @property
     def config_status(self):
         """
-        采集配置状态
-        STARTING,  启用中
-        STARTED,   已启用
-        STOPPING,  停用中
-        STOPPED,   已停用
-        DEPLOYING, 执行中
-        PREPARING, 准备中
+        获取采集配置的当前状态
+
+        参数:
+            self: 实例对象，包含以下属性：
+                - operation_result: 操作结果状态（PREPARING/DEPLOYING等）
+                - last_operation: 最后执行的操作类型（START/STOP）
+                - check_task_is_ready: 方法用于检查任务就绪状态
+
+        返回值:
+            config_status: 当前配置状态，属于Status枚举类型，包含以下可能值：
+                STARTING: 启用中
+                STARTED: 已启用
+                STOPPING: 停用中
+                STOPPED: 已停用
+                DEPLOYING: 执行中
+                PREPARING: 准备中
+
+        该方法实现配置状态的状态机转换逻辑，包含三个主要处理阶段：
+        1. 构建操作类型到部署状态的映射关系
+        2. 根据操作结果处理不同状态场景：
+           - 准备阶段需要检查任务就绪状态
+           - 部署阶段根据最后操作类型转换状态
+           - 常规运行阶段根据最后操作类型确定启停状态
+        3. 返回最终计算得到的配置状态
         """
+        # 定义操作类型到部署状态的映射关系
         deploying_mapping = {OperationType.STOP: Status.STOPPING, OperationType.START: Status.STARTING}
+
+        # 处理准备阶段的特殊状态转换
         if self.operation_result == OperationResult.PREPARING:
             config_status = self.check_task_is_ready(deploying_mapping)
+
+        # 处理部署执行中的状态转换
         elif self.operation_result == OperationResult.DEPLOYING:
             config_status = deploying_mapping.get(self.last_operation, Status.DEPLOYING)
+
+        # 处理常规启停状态转换
         else:
             config_status = Status.STOPPED if self.last_operation == OperationType.STOP else Status.STARTED
 

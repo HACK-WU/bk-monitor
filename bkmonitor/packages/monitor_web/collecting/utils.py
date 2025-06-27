@@ -9,6 +9,7 @@ specific language governing permissions and limitations under the License.
 """
 
 from core.drf_resource import api
+from monitor_web.models import CollectConfigMeta
 
 
 def chunks(lst, n):
@@ -21,7 +22,7 @@ def chunks(lst, n):
         yield lst[i : i + n]
 
 
-def fetch_sub_statistics(config_data_list):
+def fetch_sub_statistics(config_data_list: list[CollectConfigMeta]):
     """
     获取订阅配置统计信息并建立ID映射关系
 
