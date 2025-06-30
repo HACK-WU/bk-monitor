@@ -19,8 +19,7 @@ from collections.abc import Callable
 
 from django.conf import settings
 from django.core.cache import cache, caches
-
-# from django.utils import translation
+from django.utils import translation
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
@@ -28,6 +27,7 @@ from bkmonitor.utils.local import local
 from bkmonitor.utils.request import get_request
 
 logger = logging.getLogger(__name__)
+
 
 try:
     mem_cache = caches["locmem"]
@@ -108,15 +108,11 @@ class UsingCache:
         # 返回确定的缓存类型
         return using_cache_type
 
-    def _cache_key(self, task_definition: Callable, args, kwargs) -> str | None:
+    def _cache_key(self, task_definition, args, kwargs):
         # 新增根据用户openid设置缓存key
-        # lang = "en" if translation.get_language() == "en" else "zh-hans"
+        lang = "en" if translation.get_language() == "en" else "zh-hans"
         if self.using_cache_type:
-            return (
-                f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
-                f":{count_md5(args)}:{count_md5(kwargs)}:{self._get_username()}"
-            )
-
+            return f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}:{count_md5(args)},{count_md5(kwargs)}[{self._get_username()}]{lang}"
         return None
 
     def get_value(self, cache_key, default=None):
@@ -158,8 +154,6 @@ class UsingCache:
         # 更新一级缓存
         if self.local_cache_enable:
             setattr(local, cache_key, json.dumps(value))
-
-        # 返回最终值
         return value
 
     def set_value(self, key, value, timeout=60):
