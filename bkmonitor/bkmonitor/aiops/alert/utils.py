@@ -110,17 +110,32 @@ class AIOPSManager(abc.ABC):
         with_anomaly: bool = True,
     ):
         """
-        获取图表配置
-        :param alert: 告警对象
-        :param compare_function:
-        :param use_raw_query_config: 是否使用原始查询配置（适用于AIOps接入后要获取原始数据源的场景）
-        :param with_anomaly: 是否需要在返回图表中包含is_anomaly字段
+        获取图表配置的核心方法，支持多数据源适配与智能算法扩展
+
+        参数:
+            alert: 告警文档对象，包含策略配置和事件上下文信息
+            compare_function: 时间对比配置，默认{"time_compare": ["1d", "1w"]}
+            use_raw_query_config: 是否使用原始查询配置（AIOps场景）
+            with_anomaly: 是否包含异常标记字段
+
+        返回值:
+            图表配置字典，包含ID/类型/标题/子标题/目标数据源等结构
+            当策略为空时返回异常事件统计面板
+            当查询配置无效时返回None
+
+        该方法实现以下核心功能：
+        1. 多数据源适配（监控采集器/FTAsdk/自定义事件/日志搜索）
+        2. 智能算法可视化扩展（边界检测/异常评分/预测模型）
+        3. 维度过滤与聚合条件自动构建
+        4. 双时序数据源支持（主数据+扩展指标）
         """
+
+        # 初始化时间对比配置
         if compare_function is None:
             compare_function = {"time_compare": ["1d", "1w"]}
 
+        # 处理无策略场景：返回告警数量统计面板
         if not alert.strategy:
-            # 策略为空，则显示告警数量统计
             return {
                 "id": "event",
                 "type": "bar",
@@ -152,13 +167,16 @@ class AIOPSManager(abc.ABC):
                 ],
             }
 
+        # 获取策略项和查询配置
         item = alert.strategy["items"][0]
         query_config = item["query_configs"][0]
 
+        # 预处理原始查询配置（AIOps场景）
         if use_raw_query_config:
             raw_query_config = query_config.get("raw_query_config", {})
             query_config.update(raw_query_config)
 
+        # 初始化统一查询参数容器
         unify_query_params = {
             "expression": item.get("expression", ""),
             "functions": item.get("functions", []),
@@ -166,18 +184,21 @@ class AIOPSManager(abc.ABC):
             "function": compare_function,
         }
 
+        # AIOPS额外图表参数初始化
         extra_unify_query_params = {
-            # AIOPS 额外图表
             "expression": item.get("expression", ""),
             "functions": item.get("functions", []),
             "query_configs": [],
             "function": compare_function,
         }
 
+        # 获取数据源标识
         data_source = (query_config["data_source_label"], query_config["data_type_label"])
+
+        # 处理可用数据源类型
         if data_source in cls.AVAILABLE_DATA_LABEL:
             for query_config in item["query_configs"]:
-                # 系统事件需要特殊处理
+                # 系统事件特殊处理逻辑
                 if data_source == (DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.EVENT):
                     event_name_mapping = {
                         "corefile-gse": "CoreFile",
@@ -208,11 +229,12 @@ class AIOPSManager(abc.ABC):
                     )
                     continue
 
-                # promql
+                # PromQL配置预处理
                 if use_raw_query_config:
                     raw_query_config = query_config.get("raw_query_config", {})
                     query_config.update(raw_query_config)
 
+                # 维度信息提取与过滤
                 dimensions = {}
                 dimension_fields = query_config.get("agg_dimension", [])
                 try:
@@ -222,6 +244,7 @@ class AIOPSManager(abc.ABC):
                 except Exception:  # noqa
                     pass
 
+                # 构建有效维度过滤
                 dimensions = {
                     key: value
                     for key, value in dimensions.items()
@@ -239,7 +262,7 @@ class AIOPSManager(abc.ABC):
                     translate_method = getattr(cls, translate_method_name)
                     translate_method(query_config, dimensions=dimensions, filter_dict=filter_dict)
 
-                # promql添加维度过滤特殊处理
+                # PromQL维度过滤特殊处理
                 if query_config["data_source_label"] == DataSourceLabel.PROMETHEUS:
                     where = []
                     agg_dimension = []
@@ -268,7 +291,7 @@ class AIOPSManager(abc.ABC):
                 if query_config["data_type_label"] == DataTypeLabel.ALERT:
                     metrics[0]["display"] = True
 
-                # 扩展指标（针对智能异常检测，需要根据敏感度来）
+                # 智能算法扩展指标处理
                 algorithm_list = item.get("algorithms", [])
                 intelligent_algorithm_list = [
                     algorithm
@@ -327,11 +350,8 @@ class AIOPSManager(abc.ABC):
                             {"field": "value", "method": "AVG"},
                             {"field": "bounds", "method": "", "display": True},
                         ]
-
                         extra_metrics = []
-
                         agg_dimension = ["cluster"]
-
                         clusters = alert.event.extra_info.origin_alarm.data["values"]["cluster"]
                         pattern = re.compile(CLUSTER_PATTERN)
                         cluster_str_list = pattern.findall(clusters)
@@ -342,6 +362,7 @@ class AIOPSManager(abc.ABC):
                                 where.pop(index)
                                 break
 
+                # 构建最终查询配置
                 query_config = {
                     "custom_event_name": query_config.get("custom_event_name", ""),
                     "query_string": query_config.get("query_string", ""),
@@ -364,15 +385,18 @@ class AIOPSManager(abc.ABC):
 
                 unify_query_params["query_configs"].append(query_config)
 
+                # 构建扩展查询配置
                 if extra_metrics:
                     extra_query_config = copy.deepcopy(query_config)
                     extra_query_config["metrics"] = extra_metrics
                     extra_unify_query_params["expression"] = extra_metrics[0].get("alias") or extra_metrics[0]["field"]
                     extra_unify_query_params["query_configs"].append(extra_query_config)
 
+        # 验证查询配置有效性
         if not unify_query_params["query_configs"]:
             return
 
+        # 确定数据源类型
         data_source_label = unify_query_params["query_configs"][0]["data_source_label"]
         data_type_label = unify_query_params["query_configs"][0]["data_type_label"]
         is_bar = (data_source_label, data_type_label) in (
@@ -385,8 +409,10 @@ class AIOPSManager(abc.ABC):
 
         is_composite = data_type_label == DataTypeLabel.ALERT
 
+        # 构建子标题
         sub_titles = "\n".join([query_config["metric_id"] for query_config in item["query_configs"]])
 
+        # 构建面板配置
         panel = {
             "id": "event",
             "type": "bar" if is_bar else "graph",
@@ -402,6 +428,7 @@ class AIOPSManager(abc.ABC):
             ],
         }
 
+        # 添加扩展数据源配置
         if extra_unify_query_params["query_configs"]:
             panel["targets"].append(
                 {

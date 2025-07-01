@@ -604,8 +604,45 @@ class DataSource(metaclass=ABCMeta):
         time_align: bool = True,
         use_full_index_names: bool = False,
     ):
+        """
+        构建数据查询的QuerySet对象
+
+        参数:
+            bk_tenant_id: 租户ID标识
+            metrics: 指标计算配置列表
+            select: 需要查询的字段列表
+            table: 数据表名称
+            agg_condition: 聚合条件列表
+            where: 查询过滤条件字典
+            group_by: 分组统计字段列表
+            distinct: 去重字段名称
+            index_set_id: 索引集ID
+            query_string: 原始查询语句
+            nested_paths: 嵌套字段路径列表
+            limit: 查询结果最大数量限制
+            offset: 查询结果偏移量
+            slimit: 子查询结果限制
+            order_by: 排序字段列表
+            time_field: 时间字段名称
+            interval: 时间间隔（秒）
+            start_time: 起始时间戳（毫秒）
+            end_time: 结束时间戳（毫秒）
+            time_align: 是否对齐时间间隔
+            use_full_index_names: 是否使用完整索引名称
+
+        返回值:
+            DataQueryHandler实例：包含完整查询配置的处理器对象
+
+        该方法实现以下核心功能：
+        1. 参数默认值处理与数据结构复制
+        2. 实时监控指标方法转换
+        3. 时间范围过滤条件构建
+        4. 时间聚合字段自动添加
+        5. 查询条件链式组装
+        """
         from bkmonitor.data_source.handler import DataQueryHandler
 
+        # 参数默认值处理与深拷贝
         metrics = json.loads(json.dumps(metrics)) or []
         select = select or []
         agg_condition = agg_condition or []
@@ -614,28 +651,33 @@ class DataSource(metaclass=ABCMeta):
         time_field = time_field or cls.DEFAULT_TIME_FIELD
         order_by = order_by or [f"{time_field} desc"]
 
-        # 实时监控方法处理
+        # 实时监控方法转换处理
+        # 将实时监控方法（REAL_TIME）转换为平均值计算（AVG）
         for metric in metrics:
             if metric.get("method") == AGG_METHOD_REAL_TIME:
                 metric["method"] = "AVG"
 
-        # 过滤条件中添加时间字段
+        # 时间范围过滤条件构建
+        # 处理起始时间和结束时间的时间对齐逻辑
+        # 生成基于时间字段的过滤条件字典
         time_filter = {}
 
         if start_time:
             if interval and time_align:
                 start_time = time_interval_align(start_time // 1000, interval) * 1000
-
             time_filter[f"{time_field}__gte"] = start_time
         if end_time:
             if interval and time_align:
                 end_time = time_interval_align(end_time // 1000, interval) * 1000
             time_filter[f"{time_field}__lt"] = end_time
 
-        # 添加时间聚合字段
+        # 时间聚合字段添加
+        # 当存在时间间隔时，自动将时间字段加入分组条件
         if interval:
             group_by.append(cls._get_time_field(interval))
 
+        # 查询条件链式组装
+        # 构建基础查询对象并逐步添加各种查询条件
         q = DataQueryHandler(cls.data_source_label, cls.data_type_label)
         if where:
             where_node = dict_to_q(where)
@@ -1500,6 +1542,16 @@ class CustomTimeSeriesDataSource(TimeSeriesDataSource):
 class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
     """
     日志时序型数据源
+
+    该类实现基于日志搜索的日志型时序数据源功能，主要特性包括：
+    1. 自动转换查询条件操作符以适配日志搜索语法
+    2. 限制日志查询返回数量的特殊处理
+    3. 支持维度查询和原始日志查询功能
+
+    属性:
+        data_source_label: 数据源标签标识（BK_LOG_SEARCH）
+        data_type_label: 数据类型标签（TIME_SERIES）
+        DEFAULT_TIME_FIELD: 默认时间字段名称（dtEventTimeStamp）
     """
 
     data_source_label = DataSourceLabel.BK_LOG_SEARCH
@@ -1508,13 +1560,25 @@ class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
     DEFAULT_TIME_FIELD = "dtEventTimeStamp"
 
     def __init__(self, *args, **kwargs):
+        """
+        初始化日志数据源实例
+
+        参数:
+            *args: 可变位置参数（传递给父类）
+            **kwargs: 可变关键字参数（传递给父类）
+
+        该方法实现以下特殊处理：
+        1. 将查询条件中的eq/neq操作符转换为日志搜索支持的"is one of"/"is not one of"
+        2. 保留原始操作符记录用于后续调试
+        """
         super().__init__(*args, **kwargs)
 
-        # 条件方法替换
+        # 条件方法替换映射表
         condition_mapping = {
             "eq": "is one of",
             "neq": "is not one of",
         }
+        # 遍历所有查询条件进行操作符转换
         for condition in self.where:
             if condition["method"] in condition_mapping:
                 condition["_origin_method"] = condition["method"]
@@ -1527,7 +1591,23 @@ class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
         *args,
         **kwargs,
     ) -> list:
-        # 日志查询中limit仅能限制返回的原始日志数量，因此固定为1
+        """
+        查询时序数据（强制限制返回数量）
+
+        参数:
+            start_time: 查询起始时间戳（毫秒）
+            end_time: 查询结束时间戳（毫秒）
+            *args: 其他位置参数（传递给父类）
+            **kwargs: 其他关键字参数（传递给父类）
+
+        返回值:
+            包含查询结果的列表
+
+        特别说明：
+        - 日志查询的limit参数仅限制原始日志数量，故强制设置为None
+        - 调用父类query_data方法时始终传递limit=None
+        """
+        # 移除可能存在的limit参数
         if "limit" in kwargs:
             kwargs.pop("limit")
 
@@ -1542,14 +1622,35 @@ class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
         *args,
         **kwargs,
     ) -> list:
-        # 日志查询中limit仅能限制返回的原始日志数量，因此固定为1
+        """
+        查询维度数据（支持单字段维度查询）
+
+        参数:
+            dimension_field: 维度字段名称（支持字符串或列表形式）
+            start_time: 查询起始时间戳（毫秒）
+            end_time: 查询结束时间戳（毫秒）
+            limit: 返回结果的最大数量
+            *args: 其他位置参数（传递给父类）
+            **kwargs: 其他关键字参数（传递给父类）
+
+        返回值:
+            包含维度值的列表（最多返回limit个结果）
+
+        特别说明：
+        - 当dimension_field为列表时仅取第一个字段
+        - 断言确保维度字段非空
+        - 最终结果进行切片限制数量
+        """
+        # 移除可能存在的limit参数
         if "limit" in kwargs:
             kwargs.pop("limit")
 
+        # 处理列表形式的维度字段
         if isinstance(dimension_field, list):
             assert len(dimension_field) > 0, _("维度查询参数，维度字段是必须的")
             dimension_field = dimension_field[0]
 
+        # 调用父类方法并限制返回数量
         return super().query_dimensions(dimension_field, start_time, end_time, *args, **kwargs)[:limit]
 
     def query_log(
@@ -1561,6 +1662,29 @@ class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
         *args,
         **kwargs,
     ) -> tuple[list, int]:
+        """
+        查询原始日志数据
+
+        参数:
+            start_time: 查询起始时间戳（毫秒）
+            end_time: 查询结束时间戳（毫秒）
+            limit: 返回日志的最大数量
+            offset: 分页偏移量
+            *args: 其他位置参数（传递给父类）
+            **kwargs: 其他关键字参数（传递给父类）
+
+        返回值:
+            二元组包含：
+            - 日志数据列表（包含_source字段的原始日志）
+            - 符合条件的总日志数量
+
+        查询流程：
+        1. 构建日志查询对象
+        2. 解析返回数据结构
+        3. 提取日志内容和总数
+        4. 处理total字段的可能嵌套结构
+        """
+        # 构建日志查询对象
         q = self._get_queryset(
             bk_tenant_id=self.bk_tenant_id,
             query_string=self.query_string,
@@ -1575,11 +1699,14 @@ class LogSearchTimeSeriesDataSource(TimeSeriesDataSource):
             offset=offset,
         )
 
+        # 解析原始数据结构
         data = q.original_data
         total = data["hits"]["total"]
+        # 处理total字段的两种可能结构
         if isinstance(total, dict):
             total = total["value"]
 
+        # 提取日志内容并限制返回数量
         result = [record["_source"] for record in data["hits"]["hits"][:limit]]
         return result, total
 
