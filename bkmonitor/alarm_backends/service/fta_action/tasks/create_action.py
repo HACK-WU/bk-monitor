@@ -2,6 +2,7 @@ import copy
 import logging
 import math
 import time
+import json
 
 from django.conf import settings
 from django.utils.translation import gettext as _
@@ -851,16 +852,36 @@ class CreateActionProcessor:
                     continue
                 # 获取到插件
                 action_plugin = action_plugins.get(str(action_config["plugin_id"]))
-                enable_delay = int(action["options"].get("enable_delay", 0))
+                skip_delay = int(action["options"].get("skip_delay", 0))
                 current_time = int(time.time())
-                # 如果当前时间距离告警开始时间，大于enable_delay，则不处理改套餐
-                if (
-                    ActionSignal.ABNORMAL in action["signal"]
-                    and enable_delay != 0
-                    and current_time - alert["begin_time"] > enable_delay
-                ):
+                # 如果当前时间距离告警开始时间，大于skip_delay，则不处理改套餐
+                if ActionSignal.ABNORMAL in action["signal"] and current_time - alert["begin_time"] > skip_delay > 0:
+                    description = {
+                        "config_id": action["config_id"],
+                        "action_name": action_config["name"],
+                        "action_signal": action["signal"],
+                        "skip_delay": skip_delay,
+                        "content": f"告警开始时间距离当前时间大于{skip_delay}秒,不处理该套餐",
+                    }
+
+                    # 由于并没有实际创建ActionInstance,所以这里的action_instance_id为0
+                    action_log = dict(
+                        op_type=AlertLog.OpType.ACTION,
+                        alert_id=alert.id,
+                        description=json.dumps(description, ensure_ascii=False),
+                        time=current_time,
+                        create_time=current_time,
+                        event_id=f"{int(time.time() * 1000)}0",
+                    )
+                    AlertLog.bulk_create([AlertLog(**action_log)])
+                    logger.warning(
+                        "[fta_action] AlertID: %s, ActionName: %s, Reason: %s",
+                        alert.id,
+                        action_config["name"],
+                        f"告警开始时间距离当前时间大于{skip_delay}秒,不处理该套餐",
+                    )
+
                     continue
-                # 创建处理套餐并保存实例，方便后续处理
                 action_instances.append(
                     self.do_create_action(
                         action_config,
