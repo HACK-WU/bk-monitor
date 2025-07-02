@@ -584,29 +584,42 @@ class CreateActionProcessor:
 
     def alert_assign_handle(self, alert, action_configs, origin_actions, itsm_actions) -> AlertAssigneeManager:
         """
-        告警分派，同时更新ITSM动作列表
-        :param alert: 当前告警信息
-        :param action_configs: 动作配置信息
-        :param origin_action_ids: 原始动作ID列表
-        :param itsm_actions: ITSM动作列表
-        :return: 返回分配管理器
+        告警分派核心处理函数，实现告警分配逻辑与ITSM动作同步机制
+
+        参数:
+            alert: 告警对象，包含事件详情和业务上下文信息
+            action_configs: 动作配置字典，缓存动作ID到配置的映射关系
+            origin_actions: 原始动作ID列表，记录已存在的动作配置ID
+            itsm_actions: ITSM动作列表，存储需要执行的ITSM流程配置
+
+        返回值:
+            AlertAssigneeManager: 告警分配管理器实例，包含分派结果和匹配规则信息
+
+        执行流程:
+        1. 解析分派模式（基于规则/默认通知）
+        2. 构建监控指标上下文标签
+        3. 创建分配管理器实例并处理异常
+        4. 更新ITSM动作配置（首次执行且非升级通知时）
+        5. 记录监控指标数据
         """
-        # 获取到告警分派模式：by_rule(基于规则，也就是告警分派)|only_notice(默认通知)
+        # 获取告警分派模式：by_rule(基于规则分派)|only_notice(默认通知)
         assign_mode = self.notice["options"].get("assign_mode")
-        # 初始化分配标签，包含业务ID、分配类型、通知类型和告警来源
+
+        # 初始化分配上下文标签
         assign_labels = {
             "bk_biz_id": alert.event.bk_biz_id,
             "assign_type": "action",
             "notice_type": self.notice_type,
             "alert_source": getattr(alert.event, "plugin_id", ""),
         }
-        # 使用metrics记录分配处理时间
+
+        # 使用metrics记录分配处理时间（包含异常处理上下文）
         with metrics.ALERT_ASSIGN_PROCESS_TIME.labels(**assign_labels).time():
-            exc = None  # 初始化异常变量
-            assignee_manager = None  # 初始化分配管理器变量
+            exc = None
+            assignee_manager = None
             try:
-                # 获取分配管理器，该管理器中已经完成可对告警的分派。
-                # 所以获取分派结果只需要返回分配管理器即可
+                # 创建告警分配管理器实例
+                # 该实例内部完成告警分派规则匹配和执行人计算
                 assignee_manager = AlertAssigneeManager(
                     alert,
                     self.notice["user_groups"],
@@ -614,31 +627,31 @@ class CreateActionProcessor:
                     self.notice["options"].get("upgrade_config", {}),
                     notice_type=self.notice_type,
                 )
-                # 更新分配标签，添加匹配到的规则组ID
+                # 将匹配到的规则组ID注入监控标签
                 assign_labels.update({"rule_group_id": assignee_manager.matched_group})
-            except BaseException as error:  # 捕获所有异常
-                # 如果发生异常，更新分配标签，设置规则组ID为None，并记录异常信息
+            except BaseException as error:
+                # 异常处理分支：记录错误信息并更新监控标签
                 assign_labels.update({"rule_group_id": None})
                 exc = error
                 logger.exception("[alert assign error] alert(%s) assign failed, error info %s", alert.id, str(error))
-            # 根据是否有异常更新分配标签的状态
             assign_labels["status"] = metrics.StatusEnum.from_exc(exc)
 
-        # 记录分配处理次数
+        # 记录分配处理次数指标
         metrics.ALERT_ASSIGN_PROCESS_COUNT.labels(**assign_labels).inc()
-        # 如果是第一次执行且不是升级通知，并且没有异常发生，判断匹配到规则
+
+        # ITSM动作配置同步逻辑（仅首次执行且非升级通知时触发）
         if self.execute_times == 0 and self.notice_type != ActionNoticeType.UPGRADE and exc is None:
-            # 遍历ITSM动作ID
+            # 遍历分配管理器关联的ITSM动作
             for itsm_action_id in assignee_manager.itsm_actions.keys():
-                # 如果动作ID不在配置信息中，则添加
+                # 动态加载缺失的动作配置
                 if str(itsm_action_id) not in action_configs:
                     action_configs[str(itsm_action_id)] = ActionConfigCacheManager.get_action_config_by_id(
                         itsm_action_id
                     )
-                # 如果动作ID不在原始动作列表中，直接添加到ITSM动作列表
+                # 注册新发现的ITSM动作到执行列表
                 if str(itsm_action_id) not in origin_actions:
                     itsm_actions.append({"config_id": itsm_action_id, "id": 0, "options": {}})
-        # 返回分配管理器
+
         return assignee_manager
 
     @classmethod

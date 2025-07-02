@@ -452,20 +452,42 @@ class AlertAssignee:
 
     def get_group_notify_configs(self, notice_type, user_type):
         """
-        获取通知组对应的通知方式内容
-        @:param notice_type: alert_notice: 告警通知  action_notice： 执行通知配置
+        获取通知组对应的通知方式配置信息
+
+        参数:
+            notice_type (str): 通知类型标识符
+                - "alert_notice": 告警通知配置
+                - "action_notice": 执行通知配置
+            user_type (UserGroupType): 用户组类型枚举值
+                用于区分主用户组(MAIN)和关注组(FOLLOW)
+
+        返回值:
+            defaultdict(dict): 用户组通知配置字典，结构示例：
+                {
+                    group_id: {
+                        "notice_way": [...],  # 通知方式列表
+                        "mention_users": [...]  # 提及用户列表
+                    }
+                }
+
+        执行流程说明:
+        1. 根据用户类型选择主用户组或关注组
+        2. 查询数据库获取用户组对象集合
+        3. 遍历用户组构建通知配置字典：
+           - 提取指定通知类型配置项
+           - 获取组内提及用户列表
         """
-        group_notify_items = defaultdict(dict)  # 初始化通知组项的默认字典
-        user_groups = (
-            self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups
-        )  # 根据用户类型选择用户组
-        for user_group in UserGroup.objects.filter(id__in=user_groups):  # 遍历选定的用户组
-            group_notify_items[user_group.id] = {  # 设置通知组项
+        group_notify_items = defaultdict(dict)
+        user_groups = self.user_groups if user_type == UserGroupType.MAIN else self.follow_groups
+
+        # 查询用户组对象并构建通知配置
+        for user_group in UserGroup.objects.filter(id__in=user_groups):
+            group_notify_items[user_group.id] = {
                 "notice_way": self.get_notify_item(getattr(user_group, notice_type, []), self.alert.event.bk_biz_id),
-                # 获取通知方式
-                "mention_users": self.get_group_mention_users(user_group),  # 获取提及的用户
+                "mention_users": self.get_group_mention_users(user_group),
             }
-        return group_notify_items  # 返回通知组项
+
+        return group_notify_items
 
     def get_all_group_users(self):
         """
@@ -486,37 +508,76 @@ class AlertAssignee:
         """
         获取不带轮值功能的用户组中的所有用户。
 
-        本函数旨在从用户组中筛选出不需要参与轮值的用户组，然后收集这些用户组中的所有用户，
-        包括直接指定的用户和属于其他用户组的用户。
+        本函数通过用户组ID过滤出非轮值用户组，递归解析用户组成员关系，
+        构建完整的用户列表集合。包含直接用户和嵌套用户组的展开用户。
 
-        :param user_groups: 用户组的列表，用于限定查询范围。
-        :return: 一个字典，包含不需要轮值的用户组中的所有用户。
+        参数:
+            user_groups (List[int]): 用户组ID列表，用于限定查询范围
+
+        返回:
+            Dict[int, List[str]]: 用户组ID到用户名列表的映射字典
+                key: 用户组ID(int)
+                value: 用户名列表(str)
+
+        执行流程:
+        1. 过滤出need_duty=False的用户组
+        2. 按ID排序遍历职责安排记录
+        3. 处理两种用户类型：
+           - 用户组类型：递归展开获取所有成员
+           - 直接用户类型：添加到结果集
+        4. 维护去重后的用户名列表
         """
         # 筛选出不需要轮值的用户组
+        # 使用values_list优化查询，仅获取ID字段
         no_duty_groups = list(
             UserGroup.objects.filter(id__in=user_groups, need_duty=False).values_list("id", flat=True)
         )
 
-        # 遍历每个不需要轮值的用户组的职责安排
+        # 遍历职责安排记录
+        # 按ID排序确保处理顺序一致性
         for duty in DutyArrange.objects.filter(user_group_id__in=no_duty_groups).order_by("id"):
-            group_users = self.all_group_users[duty.user_group_id]
+            # 获取当前用户组的用户容器
+            group_users: list = self.all_group_users[duty.user_group_id]
+
+            # 非轮值组且已有数据时跳过后续处理
             if duty.user_group_id in no_duty_groups and group_users:
-                # 如果没有启动轮值，获取到第一个即可
                 continue
+
+            # 解析职责中的用户配置
             for user in duty.users:
-                # 根据用户类型收集用户
+                # 用户组类型处理分支
+                # 处理嵌套用户组的递归展开
                 if user["type"] == "group":
-                    # 如果是用户组类型，递归获取用户组中的所有用户
+                    # 获取业务用户组成员并去重添加
                     for username in self.biz_group_users.get(user["id"]) or []:
                         if username not in group_users:
                             group_users.append(username)
+
+                # 直接用户类型处理分支
                 elif user["type"] == "user" and user["id"] not in group_users:
-                    # 如果是用户类型，直接添加到用户列表中
+                    # 添加独立用户到结果集
                     group_users.append(user["id"])
 
-    def get_group_mention_users(self, user_group):
+    def get_group_mention_users(self, user_group: UserGroup):
         """
         获取用户组对应的提醒人员列表和chat_id
+
+        参数:
+            user_group (UserGroup): 用户组对象，包含以下关键属性：
+                - mention_type (int): 提及类型标识（0表示默认提及）
+                - mention_list (List[Dict]): 提及对象列表，格式为[{"type": "group/user", "id": "唯一标识"}]
+                - channels (List[str]): 通知渠道列表（包含WX_BOT等渠道标识）
+
+        返回值:
+            List[str]: 提醒用户列表，包含去重的用户名字符串
+
+        执行流程说明：
+        1. 默认提及处理：当提及类型为0且提及列表为空时，设置默认提及所有用户
+           - 特殊处理企业微信机器人渠道，若存在其他渠道且不含机器人则清空提及列表
+        2. 提及对象解析：
+           - 组类型处理：支持"all"全组标识和具体业务组ID
+           - 个人类型处理：直接添加指定用户ID
+           - 自动去重机制：确保用户名在列表中唯一存在
         """
         mention_users = []  # 初始化提醒用户列表
         mention_list = user_group.mention_list  # 获取用户组的提及列表
@@ -526,86 +587,129 @@ class AlertAssignee:
             # 如果已经设置了channels并且没有企业微信机器人，直接设置为空
             if user_group.channels and NoticeChannel.WX_BOT not in user_group.channels:
                 mention_list = []
-        # 遍历提及列表
+
+        # 提及对象解析与用户收集
         for user in mention_list:
-            # 如果用户类型是组
             if user["type"] == "group":
-                # 如果是所有用户组，则扩展所有用户组的用户
                 if user["id"] == "all":
+                    # 处理全组提及：从全组用户映射中获取对应用户列表
                     mention_users.extend(self.all_group_users.get(user_group.id, []))
                     continue
-                # 否则，遍历业务组用户并添加到提醒用户列表
+
+                # 处理业务组提及：遍历指定业务组用户并去重添加
                 for username in self.biz_group_users.get(user["id"]) or []:
                     if username not in mention_users:
                         mention_users.append(username)
-            # 如果用户类型是个人且ID不在提醒用户列表中，则添加到列表
-            elif user["type"] == "user" and user["id"] not in mention_users:
-                mention_users.append(user["id"])
-        return mention_users  # 返回提醒用户列表
+            elif user["type"] == "user":
+                # 处理个人提及：直接添加指定用户（确保唯一性）
+                if user["id"] not in mention_users:
+                    mention_users.append(user["id"])
+
+        return mention_users  # 返回最终去重后的提醒用户列表
 
     def get_group_users_with_duty(self, user_groups):
         """
-        获取需要轮值的用户
-        :return:
+        获取需要轮值的用户及其值班计划信息
+
+        参数:
+            user_groups: 可迭代对象，包含待查询的用户组ID列表
+
+        返回值:
+            None: 当user_groups为空时直接返回
+            通过self.get_group_duty_users处理用户数据，实际返回值由该方法决定
+
+        执行流程:
+        1. 输入校验：若无用户组则终止处理
+        2. 查询需要轮值的用户组基本信息（时区、ID、值班规则）
+        3. 获取当前时间，筛选有效值班计划（按规则分组存储）
+        4. 为每个有有效值班计划的用户组获取具体值班人员
         """
         if not user_groups:  # 如果没有用户组，直接返回
             return
-        # 过滤出需要轮值的告警组，并只获取到轮值规则
-        duty_groups = UserGroup.objects.filter(id__in=user_groups, need_duty=True).only("timezone", "id", "duty_rules")
-        group_duty_plans = defaultdict(dict)  # 初始化值班计划的字典
-        # 遍历需要轮值的用户组
-        for group in duty_groups:
-            now = time_tools.datetime2str(datetime.now(tz=pytz.timezone(group.timezone)))  # 获取当前时间字符串
-            # 过滤出有效的值班计划，并按顺序排序
-            for duty_plan in DutyPlan.objects.filter(
-                user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
-            ).order_by("order"):
-                rule_id = duty_plan.duty_rule_id  # 获取值班规则的ID
-                group_duty_plans[group.id].setdefault(rule_id, []).append(duty_plan)  # 添加到值班计划字典
 
-        # 再次遍历需要轮值的用户组
+        # 查询需要轮值的用户组基本信息
+        duty_groups = UserGroup.objects.filter(id__in=user_groups, need_duty=True).only("timezone", "id", "duty_rules")
+
+        # 初始化值班计划字典：{用户组ID: {规则ID: [值班计划列表]}}
+        group_duty_plans = defaultdict(dict)
+
+        # 处理有效值班计划并组织数据结构
         for group in duty_groups:
-            # 如果当前告警组没有值班计划，直接跳过
+            now = time_tools.datetime2str(datetime.now(tz=pytz.timezone(group.timezone)))
+            # 筛选当前时间范围内的有效值班计划并按顺序排序
+            # 一个告警组中可以配置多个轮值组，轮值组可以配置多个轮值规则
+            valid_plans = DutyPlan.objects.filter(
+                user_group_id=group.id, is_effective=1, start_time__lte=now, finished_time__gte=now
+            ).order_by("order")
+
+            # 按值班规则ID分组存储计划
+            for duty_plan in valid_plans:
+                rule_id = duty_plan.duty_rule_id
+                group_duty_plans[group.id].setdefault(rule_id, []).append(duty_plan)
+
+        # 处理用户组值班人员信息
+        for group in duty_groups:
+            # 跳过无有效值班计划的用户组
             if group.id not in group_duty_plans:
                 continue
-            # 获取到告警组的值班人员，人员信息会根据告警组ID存放在self.all_group_users中
-            self.get_group_duty_users(group, group_duty_plans[group.id])  # 获取当前用户组的值班用户
 
-    def get_group_duty_users(self, group, group_duty_plans):
+            # 获取当前用户组的值班人员信息
+            self.get_group_duty_users(group, group_duty_plans[group.id])
+
+    def get_group_duty_users(self, group: UserGroup, group_duty_plans: dict[int, list[DutyPlan]]):
         """
-        获取当前用户组的值班用户
+        获取当前用户组的值班用户列表并更新组内用户缓存
+
+        参数:
+            group: 用户组对象，包含duty_rules(值班规则ID列表)和timezone(时区信息)
+            group_duty_plans: 组值班计划字典，键为规则ID，值为对应的值班计划列表
+
+        返回值:
+            None: 无显式返回值，通过日志记录匹配结果并更新self.all_group_users
+
+        执行流程:
+        1. 遍历用户组关联的所有值班规则
+        2. 筛选存在有效值班计划的规则
+        3. 基于当前时间判断计划有效性
+        4. 处理用户组嵌套关系，合并用户列表
+        5. 记录匹配成功的规则信息
         """
         # 遍历用户组的值班规则
         for rule_id in group.duty_rules:
-            is_rule_matched = False  # 初始化规则匹配标志
-            # 如果当前规则不存在计划中，继续下一个规则
+            is_rule_matched = False  # 标记当前规则是否匹配成功
+
+            # 检查规则ID是否存在于值班计划中
             if rule_id not in group_duty_plans:
                 continue
 
-            alert_time = datetime.now(tz=pytz.timezone(group.timezone))  # 获取当前时间的时区感知对象
+            # 获取带时区信息的当前时间
+            alert_time = datetime.now(tz=pytz.timezone(group.timezone))
 
-            # 遍历当前规则的值班计划
+            # 处理当前规则下的所有值班计划
             for duty_plan in group_duty_plans[rule_id]:
-                # 如果当前计划没有生效，则跳过
+                # 跳过未生效的值班计划
                 if not duty_plan.is_active_plan(data_time=time_tools.datetime2str(alert_time)):
                     continue
-                # 如果当前轮值规则适配生效，则需要终止下一个规则生效
+
+                # 标记规则匹配成功并获取用户组
                 is_rule_matched = True
-                group_users = self.all_group_users[duty_plan.user_group_id]  # 获取用户组的用户列表
-                # 遍历值班计划中的用户
+                group_users: list[str] = self.all_group_users[duty_plan.user_group_id]
+
+                # 处理值班计划中的用户列表
                 for user in duty_plan.users:
-                    # 如果用户类型是组，则遍历并添加用户
+                    # 处理用户组类型用户
                     if user["type"] == "group":
                         for username in self.biz_group_users.get(user["id"]) or []:
                             if username not in group_users:
                                 group_users.append(username)
-                    # 如果用户类型是个人且ID不在用户列表中，则添加到列表
+
+                    # 处理个人用户类型
                     elif user["type"] == "user" and user["id"] not in group_users:
                         group_users.append(user["id"])
-            # 如果适配到了对应的轮值规则，记录日志并返回
+
+            # 记录匹配成功的值班规则
             if is_rule_matched:
                 logger.info("user group (%s) matched duty rule(%s) for alert(%s)", group.id, rule_id, self.alert.id)
-                return
 
     def get_assignee_by_user_groups(self, by_group=False, user_type=UserGroupType.MAIN):
         """
@@ -630,54 +734,81 @@ class AlertAssignee:
     ):
         """
         根据用户组和告警获取通知方式和对应的处理人元信息
-        :param notify_configs: 已有的通知配置
-        :param notice_phase: 获取通知阶段配置
-        :param notice_type:通知方式  alert_notice: 告警通知  action_notice： 执行通知配置
-        :param user_type: 通知组类型
-        :return:
+
+        参数:
+            notice_type: 通知类型枚举值，默认为告警通知类型
+                        可选值: NoticeType.ALERT_NOTICE(告警通知), NoticeType.ACTION_NOTICE(执行通知)
+            notice_phase: 通知阶段配置，用于匹配通知规则的阶段条件
+                         当notice_type为ACTION_NOTICE时使用phase字段匹配
+            notify_configs: 已有的通知配置字典，用于累积通知接收人信息
+                           默认值为None时初始化为空的defaultdict(list)
+            user_type: 用户组类型枚举值，默认为主通知组类型
+                      可选值: UserGroupType.MAIN(主组), UserGroupType.BACKUP(备用组)等
+
+        返回值:
+            dict: 包含完整通知配置的字典，结构示例：
+                {
+                    "weixin": ["admin", "test_user"],
+                    "email": ["admin@example.com"],
+                    "wxbot_mention_users": [{"user1": ["group1_user"]}]
+                }
+            其中键为通知方式名称，值为对应的接收人列表，特殊键"wxbot_mention_users"存储@用户映射关系
+
+        执行流程:
+        1. 从用户组获取基础通知配置（通过get_group_notify_configs方法）
+        2. 处理电话通知的特殊逻辑（用户列表去重存储）
+        3. 解析企业微信通知配置（包含@用户映射处理）
+        4. 处理默认通知逻辑（无指定接收人时使用用户组成员）
+        5. 清理空的wxbot_mention_users字段
         """
+
         # step 1 通过用户组获取对应时间段的通知渠道
         group_notify_items = self.get_group_notify_configs(notice_type, user_type)
 
         # step 3 根据通知方式和用户组进行关联配置
-        notify_configs = defaultdict(list) if notify_configs is None else notify_configs
-        notice_item_phase_key = "level" if notice_type == NoticeType.ALERT_NOTICE else "phase"
+        notify_configs = notify_configs or defaultdict(list)
         notice_phase = notice_phase or self.alert.severity
+        notice_item_phase_key = "level" if notice_type == NoticeType.ALERT_NOTICE else "phase"
         notify_configs["wxbot_mention_users"] = notify_configs.get("wxbot_mention_users", [])
+
+        # 主要处理逻辑：遍历用户组通知配置
         for group_id, notify_info in group_notify_items.items():
             notify_item = notify_info["notice_way"]
             mention_users = notify_info["mention_users"]
             if not notify_item:
                 continue
+
             group_users = self.all_group_users.get(group_id, [])
             notice_ways = []
+
+            # 获取当前阶段匹配的通知方式配置
             for notify_config_item in notify_item["notify_config"]:
-                # 通知配置的获取
                 if notice_phase == notify_config_item[notice_item_phase_key]:
                     notice_ways = notify_config_item.get("notice_ways")
+
+            # 处理具体通知方式
             for notice_way in notice_ways:
                 notice_way_type = notice_way["name"]
+
+                # 电话通知特殊处理（用户列表去重存储）
                 if notice_way_type == NoticeWay.VOICE:
-                    # 如果是电话通知，需要额外处理
                     if group_users not in notify_configs[notice_way_type]:
-                        # 电话通知通过用户列表去重
                         notify_configs[notice_way_type].append(group_users)
                     continue
+
+                # 企业微信渠道处理（包含@用户映射）
                 if notice_way.get("receivers"):
-                    # 企业微信可以一次进行通知
                     if notice_way_type == NoticeWay.BK_CHAT:
-                        # 如果是bkchat渠道对接，需要将隐藏的通知方式解开
+                        # BKChat渠道解析隐藏通知方式
                         for receiver in notice_way["receivers"]:
                             try:
                                 real_notice_way, receiver_id = receiver.split("|")
                             except ValueError:
-                                # 如果不符合格式，直接用bkchat的默认发送方式
                                 notify_configs[notice_way_type].append(receiver)
                                 continue
                             notify_configs[f"{notice_way_type}|{real_notice_way}"].append(receiver_id)
                     else:
-                        # 企业微信机器人的，直接扩展
-                        # 先去重
+                        # 普通通知方式处理（去重后添加接收人）
                         receivers = [
                             receiver
                             for receiver in notice_way["receivers"]
@@ -686,19 +817,25 @@ class AlertAssignee:
                         if receivers:
                             notify_configs[notice_way_type].extend(receivers)
 
+                        # 记录需要@的用户信息
                         if mention_users:
-                            # 如果当前对应的组有需要提醒的人员信息，保存起来
                             for receiver in notice_way["receivers"]:
                                 self.wxbot_mention_users[receiver].extend(mention_users)
                     continue
+
+                # 默认通知逻辑（无指定接收人时使用用户组成员）
                 for group_user in group_users:
                     if group_user not in notify_configs[notice_way_type]:
                         notify_configs[notice_way_type].append(group_user)
+
+        # 处理@用户映射关系存储
         if self.wxbot_mention_users:
             notify_configs["wxbot_mention_users"].append(self.wxbot_mention_users)
+
+        # 清理空的@用户字段
         if not notify_configs["wxbot_mention_users"]:
-            # 如果没有提醒人，不显示在配置中
             notify_configs.pop("wxbot_mention_users")
+
         return notify_configs
 
     def add_appointee_to_notify_group(self, notify_configs):
@@ -728,12 +865,27 @@ class AlertAssignee:
     def get_biz_group_users(self):
         """
         通过业务信息获取对应的角色人员信息
-        :return: 字典，包含业务对应的角色人员信息
+
+        参数:
+            无
+
+        返回值:
+            dict: 包含业务对应的角色人员信息的字典，包含以下键值对：
+                - 原始业务角色信息键值对（来自get_business_roles）
+                - operator: 主机负责人列表（可能为空）
+                - bk_bak_operator: 主机备份负责人列表（可能为空）
+
+        执行流程:
+            1. 获取基础业务角色信息
+            2. 确保必要角色键存在（operator/bk_bak_operator）
+            3. 根据监控目标类型判断是否需要补充主机负责人信息
+            4. 异常安全地获取并更新主机负责人信息
         """
-        # 获取业务角色用户信息
+        # 获取基础业务角色信息
         group_users = get_business_roles(self.alert.event.bk_biz_id)
 
-        # 确保某些角色键存在，避免后续访问时KeyError
+        # 确保必要角色键存在，避免后续访问时KeyError
+        # 添加空列表作为默认值，保证字典结构完整性
         group_users.update(
             {
                 "operator": [],
@@ -742,21 +894,25 @@ class AlertAssignee:
         )
 
         try:
+            # 检查监控目标类型
             # 如果没有监控对象，则不需要获取负责人信息，直接返回当前的group_users
             if not self.alert.event.target_type:
                 return group_users
 
-            # 根据主机ID获取主机信息
+            # 获取主机基础信息
+            # 通过HostManager组件根据主机ID查询主机详情
             host = HostManager.get_by_id(self.alert.event.bk_host_id)
 
-            # 遍历操作者和备份操作者属性，获取并更新主机对应的负责人信息
+            # 补充主机负责人信息
+            # 遍历操作者属性字段，获取并更新主机对应的负责人信息
             for operator_attr in ["operator", "bk_bak_operator"]:
                 group_users[operator_attr] = self.get_host_operator(host, operator_attr)
         except AttributeError:
-            # 如果在获取主机信息或负责人信息时遇到AttributeError异常，则忽略
+            # 容错处理：当主机信息或负责人字段不存在时
+            # 忽略AttributeError异常，保持原有空列表结构
             pass
 
-        # 返回更新后的业务角色用户信息
+        # 返回最终组装完成的业务角色用户信息
         return group_users
 
     @classmethod

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,10 +7,10 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 import time
 from collections import defaultdict
-from typing import List
 
 from alarm_backends.core.cache.assign import AssignCacheManager
 from alarm_backends.core.context import ActionContext
@@ -33,13 +32,13 @@ class BackendAssignMatchManager(AlertAssignMatchManager):
     """
 
     def __init__(
-            self,
-            alert: AlertDocument,
-            notice_users=None,
-            group_rules: list = None,
-            assign_mode=None,
-            notice_type=None,
-            cmdb_attrs=None,
+        self,
+        alert: AlertDocument,
+        notice_users=None,
+        group_rules: list = None,
+        assign_mode=None,
+        notice_type=None,
+        cmdb_attrs=None,
     ):
         """
         :param alert: 告警
@@ -53,11 +52,9 @@ class BackendAssignMatchManager(AlertAssignMatchManager):
                 "sets": action_context.target.sets,
                 "modules": action_context.target.modules,
             }
-        super(BackendAssignMatchManager, self).__init__(
-            alert, notice_users, group_rules, assign_mode, notice_type, cmdb_attrs
-        )
+        super().__init__(alert, notice_users, group_rules, assign_mode, notice_type, cmdb_attrs)
 
-    def get_matched_rules(self) -> List[AssignRuleMatch]:
+    def get_matched_rules(self) -> list[AssignRuleMatch]:
         """
         适配分派规则, 后台通过缓存获取
         :return: 返回匹配的分派规则列表
@@ -99,23 +96,16 @@ class AlertAssigneeManager:
     """
 
     def __init__(
-            self,
-            alert: AlertDocument,
-            notice_user_groups: List = None,
-            assign_mode: AssignMode = None,
-            upgrade_config=None,
-            notice_type: ActionNoticeType = None,
-            user_type: UserGroupType = UserGroupType.MAIN,
-            new_alert=False,
+        self,
+        alert: AlertDocument,
+        notice_user_groups: list = None,
+        assign_mode: AssignMode = None,
+        upgrade_config=None,
+        notice_type: ActionNoticeType = None,
+        user_type: UserGroupType = UserGroupType.MAIN,
+        new_alert=False,
     ):
         """
-        1、初始化基本属性：设置告警对象、通知用户组、分派模式、通知类型、用户类型和是否为新告警。
-        2、初始化升级规则匹配对象：根据传入的升级配置初始化 UpgradeRuleMatch 对象。
-        3、获取通知对象：根据通知类型（升级通知或默认通知）获取相应的通知对象。
-        4、初始化匹配状态：设置匹配状态和匹配的告警组ID。
-        5、获取告警分派管理对象：根据分派模式获取告警分派管理对象，并完成告警分派工作
-        5、获取通知负责人对象：根据分派模式获取通知负责人对象。
-        
         :param alert: 告警
         :param notice_user_groups: 通知用户组(告警组)
         :param assign_mode: 分派模式
@@ -123,6 +113,13 @@ class AlertAssigneeManager:
         :param notice_type: 通知类型
         :param user_type: 用户类型
         :param new_alert: 是否为新告警
+
+        1、初始化基本属性：设置告警对象、通知用户组、分派模式、通知类型、用户类型和是否为新告警。
+        2、初始化升级规则匹配对象：根据传入的升级配置初始化 UpgradeRuleMatch 对象。
+        3、获取通知对象：根据通知类型（升级通知或默认通知）获取相应的通知对象。
+        4、初始化匹配状态：设置匹配状态和匹配的告警组ID。
+        5、获取告警分派管理对象：根据分派模式获取告警分派管理对象，并完成告警分派工作
+        5、获取通知负责人对象：根据分派模式获取通知负责人对象。
         """
         self._is_new = new_alert  # 标记是否为新告警
         self.alert = alert  # 初始化告警对象
@@ -139,9 +136,10 @@ class AlertAssigneeManager:
         else:
             # 获取非告警升级通知对象
             self.origin_notice_users_object: AlertAssignee = self.get_origin_notice_users_object(
-                notice_user_groups or [])  # 否则使用原始的通知人员对象
+                notice_user_groups or []
+            )  # 否则使用原始的通知人员对象
 
-        self.matched_group: List[AssignRuleMatch] = None  # 匹配的告警组ID
+        self.matched_group: list[AssignRuleMatch] = None  # 匹配的告警组ID
         self.is_matched = False  # 初始化匹配状态为未匹配
         # 获取告警分派管理对象，如果是默认通知，则返回None。否则会更新matched_group的值
         self.match_manager: BackendAssignMatchManager = self.get_match_manager()
@@ -151,8 +149,30 @@ class AlertAssigneeManager:
 
     def get_match_manager(self):
         """
-        生成告警分派管理对象
-        :return:
+        生成告警分派管理对象并执行匹配规则处理
+
+        参数:
+            self: 实例对象，包含以下关键属性：
+                - alert: 告警对象，包含告警基础信息和策略配置
+                - assign_mode: 分派模式枚举集合，决定告警分派策略
+                - notice_type: 通知类型标识
+                - _is_new: 标记是否为新告警构建流程
+
+        返回值:
+            BackendAssignMatchManager实例，包含以下核心数据：
+            - matched_rules: 匹配的告警规则列表
+            - matched_group_info: 匹配的告警组信息字典
+
+        执行流程说明:
+        1. 模式预检：当分派模式不包含规则分派时，直接跳过匹配流程
+        2. 管理器初始化：创建分派匹配管理器并传入完整接收者列表
+        3. 规则匹配：执行匹配逻辑后更新以下状态：
+           - is_matched: 标记是否成功匹配规则
+           - matched_group: 存储匹配的告警组ID
+        4. 日志记录：输出包含以下关键信息的调试日志：
+           - 告警ID、策略ID
+           - 匹配规则数量
+           - 分派模式详情
         """
         # 如果分派模式中不包含按规则分派，则不需要匹配管理器
         if AssignMode.BY_RULE not in self.assign_mode:
@@ -197,8 +217,7 @@ class AlertAssigneeManager:
         if self.is_matched:
             # 如果适配到了，直接发送给分派的负责人
             if self.notice_appointees_object:
-                self.notice_appointees_object.get_notice_receivers(notify_configs=notify_configs,
-                                                                   user_type=user_type)
+                self.notice_appointees_object.get_notice_receivers(notify_configs=notify_configs, user_type=user_type)
         elif self.origin_notice_users_object:  # 如果没有匹配成功，但有默认通知人员
             # 有默认通知的话，就加上默认通知人员
             self.origin_notice_users_object.get_notice_receivers(notify_configs=notify_configs, user_type=user_type)
@@ -302,26 +321,52 @@ class AlertAssigneeManager:
 
     def get_origin_supervisor_object(self):
         """
-        获取原升级告警关注人员
+        获取原始升级告警关注人员对象并处理升级逻辑
+
+        参数:
+            self: 包含以下关键属性
+                - notice_type: 告警通知类型（ActionNoticeType枚举）
+                - assign_mode: 分配模式列表（包含AssignMode枚举）
+                - alert: 告警对象（包含extra_info和duration属性）
+                - upgrade_rule: 升级规则对象（包含need_upgrade方法）
+                - user_type: 用户组类型（UserGroupType枚举）
+
+        返回值:
+            AlertAssignee对象: 包含升级后的用户组和关注者组
+            None: 当不满足升级条件或无需升级时
+
+        执行流程:
+        1. 升级条件校验：仅处理UPGRADE通知类型且分配模式包含ONLY_NOTICE的情况
+        2. 升级状态解析：从告警扩展信息中提取升级记录（上次用户组索引/升级时间）
+        3. 升级触发判断：通过升级间隔时间和告警持续时间判断是否需要升级
+        4. 用户组升级处理：获取新的用户组索引和用户组列表
+        5. 升级状态更新：当用户组变更时记录日志并更新告警扩展信息
+        6. 用户组分类处理：根据用户类型决定是否将用户组转为关注者组
         """
         # 如果通知类型不是UPGRADE或者分配模式中不包含ONLY_NOTICE，则返回None
         if self.notice_type != ActionNoticeType.UPGRADE or AssignMode.ONLY_NOTICE not in self.assign_mode:
             return None
+
         # 获取当前时间戳
         current_time = int(time.time())
+
         # 从告警的额外信息中获取升级通知的相关信息
         upgrade_notice = self.alert.extra_info.to_dict().get("upgrade_notice", {})
         last_group_index = upgrade_notice.get("last_group_index")
         last_upgrade_time = upgrade_notice.get("last_upgrade_time", current_time)
+
         # 计算距离上次升级的时间间隔
         latest_upgrade_interval = current_time - last_upgrade_time
         alert_duration = self.alert.duration or 0
+
         # 判断是否需要升级
         need_upgrade = self.upgrade_rule.need_upgrade(latest_upgrade_interval or alert_duration)
         if not need_upgrade:
             return None
+
         # 如果需要升级，获取新的用户组索引和用户组列表
         user_groups, current_group_index = self.upgrade_rule.get_upgrade_user_group(last_group_index, need_upgrade)
+
         # 如果当前用户组索引与上次不同，更新告警的额外信息并记录日志
         if current_group_index != last_group_index:
             logger.info(
@@ -335,11 +380,13 @@ class AlertAssigneeManager:
                 "last_group_index": current_group_index,
                 "last_upgrade_time": current_time,
             }
+
         # 如果用户类型是FOLLOWER，则将用户组列表赋值给follow_groups，并清空user_groups
         follow_groups = []
         if self.user_type == UserGroupType.FOLLOWER:
             follow_groups = user_groups
             user_groups = []
+
         # 返回AlertAssignee对象
         return AlertAssignee(self.alert, user_groups=user_groups, follow_groups=follow_groups)
 
