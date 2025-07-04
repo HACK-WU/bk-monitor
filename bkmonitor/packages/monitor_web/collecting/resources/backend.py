@@ -1049,7 +1049,7 @@ class SaveCollectConfigResource(Resource):
             # mode 为 "plugin" 时，如果密码不改变，不会传入，获取到 None
             # mode 为 "collector" 时，如果密码不改变，传入值为 bool 类型（由详情接口返回的）
             # 这两种情况要替换为实际值（默认值兜底）
-            if isinstance(received_password, (type(None), bool)):
+            if isinstance(received_password, type(None) | bool):
                 default_password = param["default"]
                 actual_password = deployment_params[param_mode].get(param_name, default_password)
                 data["params"][param_mode][param_name] = actual_password
