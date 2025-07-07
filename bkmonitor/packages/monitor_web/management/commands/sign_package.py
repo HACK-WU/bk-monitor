@@ -59,7 +59,7 @@ class Command(BaseCommand):
         with open(src_path, "rb") as tar_obj:
             with tarfile.open(fileobj=tar_obj, mode="r:gz") as tar:
                 print(f"Package unzip in tmp path: {tmp_dir}")
-                tar.extractall(tmp_dir)
+                tar.extractall(tmp_dir, filter="data")
                 filename_list = tar.getnames()
 
         # 2. 解析 meta.yaml
@@ -107,13 +107,11 @@ class Command(BaseCommand):
 
         # 4. 重新打包
         print(
-            "4/4 finish sign and make package: {}({}), version: {}.{}".format(
-                plugin_id, plugin_type, tmp_version.config_version, tmp_version.info_version
-            )
+            f"4/4 finish sign and make package: {plugin_id}({plugin_type}), version: {tmp_version.config_version}.{tmp_version.info_version}"
         )
         import_manager.make_package()
         package_path = os.path.join(import_manager.tmp_path, plugin_id + ".tgz")
-        dest = os.path.join(dest_path, "%s-official.tgz" % tmp_version)
+        dest = os.path.join(dest_path, f"{tmp_version}-official.tgz")
         shutil.copyfile(package_path, dest)
         print(f"Package is saved in {dest}")
         shutil.rmtree(import_manager.tmp_path)

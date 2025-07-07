@@ -141,7 +141,7 @@ class DataDogPluginUploadResource(Resource):
             result = dict(parser_content, **file_info)
             return result
         except Exception as err:
-            logger.error("[plugin] Upload plugin failed, msg is %s" % str(err))
+            logger.error(f"[plugin] Upload plugin failed, msg is {str(err)}")
             raise err
         finally:
             PluginFileManager.clean_dir(base_path)
@@ -505,7 +505,7 @@ class PluginImportResource(Resource):
     def un_tar_gz_file(self, tar_obj):
         # 解压文件到临时目录
         with tarfile.open(fileobj=tar_obj, mode="r:gz") as tar:
-            tar.extractall(self.tmp_path)
+            tar.extractall(self.tmp_path, filter="data")
             self.filename_list = tar.getnames()
 
     def get_plugin(self):
@@ -551,8 +551,8 @@ class PluginImportResource(Resource):
             return
         if self.current_version.is_official:
             if self.tmp_version.is_official:
-                self.create_params["conflict_detail"] = """导入插件包版本为：{}；已有插件版本为：{}""".format(
-                    self.tmp_version.version, self.current_version.version
+                self.create_params["conflict_detail"] = (
+                    f"""导入插件包版本为：{self.tmp_version.version}；已有插件版本为：{self.current_version.version}"""
                 )
                 self.check_conflict_title()
                 if not self.create_params["conflict_title"]:
@@ -560,21 +560,17 @@ class PluginImportResource(Resource):
                     self.create_params["duplicate_type"] = None
             else:
                 self.create_params["conflict_detail"] = (
-                    """导入插件包为非官方插件, 版本为: {}；当前插件为官方插件，版本为：{}""".format(
-                        self.tmp_version.version, self.current_version.version
-                    )
+                    f"""导入插件包为非官方插件, 版本为: {self.tmp_version.version}；当前插件为官方插件，版本为：{self.current_version.version}"""
                 )
                 self.check_conflict_title()
         else:
             if self.tmp_version.is_official:
                 self.create_params["conflict_detail"] = (
-                    """导入插件包为官方插件，版本为：{}；当前插件为非官方插件，版本为：{}""".format(
-                        self.tmp_version.version, self.current_version.version
-                    )
+                    f"""导入插件包为官方插件，版本为：{self.tmp_version.version}；当前插件为非官方插件，版本为：{self.current_version.version}"""
                 )
             else:
-                self.create_params["conflict_detail"] = """导入插件包版本为: {}；当前插件版本为: {}""".format(
-                    self.tmp_version.version, self.current_version.version
+                self.create_params["conflict_detail"] = (
+                    f"""导入插件包版本为: {self.tmp_version.version}；当前插件版本为: {self.current_version.version}"""
                 )
                 self.check_conflict_title()
 

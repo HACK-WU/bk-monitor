@@ -689,7 +689,7 @@ class UploadPackageResource(Resource):
         t = None
         try:
             t = tarfile.open(fileobj=file_instance.file_data.file)
-            t.extractall(path=self.parse_path)
+            t.extractall(path=self.parse_path, filter="data")
         except Exception as e:
             logger.exception(f"压缩包解压失败: {e}")
             raise UploadPackageError(
