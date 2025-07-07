@@ -193,18 +193,55 @@ class DslMixin:
 
 
 class BaseDataQuery:
+    """
+    基础数据查询类，提供通用数据查询功能的基类
+
+    属性:
+        TYPE: 查询类型标识符，字符串类型
+        QUERY_CLASS: 关联的SQL查询类，用于构建查询语句
+
+    该类实现基础查询功能，包含以下核心机制：
+    1. 数据库连接上下文管理
+    2. 查询对象生命周期管理
+    3. 查询结果缓存机制
+    4. 查询实例克隆能力
+    """
     TYPE = "base"
     QUERY_CLASS = sql.Query
 
     def __init__(self, using: tuple[str, str], query=None):
+        """
+        初始化基础数据查询实例
+
+        参数:
+            using: 数据库连接标识元组，格式为(数据库别名, 数据表名)
+            query: 可选的自定义查询对象，若未提供则创建新实例
+
+        初始化流程：
+        1. 存储数据库连接上下文信息
+        2. 初始化查询对象（使用默认或自定义查询类）
+        3. 重置结果缓存状态
+        """
         self.using: tuple[str, str] = using
         self.query = query or self.QUERY_CLASS(self.using)
         self._result_cache: list[Any] | None = None
 
     def _clone(self):
+        """
+        创建当前查询实例的独立副本
+
+        返回值:
+            BaseDataQuery的新实例，包含克隆的查询对象
+
+        克隆过程包含以下关键步骤：
+        1. 调用底层查询对象的clone方法
+        2. 使用相同的数据库连接信息创建新实例
+        3. 复制查询状态但保持独立性
+        """
         query = self.query.clone()
         clone = self.__class__(using=self.using, query=query)
         return clone
+
 
 
 class DataQuery(BaseDataQuery, IterMixin, QueryMixin, DslMixin):

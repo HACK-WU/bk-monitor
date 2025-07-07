@@ -148,7 +148,7 @@ def q_to_dict(q: tree.Node):
     return filter_dict
 
 
-def dict_to_q(filter_dict):
+def dict_to_q(filter_dict) -> Q | None:
     """
     将前端传入的过滤字典转换为Django查询条件Q对象
 
@@ -240,12 +240,33 @@ def filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]):
 
 
 def _list_to_q(key, value):
-    # value是list,key是上一个循环的键
-    # 用于辅助dict_to_q
+    """
+    将列表结构转换为Django Q查询对象的递归处理函数
+    
+    参数:
+        key: str类型，当前处理的字段键名（可能包含操作符）
+        value: list类型，待转换的列表值，元素类型可能为dict/list/str
+    
+    返回值:
+        Q对象：表示列表条件的查询表达式，通过逻辑与/或组合构建
+        
+    执行流程:
+    1. 解析字段键的操作符状态（存在/否定）
+    2. 处理空值边界条件：
+       - 无操作符时跳过空列表
+       - 有操作符时返回空字符串匹配
+    3. 根据操作符类型分发处理：
+       - 否定条件：使用OR组合子条件
+       - 正常条件：使用AND组合子条件
+    4. 支持嵌套结构处理：
+       - 字典结构递归调用dict_to_q
+       - 列表结构递归调用自身
+       - 基础类型直接构建Q对象
+    """
     ret = Q()
     operator, operator_is_false = _operator_is_exist(key)
 
-    # 判断value是否为空
+    # 处理空值边界条件
     if operator:
         if not value:
             # 没有操作符的空列表不解析,跳过
@@ -255,11 +276,9 @@ def _list_to_q(key, value):
             # 有操作符的空列表解析空字符串
             return Q(**{key: ""})
 
-    #  # list要看下里面的元素是什么类型,list条件下的三种情况,dict,list,str
-    #  双层否定会表肯定,变成and条件
+    # 处理否定条件下的OR逻辑组合
     if operator_is_false:
         if isinstance(value[0], dict):
-            # temp_ret用来防止第一个q是空的情况,不能让空q取或
             temp_ret = dict_to_q(value[0])
             ret = (ret | temp_ret) if temp_ret else ret
             for i in value[1:]:
@@ -274,6 +293,8 @@ def _list_to_q(key, value):
             ret = (ret | temp_ret) if temp_ret else ret
             for i in value[1:]:
                 ret = ret | Q(**{key: i})
+    
+    # 处理正常条件下的AND逻辑组合
     else:
         if isinstance(value[0], dict):
             for i in value:
@@ -284,6 +305,7 @@ def _list_to_q(key, value):
         else:
             for i in value:
                 ret = ret & Q(**{key: i})
+    
     return ret
 
 
