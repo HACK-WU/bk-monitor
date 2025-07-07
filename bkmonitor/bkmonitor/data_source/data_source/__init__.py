@@ -150,17 +150,24 @@ def q_to_dict(q: tree.Node):
 
 def dict_to_q(filter_dict):
     """
-    把前端传过来的filter_dict的格式变成django的Q
-    规则：遍历每一个key:
-    #         1.当val是个列表时：
-    #            a.列表的内容是dict则递归调用自身，得到条件列表，用and拼接成一个条件字符串
-    #            b.列表内容不是dict则根据key op val 生成一个条件字符串
-    #            用or拼接上面列表生成的条件字符串
-    #         2.当val不是个列表时：则根据key op val 生成一个条件字符串
-    #         用and拼接上面的条件字符串
+    将前端传入的过滤字典转换为Django查询条件Q对象
+
+    参数:
+        filter_dict (dict): 包含过滤条件的嵌套字典结构，支持列表和子字典条件组合
+
+    返回值:
+        Q: 转换后的Django查询条件对象，当filter_dict为空或无效时返回None
+
+    转换规则:
+    1. 当value为列表时：
+       a. 若列表元素为字典则递归处理，通过AND连接生成条件字符串
+       b. 若列表元素非字典则按key op val生成条件，通过OR连接列表条件
+    2. 当value为字典时递归处理，通过AND连接生成条件
+    3. 当value为普通值时直接生成key op val条件
+    最终通过AND连接所有单值条件和列表条件
     """
     ret = None
-    # dict下都是and条件
+    # 分离处理单值条件和列表条件
     list_filter = {}
     single_filter = {}
     for key, value in filter_dict.items():
@@ -178,9 +185,11 @@ def dict_to_q(filter_dict):
         else:
             single_filter[key] = value
 
+    # 处理单值过滤条件
     if single_filter:
         ret = Q(**single_filter) if ret is None else ret & Q(**single_filter)
 
+    # 处理列表过滤条件
     for key, value in list_filter.items():
         _ret = _list_to_q(key, value)
         if not _ret.children:
