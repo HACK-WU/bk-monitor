@@ -27,6 +27,7 @@ class SQLCompiler(compiler.SQLCompiler):
     SELECT_RE = re.compile(
         r"(?P<agg_method>[^\( ]+)[\( ]+" r"(?P<metric_field>[^\) ]+)[\) ]+" r"([ ]?as[ ]+(?P<metric_alias>[^ ]+))?"
     )
+    ESCAPE_CHAR = re.compile(r'([+\-=&|><!(){}[\]^"~*?\\:\/ ])')
     DEFAULT_AGG_METHOD = "count"
     DEFAULT_METRIC_FIELD = "_index"
     DEFAULT_METRIC_ALIAS = "count"
@@ -69,11 +70,11 @@ class SQLCompiler(compiler.SQLCompiler):
             node: 过滤条件节点对象，需包含以下属性：
                 - children: 子条件列表，元素类型为tuple或Q对象
                 - connector: 条件连接符（AND/OR）
-    
+
         返回值:
             str: 解析生成的查询表达式字符串，格式示例：
                 "(field1: "value" OR field2: (*, 10])"
-    
+
         执行流程:
             1. 遍历节点的所有子条件
             2. 对元组条件进行字段解析和操作符映射
@@ -82,26 +83,26 @@ class SQLCompiler(compiler.SQLCompiler):
         """
         sub_queries = []
         for child in node.children:
-            # 处理元组格式的过滤条件（字段-值对）
             if isinstance(child, tuple) and len(child) == 2:
                 field = child[0].split("__")
-                # 解析字段名和操作符
                 if len(field) == 1 or "" in field:
                     field = child[0]
                     method = "eq"
                 else:
                     field, method = field[:-1], field[-1]
                     field = "__".join(field)
-    
-                # 规范化值列表格式
+
                 if not isinstance(child[1], list):
                     values = [child[1]]
                 else:
                     values = child[1]
-    
+
                 if not values:
                     continue
-    
+
+                # 转义特殊字符
+                values = [self.ESCAPE_CHAR.sub(r"\\\1", value) for value in values]
+
                 # 映射操作符到查询语法模板
                 connector = "OR"
                 if method == "eq":
@@ -128,21 +129,21 @@ class SQLCompiler(compiler.SQLCompiler):
                     connector = "AND"
                 else:
                     continue
-    
+
                 # 生成子查询表达式
                 sub_query_string = f" {connector} ".join(expr_template.format(field, value) for value in values)
                 if len(values) > 1:
                     sub_query_string = f"({sub_query_string})"
-    
+
                 sub_queries.append(sub_query_string)
-            
+
             # 递归处理嵌套的Q对象条件
             elif isinstance(child, Q):
                 sub_query_string = self._parse_filter(child)
                 if not sub_query_string:
                     continue
                 sub_queries.append(sub_query_string)
-    
+
         # 组合最终查询表达式
         query_string = f" {node.connector} ".join(sub_queries)
         if len(sub_queries) > 1:
@@ -153,13 +154,13 @@ class SQLCompiler(compiler.SQLCompiler):
     def as_sql(self):
         """
         将查询对象转换为蓝鲸监控平台兼容的查询参数结构
-        
+
         参数:
             self: Query实例对象，包含以下关键属性：
                 - query: 查询上下文对象，包含租户ID(index_set_id)、表名(table_name)、原始查询字符串(raw_query_string)
                 - high_mark/low_mark: 分页上限/下限
                 - offset: 分页偏移量
-        
+
         返回值:
             tuple: (空字符串, 查询参数字典)，其中查询参数字典包含：
                 - bk_tenant_id: 租户ID
@@ -170,7 +171,7 @@ class SQLCompiler(compiler.SQLCompiler):
                 - query_string: 查询语句
                 - size/start: 分页参数
                 - start_time/end_time: 时间范围
-        
+
         执行流程:
         1. 租户ID处理：优先使用查询上下文中的租户ID，缺失时使用默认值并记录警告
         2. 时间字段解析：通过私有方法获取时间字段配置
@@ -266,7 +267,6 @@ class SQLCompiler(compiler.SQLCompiler):
             result["start"] = self.query.offset
 
         return "", result
-
 
     def _get_metric(self):
         if self.query.select:
