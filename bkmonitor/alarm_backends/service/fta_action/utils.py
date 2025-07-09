@@ -706,9 +706,8 @@ class AlertAssignee:
                     # 处理个人用户类型
                     elif user["type"] == "user" and user["id"] not in group_users:
                         group_users.append(user["id"])
-
-            # 记录匹配成功的值班规则
-            if is_rule_matched:
+            if is_rule_matched and group.duty_notice.get("hit_first_duty", True):
+                # 适配到了对应的轮值规则，中止
                 logger.info("user group (%s) matched duty rule(%s) for alert(%s)", group.id, rule_id, self.alert.id)
 
     def get_assignee_by_user_groups(self, by_group=False, user_type=UserGroupType.MAIN):
