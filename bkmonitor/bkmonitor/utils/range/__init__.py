@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from constants.common import DutyType
 
 from . import conditions, fields, period
@@ -97,43 +97,63 @@ def load_agg_condition_instance(agg_condition):
 
 def load_condition_instance(conditions_config, default_value_if_not_exists=True):
     """
-    根据conditions配置加载Conditions实例
-    :param conditions_config: 条件配置列表，每个元素是一个条件列表，用于构建OrCondition对象
-            格式为: [[{"field":"ip", "method":"eq", "value":"111"}, {}], []]
-    :param default_value_if_not_exists: 如果条件不存在时的默认值
-    :return: condition object: 返回构建的OrCondition对象
+    根据conditions配置加载Conditions实例，构建组合条件对象树
+
+    参数:
+        conditions_config: 条件配置列表，每个元素是一个条件列表，用于构建OrCondition对象
+                          格式为: [[{"field":"ip", "method":"eq", "value":"111"}, {}], []]
+                          支持多级嵌套结构，每个子列表代表一个OR条件组
+        default_value_if_not_exists: 布尔值，当条件字段不存在时的默认处理策略
+                                   True表示返回空值继续处理，False表示抛出异常
+
+    返回值:
+        OrCondition对象: 包含完整条件树的组合条件对象
+                       结构为: OrCondition(AndCondition(Condition,...), ...)
+
+    处理流程:
+    1. 参数类型校验（list/tuple）
+    2. 构建OR条件根节点
+    3. 遍历每个AND条件组
+    4. 解析条件字段配置
+    5. 创建具体条件实例
+    6. 组装完整的条件树
     """
     # 检查conditions_config是否为列表或元组，如果不是则抛出异常
-    if not isinstance(conditions_config, (list, tuple)):
+    if not isinstance(conditions_config, list | tuple):
         raise Exception("Config Incorrect, Check your settings.")
 
-    # 创建一个OrCondition对象，用于最终返回
+    # 创建OrCondition对象作为根节点容器
     or_cond_obj = conditions.OrCondition()
-    # 遍历conditions_config中的每个条件列表，每个条件列表用于构建一个AndCondition对象
+
+    # 遍历顶层OR条件组
     for cond_item_list in conditions_config:
+        # 创建AND条件容器
         and_cond_obj = conditions.AndCondition()
-        # 遍历条件列表中的每个条件，构建单个条件对象
+
+        # 处理单个条件项
         for cond_item in cond_item_list:
+            # 提取条件三要素
             field_name = cond_item.get("field")
             method = cond_item.get("method", "eq")
-            # 日志对eq/neq 进行了转换(is one of/is not one of)
+            # 日志对eq/neq进行了转换处理
             if method not in CONDITION_CLASS_MAP:
                 method = cond_item.get("_origin_method", "eq")
 
             field_value = cond_item.get("value")
-            # 如果field_name, method, field_value任一为空，则跳过当前条件
+
+            # 跳过不完整条件
             if not all([field_name, method, field_value]):
                 continue
 
-            # 加载单个条件字段实例
+            # 加载字段实例
             cond_field = load_field_instance(field_name, field_value)
-            # 根据方法获取对应的条件类实例，并传入单个条件字段实例
+            # 创建具体条件对象
             cond_obj = CONDITION_CLASS_MAP.get(method)(cond_field, default_value_if_not_exists)
-            # 将条件类实例添加到AndCondition对象中
+            # 添加到AND条件组
             and_cond_obj.add(cond_obj)
 
-        # 将构建好的AndCondition对象添加到OrCondition对象中
+        # 将AND条件组添加到OR根节点
         or_cond_obj.add(and_cond_obj)
-    # 返回最终构建的OrCondition对象
-    return or_cond_obj
 
+    # 返回构建完成的条件树
+    return or_cond_obj

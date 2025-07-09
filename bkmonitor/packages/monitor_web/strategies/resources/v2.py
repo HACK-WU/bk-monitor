@@ -4,12 +4,12 @@ import operator
 import re
 import time
 from collections import defaultdict, namedtuple
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import reduce
 from itertools import chain, product, zip_longest
 from typing import Any
+from collections.abc import Callable
 
 import arrow
 import pytz
@@ -3047,7 +3047,7 @@ class GetTargetDetailWithCache(CacheResource):
         由于目前产品形态只支持单对象的展示，因此若存在多对象，只取第一个对象返回给前端
         """
         # 定义字段类型到节点类型的映射关系
-        target_type_map = {
+        target_type_map: dict[str, str] = {
             TargetFieldType.host_target_ip: TargetNodeType.INSTANCE,
             TargetFieldType.host_ip: TargetNodeType.INSTANCE,
             TargetFieldType.host_topo: TargetNodeType.TOPO,
@@ -3060,7 +3060,7 @@ class GetTargetDetailWithCache(CacheResource):
         }
 
         # 定义字段类型到对象类型的映射关系
-        obj_type_map = {
+        obj_type_map: dict[str, str] = {
             TargetFieldType.host_target_ip: TargetObjectType.HOST,
             TargetFieldType.host_ip: TargetObjectType.HOST,
             TargetFieldType.host_topo: TargetObjectType.HOST,
@@ -3073,7 +3073,7 @@ class GetTargetDetailWithCache(CacheResource):
         }
 
         # 定义字段类型到数据获取方法的映射关系
-        info_func_map = {
+        info_func_map: dict[str, Callable] = {
             TargetFieldType.host_target_ip: resource.commons.get_host_instance_by_ip,
             TargetFieldType.host_ip: resource.commons.get_host_instance_by_ip,
             TargetFieldType.service_topo: resource.commons.get_service_instance_by_node,
@@ -3097,7 +3097,7 @@ class GetTargetDetailWithCache(CacheResource):
             return None
 
         # 构建基础参数模板
-        params = {"bk_biz_id": bk_biz_id}
+        params: dict[str, Any] = {"bk_biz_id": bk_biz_id}
 
         # 根据不同目标类型构造请求参数
         if field in [TargetFieldType.host_ip, TargetFieldType.host_target_ip]:
@@ -3150,6 +3150,8 @@ class GetTargetDetailWithCache(CacheResource):
             instance_count = len(instances)
 
         # 补充未查询到模块的模版信息
+        # get_nodes_by_template 是通过node节点查询模版信息，但是如果node节点查询异常，则不会返回模版信息
+        # 因此需要补充未查询到的模版信息
         if (
             "bk_inst_ids" in params
             and len(target_detail) != len(params["bk_inst_ids"])
@@ -3182,7 +3184,7 @@ class GetTargetDetailWithCache(CacheResource):
                         "bk_biz_id": bk_biz_id,
                         "bk_inst_name": "",
                         "SERVICE_TEMPLATE": _id,
-                        "node_path": templates[_id]["name"],
+                        "node_path": templates[_id]["name"],  # 模板名称
                         "all_host": [],
                         "count": 0,
                         "agent_error_count": 0,
@@ -3201,26 +3203,66 @@ class GetTargetDetailWithCache(CacheResource):
 
 class GetTargetDetail(Resource):
     """
-    获取监控目标详情
+    获取监控目标详情的资源类，处理监控策略与目标的关联查询
+
+    功能流程：
+    1. 验证并解析请求参数
+    2. 查询策略及关联监控项
+    3. 使用缓存机制获取目标详情
+    4. 补充缺失策略的数据源信息
+    5. 统一返回目标详情数据
+
+    参数:
+        bk_biz_id (int): 业务ID
+        strategy_ids (List[int]): 需要查询的策略ID列表
+        refresh (bool): 是否强制刷新缓存（可选，默认False）
+
+    返回值:
+        Dict[int, Dict]: 策略ID到目标详情的映射字典，详情包含：
+            - bk_target_type: 目标类型
+            - bk_obj_type: 对象类型
+            - bk_target_detail: 目标详细信息
+            - instance_type: 实例类型（根据数据目标映射）
     """
 
     class RequestSerializer(serializers.Serializer):
+        """
+        请求参数验证器，定义接口必填和可选参数的格式要求
+        """
+
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
         strategy_ids = serializers.ListField(required=True, label="策略ID列表", child=serializers.IntegerField())
         refresh = serializers.BooleanField(required=False, default=False, label="是否刷新缓存")
 
     def perform_request(self, params):
+        """
+        执行监控目标详情查询的核心逻辑
+
+        参数:
+            params (Dict): 经过验证的请求参数字典，包含：
+                - bk_biz_id: 业务ID
+                - strategy_ids: 策略ID列表
+                - refresh: 缓存刷新标志
+
+        返回值:
+            Dict[int, Dict]: 按策略ID组织的目标详情数据字典
+        """
+        # 查询策略及关联监控项（使用only优化查询字段）
         bk_biz_id = params["bk_biz_id"]
         strategies = StrategyModel.objects.filter(bk_biz_id=bk_biz_id, id__in=params["strategy_ids"]).only(
             "id", "scenario"
         )
         strategy_ids = [strategy.id for strategy in strategies]
+
+        # 获取监控项基础信息（预加载关联数据避免N+1查询）
         items = ItemModel.objects.filter(strategy_id__in=strategy_ids)
 
+        # 初始化缓存查询实例并预加载策略-目标映射
         get_target_detail_with_cache = GetTargetDetailWithCache()
         # 提前设置策略与监控目标映射，避免频繁查询数据库
         get_target_detail_with_cache.set_mapping({item.strategy_id: (bk_biz_id, item.target) for item in items})
 
+        # 分离缓存命中与未命中情况
         empty_strategy_ids = []
         result = {}
         for item in items:

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,12 +7,12 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import abc
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 from itertools import chain
-from typing import Dict
 
 from rest_framework import serializers
 from api.cmdb.define import Host, Set, Module
@@ -81,6 +80,12 @@ class BatchUpdateResource(Resource, metaclass=abc.ABCMeta):
 
 
 class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
+    def __init__(self):
+        super().__init__()
+        self.hosts: dict[str, Host] | None = None
+        self.sets: dict[str, Set] | None = None
+        self.modules: dict[str, Module] | None = None
+
     class RequestSerializer(BatchAssignRulesSlz):
         exclude_groups = serializers.ListField(label="排除的规则组", child=serializers.IntegerField(), default=[])
         days = serializers.IntegerField(label="调试周期", default=7)
@@ -113,28 +118,53 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 rule.update(is_changed=False)
 
     @staticmethod
-    def get_cmdb_attributes(bk_biz_id):
-        # 获取到指定业务下的主机信息
-        hosts: Dict[str, Host] = {
+    def get_cmdb_attributes(bk_biz_id) -> tuple[dict[str, Host], dict[str, Set], dict[str, Module]]:
+        """
+        获取指定业务ID下的CMDB基础属性信息
+
+        参数:
+            bk_biz_id (int/str): 业务ID，用于定位CMDB中的业务范围
+
+        返回值:
+            Tuple[Dict[str, Host], Dict[str, Set], Dict[str, Module]]:
+            包含三个字典的元组：
+            - 主机字典：key为字符串格式的主机ID，value为Host对象
+            - 集群字典：key为字符串格式的集群ID，value为Set对象
+            - 模块字典：key为字符串格式的模块ID，value为Module对象
+
+        该函数通过CMDB接口获取业务下的基础拓扑数据，构建三个维度的映射关系：
+        1. 主机维度：通过topo节点获取全量主机
+        2. 集群维度：获取业务下所有集群
+        3. 模块维度：获取业务下所有模块
+        """
+
+        # 构建主机ID到Host对象的映射关系
+        # 使用bk_host_id或host_id作为主键，确保兼容不同数据源
+        hosts: dict[str, Host] = {
             str(host.bk_host_id or host.host_id): host for host in api.cmdb.get_host_by_topo_node(bk_biz_id=bk_biz_id)
         }
-        # 获取到指定业务下的集群信息
-        sets: Dict[str, Set] = {str(bk_set.bk_set_id): bk_set for bk_set in api.cmdb.get_set(bk_biz_id=bk_biz_id)}
-        # 获取到指定业务下的模块信息
-        modules: Dict[str, Module] = {str(bk_module.bk_module_id): bk_module for bk_module in
-                                      api.cmdb.get_module(bk_biz_id=bk_biz_id)}
+
+        # 构建集群ID到Set对象的映射关系
+        # 通过bk_set_id进行字符串化存储，保证键值统一性
+        sets: dict[str, Set] = {str(bk_set.bk_set_id): bk_set for bk_set in api.cmdb.get_set(bk_biz_id=bk_biz_id)}
+
+        # 构建模块ID到Module对象的映射关系
+        # 通过bk_module_id进行字符串化存储，保证键值统一性
+        modules: dict[str, Module] = {
+            str(bk_module.bk_module_id): bk_module for bk_module in api.cmdb.get_module(bk_biz_id=bk_biz_id)
+        }
 
         return hosts, sets, modules
 
     def get_alert_cmdb_attributes(self, alert):
         """
         根据告警信息获取CMDB属性
-    
+
         当没有可用的主机信息时，直接返回None
-    
+
         参数:
         - alert: 告警对象，包含事件信息
-    
+
         返回:
         - alert_cmdb_attributes: 包含主机、集群和模块信息的字典，如果无法获取则为None
         """
@@ -142,7 +172,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             return None
         try:
             # 尝试根据主机ID获取主机信息
-            host = self.hosts.get(str(alert.event.bk_host_id))
+            host: Host = self.hosts.get(str(alert.event.bk_host_id))
             if not host:
                 # 如果根据主机ID未找到主机信息，尝试根据IP和云区域ID组合获取
                 host = self.hosts.get(f"{alert.event.ip}|{alert.event.bk_cloud_id}")
@@ -157,30 +187,48 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         alert_cmdb_attributes = {"host": host, "sets": sets, "modules": modules}
         for bk_set_id in host.bk_set_ids:
             # 根据集合ID获取集合信息
-            biz_set = self.sets.get(str(bk_set_id))
+            biz_set: Set = self.sets.get(str(bk_set_id))
             if biz_set:
                 sets.append(biz_set)
 
         for bk_module_id in host.bk_module_ids:
             # 根据模块ID获取模块信息
-            biz_module = self.modules.get(str(bk_module_id))
+            biz_module: Module = self.modules.get(str(bk_module_id))
             if biz_module:
                 modules.append(biz_module)
         return alert_cmdb_attributes
 
     def perform_request(self, validated_request_data):
         """
-        告警分派规则调试
+        告警分派规则调试接口
 
-        调试的不仅仅只是当前告警分派规则组的内容，其他规则组的也会进行调试。
-        获取到所有告警，然后循环告警用于匹配传入的规则，看是否命中
+        参数:
+            validated_request_data (dict): 经过验证的请求数据，包含以下字段：
+                - bk_biz_id (int): 业务ID
+                - max_alert_count (int): 最大告警数量
+                - days (int): 查询时间范围（天数）
+                - start_time (int): 查询起始时间戳
+                - end_time (int): 查询结束时间戳
+                - assign_group_id (int): 待调试的规则组ID
+                - group_name (str): 规则组名称
+                - priority (int): 规则组优先级
+                - exclude_groups (list): 需排除的规则组列表
+                - rules (list): 待调试的规则列表
 
-        1、提取请求数据：从请求数据中提取业务ID。
-        2、获取CMDB属性：获取主机、集群和模块的属性。
-        3、查询告警数据：根据业务ID和时间范围，查询最近一段时间内的告警数据。
-        4、获取规则组：获取所有告警分派规则组，并根据优先级排序。
-        5、规则适配：对每个告警进行规则适配，记录匹配到的规则和告警信息。
-        6、返回结果：返回所有规则组的信息，包括匹配到的告警数量和规则详情
+        返回值:
+            list: 包含规则组匹配结果的响应数据，每个元素包含：
+                - group_id (int): 规则组ID
+                - alerts_count (int): 匹配告警数量
+                - group_name (str): 规则组名称
+                - priority (int): 规则组优先级
+                - rules (list): 包含匹配结果的规则列表
+
+        执行流程:
+            1. 提取业务ID并获取CMDB属性
+            2. 构建告警查询条件并获取原始告警数据
+            3. 加载并处理所有规则组数据
+            4. 执行告警与规则的匹配逻辑
+            5. 翻译指标并构建响应数据
         """
         # 提取请求数据中的业务ID
         bk_biz_id = validated_request_data["bk_biz_id"]
@@ -195,11 +243,12 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             "page_size": validated_request_data["max_alert_count"],
             "ordering": ["-create_time"],
             "start_time": validated_request_data["start_time"]
-                          or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
+            or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
             "end_time": validated_request_data["end_time"] or int(current_time.timestamp()),
         }
         handler = AlertQueryHandler(**search_params)
-        # 查询并获取到告警数据
+
+        # 执行原始告警数据查询并转换为文档对象
         search_result, _ = handler.search_raw()
         # 将告警数据转为AlertDocument告警对象
         alerts = [AlertDocument(**hit.to_dict()) for hit in search_result]
@@ -211,7 +260,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         priority = validated_request_data.get("priority", 0)
         exclude_groups = validated_request_data.get("exclude_groups") or []
 
-        # 获取到告警分派规则组
+        # 查询所有业务相关的规则组并应用排除过滤
         groups_queryset = AlertAssignGroup.objects.filter(bk_biz_id__in=[bk_biz_id, GLOBAL_BIZ_ID]).order_by(
             "-priority"
         )
@@ -219,12 +268,14 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         # 过滤掉不需要的规则组
         if exclude_groups:
             groups_queryset = groups_queryset.exclude(id__in=validated_request_data["exclude_groups"])
-        # 组装获取到的规则组
+
+        # 序列化规则组数据并清理冗余字段
         groups = {group["id"]: group for group in AssignGroupSlz(instance=groups_queryset, many=True).data}
         # 去掉ID字段
         for group in groups.values():
             group.pop("id", None)
 
+        # 初始化规则存储结构并处理待调试规则
         group_rules = defaultdict(list)
         priority_rules = defaultdict(list)
         if group_id:
@@ -254,6 +305,8 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             group_rules[rule["assign_group_id"]].append(rule)
         for rule in validated_request_data["rules"]:
             rule["alerts"] = []
+
+        # 按优先级排序规则组
         sorted_priorities = sorted(priority_rules.keys(), reverse=True)
         # 按照优先级排序存储的分派规则
         sorted_priority_rules = [priority_rules[sorted_priority] for sorted_priority in sorted_priorities]
@@ -276,9 +329,9 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             # 匹配告警，如果匹配，则更新alert告警信息
             alert_manager.run_match()
             if not alert_manager.matched_rules:
-                # 没有适配到任何规则
                 continue
-            # 构建告警详情
+
+            # 构建告警详情信息
             alert_info = {
                 "id": alert.id,
                 "origin_severity": origin_severity,
@@ -287,6 +340,8 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
                 "content": getattr(alert.event, "description", ""),
                 "metrics": [{"id": metric_id} for metric_id in alert.event.metric],
             }
+
+            # 记录匹配结果
             for matched_rule in alert_manager.matched_rules:
                 alert_dict = alert.to_dict()
                 alert_dict["origin_severity"] = origin_severity
@@ -294,6 +349,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             matched_group_alerts[alert_manager.matched_group_info["group_id"]].append(alert)
             matched_alerts.append(alert_info)
 
+        # 执行指标翻译操作
         MetricTranslator(bk_biz_ids=[bk_biz_id]).translate_from_dict(
             list(chain(*[alert["metrics"] for alert in matched_alerts])), "id", "name"
         )
