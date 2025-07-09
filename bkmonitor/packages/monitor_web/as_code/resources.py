@@ -603,33 +603,28 @@ class ImportConfigFileResource(Resource):
     @step(state="DECOMPRESSION", message=_lazy("解压中..."))
     def decompression_and_read(self, file: File):
         """
-        解压文件并读取配置
+        直接读取压缩包中的文件内容而不解压
         """
-        with tempfile.TemporaryDirectory() as temp_path:
-            # 解压文件
-            if file.name.endswith(".zip"):
-                with zipfile.ZipFile(file.file, "r") as zip_file:
-                    zip_file.extractall(temp_path)
-            else:
-                with tarfile.open(fileobj=file.file) as tar:
-                    tar.extractall(temp_path, filter="data")
-
-            temp_path = os.path.join(temp_path, "configs/")
-
-            # 读取文件
-            configs = {}
-            for path, dirs, filenames in os.walk(temp_path):
-                if not filenames:
-                    continue
-                path = str(path)
-                relative_path = path[len(temp_path) :]
-                for filename in filenames:
-                    filename = str(filename)
-                    if not filename.endswith((".yaml", ".yml", ".json")):
+        configs = {}
+        if file.name.endswith(".zip"):
+            with zipfile.ZipFile(file.file, "r") as zip_file:
+                for file_info in zip_file.infolist():
+                    if not file_info.filename.startswith("./configs/"):
                         continue
-                    f = open(os.path.join(path, filename))
-                    configs[f"{relative_path}/{filename}"] = f.read()
-                    f.close()
+                    config_name = file_info.filename[len("./configs/") :]
+                    if file_info.filename.endswith((".yaml", ".yml", ".json")):
+                        with zip_file.open(file_info) as f:
+                            configs[config_name] = f.read().decode("utf-8")
+        else:
+            with tarfile.open(fileobj=file.file) as tar:
+                for member in tar.getmembers():
+                    if not member.name.startswith("./configs/"):
+                        continue
+                    config_name = member.name[len("./configs/") :]
+                    if member.name.endswith((".yaml", ".yml", ".json")):
+                        f = tar.extractfile(member)
+                        if f:
+                            configs[config_name] = f.read().decode("utf-8")
         return configs
 
     @step(state="IMPORT", message=_lazy("配置导入中..."))
