@@ -1693,6 +1693,35 @@ class GetMetricListV2Resource(Resource):
     def filter_by_conditions(cls, metrics: QuerySet, params: dict) -> QuerySet:
         """
         按查询条件过滤指标
+
+        参数:
+            cls: 调用类对象（用于调用类方法）
+            metrics: 原始指标QuerySet对象
+            params: 查询参数字典，包含以下可选字段：
+                - conditions: 条件列表，每个条件包含key和value字段
+                - alert_name: 告警名称列表
+                - index_set_id: 索引集ID列表
+                - strategy_id: 策略ID列表
+                - strategy_name: 策略名称列表
+                - metric_id: 指标ID列表
+                - query: 模糊查询字符串列表
+
+        返回值:
+            过滤后的指标QuerySet对象
+
+        该方法实现多维度指标过滤功能，包含：
+        1. 条件参数预处理（转换为字段-值列表映射）
+        2. 精确字段过滤（支持7个直接匹配字段）
+            - data_source_label
+            - data_target
+            - data_type_label
+            - data_category
+            - metric_field
+            - result_table_id
+            - index_set_id
+        3. 复杂条件组合过滤（告警名称/策略名称模糊匹配）
+        4. 指标ID解析与双重匹配机制
+        5. 多模式模糊搜索（支持PromQL格式和MetricID格式解析）
         """
         filter_dict = defaultdict(list)
         for condition in params.get("conditions", []):
@@ -1761,6 +1790,7 @@ class GetMetricListV2Resource(Resource):
                 found_metric = metric_filter.exists()
 
             metrics = metric_filter if found_metric else cls.filter_by_double_paragaphs_metric_id(metrics, filter_dict)
+
         # 模糊搜索
         if filter_dict["query"]:
             # 尝试解析指标ID格式的query字符串
