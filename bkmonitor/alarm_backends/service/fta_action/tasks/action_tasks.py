@@ -71,7 +71,7 @@ def run_action(action_type, action_info):
     """
     # 动态导入处理器模块
     # 模块路径优先使用action_info中的module字段，否则拼接action_type
-    module_name = "alarm_backends.service.fta_action.%s.processor" % action_type or action_info.get("module")
+    module_name = f"alarm_backends.service.fta_action.{action_type}.processor" or action_info.get("module")
     # logger.info("$%s Action start, call back module name %s", action_info["id"], action_type)
     logger.info(f"[run_action_worker] action({action_info['id']}) {action_type} begin import {module_name}")
     try:
@@ -228,9 +228,13 @@ def sync_action_instances_every_10_secs(last_sync_time=None):
             try:
                 last_sync_time = int(redis_client.get(cache_key))
             except (ValueError, TypeError):
+                logger.warning(
+                    f"[sync_action_instances] get last_sync_time({cache_key}) failed. "
+                    f"will start processing one hour ago"
+                )
                 # 如果获取缓存记录异常，表示要全库更新或者指定变量，这种可能性很小，但是无法保证redis一直正常运行
-                three_days_ago = current_sync_time - timedelta(days=3)
-                last_sync_time = last_sync_time or int(three_days_ago.timestamp())
+                one_hour_ago = current_sync_time - timedelta(hours=1)
+                last_sync_time = last_sync_time or int(one_hour_ago.timestamp())
 
             # 同步逻辑： 如果不存在最近更新时间的缓存key， 直接更新全表， 如果有，则更新对应时间范围内的数据即可
             # 汇总并且处于休眠期的内容不做同步
