@@ -295,7 +295,7 @@ class UptimeCheckTask(OperateRecordModel):
     name = models.CharField("任务名称", max_length=128, db_index=True)
     protocol = models.CharField("协议", choices=PROTOCOL_CHOICES, max_length=10)
     labels = models.JSONField("自定义标签", default=dict, null=True, blank=True)
-    indepentent_dataid = models.BooleanField("独立业务数据ID", default=False)
+    independent_dataid = models.BooleanField("独立业务数据ID", default=True)
     check_interval = models.PositiveIntegerField("拨测周期(分钟)", default=5)
     # 地点变为可选项
     location = JsonField("地区", default="{}")
@@ -330,7 +330,7 @@ class UptimeCheckTask(OperateRecordModel):
             for group in self.groups.all():
                 group.tasks.remove(self.id)
 
-        logger.info(_("拨测任务已删除,ID:%d" % pk))
+        logger.info(_("拨测任务已删除,ID:%d") % pk)
 
     @property
     def temp_conf_name(self):
@@ -450,7 +450,7 @@ class UptimeCheckTask(OperateRecordModel):
         停止订阅
         立即执行自身绑定的订阅id的STOP命令
         """
-        action_name = "bkmonitorbeat_%s" % self.protocol.lower()
+        action_name = f"bkmonitorbeat_{self.protocol.lower()}"
         if subscription_ids is None:
             subscription_ids = UptimeCheckTaskSubscription.objects.filter(uptimecheck_id=self.pk).values_list(
                 "subscription_id", flat=True
@@ -464,7 +464,7 @@ class UptimeCheckTask(OperateRecordModel):
         启动订阅
         立即执行自身绑定的订阅id的START命令
         """
-        action_name = "bkmonitorbeat_%s" % self.protocol.lower()
+        action_name = f"bkmonitorbeat_{self.protocol.lower()}"
         subscriptions = UptimeCheckTaskSubscription.objects.filter(uptimecheck_id=self.pk)
         for subscription in subscriptions:
             api.node_man.run_subscription(subscription_id=subscription.subscription_id, actions={action_name: "START"})
@@ -526,12 +526,12 @@ class UptimeCheckTask(OperateRecordModel):
                 ],
             }
             step = {
-                "id": "bkmonitorbeat_%s" % protocol,
+                "id": f"bkmonitorbeat_{protocol}",
                 "type": "PLUGIN",
                 "config": {
                     "plugin_name": "bkmonitorbeat",
                     "plugin_version": "latest",
-                    "config_templates": [{"name": "bkmonitorbeat_%s.conf" % protocol, "version": "latest"}],
+                    "config_templates": [{"name": f"bkmonitorbeat_{protocol}.conf", "version": "latest"}],
                 },
                 "params": {
                     "context": {
