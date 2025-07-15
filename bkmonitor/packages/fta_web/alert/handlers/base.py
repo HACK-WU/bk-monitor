@@ -127,12 +127,11 @@ class BaseQueryTransformer(BaseTreeTransformer):
                 ipv6 = exploded_ip(node.expr.value.strip('"'))
                 node.expr.value = f'"{ipv6}"'
 
-            yield from self.generic_visit(
-                node, {"search_field_name": node.name, "search_field_origin_name": origin_node_name}
-            )
+            context.update({"search_field_name": node.name, "search_field_origin_name": origin_node_name})
+            yield from self.generic_visit(node, context)
 
     @classmethod
-    def transform_query_string(cls, query_string: str):
+    def transform_query_string(cls, query_string: str, context=None):
         """
         转换查询字符串为ES查询DSL或重整后的查询字符串
 
@@ -152,11 +151,11 @@ class BaseQueryTransformer(BaseTreeTransformer):
         4. 查询语句格式重整
         """
 
-        def parse_query_string_node(_transform_obj, _query_string):
+        def parse_query_string_node(_transform_obj, _query_string, _context):
             """解析查询字符串生成语法树节点"""
             try:
                 query_node = parser.parse(_query_string, lexer=lexer.clone())
-                return _transform_obj.visit(query_node)
+                return _transform_obj.visit(query_node, _context)
             except ParseError as e:
                 raise QueryStringParseError({"msg": e})
 
@@ -173,7 +172,7 @@ class BaseQueryTransformer(BaseTreeTransformer):
 
         # 解析生成查询语法树
         # 使用自定义语法解析器进行节点转换
-        query_tree = parse_query_string_node(transform_obj, query_string)
+        query_tree = parse_query_string_node(transform_obj, query_string, context)
 
         # 嵌套字段特殊处理逻辑
         # 当存在嵌套字段时需要转换为DSL模式（query_string兼容性限制）
@@ -391,7 +390,7 @@ class BaseQueryHandler:
 
         return search_object
 
-    def add_query_string(self, search_object: Search, query_string: str = None):
+    def add_query_string(self, search_object: Search, query_string: str = None, context=None):
         """
         处理并添加查询字符串到Elasticsearch搜索对象
 
@@ -413,7 +412,7 @@ class BaseQueryHandler:
         query_string = process_metric_string(query_string)
 
         if query_string.strip():
-            query_dsl = self.query_transformer.transform_query_string(query_string)
+            query_dsl = self.query_transformer.transform_query_string(query_string, context)
             if isinstance(query_dsl, str):
                 # 使用query_string查询方式构建查询条件
                 search_object = search_object.query("query_string", query=query_dsl)
