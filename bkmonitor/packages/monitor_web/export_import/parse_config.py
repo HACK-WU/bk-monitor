@@ -222,7 +222,9 @@ class StrategyConfigParse(BaseParse):
 
                 # 处理数组格式和字符串格式的配置值
                 if isinstance(condition_msg["value"], list):
-                    bk_collect_config_ids.extend(map(int, condition_msg["value"]))
+                    bk_collect_config_ids.extend(
+                        [int(value) for value in condition_msg["value"] if str(value).isdigit()]
+                    )
                 else:
                     bk_collect_config_id = condition_msg["value"].split("(")[0]
                     bk_collect_config_ids.append(int(bk_collect_config_id))
