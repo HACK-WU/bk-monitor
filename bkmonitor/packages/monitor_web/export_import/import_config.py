@@ -39,6 +39,7 @@ from monitor_web.models import (
 )
 from monitor_web.plugin.manager import PluginManagerFactory
 from monitor_web.plugin.resources import CreatePluginResource
+from packages.monitor_web.strategies.default_settings.datalink.v1 import DEFAULT_DATALINK_COLLECTING_FLAG
 from utils import count_md5
 
 logger = logging.getLogger("monitor_web")
@@ -483,9 +484,12 @@ def get_strategy_config(bk_biz_id: int, strategy_ids: list[int]) -> list[dict]:
     """
     获取策略配置列表（包含用户组详细信息）
     """
-    strategy_configs = resource.strategies.get_strategy_list_v2(
+    strategy_configs: list[dict] = resource.strategies.get_strategy_list_v2(
         bk_biz_id=bk_biz_id,
-        conditions=[{"key": "id", "value": strategy_ids}],
+        conditions=[
+            {"key": "id", "value": strategy_ids},
+            {"key": "source__neq", "value": DEFAULT_DATALINK_COLLECTING_FLAG},
+        ],
         page=0,
         page_size=0,
         with_user_group=True,
