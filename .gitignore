@@ -202,3 +202,8 @@ bkcodeai.json
 .ruff_cache/
 
 .cursor/
+grafana_migrate/grafana
+grafana_migrate/monitor
+test2.py
+test.json
+hello.py
