@@ -69,6 +69,7 @@ from monitor_web.models import (
     UploadedFileInfo,
 )
 from monitor_web.plugin.manager import PluginManagerFactory
+from monitor_web.strategies.default_settings.datalink.v1 import DEFAULT_DATALINK_COLLECTING_FLAG
 from monitor_web.strategies.serializers import handle_target, is_validate_target
 from monitor_web.tasks import import_config, remove_file
 
@@ -236,7 +237,8 @@ class GetAllConfigListResource(Resource):
                 Q(id__icontains=search_value) | Q(name__icontains=search_value)
             )
             self.strategy_config_list = self.strategy_config_list.filter(
-                Q(id__icontains=search_value) | Q(name__icontains=search_value)
+                Q(id__icontains=search_value)
+                | Q(name__icontains=search_value) & ~Q(source=DEFAULT_DATALINK_COLLECTING_FLAG)
             )
             self.view_config_list = [
                 view_config
