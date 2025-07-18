@@ -4,9 +4,11 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 cookie = Path("grafana/cookie").read_text().strip()
-url = Path("grafana/url").read_text().strip()
-
-headers = {}
+config = Path("grafana/config.json").read_text().strip()
+config = json.loads(config)
+url = config["url"]
+headers = config["headers"]
+headers["cookie"] = cookie
 
 
 def get_promqls():

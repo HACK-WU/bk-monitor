@@ -204,6 +204,7 @@ bkcodeai.json
 .cursor/
 grafana_migrate/grafana
 grafana_migrate/monitor
+grafana_migrate/parse_result.json
 test2.py
 test.json
 hello.py

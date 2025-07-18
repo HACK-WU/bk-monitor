@@ -1,13 +1,28 @@
 from pathlib import Path
 import json
+from get_variables import get_variables
+from string import Template
+
+
+class CustomTemplate(Template):
+    delimiter = "$"  # 使用单个 $ 作为分隔符
+
+
+def replace_variables(promql: str, variables: dict):
+    if "$" not in promql:
+        return promql
+    promql = CustomTemplate(promql).safe_substitute(**variables)
+    return promql
 
 
 def get_promql(src_path, promql_key):
-    src_path = src_path.read_text()
-    src_path = json.loads(src_path)
+    setting = src_path.read_text()
+    setting = json.loads(setting)
+
+    templating = setting["dashboard"]["templating"]
+    variables = get_variables(templating)
 
     alert_new_json = {}
-
     find_inner_title = set()
 
     def _get_promql(_panel, value):
@@ -15,9 +30,10 @@ def get_promql(src_path, promql_key):
             promql = target.get(promql_key)
             if promql:
                 find_inner_title.add(value["inner_title"])
+                promql = replace_variables(promql, variables)
                 alert_new_json[promql] = value
 
-    for out_panel in src_path["dashboard"]["panels"]:
+    for out_panel in setting["dashboard"]["panels"]:
         out_title = out_panel["title"]
         for panel in out_panel.get("panels", []):
             item = {"out_title": out_title, "inner_title": panel["title"]}
@@ -72,10 +88,3 @@ def get_grafana_promql():
     print(len(alert_new_json), "个panels")
     with open(str(dest_path), "w") as f:
         json.dump(alert_new_json, f, indent=4, ensure_ascii=False)
-
-
-get_monitor_promql()
-# 1225 个source
-print("---------------------")
-# get_grafana_promql()
-# 1225
