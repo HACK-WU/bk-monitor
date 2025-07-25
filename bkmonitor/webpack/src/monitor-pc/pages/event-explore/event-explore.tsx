@@ -23,22 +23,21 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { Component, ProvideReactive, Ref, Prop, Watch, Emit, InjectReactive } from 'vue-property-decorator';
+import { Component, Emit, InjectReactive, Prop, ProvideReactive, Ref, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
 // import { getDataSourceConfig } from 'monitor-api/modules/grafana';
-
 import { eventGenerateQueryString } from 'monitor-api/modules/data_explorer';
 import { copyText, Debounce, deepClone } from 'monitor-common/utils';
 
 import RetrievalFilter from '../../components/retrieval-filter/retrieval-filter';
 import {
+  type IGetValueFnParams,
   ECondition,
   EFieldType,
   EMethod,
   EMode,
   mergeWhereList,
-  type IGetValueFnParams,
 } from '../../components/retrieval-filter/utils';
 import { handleTransformToTimestamp } from '../../components/time-range/utils';
 import { APIType, getEventViewConfig, RetrievalFilterCandidateValue } from './api-utils';
@@ -50,8 +49,9 @@ import {
   type ConditionChangeEvent,
   type ExploreEntitiesMap,
   type ExploreFieldMap,
-  ExploreSourceTypeEnum,
+  type HideFeatures,
   type IFormData,
+  ExploreSourceTypeEnum,
 } from './typing';
 
 import type { IWhereItem } from '../../components/retrieval-filter/utils';
@@ -62,33 +62,34 @@ import type { IViewOptions } from '../monitor-k8s/typings/book-mark';
 import './event-explore.scss';
 Component.registerHooks(['beforeRouteEnter', 'beforeRouteLeave']);
 
-interface IProps {
-  source: APIType;
-  dataId?: string;
-  dataTypeLabel?: string;
-  dataSourceLabel?: string;
-  queryString?: string;
-  where?: IWhereItem[];
-  commonWhere?: IWhereItem[];
-  group_by?: IFormData['group_by'];
-  filter_dict?: IFormData['filter_dict'];
-  favoriteList?: IFavList.favGroupList[];
-  currentFavorite?: IFavList.favList;
-  filterMode?: EMode;
-  defaultShowResidentBtn?: boolean;
-  eventSourceType?: ExploreSourceTypeEnum[];
-}
-
 interface IEvent {
-  onWhereChange: (where: IWhereItem[]) => void;
-  onQueryStringChange: (queryString: string) => void;
+  onCommonWhereChange: (where: IWhereItem[]) => void;
+  onEventSourceTypeChange: (v: ExploreSourceTypeEnum[]) => void;
   onFavorite: (isEdit: boolean) => void;
   onFilterModeChange: (filterMode: EMode) => void;
+  onQueryStringChange: (queryString: string) => void;
   onQueryStringInputChange: (val: string) => void;
-  onCommonWhereChange: (where: IWhereItem[]) => void;
-  onShowResidentBtnChange?: (v: boolean) => void;
-  onEventSourceTypeChange: (v: ExploreSourceTypeEnum[]) => void;
   onSetRouteParams: (otherQuery: Record<string, any>) => void;
+  onShowResidentBtnChange?: (v: boolean) => void;
+  onWhereChange: (where: IWhereItem[]) => void;
+}
+
+interface IProps {
+  commonWhere?: IWhereItem[];
+  currentFavorite?: IFavList.favList;
+  dataId?: string;
+  dataSourceLabel?: string;
+  dataTypeLabel?: string;
+  defaultShowResidentBtn?: boolean;
+  eventSourceType?: ExploreSourceTypeEnum[];
+  favoriteList?: IFavList.favGroupList[];
+  filter_dict?: IFormData['filter_dict'];
+  filterMode?: EMode;
+  group_by?: IFormData['group_by'];
+  hideFeatures?: HideFeatures;
+  queryString?: string;
+  source: APIType;
+  where?: IWhereItem[];
 }
 @Component
 export default class EventExplore extends tsc<
@@ -113,6 +114,8 @@ export default class EventExplore extends tsc<
   @Prop({ default: () => [ExploreSourceTypeEnum.ALL], type: Array }) eventSourceType: ExploreSourceTypeEnum[];
   /** UI查询 */
   @Prop({ default: () => [], type: Array }) where: IFormData['where'];
+  /** 不显示的功能列表  */
+  @Prop({ default: () => [], type: Array }) hideFeatures: HideFeatures;
   /** 常驻筛选 */
   @Prop({ default: () => [], type: Array }) commonWhere: IWhereItem[];
   /** 维度列表 */
@@ -558,7 +561,12 @@ export default class EventExplore extends tsc<
         {this.$scopedSlots.favorite?.('')}
         <div class='right-main-panel'>
           {this.$scopedSlots.header?.('')}
-          <div class='event-retrieval-content'>
+          <div
+            style={{
+              height: this.hideFeatures.includes('header') ? 'calc(100% - 0px)' : 'calc(100% - 52px)',
+            }}
+            class='event-retrieval-content'
+          >
             {this.loading ? (
               <div class='skeleton-element filter-skeleton' />
             ) : (
@@ -570,7 +578,7 @@ export default class EventExplore extends tsc<
                 fields={this.fieldList}
                 filterMode={this.filterMode}
                 getValueFn={this.getRetrievalFilterValueData}
-                isShowFavorite={this.source === APIType.MONITOR}
+                isShowFavorite={!this.hideFeatures.includes('favorite') && this.source === APIType.MONITOR}
                 queryString={this.queryString}
                 residentSettingOnlyId={this.residentSettingOnlyId}
                 selectFavorite={this.currentFavorite}
