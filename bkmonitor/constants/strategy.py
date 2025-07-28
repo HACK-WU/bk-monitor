@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -23,7 +22,7 @@ SYSTEM_PROC_PORT_DYNAMIC_DIMENSIONS = ["listen", "nonlisten", "not_accurate_list
 ORIGIN_RESULT_TABLE_ID = "origin_result_table_id"
 
 
-class DataTarget(object):
+class DataTarget:
     NONE_TARGET = "none_target"
     SERVICE_TARGET = "service_target"
     HOST_TARGET = "host_target"
@@ -146,7 +145,7 @@ DATA_TARGET_MAP = {
 }
 
 
-class TargetFieldType(object):
+class TargetFieldType:
     host_topo = "host_topo_node"  # 动态拓扑
     service_topo = "service_topo_node"
     host_ip = "ip"  # 静态拓扑
@@ -159,7 +158,7 @@ class TargetFieldType(object):
     dynamic_group = "dynamic_group"  # 动态分组
 
 
-class TargetMethodType(object):
+class TargetMethodType:
     eq = "eq"
     neq = "neq"
     lte = "lte"
@@ -199,7 +198,7 @@ TargetMethodList = [
 ]
 
 
-class SourceType(object):
+class SourceType:
     BKMONITOR = ("BKMONITOR", _("监控采集"))
     BASEALARM = ("BASEALARM", _("系统事件"))
     BKDATA = ("BKDATA", _("计算平台"))
@@ -232,6 +231,8 @@ class DimensionFieldType:
     String = "string"
 
 
+OS_RESTART_METRIC_ID = "bk_monitor.os_restart"
+
 # 系统时间主机重启、进程端口、PING不可达、自定义字符型对应query_config
 EVENT_QUERY_CONFIG_MAP = {
     "ping-gse": {
@@ -250,7 +251,7 @@ EVENT_QUERY_CONFIG_MAP = {
         "result_table_id": "system.env",
         "unit": "",
         "metric_field": "uptime",
-        "metric_id": "bk_monitor.os_restart",
+        "metric_id": OS_RESTART_METRIC_ID,
     },
     "proc_port": {
         "agg_dimension": [
