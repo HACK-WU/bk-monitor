@@ -58,6 +58,8 @@ class QueryField:
         self.es_field = field if es_field is None else es_field
         self.agg_field = self.es_field if agg_field is None else agg_field
         self.searchable = searchable
+        # is_char参数对查询没有影响，仅用于前端展示
+        # top_n查询时，is_char为True时，会将字段值加上双引号。
         self.is_char = is_char
         self.alias_func = alias_func
 
@@ -97,6 +99,36 @@ class BaseQueryTransformer(BaseTreeTransformer):
     doc_cls = None
 
     def visit_search_field(self, node, context):
+        """
+        处理搜索字段的解析与转换逻辑
+
+        参数:
+            node: 当前处理的搜索字段节点对象
+                包含字段名称(name)和表达式(expr)等属性
+            context: 上下文字典
+                包含搜索字段处理的运行时状态信息
+                特殊键值:
+                    - ignore_search_field: 布尔值，是否忽略字段转换
+                    - search_field_name: 处理后的字段名称
+                    - search_field_origin_name: 原始字段名称
+
+        返回值:
+            生成器对象，遍历处理后的节点元素
+            通过yield from返回处理链的中间件响应
+
+        执行流程:
+        1. 安全短路处理: 当忽略字段转换时直接透传节点
+        2. 嵌套KV字段转换:
+           对tags.key/tags.value等特殊字段进行双重搜索转换
+           (tags.a : b) => (tags.key : a AND tags.value : b)
+        3. 字段别名处理:
+           调用字段别名函数(如存在)
+           执行字段名到ES存储名的转换
+        4. IPv6地址规范化:
+           对event.ipv6字段执行地址展开标准化
+        5. 上下文更新:
+           记录原始字段名与转换后字段名
+        """
         if context.get("ignore_search_field"):
             yield from self.generic_visit(node, context)
         else:
@@ -115,6 +147,8 @@ class BaseQueryTransformer(BaseTreeTransformer):
                             )
                         ),
                     )
+                    # tags的存储格式为：
+                    # {"tags": [{"key": "host", "value": "server1"}, {"key": "module", "value": "web"}]}
                     break
             else:
                 query_field = self.get_field_info(node.name)
@@ -168,6 +202,7 @@ class BaseQueryTransformer(BaseTreeTransformer):
         # 处理PromQL特殊语法
         # 包含promql语句时需要特殊转换处理，可能触发语法错误
         if is_include_promql(query_string):
+            # todo 调整，将判断是否为promql语句，调整到top_n查询中，如果为promql语句，返回转义后的语句。然后再使用转义后的语句进行查询
             query_string = cls.convert_metric_id(query_string)
 
         # 解析生成查询语法树
@@ -471,20 +506,48 @@ class BaseQueryHandler:
 
     def parse_condition_item(self, condition: dict) -> Q:
         """
-        解析单个filter条件为 Q
+        将字典格式的查询条件转换为Elasticsearch DSL的Q查询对象
+
+        参数:
+            condition: 包含查询条件的字典对象，格式要求:
+                {
+                    "method": "include/exclude/terms",
+                    "key": 字段名称,
+                    "value": 匹配值(字符串或列表)
+                }
+
+        返回值:
+            转换后的Q查询对象，用于构建Elasticsearch查询条件
+
+        处理逻辑:
+        1. 包含查询(include):
+            - 单值转换为通配符查询(*value*)
+            - 多值生成多个通配符查询并通过OR组合
+        2. 排除查询(exclude):
+            - 单值转换为取反的通配符查询
+            - 多值生成多个通配符查询后整体取反
+        3. 默认terms查询:
+            - 直接转换为terms精确匹配查询
         """
         if condition["method"] == "include":
             if isinstance(condition["value"], list):
-                # 如果是列表，生成多个 wildcard 查询并通过 OR 组合
+                # 生成多个wildcard查询并组合
+                # 当存在多个包含条件时，通过bool should组合查询条件
                 queries = [Q("wildcard", **{condition["key"]: f"*{value}*"}) for value in condition["value"]]
                 return queries[0] if len(queries) == 1 else Q("bool", should=queries)
+            # 生成单个wildcard查询
             return Q("wildcard", **{condition["key"]: f"*{condition['value']}*"})
+
         elif condition["method"] == "exclude":
             if isinstance(condition["value"], list):
-                # 如果是列表，生成多个 wildcard 查询并通过 OR 组合后取反
+                # 生成多个wildcard查询并组合后整体取反
+                # 通过~运算符实现逻辑非操作
                 queries = [Q("wildcard", **{condition["key"]: f"*{value}*"}) for value in condition["value"]]
                 return ~(queries[0] if len(queries) == 1 else Q("bool", should=queries))
+            # 生成单个取反wildcard查询
             return ~Q("wildcard", **{condition["key"]: f"*{condition['value']}*"})
+
+        # 默认执行terms精确匹配查询
         return Q("terms", **{condition["key"]: condition["value"]})
 
     @classmethod
