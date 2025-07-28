@@ -1431,7 +1431,7 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
         """
         if self.bk_biz_id == 0:
             # 主机数据
-            result_table_label_name_map = {"os": "主机", "host_process": "进程"}
+            result_table_label_name_map = {"os": "操作系统", "host_process": "进程"}
             for result_table_info in copy.deepcopy(SYSTEM_HOST_METRICS):
                 # 判断是否需要补充节点类型和节点名称维度
                 dimensions = result_table_info["dimensions"]
@@ -1456,6 +1456,8 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                         "data_type_label": DataTypeLabel.TIME_SERIES,
                         "data_target": DataTarget.HOST_TARGET,
                         "data_label": result_table_info["data_label"],
+                        "related_id": "system",
+                        "related_name": "system",
                     }
             # 拨测数据
             for result_table_info in copy.deepcopy(UPTIMECHECK_METRICS):
@@ -1484,7 +1486,7 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                 yield {
                     "bk_biz_id": 0,
                     "result_table_id": "process.perf",
-                    "result_table_name": "进程",
+                    "result_table_name": "进程性能",
                     "metric_field": metric_info["metric_field"],
                     "metric_field_name": metric_info["metric_field_name"],
                     "unit": metric_info["unit"],
@@ -1497,6 +1499,8 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                     "data_type_label": DataTypeLabel.TIME_SERIES,
                     "data_target": DataTarget.HOST_TARGET,
                     "data_label": "",
+                    "related_id": "process",
+                    "related_name": "进程采集",
                 }
             # 进程端口
             yield {
@@ -1515,6 +1519,8 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                 "data_type_label": DataTypeLabel.TIME_SERIES,
                 "data_target": DataTarget.HOST_TARGET,
                 "data_label": "",
+                "related_id": "process",
+                "related_name": "进程采集",
             }
 
         # 插件采集
