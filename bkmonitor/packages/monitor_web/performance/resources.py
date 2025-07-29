@@ -14,7 +14,7 @@ from typing import Dict, List
 from api.cmdb.define import Host, TopoNode
 from bkm_space.validate import validate_bk_biz_id
 from bkmonitor.utils import time_tools
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.views import serializers
 from core.drf_resource import api, resource

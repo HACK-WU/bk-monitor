@@ -9,7 +9,7 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import reduce
 from itertools import chain, product, zip_longest
-from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, DefaultDict, Dict, List, Optional, Tuple
 
 import arrow
 import pytz
@@ -54,7 +54,7 @@ from bkmonitor.strategy.new_strategy import (
     get_metric_id,
     parse_metric_id,
 )
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.request import get_source_app
 from bkmonitor.utils.time_format import duration_string, parse_duration
 from bkmonitor.utils.user import get_global_user

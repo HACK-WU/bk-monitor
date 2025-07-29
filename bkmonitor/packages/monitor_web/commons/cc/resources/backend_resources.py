@@ -18,7 +18,7 @@ from django.utils.translation import gettext as _
 
 from api.cmdb.define import Host
 from bkmonitor.strategy.new_strategy import Item
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.country import COUNTRIES, ISP_LIST
 from bkmonitor.views import serializers
 from constants.cmdb import TargetNodeType, TargetObjectType

@@ -34,7 +34,7 @@ from apm_web.trace.serializers import (
     QueryStatisticsSerializer,
     SpanIdInputSerializer,
 )
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from constants.apm import (
     OtlpKey,
     PreCalculateSpecificField,

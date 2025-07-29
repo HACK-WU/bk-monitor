@@ -11,7 +11,7 @@ from rest_framework import serializers
 from api.cmdb.define import Business
 from bkm_space.api import SpaceApi
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument, EventDocument
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.action import ActionDisplayStatus, ActionPluginType

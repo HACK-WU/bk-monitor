@@ -14,7 +14,7 @@ from rest_framework import serializers
 
 from apm_web.handlers.log_handler import ServiceLogHandler
 from apm_web.handlers.service_handler import ServiceHandler
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from constants.apm import Vendor
 from core.drf_resource import Resource, api
 from monitor_web.scene_view.resources import HostIndexQueryMixin

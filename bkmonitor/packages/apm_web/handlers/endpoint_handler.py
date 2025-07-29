@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from apm_web.metric_handler import ServiceFlowCount
 from apm_web.models import Application
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from core.drf_resource import api
 
 

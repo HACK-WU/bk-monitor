@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from django.conf import settings
 
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from core.drf_resource.contrib.nested_api import KernelAPIResource
 
 

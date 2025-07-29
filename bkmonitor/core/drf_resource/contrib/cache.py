@@ -13,7 +13,7 @@ import abc
 
 import six
 
-from bkmonitor.utils.cache import CacheTypeItem, using_cache
+from core.drf_resource.cache import CacheTypeItem, using_cache
 from core.drf_resource.base import Resource
 
 

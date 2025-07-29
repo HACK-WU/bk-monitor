@@ -17,7 +17,7 @@ from django.conf import settings
 
 from bkmonitor.data_source import load_data_source
 from bkmonitor.data_source.unify_query.query import UnifyQuery
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from bkmonitor.utils.common_utils import host_key, ignored
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import resource

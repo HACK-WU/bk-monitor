@@ -17,7 +17,7 @@ from rest_framework import serializers
 
 from bkm_space.validate import validate_bk_biz_id
 from bkmonitor.commons.tools import batch_request
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.user import get_backend_username, get_global_user, make_userinfo
 from constants.cmdb import TargetNodeType
 from core.drf_resource import APIResource

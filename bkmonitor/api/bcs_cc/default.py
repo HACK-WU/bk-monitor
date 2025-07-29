@@ -10,7 +10,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from bkmonitor.commons.tools import batch_request
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from core.drf_resource import api
 from core.drf_resource.base import Resource
 from core.drf_resource.contrib.api import APIResource

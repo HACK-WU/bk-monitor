@@ -32,7 +32,7 @@ from bkmonitor.action.serializers.report import (
 )
 from bkmonitor.models import Strategy
 from bkmonitor.models.base import ReportContents, ReportItems, ReportStatus
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.grafana import fetch_biz_panels, fetch_panel_title_ids
 from bkmonitor.utils.request import get_request
 from constants.report import GRAPH_ID_REGEX, GroupId, StaffChoice

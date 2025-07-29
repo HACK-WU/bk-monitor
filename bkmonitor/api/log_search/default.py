@@ -15,7 +15,7 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from core.drf_resource import APIResource
 
 

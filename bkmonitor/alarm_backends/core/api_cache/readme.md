@@ -41,7 +41,9 @@ CacheTypeItem(key='biz', timeout=20,label="业务及人员相关", user_related=
 ## 1、装饰器
 
 ```python
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
+
+
 @using_cache(CacheType.DATA)
 def test():
     pass
@@ -53,7 +55,8 @@ def test():
 
 ```python
 from core.drf_resource.contrib.cache import CacheResource
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
+
 
 class HostPerformanceResource(CacheResource):
     cache_type = CacheType.HOST

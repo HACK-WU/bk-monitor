@@ -25,7 +25,7 @@ from apm_web.topo.handle.relation.define import (
 )
 from apm_web.topo.handle.relation.query import RelationQ
 from bkm_space.api import SpaceApi
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from bkmonitor.utils.thread_backend import ThreadPool
 from core.drf_resource import api
 

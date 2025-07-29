@@ -20,7 +20,7 @@ from django.utils.translation import gettext as _
 from bkm_space.api import SpaceApi
 from bkm_space.define import SpaceFunction, SpaceTypeEnum
 from bkmonitor.iam import ActionEnum, Permission, ResourceEnum
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.request import get_request, get_request_username
 from bkmonitor.utils.user import get_local_username

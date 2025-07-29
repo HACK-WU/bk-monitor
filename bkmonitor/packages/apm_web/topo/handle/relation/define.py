@@ -13,7 +13,7 @@ from dataclasses import dataclass, field, fields
 from typing import List, Tuple
 
 from apm_web.topo.constants import SourceType
-from bkmonitor.utils.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType, using_cache
 from core.drf_resource import api
 
 

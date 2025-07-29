@@ -34,7 +34,7 @@ from bkmonitor.iam.resource import ResourceEnum
 from bkmonitor.models import ItemModel, StrategyModel
 from bkmonitor.models.base import Action, NoticeGroup, Shield
 from bkmonitor.models.home import HomeAlarmGraphConfig
-from bkmonitor.utils.cache import CacheType
+from core.drf_resource.cache import CacheType
 from bkmonitor.utils.request import get_request
 from bkmonitor.utils.time_tools import get_datetime_range, localtime
 from bkmonitor.views import serializers
