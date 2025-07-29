@@ -18,7 +18,6 @@ from typing import Callable, Optional
 
 from django.conf import settings
 from django.core.cache import cache, caches
-from django.utils import translation
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
@@ -33,10 +32,11 @@ except Exception:
     mem_cache = cache
 
 
-class UsingCache(object):
+class BaseUsingCache(object):
     min_length = 15
     preset = 6
     key_prefix = "web_cache"
+    default_username = "backend"
 
     def __init__(
             self,
@@ -69,17 +69,14 @@ class UsingCache(object):
         else:
             self.user_related = True
 
+        self.username = self.default_username
+        if user_related:
+            self.username = self._get_username()
         self.using_cache_type = self._get_using_cache_type()
         self.local_cache_enable = settings.ROLE == "web"
 
     def _get_username(self):
-        username = "backend"
-        if self.user_related:
-            try:
-                username = get_request().user.username
-            except Exception:
-                username = "backend"
-        return username
+        raise NotImplementedError
 
     def _get_using_cache_type(self):
         """
@@ -95,7 +92,7 @@ class UsingCache(object):
         using_cache_type = self.cache_type
 
         # 如果当前用户是'backend'，根据backend_cache_type和cache_type确定使用哪种缓存类型
-        if self._get_username() == "backend":
+        if self.username == self.default_username:
             using_cache_type = self.backend_cache_type or self.cache_type
 
         # 检查using_cache_type是否为有效的缓存类型，如果不是则抛出异常
@@ -108,10 +105,9 @@ class UsingCache(object):
 
     def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
         # 新增根据用户openid设置缓存key
-        lang = "en" if translation.get_language() == "en" else "zh-hans"
         if self.using_cache_type:
             return (f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
-                    f":{count_md5(args)}:{count_md5(kwargs)}:{self._get_username()}")
+                    f":{count_md5(args)}:{count_md5(kwargs)}:{self.username}")
 
         return None
 
@@ -255,6 +251,18 @@ class UsingCache(object):
         default_wrapper.cacheless = cacheless_wrapper
 
         return default_wrapper
+
+
+class UsingCache(BaseUsingCache):
+
+    def _get_username(self):
+        username = self.default_username
+        if self.user_related:
+            try:
+                username = get_request().user.username
+            except Exception:
+                username = self.default_username
+        return username
 
 
 using_cache = UsingCache
