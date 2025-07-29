@@ -15,12 +15,9 @@ import logging
 
 import requests
 import six
-from blueapps.account.conf import ConfFixture
-from blueapps.account.utils import load_backend
 from django.conf import settings
 from django.http import StreamingHttpResponse
 from django.utils import translation
-from django.utils.module_loading import import_string
 from django.utils.translation import gettext as _
 from requests.exceptions import HTTPError, ReadTimeout
 
@@ -30,6 +27,7 @@ from core.drf_resource.contrib.cache import CacheResource
 from core.errors.api import BKAPIError
 from core.errors.iam import APIPermissionDeniedError
 from core.prometheus import metrics
+from core.utils import get_bk_login_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -40,30 +38,6 @@ __doc__ = """
 
 BK_USERNAME_FIELD = "bk_username"
 APIPermissionDeniedCodeList = ["9900403", "35999999"]
-
-
-def get_bk_login_ticket(request):
-    """
-    从 request 中获取用户登录凭据
-    """
-    form_cls = "AuthenticationForm"
-    context = [request.COOKIES, request.GET]
-
-    if request.is_rio():
-        # 为了保证能够使用RIO,需要调整import路径
-        context.insert(0, request.META)
-        AuthenticationForm = import_string("blueapps.account.components.rio.forms.RioAuthenticationForm")
-    else:
-        if request.is_wechat():
-            form_cls = "WeixinAuthenticationForm"
-
-        AuthenticationForm = load_backend("{}.forms.{}".format(ConfFixture.BACKEND_TYPE, form_cls))
-
-    for form in (AuthenticationForm(c) for c in context):
-        if form.is_valid():
-            return form.cleaned_data
-
-    return {}
 
 
 class APIResource(six.with_metaclass(abc.ABCMeta, CacheResource)):
