@@ -15,8 +15,8 @@ from alarm_backends.core.cache.cmdb.business import BusinessManager
 from alarm_backends.core.cache.cmdb.dynamic_group import DynamicGroupManager
 from bkmonitor.models.fta.assign import AlertAssignGroup, AlertAssignRule
 from bkmonitor.utils import extended_json
-from bkmonitor.utils.local import local
 from constants.action import GLOBAL_BIZ_ID
+from core.drf_resource.utils.local import local
 
 setattr(local, "assign_cache", {})
 
@@ -64,7 +64,7 @@ class AssignCacheManager(CacheManager):
     def get_assign_groups_by_priority(cls, bk_biz_id, priority):
         """
         根据业务ID和优先级获取分配组
-    
+
         :param bk_biz_id: 业务ID
         :param priority: 优先级
         :return: 分配组的集合

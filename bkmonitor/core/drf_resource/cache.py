@@ -21,8 +21,8 @@ from django.core.cache import cache, caches
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
-from bkmonitor.utils.local import local
 from bkmonitor.utils.request import get_request
+from core.drf_resource.utils.local import local
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +39,13 @@ class BaseUsingCache(object):
     default_username = "backend"
 
     def __init__(
-            self,
-            cache_type,
-            backend_cache_type=None,
-            user_related=None,
-            compress=True,
-            is_cache_func=lambda res: True,
-            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+        self,
+        cache_type,
+        backend_cache_type=None,
+        user_related=None,
+        compress=True,
+        is_cache_func=lambda res: True,
+        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型
@@ -106,8 +106,10 @@ class BaseUsingCache(object):
     def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
         # 新增根据用户openid设置缓存key
         if self.using_cache_type:
-            return (f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
-                    f":{count_md5(args)}:{count_md5(kwargs)}:{self.username}")
+            return (
+                f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
+                f":{count_md5(args)}:{count_md5(kwargs)}:{self.username}"
+            )
 
         return None
 
@@ -254,7 +256,6 @@ class BaseUsingCache(object):
 
 
 class UsingCache(BaseUsingCache):
-
     def _get_username(self):
         username = self.default_username
         if self.user_related:

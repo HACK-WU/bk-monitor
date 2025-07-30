@@ -42,7 +42,7 @@ class OverrideMiddleware(MiddlewareMixin):
         request.META.update({"HTTP_X_REQUESTED_WITH": "XMLHttpRequest"})
         request.is_rio = is_rio
         request.is_wechat = is_wechat
-        from bkmonitor.utils.local import local
+        from core.drf_resource.utils.local import local
 
         local.current_request = request
 

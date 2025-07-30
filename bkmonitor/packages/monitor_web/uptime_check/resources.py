@@ -37,7 +37,6 @@ from bkmonitor.utils.common_utils import host_key, logger, parse_host_id, safe_i
 from bkmonitor.utils.country import ISP_LIST
 from bkmonitor.utils.encode import EncodeWebhook
 from bkmonitor.utils.ip import exploded_ip, is_v4, is_v6
-from bkmonitor.utils.local import with_client_operator
 from bkmonitor.utils.thread_backend import InheritParentThread, ThreadPool
 from bkmonitor.utils.time_tools import (
     get_timestamp_range_by_biz_date,
@@ -51,6 +50,7 @@ from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import api, resource
 from core.drf_resource.base import Resource
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.local import with_client_operator
 from core.errors.api import BKAPIError
 from core.errors.dataapi import EmptyQueryException
 from monitor.models import UptimeCheckTaskSubscription

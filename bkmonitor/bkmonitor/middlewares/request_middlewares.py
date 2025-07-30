@@ -16,8 +16,8 @@ from django.utils.deprecation import MiddlewareMixin
 
 from audit.instance import push_event
 from bkmonitor.utils.common_utils import fetch_biz_id_from_request
-from bkmonitor.utils.local import local
 from bkmonitor.utils.request import is_ajax_request
+from core.drf_resource.utils.local import local
 
 logger = logging.getLogger(__name__)
 

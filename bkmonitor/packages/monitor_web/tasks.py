@@ -1413,7 +1413,7 @@ def update_metric_json_from_ts_group():
 @celery_receiver(task_postrun)
 def task_postrun_handler(sender=None, headers=None, body=None, **kwargs):
     # 清理celery任务的线程变量
-    from bkmonitor.utils.local import local
+    from core.drf_resource.utils.local import local
 
     local.clear()
 

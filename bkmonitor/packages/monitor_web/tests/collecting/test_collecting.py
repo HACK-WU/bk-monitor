@@ -16,9 +16,9 @@ import os
 import mock
 from django.test import TestCase
 
-from bkmonitor.utils.local import local
 from config import celery_app
 from core.drf_resource import APIResource, resource
+from core.drf_resource.utils.local import local
 from monitor_web.models import (
     CollectorPluginConfig,
     CollectorPluginInfo,

@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from functools import wraps
 
-from bkmonitor.utils.local import local
+from core.drf_resource.utils.local import local
 
 backend_db_apps = ["monitor_api", "metadata", "bkmonitor", "apm", "calendars"]
 
@@ -26,7 +26,6 @@ backend_router = "monitor_api"
 
 class BackendRouter(object):
     def db_for_read(self, model, **hints):
-
         # 动态路由判断
         if getattr(local, "DB_FOR_READ_OVERRIDE", []):
             return local.DB_FOR_READ_OVERRIDE[-1]
@@ -38,7 +37,6 @@ class BackendRouter(object):
         return None
 
     def db_for_write(self, model, **hints):
-
         # 动态路由判断
         if getattr(local, "DB_FOR_WRITE_OVERRIDE", []):
             return local.DB_FOR_WRITE_OVERRIDE[-1]

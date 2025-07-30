@@ -6,8 +6,8 @@ from django.core.cache import cache
 from mockredis import mock_redis_client
 from rest_framework.exceptions import ValidationError
 
-from bkmonitor.utils.local import local
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.local import local
 from metadata import models
 from metadata.models.space import (
     Space,

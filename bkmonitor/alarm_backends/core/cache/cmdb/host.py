@@ -17,8 +17,8 @@ from django.conf import settings
 
 from alarm_backends.core.cache.cmdb.base import CMDBCacheManager, RefreshByBizMixin
 from api.cmdb.define import Host, TopoTree
-from bkmonitor.utils.local import local
 from core.drf_resource import api
+from core.drf_resource.utils.local import local
 
 setattr(local, "host_cache", {})
 

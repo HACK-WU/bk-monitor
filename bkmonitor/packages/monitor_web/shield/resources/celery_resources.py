@@ -10,11 +10,11 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from core.drf_resource.base import Resource
 from bkmonitor.models import Shield
 from bkmonitor.utils.common_utils import logger
-from bkmonitor.utils.local import local
 from bkmonitor.utils.time_tools import now
+from core.drf_resource.base import Resource
+from core.drf_resource.utils.local import local
 from monitor_web.shield.utils import ShieldDisplayManager
 from utils import business
 

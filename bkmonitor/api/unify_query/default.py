@@ -18,9 +18,9 @@ from django.conf import settings
 from rest_framework import serializers
 
 from bkm_space.utils import bk_biz_id_to_space_uid, parse_space_uid
-from bkmonitor.utils.local import local
 from bkmonitor.utils.request import get_request
 from core.drf_resource import Resource
+from core.drf_resource.utils.local import local
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("bkmonitor")

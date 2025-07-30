@@ -11,9 +11,9 @@ specific language governing permissions and limitations under the License.
 
 import json
 
-from bkmonitor.utils.local import local
 from constants.cmdb import BIZ_ID_FIELD_NAMES
 from constants.common import SourceApp
+from core.drf_resource.utils.local import local
 
 
 def get_request(peaceful=False):

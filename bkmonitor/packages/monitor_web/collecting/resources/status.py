@@ -17,9 +17,9 @@ from rest_framework import serializers
 
 from api.cmdb.define import TopoNode, TopoTree
 from bkmonitor.data_source import BkMonitorLogDataSource
-from bkmonitor.utils.local import local
 from constants.cmdb import TargetNodeType
 from core.drf_resource import Resource, api
+from core.drf_resource.utils.local import local
 from core.errors.api import BKAPIError
 from monitor_web.collecting.constant import CollectStatus
 from monitor_web.collecting.deploy import get_collect_installer
