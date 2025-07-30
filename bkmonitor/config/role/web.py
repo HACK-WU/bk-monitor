@@ -88,7 +88,7 @@ MIDDLEWARE = (
     "bkmonitor.middlewares.prometheus.MetricsBeforeMiddleware",  # 必须放到最前面
     "django.contrib.sessions.middleware.SessionMiddleware",
     "blueapps.middleware.request_provider.RequestProvider",
-    "bkmonitor.middlewares.request_middlewares.RequestProvider",
+    "bkmonitor.middlewares.request_middlewares.RequestProvider",  # 保留
     "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     # "django.middleware.csrf.CsrfViewMiddleware",

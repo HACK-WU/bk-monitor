@@ -126,7 +126,7 @@ class ResourceViewSet(viewsets.GenericViewSet):
 
         for resource_route in cls.resource_routes:
             # 生成方法模版
-            function = cls._generate_function_template(resource_route)
+            function = cls._generate_view_function(resource_route)
 
             # 配置swagger装饰器
             request_serializer_class = resource_route.resource_class.RequestSerializer or Serializer
@@ -188,12 +188,12 @@ class ResourceViewSet(viewsets.GenericViewSet):
                 ] = resource_route.resource_class
 
     @classmethod
-    def _generate_function_template(cls, resource_route: ResourceRoute):
+    def _generate_view_function(cls, resource_route: ResourceRoute):
         """
         生成方法模版
         """
 
-        def template(self, request, *args, **kwargs):
+        def view(self, request, *args, **kwargs):
             resource = resource_route.resource_class()
             params = request.query_params.copy() if resource_route.method == "GET" else request.data
 
@@ -219,5 +219,5 @@ class ResourceViewSet(viewsets.GenericViewSet):
                 response.content_encoding = resource_route.content_encoding
             return response
 
-        template.__name__ = resource_route.endpoint
-        return template
+        view.__name__ = resource_route.endpoint
+        return view
