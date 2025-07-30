@@ -219,7 +219,7 @@ class FilterDictSerializer(serializers.Serializer):
         return value
 
 
-class ListK8SResources(Resource):
+class ListK8sResources(Resource):
     """获取K8s资源列表"""
 
     class RequestSerializer(FilterDictSerializer):
@@ -413,7 +413,7 @@ class ResourceTrendResource(Resource):
         agg_method = validated_request_data["method"]
         resource_meta.set_agg_method(agg_method)
         resource_meta.set_agg_interval(start_time, end_time)
-        ListK8SResources().add_filter(resource_meta, validated_request_data["filter_dict"])
+        ListK8sResources().add_filter(resource_meta, validated_request_data["filter_dict"])
         column = validated_request_data["column"]
         series_map = {}
         metric = resource.k8s.get_scenario_metric(metric_id=column, scenario="performance")

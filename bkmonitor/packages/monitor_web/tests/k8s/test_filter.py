@@ -38,7 +38,7 @@ from monitor_web.k8s.core.meta import (
 )
 from monitor_web.k8s.resources import (
     GetResourceDetail,
-    ListK8SResources,
+    ListK8sResources,
     WorkloadOverview,
 )
 
@@ -985,7 +985,7 @@ class TestK8sListResources(TestCase):
 
             # 验证整体接口(不带历史数据)
             self.assertEqual(
-                ListK8SResources()(validated_request_data),
+                ListK8sResources()(validated_request_data),
                 {
                     "count": len(orm_resource),
                     "items": orm_resource,
@@ -995,7 +995,7 @@ class TestK8sListResources(TestCase):
             # 带上历史数据, 去重 default
             validated_request_data["with_history"] = True
             self.assertEqual(
-                ListK8SResources()(validated_request_data),
+                ListK8sResources()(validated_request_data),
                 {
                     "count": len(orm_resource + promql_resource[:1]),
                     "items": [
@@ -1042,7 +1042,7 @@ class TestK8sListResources(TestCase):
             )
             # 第一个namespace: blueking 命中 检索
             self.assertEqual(
-                ListK8SResources()(validated_request_data),
+                ListK8sResources()(validated_request_data),
                 {"count": len(orm_resource[:1]), "items": orm_resource[:1]},
             )
 
@@ -1093,7 +1093,7 @@ class TestK8sListResources(TestCase):
         ]
         with mock.patch("core.drf_resource.resource.grafana.graph_unify_query") as mock_graph_unify_query:
             mock_graph_unify_query.return_value = {"series": query_result}
-            ns_list = ListK8SResources()(validated_request_data)["items"]
+            ns_list = ListK8sResources()(validated_request_data)["items"]
             self.assertEqual(
                 [
                     {'bk_biz_id': 2, 'bcs_cluster_id': 'BCS-K8S-00000', 'namespace': 'bkmonitor-operator'},
@@ -1146,7 +1146,7 @@ class TestK8sListResources(TestCase):
         #     .only(*K8sWorkloadMeta.only_fields)
         # )
         # 验证get_from_meta
-        workload_list = ListK8SResources()(validated_request_data)
+        workload_list = ListK8sResources()(validated_request_data)
         expect_workload_list = [
             {'workload': 'Deployment:bk-monitor-web'},
             {'workload': 'Deployment:bk-monitor-web-worker'},
@@ -1157,7 +1157,7 @@ class TestK8sListResources(TestCase):
         )
 
         # 验证promql with  filter_dict AND query_string
-        ListK8SResources().add_filter(meta, validated_request_data["filter_dict"])
+        ListK8sResources().add_filter(meta, validated_request_data["filter_dict"])
         meta.filter.add(
             load_resource_filter(
                 validated_request_data["resource_type"],
@@ -1210,7 +1210,7 @@ class TestK8sListResources(TestCase):
         with mock.patch("core.drf_resource.resource.grafana.graph_unify_query") as mock_graph_unify_query:
             mock_graph_unify_query.return_value = {"series": query_result}
             validated_request_data["with_history"] = True
-            workload_list = ListK8SResources()(validated_request_data)
+            workload_list = ListK8sResources()(validated_request_data)
             expect_workload_list = [
                 {'namespace': 'blueking', 'workload': 'Deployment:bk-monitor-web'},
                 {'namespace': 'blueking', 'workload': 'Deployment:bk-monitor-web-beat'},
@@ -1272,11 +1272,11 @@ class TestK8sListResources(TestCase):
             .only(*K8sPodMeta.only_fields)
         )
         # 验证 get_from_meta
-        pod_list = ListK8SResources()(validated_request_data)
+        pod_list = ListK8sResources()(validated_request_data)
         expect_pod_list = [obj.to_meta_dict() for obj in orm_resource]
         self.assertEqual(pod_list, {"count": len(expect_pod_list), "items": expect_pod_list})
         # 验证 promql with  filter_dict AND query_string
-        ListK8SResources().add_filter(meta, validated_request_data["filter_dict"])
+        ListK8sResources().add_filter(meta, validated_request_data["filter_dict"])
         meta.filter.add(
             load_resource_filter(
                 validated_request_data["resource_type"],
@@ -1319,7 +1319,7 @@ class TestK8sListResources(TestCase):
         with mock.patch("core.drf_resource.resource.grafana.graph_unify_query") as mock_graph_unify_query:
             mock_graph_unify_query.return_value = {"series": query_result}
             validated_request_data["with_history"] = True
-            pod_list = ListK8SResources()(validated_request_data)
+            pod_list = ListK8sResources()(validated_request_data)
             expect_pod_list = [
                 BCSPod(
                     workload_type="Deployment",
@@ -1386,14 +1386,14 @@ class TestK8sListResources(TestCase):
             .filter(name__icontains=validated_request_data["query_string"]).only(*K8sContainerMeta.only_fields)
         )
         # 验证 get_from_meta
-        contianer_list = ListK8SResources()(validated_request_data)
+        contianer_list = ListK8sResources()(validated_request_data)
         expect_container_list = [{'container': 'bk-monitor-web'}]
         self.assertEqual(
             contianer_list,
             {"count": len(expect_container_list), "items": expect_container_list},
         )
         # 验证 promql with  filter_dict AND query_string
-        ListK8SResources().add_filter(meta, validated_request_data["filter_dict"])
+        ListK8sResources().add_filter(meta, validated_request_data["filter_dict"])
         meta.filter.add(
             load_resource_filter(
                 validated_request_data["resource_type"],
@@ -1447,7 +1447,7 @@ class TestK8sListResources(TestCase):
         with mock.patch("core.drf_resource.resource.grafana.graph_unify_query") as mock_graph_unify_query:
             mock_graph_unify_query.return_value = {"series": query_result}
             validated_request_data["with_history"] = True
-            container_list = ListK8SResources()(validated_request_data)
+            container_list = ListK8sResources()(validated_request_data)
             expect_container_list = [
                 BCSContainer(
                     pod_name="bk-monitor-web-544d4dc768-4564s",
@@ -1506,7 +1506,7 @@ class TestK8sListResources(TestCase):
         ]
         with mock.patch("core.drf_resource.resource.grafana.graph_unify_query") as mock_graph_unify_query:
             mock_graph_unify_query.return_value = {"series": query_result}
-            container_list = ListK8SResources()(validated_request_data)
+            container_list = ListK8sResources()(validated_request_data)
             print(container_list)
 
         meta = load_resource_meta(validated_request_data["resource_type"], 2, "BCS-K8S-00000")
