@@ -443,6 +443,7 @@ class BaseQueryHandler:
         4. 查询构建：根据DSL类型选择query_string或filter查询方式
         """
         query_string = self.query_string if query_string is None else query_string
+        # todo 移动到 Transformer 中进行处理
         query_string = process_stage_string(query_string)
         query_string = process_metric_string(query_string)
 
