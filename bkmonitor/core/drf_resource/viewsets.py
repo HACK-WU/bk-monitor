@@ -21,6 +21,7 @@ from rest_framework.response import Response
 from rest_framework.serializers import Serializer
 
 from core.drf_resource.base import Resource
+from core.drf_resource.utils.local import local
 
 """
 Resource的ViewSet定义
@@ -196,6 +197,7 @@ class ResourceViewSet(viewsets.GenericViewSet):
         def view(self, request, *args, **kwargs):
             resource = resource_route.resource_class()
             params = request.query_params.copy() if resource_route.method == "GET" else request.data
+            local.current_request = request
 
             if resource_route.pk_field:
                 # 如果是detail route，需要重url参数中获取主键，并塞到请求参数中
