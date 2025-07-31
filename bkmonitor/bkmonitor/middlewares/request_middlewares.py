@@ -11,25 +11,18 @@ specific language governing permissions and limitations under the License.
 
 import logging
 
-from blueapps.utils import get_request as _get_request
-from django.utils.deprecation import MiddlewareMixin
-
 from audit.instance import push_event
 from bkmonitor.utils.common_utils import fetch_biz_id_from_request
 from bkmonitor.utils.request import is_ajax_request
-from core.drf_resource.utils.local import local
+from core.drf_resource.middlewares.request import RequestProvider as BaseRequestProvider
 
 logger = logging.getLogger(__name__)
 
 
-class RequestProvider(MiddlewareMixin):
+class RequestProvider(BaseRequestProvider):
     """
     @summary: request事件接收者
     """
-
-    def process_request(self, request):
-        local.current_request = _get_request()
-        return None
 
     def process_view(self, request, view_func, view_args, view_kwargs):
         biz_id = fetch_biz_id_from_request(request, view_kwargs)
@@ -51,6 +44,5 @@ class RequestProvider(MiddlewareMixin):
 
     def process_response(self, request, response):
         push_event(request)
-        local.clear()
         response["X-Content-Type-Options"] = "nosniff"
-        return response
+        return super().process_response(request, response)
