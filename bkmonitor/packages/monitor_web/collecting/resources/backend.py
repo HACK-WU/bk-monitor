@@ -15,7 +15,7 @@ from typing import Any
 from django.conf import settings
 from django.core.paginator import Paginator
 from django.db import transaction
-from django.db.models import Q, Max
+from django.db.models import Max, Q
 from django.utils.translation import gettext as _
 
 from bkm_space.api import SpaceApi
@@ -1312,7 +1312,7 @@ class SaveCollectConfigResource(Resource):
             )
 
             # 全局唯一
-            plugin_manager.touch()
+            plugin_manager.touch(bk_biz_id=data["bk_biz_id"])
             plugin_id = plugin_manager.plugin.plugin_id
 
         # 处理SNMP_TRAP采集器逻辑
