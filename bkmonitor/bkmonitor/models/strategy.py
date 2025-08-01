@@ -157,6 +157,7 @@ class AlgorithmModel(Model):
 
     class AlgorithmChoices:
         Threshold = "Threshold"
+        NewSeries = "NewSeries"
         SimpleRingRatio = "SimpleRingRatio"
         AdvancedRingRatio = "AdvancedRingRatio"
         SimpleYearRound = "SimpleYearRound"
@@ -189,6 +190,7 @@ class AlgorithmModel(Model):
 
     ALGORITHM_CHOICES = (
         (AlgorithmChoices.Threshold, _lazy("静态阈值算法")),
+        (AlgorithmChoices.NewSeries, _lazy("新序列算法")),
         (AlgorithmChoices.SimpleRingRatio, _lazy("简易环比算法")),
         (AlgorithmChoices.AdvancedRingRatio, _lazy("高级环比算法")),
         (AlgorithmChoices.SimpleYearRound, _lazy("简易同比算法")),
