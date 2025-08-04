@@ -207,3 +207,6 @@ grafana_migrate/parse_result.json
 test2.py
 test.json
 hello.py
+
+### PreCI ###
+.codecc
