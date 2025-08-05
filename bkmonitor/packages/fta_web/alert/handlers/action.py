@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,11 +7,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import operator
 import time
 from collections import defaultdict
 from functools import reduce
-from typing import Dict, List
 
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy as _lazy
@@ -102,14 +101,14 @@ class ActionQueryHandler(BaseBizQueryHandler):
 
     def __init__(
         self,
-        bk_biz_ids: List[int] = None,
-        alert_ids: List[str] = None,
-        status: List[str] = None,
+        bk_biz_ids: list[int] = None,
+        alert_ids: list[str] = None,
+        status: list[str] = None,
         parent_action_id=None,
         username: str = "",
         **kwargs,
     ):
-        super(ActionQueryHandler, self).__init__(bk_biz_ids, username, **kwargs)
+        super().__init__(bk_biz_ids, username, **kwargs)
         self.alert_ids = alert_ids
         self.status = [status] if isinstance(status, str) else status
         self.search_parent_action_id = None
@@ -168,25 +167,48 @@ class ActionQueryHandler(BaseBizQueryHandler):
         return search_object.exclude("term", is_parent_action=True)
 
     def get_search_object(self, start_time: int = None, end_time: int = None):
+        """
+        构建带过滤条件的搜索对象
+
+        参数:
+            start_time: 查询起始时间戳，若未指定则使用实例属性self.start_time
+            end_time: 查询结束时间戳，若未指定则使用实例属性self.end_time
+
+        返回值:
+            构建完成的搜索对象，包含多条件过滤的Elasticsearch查询结构
+
+        执行流程:
+        1. 初始化时间参数与基础搜索对象
+        2. 添加父子动作关联过滤条件
+        3. 添加业务ID、操作员等基础过滤条件
+        4. 处理时间范围约束与状态过滤逻辑
+        5. 添加告警ID关联过滤条件（若有）
+        """
         start_time = start_time or self.start_time
         end_time = end_time or self.end_time
 
+        # 创建基础搜索对象并添加排除父级条件
         search_object = ActionInstanceDocument.search(start_time=self.start_time, end_time=self.end_time)
         search_object = self.get_exclude_parent_search_object(search_object)
 
+        # 添加父子动作关联过滤条件
         if self.search_parent_action_id and self.search_collect_action:
             search_object = search_object.filter(
                 Q("term", parent_action_id=self.search_parent_action_id) | Q("term", signal=ActionSignal.COLLECT)
             )
 
+        # 添加原始ID过滤条件
         if self.raw_id:
             search_object = search_object.filter("term", raw_id=self.raw_id)
 
+        # 添加业务关联条件
         search_object = self.add_biz_condition(search_object)
 
+        # 添加操作员过滤条件
         if self.username:
             search_object = search_object.filter("term", operator=self.username)
 
+        # 时间范围约束逻辑
         if start_time and end_time and not self.alert_ids:
             # 没有传告警ID才需要限定时间范围，否则会导致返回的处理记录不完整（有的记录是在告警结束后生成的）
             search_object = search_object.filter(
@@ -194,6 +216,7 @@ class ActionQueryHandler(BaseBizQueryHandler):
                 & Q("range", create_time={"lte": end_time})
             )
 
+        # 状态过滤逻辑
         if self.status:
             search_object = search_object.filter("terms", status=self.status)
         elif not self.alert_ids and not self.search_parent_action_id:
@@ -202,6 +225,7 @@ class ActionQueryHandler(BaseBizQueryHandler):
                 "terms", status=[ActionDisplayStatus.SUCCESS, ActionDisplayStatus.FAILURE, ActionDisplayStatus.RUNNING]
             )
 
+        # 告警ID关联过滤
         if self.alert_ids:
             search_object = search_object.filter("terms", alert_id=self.alert_ids)
 
@@ -335,7 +359,7 @@ class ActionQueryHandler(BaseBizQueryHandler):
                     if value in self.DurationOption.FILTER
                 ],
             )
-        return super(ActionQueryHandler, self).parse_condition_item(condition)
+        return super().parse_condition_item(condition)
 
     def add_overview(self, search_object):
         # 总览聚合
@@ -456,10 +480,10 @@ class ActionQueryHandler(BaseBizQueryHandler):
 
         return result_data
 
-    def top_n(self, fields: List, size=10, translators: Dict[str, AbstractTranslator] = None, char_add_quotes=True):
+    def top_n(self, fields: list, size=10, translators: dict[str, AbstractTranslator] = None, char_add_quotes=True):
         translators = {
             "signal": ActionSignalTranslator(),
             "action_plugin_type": ActionPluginTypeTranslator(),
             "bk_biz_id": BizTranslator(),
         }
-        return super(ActionQueryHandler, self).top_n(fields, size, translators, char_add_quotes)
+        return super().top_n(fields, size, translators, char_add_quotes)
