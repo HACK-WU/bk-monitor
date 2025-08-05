@@ -1934,9 +1934,35 @@ class AlertTopNResource(Resource):
         pass
 
     def perform_request(self, validated_request_data):
+        """
+        执行分片请求处理与结果聚合的核心方法
+
+        参数:
+            validated_request_data: dict类型，经过验证的请求数据字典，包含以下关键字段：
+                - start_time: 时间范围起始时间戳（毫秒）
+                - end_time: 时间范围结束时间戳（毫秒）
+                - bk_biz_ids: 业务ID列表（可能为None）
+                - 其他透传给资源层的参数
+
+        返回值:
+            dict类型聚合结果，包含：
+                - doc_count: 总文档数量（整型）
+                - fields: 聚合字段列表，每个元素包含：
+                    - field: 字段名称
+                    - buckets: 桶列表，每个桶包含：
+                        - id: 桶唯一标识
+                        - count: 桶计数
+                    - bucket_count: 桶数量统计
+
+        执行流程说明：
+        1. 时间区间分割与业务ID授权解析
+        2. 分片请求执行与参数构造
+        3. 多分片结果合并与数据去重聚合
+        """
         start_time = validated_request_data.pop("start_time")
         end_time = validated_request_data.pop("end_time")
         slice_times = slice_time_interval(start_time, end_time)
+
         if validated_request_data["bk_biz_ids"] is not None:
             authorized_bizs, unauthorized_bizs = self.handler_cls.parse_biz_item(validated_request_data["bk_biz_ids"])
             validated_request_data["authorized_bizs"] = authorized_bizs
@@ -1956,19 +1982,28 @@ class AlertTopNResource(Resource):
         )
 
         result = {
-            "doc_count": 0,
-            "fields": [],
+            "doc_count": 0,  # 总文档数
+            "fields": [],  # 合并后的字段列表
         }
 
-        # 创建字段映射和ID映射
-        field_map = {}
-        id_map = {}
+        field_map = {}  # 字段名 → 在result["fields"]中的索引
+        id_map = {}  # 字段名 → {桶ID → 桶在字段中的索引}
 
-        # 处理每个部分结果
+        # 处理每个分片结果进行数据聚合
         for sliced_result in results:
             result["doc_count"] += sliced_result["doc_count"]
 
             for field in sliced_result["fields"]:
+                # field:{
+                #   "field": "alter_name",
+                #   "is_char": True,
+                #   "bucket_count": 20,
+                #   "buckets": [{
+                #       "id": "\"K8s异常事件告警\"",
+                #       "name": "K8s异常事件告警",
+                #       "count": 10
+                #   }],
+                # }
                 if field["field"] not in field_map:
                     new_field = copy.deepcopy(field)
                     new_field["buckets"] = []  # 清空buckets

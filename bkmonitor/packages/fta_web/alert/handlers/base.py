@@ -807,6 +807,7 @@ class BaseQueryHandler:
 
             # 默认字段处理：提取普通聚合结果
             else:
+                # 获取到基数聚合后的桶数量
                 bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
                 buckets = []
                 for bucket in getattr(search_result.aggs, field).buckets:
