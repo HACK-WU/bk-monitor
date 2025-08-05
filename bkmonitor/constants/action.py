@@ -542,6 +542,7 @@ class ActionLogLevel:
 
 
 class ConvergeType:
+    # 二级收敛
     CONVERGE = "converge"
     ACTION = "action"
 

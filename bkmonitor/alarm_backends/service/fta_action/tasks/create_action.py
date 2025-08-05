@@ -752,6 +752,7 @@ class CreateActionProcessor:
 
         # 处理配置有效性检查
         if not actions:
+            # 策略配置的notice 和 action 未命中当前的signal
             logger.info(
                 "[create actions]ignore: empty config for signal(%s), strategy(%s), alerts %s",
                 self.signal,
@@ -819,6 +820,7 @@ class CreateActionProcessor:
                 continue
 
             if self.notice_type == ActionNoticeType.UPGRADE:
+                # 告警升级
                 supervisors = assignee_manager.get_supervisors()  # 升级通知处理分支
                 followers = assignee_manager.get_supervisors(user_type=UserGroupType.FOLLOWER)  # 告警升级关注人
                 # 没有告警升级负责人直接忽略
@@ -858,8 +860,8 @@ class CreateActionProcessor:
                 action_plugin = action_plugins.get(str(action_config["plugin_id"]))
                 skip_delay = int(action["options"].get("skip_delay", 0))
                 current_time = int(time.time())
-                # 如果当前时间距离告警开始时间，大于skip_delay，则不处理改套餐
                 if ActionSignal.ABNORMAL in action["signal"] and current_time - alert["begin_time"] > skip_delay > 0:
+                    # 如果当前时间距离告警开始时间，大于skip_delay，则不处理改套餐
                     description = {
                         "config_id": action["config_id"],
                         "action_name": action_config["name"],
@@ -1061,8 +1063,6 @@ class CreateActionProcessor:
             )
             return
 
-        # 创建消息队列类型的动作实例
-        plugin_type = ActionPluginType.MESSAGE_QUEUE
         action_instance = ActionInstance.objects.create(
             alerts=self.alert_ids,
             signal=self.signal,
@@ -1070,7 +1070,7 @@ class CreateActionProcessor:
             alert_level=self.severity,
             bk_biz_id=self.alerts[0].event.bk_biz_id,
             dimensions=self.dimensions or [],
-            action_plugin={"plugin_type": plugin_type},
+            action_plugin={"plugin_type": ActionPluginType.MESSAGE_QUEUE},
         )
 
         # 将动作实例推送到执行队列并记录实例ID
@@ -1150,6 +1150,7 @@ class CreateActionProcessor:
         # 通知类型处理逻辑
         # 创建父级通知任务并准备通知接收人信息
         if action_plugin["plugin_type"] == ActionPluginType.NOTICE:
+            # 通知套餐，父 action_instance 创建
             is_parent_action = True  # 标记为父级任务
 
             # 获取负责人和关注人通知信息

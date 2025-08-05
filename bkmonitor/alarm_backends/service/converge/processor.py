@@ -115,14 +115,7 @@ class ConvergeProcessor:
         self.lock_key = ""
         self.need_unlock = False
         self.instance_model = self.InstanceModel[instance_type]
-        try:
-            self.instance: ConvergeInstance | ActionInstance | None = self.instance_model.objects.get(id=instance_id)
-        except Exception as error:
-            print(f"pytest|get {instance_type} converge instance({instance_id})  failed {str(error)}")
-            raise
-        if instance_id == 12:
-            print("start to debug")
-        print(f"pytest|get {instance_type} converge instance({instance_id})  finished")
+        self.instance = self.instance_model.objects.get(id=instance_id)
         self.alerts = alerts
         self.origin_converge_config = copy.deepcopy(converge_config)
         self.context = converge_context
@@ -357,9 +350,7 @@ class ConvergeProcessor:
                 # 如果没有ttl的情况，很有可能是并发抢占，需要设置一下ttl, 避免长期占用
                 client.expire(self.lock_key, ACTION_CONVERGE_KEY_PROCESS_LOCK.ttl)
             raise ConvergeLockError(
-                "get parallel converge failed, current_parallel_converge_count is {}, converge condition is {}".format(
-                    parallel_converge_count, self.dimension
-                )
+                f"get parallel converge failed, current_parallel_converge_count is {parallel_converge_count}, converge condition is {self.dimension}"
             )
         client.expire(self.lock_key, ACTION_CONVERGE_KEY_PROCESS_LOCK.ttl)
         # 当获取到锁的情况下才需要去解锁
@@ -585,7 +576,7 @@ class ConvergeProcessor:
             2. 替换维度值中的'self'为上下文实际值
             3. 生成SHA1哈希标识的维度字符串
         """
-        converge_dimension = ["#%s" % self.converge_config["converge_func"]]
+        converge_dimension = ["#{}".format(self.converge_config["converge_func"])]
         self.converge_config["converged_condition"] = {}
         dimension_conditions = {
             condition["dimension"]: condition for condition in self.converge_config.get("condition")
@@ -613,7 +604,7 @@ class ConvergeProcessor:
             ]
         dimension = "".join(converge_dimension)
         sha1 = hashlib.sha1(dimension.encode("utf-8"))
-        dimension = "!sha1#%s" % sha1.hexdigest()
+        dimension = f"!sha1#{sha1.hexdigest()}"
         return dimension[:safe_length]
 
     def push_to_queue(self):
