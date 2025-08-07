@@ -432,6 +432,9 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     query_transformer = AlertQueryTransformer
 
+    # 导出时需要排除的无用字段（这些字段会在处理过程中被移除）
+    EXCLUDED_EXPORT_FIELDS = {"action_id", "action_name", "module_id", "set_id"}
+
     # 以下常量定义不同状态名称，用于业务逻辑中的状态过滤或标识：
     # - MINE_STATUS_NAME: 表示当前用户直接关联的状态（如用户自己创建的条目）
     # - MY_APPOINTEE_STATUS_NAME: 表示被当前用户指定人员关联的状态（如被委派人处理的条目）
@@ -1318,9 +1321,36 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     def export_with_docs(self) -> tuple[list[AlertDocument], list[dict]]:
         """导出告警数据，并附带原始文档。"""
-        raw_docs = [AlertDocument(**hit.to_dict()) for hit in self.scan()]
+        raw_docs = [AlertDocument(**hit.to_dict()) for hit in self.scan(source_fields=self.get_export_fields())]
         cleaned_docs = (self.clean_document(doc, exclude=["extra_info"]) for doc in raw_docs)
         return raw_docs, list(self.translate_field_names(cleaned_docs))
+
+    def get_export_fields(self):
+        """
+        获取导出时需要查询的字段列表
+        """
+        fields = set()
+
+        # 从 query_fields 中提取需要的字段，排除无用字段
+        for field in self.query_transformer.query_fields:
+            if field.field in self.EXCLUDED_EXPORT_FIELDS:
+                continue
+            if field.es_field:
+                fields.add(field.es_field)
+            elif field.field:
+                fields.add(field.field)
+
+        # 关联信息AlertRelatedInfo依赖的字段
+        fields.update({"extra_info", "dimensions"})
+
+        # 添加排序字段
+        for field in self.ordering:
+            field = field.lstrip("-")
+            es_field = self.query_transformer.transform_field_to_es_field(field)
+            if es_field:
+                fields.add(es_field)
+
+        return list(fields)
 
     @classmethod
     def handle_hit(cls, hit):
@@ -1348,23 +1378,13 @@ class AlertQueryHandler(BaseBizQueryHandler):
         data = doc.to_dict()
         cleaned_data = {}
 
-        # 固定字段处理：
-        # 通过查询转换器定义的字段映射规则提取数据
-        # 将ES存储结构转换为接口需要的扁平化结构
+        # 固定字段（跳过无用字段）
         for field in cls.query_transformer.query_fields:
+            if field.field in cls.EXCLUDED_EXPORT_FIELDS:
+                continue
             cleaned_data[field.field] = field.get_value_by_es_field(data)
 
-        # 系统保留字段清理：
-        # 移除内部流转使用的action_id字段
-        cleaned_data.pop("action_id", None)
-        cleaned_data.pop("action_name", None)
-        cleaned_data.pop("module_id", None)
-        cleaned_data.pop("set_id", None)
-        cleaned_data.pop("action_name", None)
-
-        # 业务展示字段补充：
-        # 添加格式化展示字段和计算字段
-        # 包含时间格式化、维度解析、关联信息等扩展数据
+        # 额外字段
         cleaned_data.update(
             {
                 # "strategy_name": doc.strategy.get("name") if doc.strategy else None,
