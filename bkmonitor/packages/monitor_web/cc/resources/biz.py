@@ -18,7 +18,8 @@ import logging
 from django.conf import settings
 from django.utils.translation import gettext as _
 
-from core.drf_resource.cache import CacheType, using_cache
+from core.drf_resource.cache import using_cache
+from core.utils import CacheType
 from bkmonitor.utils.common_utils import to_dict
 from core.drf_resource import api
 from core.drf_resource.exceptions import CustomException

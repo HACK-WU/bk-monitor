@@ -26,7 +26,8 @@ from apm_web.handlers.service_handler import ServiceHandler
 from apm_web.metric.constants import SeriesAliasType
 from apm_web.models import Application, CodeRedefinedConfigRelation
 from bkmonitor.models import MetricListCache
-from core.drf_resource.cache import CacheType, using_cache
+from core.drf_resource.cache import using_cache
+from core.utils import CacheType
 from bkmonitor.utils.common_utils import deserialize_and_decompress
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.apm import MetricTemporality, TelemetryDataType, Vendor

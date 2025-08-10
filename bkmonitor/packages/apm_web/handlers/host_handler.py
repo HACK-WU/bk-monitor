@@ -25,7 +25,8 @@ from apm_web.topo.handle.relation.define import (
 )
 from apm_web.topo.handle.relation.query import RelationQ
 from bkmonitor.commons.tools import batch_request
-from core.drf_resource.cache import CacheType, using_cache
+from core.drf_resource.cache import using_cache
+from core.utils import CacheType
 from constants.apm import OtlpKey
 from core.drf_resource import api
 

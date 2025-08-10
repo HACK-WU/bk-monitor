@@ -16,7 +16,7 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from core.drf_resource.cache import CacheType
+from core.utils import CacheType
 from bkmonitor.utils.request import get_request
 from constants.dataflow import AutoOffsetResets
 from core.drf_resource import APIResource

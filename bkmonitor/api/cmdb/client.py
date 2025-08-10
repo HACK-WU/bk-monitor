@@ -17,7 +17,7 @@ from gevent.monkey import saved
 
 from bkm_space.errors import NoRelatedResourceError
 from bkm_space.validate import validate_bk_biz_id
-from core.drf_resource.cache import CacheType
+from core.utils import CacheType
 from bkmonitor.utils.user import get_backend_username
 from core.drf_resource.contrib.api import APIResource
 
