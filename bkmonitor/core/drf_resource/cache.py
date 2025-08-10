@@ -38,13 +38,13 @@ class BaseUsingCache(object):
     default_user_info = "backend"
 
     def __init__(
-        self,
-        cache_type,
-        backend_cache_type=None,
-        user_related=None,
-        compress=True,
-        is_cache_func=lambda res: True,
-        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+            self,
+            cache_type,
+            backend_cache_type=None,
+            user_related=None,
+            compress=True,
+            is_cache_func=lambda res: True,
+            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型
@@ -70,29 +70,28 @@ class BaseUsingCache(object):
 
         self.user_info = self.default_user_info
         if user_related:
-            self.user_info = self._get_user_info()
-        self.using_cache_type = self._get_using_cache_type()
-        self.local_cache_enable = settings.ROLE == "web"
+            self.user_info = self.get_user_info()
+        self.using_cache_type = self.get_using_cache_type()
 
-    def __call__(self, task_definition: Callable) -> Callable:
+    def __call__(self, target_fun: Callable) -> Callable:
         """
         返回经过缓存装饰的函数。
         后面
         """
 
-        @functools.wraps(task_definition)
+        @functools.wraps(target_fun)
         def cached_wrapper(*args, **kwargs):
-            return_value = self._cached(task_definition, args, kwargs)
+            return_value = self._cached(target_fun, args, kwargs)
             return return_value
 
-        @functools.wraps(task_definition)
+        @functools.wraps(target_fun)
         def refresh_wrapper(*args, **kwargs):
-            return_value = self._refresh(task_definition, args, kwargs)
+            return_value = self._refresh(target_fun, args, kwargs)
             return return_value
 
-        @functools.wraps(task_definition)
+        @functools.wraps(target_fun)
         def cacheless_wrapper(*args, **kwargs):
-            return_value = self._cacheless(task_definition, args, kwargs)
+            return_value = self._cacheless(target_fun, args, kwargs)
             return return_value
 
         # 为函数设置各种调用模式
@@ -103,14 +102,14 @@ class BaseUsingCache(object):
 
         return default_wrapper
 
-    def _refresh(self, task_definition: Callable, args, kwargs):
+    def _refresh(self, target_fun: Callable, args, kwargs):
         """
         【强制刷新模式】
         不使用缓存的数据，将函数执行返回结果回写缓存
         """
-        cache_key = self._cache_key(task_definition, args, kwargs)
+        cache_key = self.generate_cache_key(target_fun, args, kwargs)
 
-        return_value = self._cacheless(task_definition, args, kwargs)
+        return_value = self._cacheless(target_fun, args, kwargs)
 
         # 设置了缓存空数据
         # 或者不缓存空数据且数据为空时
@@ -120,45 +119,50 @@ class BaseUsingCache(object):
 
         return return_value
 
-    def _cacheless(self, task_definition, args, kwargs):
+    def _cacheless(self, target_fun, args, kwargs):
         """
         【忽略缓存模式】
         忽略缓存机制，直接执行函数，返回结果不回写缓存
         """
         # 执行真实函数
-        return task_definition(*args, **kwargs)
+        return target_fun(*args, **kwargs)
 
-    def _get_user_info(self) -> str | dict:
-        raise NotImplementedError
+    def _cached(self, target_fun: Callable, args, kwargs):
+        """
+        【默认缓存模式】
+        先检查是否缓存是否存在
+        若存在，则直接返回缓存内容
+        若不存在，则执行函数，并将结果回写到缓存中
+        """
+        if self.is_use_cache():
+            cache_key = self.generate_cache_key(target_fun, args, kwargs)
+        else:
+            cache_key = None
 
-    def _get_using_cache_type(self):
-        raise NotImplementedError
+        if cache_key:
+            return_value = self.get_value(cache_key, default=None)
 
-    def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
-        raise NotImplementedError
+            if return_value is None:
+                return_value = self._refresh(target_fun, args, kwargs)
+        else:
+            return_value = self._cacheless(target_fun, args, kwargs)
+        return return_value
 
-    def get_value(self, cache_key, default=None):
-        raise NotImplementedError
+    # 启用缓存规则
+    def is_use_cache(self) -> bool:
+        """是否使用缓存"""
+        return True
 
-    def set_value(self, key, value, timeout=60):
-        raise NotImplementedError
+    def get_user_info(self):
+        username = self.default_user_info
+        if self.user_related:
+            try:
+                username = get_request().user.username
+            except Exception:
+                username = self.default_user_info
+        return username
 
-    def _cached(self, task_definition: Callable, args, kwargs):
-        raise NotImplementedError
-
-
-class UsingCache(BaseUsingCache):
-    def _cache_key(self, task_definition: Callable, args, kwargs) -> Optional[str]:
-        # 新增根据用户openid设置缓存key
-        if self.using_cache_type:
-            return (
-                f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(task_definition)}"
-                f":{count_md5(args)}:{count_md5(kwargs)}:{self.user_info}"
-            )
-
-        return None
-
-    def _get_using_cache_type(self):
+    def get_using_cache_type(self):
         """
         根据当前用户获取适当的缓存类型。
 
@@ -171,7 +175,6 @@ class UsingCache(BaseUsingCache):
         # 初始缓存类型默认为实例的cache_type属性
         using_cache_type = self.cache_type
 
-        # 如果当前用户是'backend'，根据backend_cache_type和cache_type确定使用哪种缓存类型
         if self.user_info == self.default_user_info:
             using_cache_type = self.backend_cache_type or self.cache_type
 
@@ -182,6 +185,33 @@ class UsingCache(BaseUsingCache):
 
         # 返回确定的缓存类型
         return using_cache_type
+
+    def generate_cache_key(self, target_fun: Callable, args, kwargs) -> Optional[str]:
+        # 新增根据用户openid设置缓存key
+        if self.using_cache_type:
+            return (
+                f"{self.key_prefix}:{self.using_cache_type.key}:{self.func_key_generator(target_fun)}"
+                f":{count_md5(args)}:{count_md5(kwargs)}:{self.user_info}"
+            )
+
+        return None
+
+    def get_value(self, cache_key, default=None):
+        value = mem_cache.get(cache_key, default=None) or cache.get(cache_key, default=None)
+        if value is None:
+            return default
+
+        if self.compress:
+            try:
+                value = zlib.decompress(value)
+            except Exception:
+                pass
+            try:
+                value = json.loads(force_bytes(value))
+            except Exception:
+                value = default
+
+        return value
 
     def set_value(self, key, value, timeout=60):
         if self.compress:
@@ -207,6 +237,18 @@ class UsingCache(BaseUsingCache):
             # 缓存出错不影响主流程
             logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
 
+
+class UsingCache(BaseUsingCache):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.local_cache_enable = settings.ROLE == "web"
+
+    def is_use_cache(self) -> bool:
+        if settings.ENVIRONMENT == "development":
+            return False
+        return True
+
     def get_value(self, cache_key, default=None):
         """
         新增一级内存缓存（local）。在同一个请求(线程)中，优先使用内存缓存。
@@ -223,61 +265,13 @@ class UsingCache(BaseUsingCache):
                 # 一级缓存命中，返回解析后的值
                 return json.loads(value)
 
-        # 一级缓存未命中，尝试从二级缓存中获取值
-        value = mem_cache.get(cache_key, default=None) or cache.get(cache_key, default=None)
-        if value is None:
-            # 二级缓存也未命中，返回默认值
-            return default
+        value = super().get_value(cache_key, default)
 
-        # 如果启用了压缩，尝试解压缩值
-        if self.compress:
-            try:
-                value = zlib.decompress(value)
-            except Exception:
-                # 解压缩失败，继续处理
-                pass
-            try:
-                # 将解压后的值解析为JSON
-                value = json.loads(force_bytes(value))
-            except Exception:
-                # 解析失败，返回默认值
-                value = default
-
-        # 更新一级缓存
         if self.local_cache_enable:
             setattr(local, cache_key, json.dumps(value))
 
         # 返回最终值
         return value
-
-    def _cached(self, task_definition: Callable, args, kwargs):
-        """
-        【默认缓存模式】
-        先检查是否缓存是否存在
-        若存在，则直接返回缓存内容
-        若不存在，则执行函数，并将结果回写到缓存中
-        """
-        if settings.ENVIRONMENT == "development":
-            cache_key = None
-        else:
-            cache_key = self._cache_key(task_definition, args, kwargs)
-        if cache_key:
-            return_value = self.get_value(cache_key, default=None)
-
-            if return_value is None:
-                return_value = self._refresh(task_definition, args, kwargs)
-        else:
-            return_value = self._cacheless(task_definition, args, kwargs)
-        return return_value
-
-    def _get_user_info(self):
-        username = self.default_user_info
-        if self.user_related:
-            try:
-                username = get_request().user.username
-            except Exception:
-                username = self.default_user_info
-        return username
 
 
 using_cache = UsingCache
@@ -312,6 +306,3 @@ class BaseCacheType:
     #  USER = CacheTypeItem(key="user", timeout=60 user_related=True)
     #  backend = CacheTypeItem(key="backend", timeout=60, user_related=False)
     pass
-
-
-
