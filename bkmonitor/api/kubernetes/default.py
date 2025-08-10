@@ -33,7 +33,7 @@ from bkmonitor.models import (
     BCSWorkload,
     MetricListCache,
 )
-from core.utils import CacheType
+from core.cache import CacheType
 from bkmonitor.utils.kubernetes import (
     BKM_METRICBEAT_ENDPOINT_UP,
     BcsClusterType,

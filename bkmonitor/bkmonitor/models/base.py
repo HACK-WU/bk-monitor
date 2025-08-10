@@ -25,7 +25,7 @@ from six import string_types
 
 from bkmonitor.middlewares.source import get_source_app_code
 from bkmonitor.utils import event_target, time_tools
-from core.utils import InstanceCache
+from core.cache import InstanceCache
 from bkmonitor.utils.db.fields import (
     EventStatusField,
     JsonField,

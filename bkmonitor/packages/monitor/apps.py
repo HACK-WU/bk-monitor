@@ -19,7 +19,7 @@ from django.core.cache import cache
 from django.core.management import call_command
 from django.db import models
 
-from core.drf_resource.cache import UsingCache
+from core.cache import UsingCache
 from bkmonitor.views import serializers
 from bkmonitor.views.fields import DateTimeField
 

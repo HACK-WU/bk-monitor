@@ -10,11 +10,12 @@ specific language governing permissions and limitations under the License.
 """
 
 import abc
-
 import six
 
-from core.drf_resource.cache import CacheTypeItem, using_cache
+from core.drf_resource.cache import CacheTypeItem
+from core.cache import using_cache
 from core.drf_resource.base import Resource
+
 
 
 class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
@@ -30,6 +31,7 @@ class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
     cache_user_related = None
     # 是否使用压缩
     cache_compress = True
+
 
     def __init__(self, *args, **kwargs):
         # 若cache_type为None则视为关闭缓存功能
@@ -85,7 +87,7 @@ class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):
             backend_cache_type=self.backend_cache_type,
             user_related=self.cache_user_related,
             compress=self.cache_compress,
-            is_cache_func=self.cache_write_trigger,
+            cache_write_trigger=self.cache_write_trigger,
             func_key_generator=func_key_generator,
         )(self.request)
 

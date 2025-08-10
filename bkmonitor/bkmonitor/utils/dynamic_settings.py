@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 from django.conf import settings
 from django.utils.functional import cached_property, empty
 
-from core.utils import InstanceCache
+from core.cache import InstanceCache
 
 
 class DynamicSettings(object):

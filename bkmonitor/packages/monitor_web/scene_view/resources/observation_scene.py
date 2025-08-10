@@ -27,7 +27,7 @@ from bkmonitor.data_source import (
     load_data_source,
 )
 from bkmonitor.models import QueryConfigModel, StrategyModel
-from core.utils import CacheType
+from core.cache import CacheType
 from bkmonitor.utils.common_utils import to_dict
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.cmdb import TargetNodeType, TargetObjectType

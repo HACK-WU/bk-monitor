@@ -24,8 +24,7 @@ from apm_web.calculation import (
 from apm_web.constants import Apdex, CalculationMethod
 from apm_web.utils import get_interval_number
 from bkmonitor.data_source import UnifyQuery, load_data_source
-from core.drf_resource.cache import using_cache
-from core.utils import CacheType
+from core.cache import using_cache, CacheType
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from bkmonitor.utils.time_tools import get_datetime_range
 from constants.apm import OtlpKey

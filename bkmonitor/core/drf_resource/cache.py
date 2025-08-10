@@ -15,13 +15,11 @@ import logging
 import zlib
 from typing import Callable, Optional
 
-from django.conf import settings
 from django.core.cache import cache, caches
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.request import get_request
-from core.drf_resource.utils.local import local
 
 logger = logging.getLogger(__name__)
 
@@ -43,20 +41,20 @@ class BaseUsingCache(object):
             backend_cache_type=None,
             user_related=None,
             compress=True,
-            is_cache_func=lambda res: True,
+            cache_write_trigger=lambda res: True,
             func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型
         :param user_related: 是否与用户关联
         :param compress: 是否进行压缩
-        :param is_cache_func: 缓存函数，当函数返回true时，则进行缓存
+        :param cache_write_trigger: 缓存函数，当函数返回true时，则进行缓存
         :param func_key_generator: 函数标识key的生成逻辑
         """
         self.cache_type = cache_type
         self.backend_cache_type = backend_cache_type
         self.compress = compress
-        self.is_cache_func = is_cache_func
+        self.cache_write_trigger = cache_write_trigger
         self.func_key_generator = func_key_generator
         # 先看用户是否提供了user_related参数
         # 若无，则查看cache_type是否提供了user_related参数
@@ -114,7 +112,7 @@ class BaseUsingCache(object):
         # 设置了缓存空数据
         # 或者不缓存空数据且数据为空时
         # 需要进行缓存
-        if self.is_cache_func(return_value):
+        if self.cache_write_trigger(return_value):
             self.set_value(cache_key, return_value, self.using_cache_type.timeout)
 
         return return_value
@@ -236,45 +234,6 @@ class BaseUsingCache(object):
                 request_path = ""
             # 缓存出错不影响主流程
             logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
-
-
-class UsingCache(BaseUsingCache):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.local_cache_enable = settings.ROLE == "web"
-
-    def is_use_cache(self) -> bool:
-        if settings.ENVIRONMENT == "development":
-            return False
-        return True
-
-    def get_value(self, cache_key, default=None):
-        """
-        新增一级内存缓存（local）。在同一个请求(线程)中，优先使用内存缓存。
-        一级缓存： local（web服务单次请求中生效）
-        二级缓存： cache（60s生效）
-        机制：
-        local (miss), cache(miss): cache <- result
-        local (miss), cache(hit): local <- result
-        """
-        # 尝试从一级内存缓存中获取值
-        if self.local_cache_enable:
-            value = getattr(local, cache_key, None)
-            if value:
-                # 一级缓存命中，返回解析后的值
-                return json.loads(value)
-
-        value = super().get_value(cache_key, default)
-
-        if self.local_cache_enable:
-            setattr(local, cache_key, json.dumps(value))
-
-        # 返回最终值
-        return value
-
-
-using_cache = UsingCache
 
 
 class CacheTypeItem(object):

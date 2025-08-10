@@ -41,8 +41,8 @@ CacheTypeItem(key='biz', timeout=20,label="业务及人员相关", user_related=
 ## 1、装饰器
 
 ```python
-from core.drf_resource.cache import using_cache
-from core.utils import CacheType
+
+from core.cache import using_cache, CacheType
 
 
 @using_cache(CacheType.DATA)
@@ -56,7 +56,7 @@ def test():
 
 ```python
 from core.drf_resource.contrib.cache import CacheResource
-from core.utils import CacheType
+from core.cache import CacheType
 
 
 class HostPerformanceResource(CacheResource):

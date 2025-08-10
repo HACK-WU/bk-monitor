@@ -19,8 +19,7 @@ from opentelemetry.semconv.trace import SpanAttributes
 from apm_web.constants import TopoNodeKind
 from apm_web.handlers.service_handler import ServiceHandler
 from apm_web.metrics import COMPONENT_LIST
-from core.drf_resource.cache import using_cache
-from core.utils import CacheType
+from core.cache import using_cache, CacheType
 from constants.apm import OtlpKey
 from core.drf_resource import api
 from core.errors.api import BKAPIError

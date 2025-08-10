@@ -23,7 +23,7 @@ from alarm_backends.management.story.base import (
     register_story,
 )
 from bkmonitor.documents import ALL_DOCUMENTS
-from core.utils import InstanceCache
+from core.cache import InstanceCache
 from metadata.models import EventGroup
 from metadata.models.result_table import ResultTable
 from metadata.models.storage import ClusterInfo, ESStorage

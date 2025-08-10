@@ -25,7 +25,7 @@ from redis.exceptions import ConnectionError
 from redis.sentinel import Sentinel
 from six.moves import map, range
 
-from core.utils import InstanceCache
+from core.cache import InstanceCache
 
 logger = logging.getLogger("core.storage.redis")
 

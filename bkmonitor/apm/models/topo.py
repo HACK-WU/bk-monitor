@@ -14,7 +14,8 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from apm.constants import DiscoverRuleType
-from core.drf_resource.cache import CacheType, using_cache
+from core.drf_resource.cache import CacheType
+from core.cache import using_cache
 from bkmonitor.utils.db import JsonField
 from constants.apm import SpanKind
 from core.drf_resource.exceptions import CustomException

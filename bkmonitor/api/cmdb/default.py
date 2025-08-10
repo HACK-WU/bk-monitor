@@ -23,8 +23,7 @@ from rest_framework import serializers
 from api.cmdb.define import _split_member_list
 from bkm_space.api import SpaceApi
 from bkmonitor.commons.tools import batch_request
-from core.drf_resource.cache import using_cache
-from core.utils import CacheType
+from core.cache import using_cache, CacheType
 from bkmonitor.utils.common_utils import to_dict
 from bkmonitor.utils.ip import exploded_ip, is_v6
 from bkmonitor.utils.thread_backend import ThreadPool
