@@ -20,9 +20,9 @@ from bk_dataview.api import get_or_create_org
 from bk_dataview.models import Dashboard
 from bk_dataview.permissions import GrafanaPermission, GrafanaRole
 from bkmonitor.models.strategy import QueryConfigModel, StrategyModel
-from bkmonitor.utils.request import get_request
 from constants.data_source import DataSourceLabel
 from core.drf_resource import Resource, api, resource
+from core.drf_resource.utils.request import get_request
 from core.errors.dashboard import GetFolderOrDashboardError
 from monitor_web.grafana.permissions import DashboardPermission
 

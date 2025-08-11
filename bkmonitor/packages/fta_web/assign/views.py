@@ -17,9 +17,9 @@ from bkmonitor.action import serializers
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission, IAMPermission
 from bkmonitor.models import AlertAssignGroup, AlertAssignRule
-from bkmonitor.utils.request import get_request
 from constants.action import GLOBAL_BIZ_ID
 from core.drf_resource import resource
+from core.drf_resource.utils.request import get_request
 from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 logger = logging.getLogger("root")

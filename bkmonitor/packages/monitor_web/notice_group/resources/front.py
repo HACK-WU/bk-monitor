@@ -16,10 +16,10 @@ from django.db import models
 from django.utils.translation import gettext as _
 
 from bkmonitor.models import Action, ActionNoticeMapping, StrategyModel
-from bkmonitor.utils.request import get_request
 from bkmonitor.views import serializers
 from core.drf_resource import api, resource
 from core.drf_resource.base import Resource
+from core.drf_resource.utils.request import get_request
 from core.errors.notice_group import NoticeGroupNotExist
 
 logger = logging.getLogger(__name__)

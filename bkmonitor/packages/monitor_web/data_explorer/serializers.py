@@ -15,7 +15,7 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from bkmonitor.utils.request import get_request
+from core.drf_resource.utils.request import get_request
 from monitor_web.models import FavoriteGroup, QueryHistory
 
 

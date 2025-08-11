@@ -22,9 +22,9 @@ from bkm_space.validate import validate_bk_biz_id
 from bkmonitor.data_source import UnifyQuery, load_data_source
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.utils.ip import is_v6
-from bkmonitor.utils.request import get_request
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import Resource, api, resource
+from core.drf_resource.utils.request import get_request
 from monitor_web.constants import AGENT_STATUS
 
 

@@ -20,11 +20,11 @@ from rest_framework import serializers
 
 from bkmonitor.models import MetricListCache, QueryConfigModel, StrategyModel
 from bkmonitor.utils.cipher import RSACipher
-from bkmonitor.utils.request import get_request
 from constants.cmdb import TargetNodeType
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import Resource, api
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.collecting import CollectingError
 from monitor_web.collecting.constant import COLLECT_TYPE_CHOICES

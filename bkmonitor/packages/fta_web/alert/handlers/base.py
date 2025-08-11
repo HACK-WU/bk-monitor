@@ -24,9 +24,10 @@ from luqum.tree import AndOperation, FieldGroup, SearchField, Word
 
 from bkmonitor.utils.elasticsearch.handler import BaseTreeTransformer
 from bkmonitor.utils.ip import exploded_ip
-from bkmonitor.utils.request import get_request, get_request_username
+from bkmonitor.utils.request import get_request_username
 from constants.alert import EventTargetType
 from core.drf_resource import resource
+from core.drf_resource.utils.request import get_request
 from core.errors.alert import QueryStringParseError
 from fta_web.alert.handlers.translator import AbstractTranslator
 from fta_web.alert.utils import process_metric_string, process_stage_string

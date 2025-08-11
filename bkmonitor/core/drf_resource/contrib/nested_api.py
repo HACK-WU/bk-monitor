@@ -18,8 +18,8 @@ from django.conf import settings
 from rest_framework.test import APIRequestFactory
 from yaml.parser import ParserError
 
-from bkmonitor.utils.request import get_request
 from core.drf_resource import APIResource
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.common import HTTP404Error
 

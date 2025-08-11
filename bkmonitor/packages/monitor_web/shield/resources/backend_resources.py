@@ -13,7 +13,7 @@ import operator
 import time
 from collections import defaultdict
 from functools import reduce
-from typing import Dict, OrderedDict, List
+from typing import Dict, List, OrderedDict
 
 from django.db.models import Q
 from django.utils.translation import gettext as _
@@ -23,7 +23,7 @@ from bkmonitor.documents.alert import AlertDocument
 from bkmonitor.documents.base import BulkActionType
 from bkmonitor.models import Event, Shield
 from bkmonitor.utils.common_utils import logger
-from bkmonitor.utils.request import get_request, get_request_username
+from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.time_tools import (
     DEFAULT_FORMAT,
     localtime,
@@ -38,6 +38,7 @@ from bkmonitor.views import serializers
 from constants.shield import ScopeType, ShieldCategory, ShieldStatus
 from core.drf_resource import resource
 from core.drf_resource.base import Resource
+from core.drf_resource.utils.request import get_request
 from core.errors.shield import DuplicateQuickShieldError, ShieldNotExist
 from fta_web.alert.handlers.base import AlertDimensionFormatter
 from monitor_web.alert_events.resources import EventDimensionMixin
@@ -578,7 +579,7 @@ class BulkAddAlertShieldResource(AddShieldResource):
                 if target_dimensions is None or dimension_data["key"] in target_dimensions:
                     # 注意，这里仅仅只是删除了dimension_config中维度配置，但_dimensions中维度配置保留,没有发生变化。
                     dimension_config[dimension_data["key"]] = dimension_data["value"]
-            # 添加与屏蔽逻辑无关的配置项
+                    # 添加与屏蔽逻辑无关的配置项
                     shield_dimensions.append(dimension)
             dimension_config.update(
                 {

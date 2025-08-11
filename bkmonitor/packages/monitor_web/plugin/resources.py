@@ -32,7 +32,6 @@ from django.utils.translation import gettext_lazy as _lazy
 from rest_framework import serializers
 
 from bkmonitor.utils.common_utils import safe_int
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.serializers import MetricJsonBaseSerializer
 from constants.result_table import (
     RT_RESERVED_WORD_EXACT,
@@ -41,6 +40,7 @@ from constants.result_table import (
 )
 from core.drf_resource import Resource, api, resource
 from core.drf_resource.tasks import step
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.export_import import ExportImportError
 from core.errors.plugin import (

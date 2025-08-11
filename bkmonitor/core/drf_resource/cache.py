@@ -19,7 +19,7 @@ from django.core.cache import cache, caches
 from django.utils.encoding import force_bytes
 
 from bkmonitor.utils.common_utils import count_md5
-from bkmonitor.utils.request import get_request
+from core.drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +36,13 @@ class BaseUsingCache(object):
     default_user_info = "backend"
 
     def __init__(
-            self,
-            cache_type,
-            backend_cache_type=None,
-            user_related=None,
-            compress=True,
-            cache_write_trigger=lambda res: True,
-            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+        self,
+        cache_type,
+        backend_cache_type=None,
+        user_related=None,
+        compress=True,
+        cache_write_trigger=lambda res: True,
+        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
     ):
         """
         :param cache_type: 缓存类型

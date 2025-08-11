@@ -32,7 +32,6 @@ from bkmonitor.models import (
 )
 from bkmonitor.models.metric_list_cache import MetricListCache
 from bkmonitor.strategy.new_strategy import Strategy, get_metric_id
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.time_tools import strftime_local
 from bkmonitor.utils.user import get_global_user
 from bkmonitor.views import serializers
@@ -47,6 +46,7 @@ from constants.strategy import (
 from core.drf_resource import Resource, api, resource
 from core.drf_resource.exceptions import CustomException
 from core.drf_resource.management.exceptions import ResourceNotRegistered
+from core.drf_resource.utils.request import get_request
 from core.errors.strategy import StrategyNotExist
 from core.unit import load_unit
 from monitor_web.alert_events.constant import EventStatus

@@ -17,8 +17,8 @@ from bkmonitor.action.serializers import DutySwitchSlz
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.models import DutyPlan, DutyRule, DutyRuleSnap, UserGroup
-from bkmonitor.utils.request import get_request
 from core.drf_resource import resource
+from core.drf_resource.utils.request import get_request
 from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 

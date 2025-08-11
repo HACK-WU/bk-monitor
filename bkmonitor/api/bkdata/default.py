@@ -16,10 +16,10 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from core.cache import CacheType
-from bkmonitor.utils.request import get_request
 from constants.dataflow import AutoOffsetResets
+from core.cache import CacheType
 from core.drf_resource import APIResource
+from core.drf_resource.utils.request import get_request
 
 
 class UseSaaSAuthInfoMixin:

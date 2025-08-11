@@ -32,13 +32,13 @@ from bkmonitor.action.serializers.report import (
 )
 from bkmonitor.models import Strategy
 from bkmonitor.models.base import ReportContents, ReportItems, ReportStatus
-from core.drf_resource.cache import CacheType
 from bkmonitor.utils.grafana import fetch_biz_panels, fetch_panel_title_ids
-from bkmonitor.utils.request import get_request
 from constants.report import GRAPH_ID_REGEX, GroupId, StaffChoice
 from core.drf_resource import CacheResource, api, resource
 from core.drf_resource.base import Resource
+from core.drf_resource.cache import CacheType
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 GlobalConfig = apps.get_model("bkmonitor.GlobalConfig")

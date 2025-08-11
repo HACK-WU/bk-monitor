@@ -85,7 +85,6 @@ from apm_web.utils import (
 from bkmonitor.data_source import conditions_to_q, filter_dict_to_conditions, q_to_dict
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.utils import group_by
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.thread_backend import InheritParentThread, ThreadPool, run_threads
 from bkmonitor.utils.time_tools import (
     get_datetime_range,
@@ -99,6 +98,7 @@ from constants.apm import (
     TelemetryDataType,
 )
 from core.drf_resource import Resource, api, resource
+from core.drf_resource.utils.request import get_request
 from core.unit import load_unit
 from monitor_web.collecting.constant import CollectStatus
 from monitor_web.scene_view.resources import GetHostOrTopoNodeDetailResource
@@ -196,7 +196,6 @@ class ProcessorHookType(Enum):
 
 
 class PreCalculateHelperMixin:
-
     DEFAULT_APP_CONFIG_KEY: str = "APM_CUSTOM_METRIC_SDK_MAPPING_CONFIG"
 
     @classmethod

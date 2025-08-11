@@ -20,13 +20,14 @@ from django.utils.translation import gettext as _
 from bkm_space.api import SpaceApi
 from bkm_space.define import SpaceFunction, SpaceTypeEnum
 from bkmonitor.iam import ActionEnum, Permission, ResourceEnum
-from core.drf_resource.cache import CacheType
 from bkmonitor.utils.common_utils import safe_int
-from bkmonitor.utils.request import get_request, get_request_username
+from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.user import get_local_username
 from bkmonitor.views import serializers
 from core.drf_resource import CacheResource, api, resource
 from core.drf_resource.base import Resource
+from core.drf_resource.cache import CacheType
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from monitor_web.commons.biz.func_control import CM
 

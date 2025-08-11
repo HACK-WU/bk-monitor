@@ -58,12 +58,12 @@ from bkmonitor.models import (
 )
 from bkmonitor.models.as_code import AsCodeImportTask
 from bkmonitor.strategy.new_strategy import Strategy
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.serializers import BkBizIdSerializer
 from bkmonitor.views import serializers
 from constants.strategy import DATALINK_SOURCE
 from core.drf_resource import Resource, api
 from core.drf_resource.tasks import step
+from core.drf_resource.utils.request import get_request
 from monitor_web.commons.report.resources import send_frontend_report_event
 from monitor_web.grafana.utils import get_org_id
 

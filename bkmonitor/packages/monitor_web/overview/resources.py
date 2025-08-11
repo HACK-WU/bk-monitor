@@ -34,14 +34,14 @@ from bkmonitor.iam.resource import ResourceEnum
 from bkmonitor.models import ItemModel, StrategyModel
 from bkmonitor.models.base import Action, NoticeGroup, Shield
 from bkmonitor.models.home import HomeAlarmGraphConfig
-from core.drf_resource.cache import CacheType
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.time_tools import get_datetime_range, localtime
 from bkmonitor.views import serializers
 from bkmonitor.views.serializers import BusinessOnlySerializer
 from constants.alert import EventStatus
 from core.drf_resource import Resource, api
+from core.drf_resource.cache import CacheType
 from core.drf_resource.contrib.cache import CacheResource
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from monitor.models import UserConfig
 from monitor_web.grafana.permissions import DashboardPermission

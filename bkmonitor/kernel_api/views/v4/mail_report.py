@@ -26,9 +26,9 @@ from bkmonitor.iam.permission import Permission
 from bkmonitor.iam.resource import ResourceEnum
 from bkmonitor.models import RenderImageTask, ReportItems
 from bkmonitor.utils.common_utils import to_dict
-from bkmonitor.utils.request import get_request
 from bkmonitor.views import serializers
 from core.drf_resource import Resource, resource
+from core.drf_resource.utils.request import get_request
 from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 

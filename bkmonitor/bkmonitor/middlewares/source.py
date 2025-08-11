@@ -11,7 +11,9 @@ specific language governing permissions and limitations under the License.
 
 
 from django.conf import settings
-from bkmonitor.utils.request import get_request, get_app_code_by_request
+
+from bkmonitor.utils.request import get_app_code_by_request
+from core.drf_resource.utils.request import get_request
 
 
 def get_source_app_code():

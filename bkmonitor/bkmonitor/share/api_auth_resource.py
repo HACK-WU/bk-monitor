@@ -14,10 +14,10 @@ from django.db import models
 from django.utils.translation import gettext as _
 
 from bkmonitor.share.utils import check_api_permission
-from bkmonitor.utils.request import get_request
 from core.drf_resource import Resource
 from core.drf_resource.exceptions import CustomException
 from core.drf_resource.tools import format_serializer_errors
+from core.drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 

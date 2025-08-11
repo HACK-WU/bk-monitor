@@ -31,7 +31,7 @@ from bkmonitor.report.serializers import (
 )
 from bkmonitor.report.utils import get_last_send_record_map
 from bkmonitor.utils.itsm import ApprovalStatusEnum
-from bkmonitor.utils.request import get_request, get_request_username
+from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.user import get_local_username
 from constants.new_report import (
     SUBSCRIPTION_VARIABLES_MAP,
@@ -46,6 +46,7 @@ from constants.new_report import (
 from core.drf_resource import api, resource
 from core.drf_resource.base import Resource
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 GlobalConfig = apps.get_model("bkmonitor.GlobalConfig")

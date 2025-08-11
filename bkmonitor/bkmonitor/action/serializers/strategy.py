@@ -42,7 +42,6 @@ from bkmonitor.models import (
 )
 from bkmonitor.utils import time_tools
 from bkmonitor.utils.common_utils import count_md5
-from bkmonitor.utils.request import get_request
 from common.log import logger
 from constants.action import NoticeChannel
 from constants.common import (
@@ -54,6 +53,7 @@ from constants.common import (
 )
 from core.drf_resource import api, resource
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.request import get_request
 from core.errors.user_group import DutyRuleNameExist, UserGroupNameExist
 
 
@@ -78,11 +78,11 @@ class HandOffSettingsSerializer(serializers.Serializer):
 
     def validate_date(self, value):
         if self.initial_data.get("rotation_type") == RotationType.WEEKLY and value not in set(
-                IsoWeekDay.WEEK_DAY_RANGE
+            IsoWeekDay.WEEK_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
         if self.initial_data.get("rotation_type") == RotationType.MONTHLY and value not in set(
-                MonthDay.MONTH_DAY_RANGE
+            MonthDay.MONTH_DAY_RANGE
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -105,8 +105,7 @@ class HandOffField(serializers.JSONField):
 
 class UserSerializer(serializers.Serializer):
     id = serializers.CharField(required=True, label="通知对象ID")
-    type = serializers.ChoiceField(required=True, choices=(("user", _("用户")), ("group", _("用户组"))),
-                                   label="通知对象类别")
+    type = serializers.ChoiceField(required=True, choices=(("user", _("用户")), ("group", _("用户组"))), label="通知对象类别")
 
 
 class ExcludeSettingsSerializer(serializers.Serializer):
@@ -144,14 +143,14 @@ class DutyTimeSerializer(serializers.Serializer):
     def validate_work_days(self, value):
         value_set = set(value)
         if (
-                self.initial_data.get("work_type") == RotationType.WEEKLY
-                and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
+            self.initial_data.get("work_type") == RotationType.WEEKLY
+            and value_set.intersection(set(IsoWeekDay.WEEK_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每周，选择的日期格式必须为星期一至星期日（1-7）"))
 
         if (
-                self.initial_data.get("work_type") == RotationType.MONTHLY
-                and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
+            self.initial_data.get("work_type") == RotationType.MONTHLY
+            and value_set.intersection(set(MonthDay.MONTH_DAY_RANGE)) != value_set
         ):
             raise ValidationError(detail=_("当前轮值类型为每月，选择的日期格式必须为1-31之间"))
         return value
@@ -597,7 +596,7 @@ class PreviewSerializer(serializers.Serializer):
         if isinstance(value, dict):
             value["name"] = "[demo] for preview"
         if self.initial_data.get(
-                "source_type", self.SourceType.API
+            "source_type", self.SourceType.API
         ) == self.SourceType.API and not self.initial_data.get("config"):
             # 如果数据来源是API，并且不带配置信息返回错误
             raise ValidationError(detail='params config is required when resource type is API')
@@ -748,8 +747,8 @@ class UserGroupSlz(serializers.ModelSerializer):
         data["strategy_count"] = len(set(self.strategy_count_of_given_type.get(instance.id, [])))
         data["rules_count"] = len(set(self.rule_count.get(instance.id, [])))
         data["delete_allowed"] = (
-                len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
-                and len(set(self.rule_count.get(instance.id, []))) == 0
+            len(set(self.strategy_count_of_all.get(instance.id, []))) == 0
+            and len(set(self.rule_count.get(instance.id, []))) == 0
         )
         data["edit_allowed"] = instance.bk_biz_id != 0
         data["config_source"] = "YAML" if instance.app else "UI"

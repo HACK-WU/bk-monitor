@@ -20,9 +20,9 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.user import get_local_username, get_request_username
 from core.drf_resource import Resource
+from core.drf_resource.utils.request import get_request
 from core.errors.bkmonitor.space import SpaceNotFound
 from metadata.models import space
 from metadata.models.space import constants, utils

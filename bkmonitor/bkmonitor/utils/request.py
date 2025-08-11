@@ -14,15 +14,7 @@ import json
 from constants.cmdb import BIZ_ID_FIELD_NAMES
 from constants.common import SourceApp
 from core.drf_resource.utils.local import local
-
-
-def get_request(peaceful=False):
-    if hasattr(local, "current_request"):
-        return local.current_request
-    elif peaceful:
-        return None
-
-    raise Exception("get_request: current thread hasn't request.")
+from core.drf_resource.utils.request import get_request
 
 
 def get_source_app(request=None):

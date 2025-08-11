@@ -14,8 +14,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument
-from bkmonitor.utils.request import get_request
 from core.drf_resource import resource
+from core.drf_resource.utils.request import get_request
 from fta_web.models.alert import AlertFeedback, AlertSuggestion, SearchFavorite
 
 

@@ -49,7 +49,7 @@ from bkmonitor.iam.compatible import CompatibleIAM
 from bkmonitor.iam.resource import Business as BusinessResource
 from bkmonitor.iam.resource import _all_resources, get_resource_by_id
 from bkmonitor.models import ApiAuthToken
-from bkmonitor.utils.request import get_request
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.iam import ActionNotExistError, PermissionDeniedError
 from core.errors.share import TokenValidatedError

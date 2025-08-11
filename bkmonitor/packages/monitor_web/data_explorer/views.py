@@ -13,6 +13,18 @@ from typing import Dict, List
 from django.db.models import Q
 from django.http import Http404
 from django.utils.translation import gettext as _
+from pypinyin import lazy_pinyin
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.request import Request
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet
+
+from bkmonitor.iam import ActionEnum, Permission
+from bkmonitor.iam.drf import BusinessActionPermission
+from core.drf_resource import resource
+from core.drf_resource.utils.request import get_request
+from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from monitor_web.data_explorer.serializers import (
     BulkDeleteFavoriteSerializer,
     BulkUpdateFavoriteSerializer,
@@ -30,18 +42,6 @@ from monitor_web.data_explorer.serializers import (
     UpdateFavoriteSerializer,
 )
 from monitor_web.models import FavoriteGroup, QueryHistory
-from pypinyin import lazy_pinyin
-from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
-from rest_framework.request import Request
-from rest_framework.response import Response
-from rest_framework.viewsets import ModelViewSet
-
-from bkmonitor.iam import ActionEnum, Permission
-from bkmonitor.iam.drf import BusinessActionPermission
-from bkmonitor.utils.request import get_request
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 def order_records_by_config(records: List[Dict], order: List) -> List[Dict]:
@@ -357,7 +357,6 @@ class FavoriteViewSet(ModelViewSet):
 
 
 class QueryHistoryViewSet(ModelViewSet):
-
     queryset = QueryHistory.objects.all().order_by("-id")
     serializer_class = QueryHistorySerializer
 

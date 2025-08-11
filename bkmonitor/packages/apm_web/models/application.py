@@ -50,11 +50,11 @@ from bkmonitor.middlewares.source import get_source_app_code
 from bkmonitor.utils import group_by
 from bkmonitor.utils.db import JsonField
 from bkmonitor.utils.model_manager import AbstractRecordModel
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.time_tools import get_datetime_range
 from common.log import logger
 from constants.apm import OtlpKey, SpanKindKey, TelemetryDataType
 from core.drf_resource import api, resource
+from core.drf_resource.utils.request import get_request
 
 tracer = trace.get_tracer(__name__)
 

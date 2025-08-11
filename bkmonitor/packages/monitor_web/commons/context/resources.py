@@ -17,7 +17,6 @@ from django.utils import timezone
 from bkm_space.api import SpaceApi
 from bkm_space.define import Space
 from bkmonitor.models.external_iam import ExternalPermission
-from bkmonitor.utils.request import get_request
 from bkmonitor.views import serializers
 from common.context_processors import (
     field_formatter,
@@ -30,6 +29,7 @@ from common.context_processors import (
 from common.log import logger
 from core.drf_resource import resource
 from core.drf_resource.base import Resource
+from core.drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from monitor.models.models import UserConfig
 from monitor_web.tasks import run_init_builtin

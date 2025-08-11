@@ -32,7 +32,6 @@ from rest_framework.exceptions import ValidationError
 from api.grafana.exporter import DashboardExporter
 from bk_dataview.api import get_or_create_org
 from bkmonitor.models import ItemModel, QueryConfigModel, StrategyModel
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.text import convert_filename
 from bkmonitor.utils.time_tools import now
 from bkmonitor.utils.user import get_local_username
@@ -41,6 +40,7 @@ from constants.data_source import DataSourceLabel
 from constants.strategy import TargetFieldType
 from core.drf_resource import Resource, api, resource
 from core.drf_resource.tasks import step
+from core.drf_resource.utils.request import get_request
 from core.errors.export_import import (
     AddTargetError,
     ImportConfigError,

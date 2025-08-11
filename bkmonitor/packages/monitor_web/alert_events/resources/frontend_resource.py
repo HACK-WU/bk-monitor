@@ -43,7 +43,6 @@ from bkmonitor.models import (
 from bkmonitor.utils import extended_json
 from bkmonitor.utils.common_utils import logger
 from bkmonitor.utils.event_related_info import get_event_relation_info
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.thread_backend import InheritParentThread
 from bkmonitor.utils.time_tools import (
     datetime2timestamp,
@@ -66,6 +65,7 @@ from constants.strategy import (
     SourceType,
 )
 from core.drf_resource import Resource, api, resource
+from core.drf_resource.utils.request import get_request
 from core.errors.event import (
     AggmethodIsRealtimeError,
     EventNotExist,

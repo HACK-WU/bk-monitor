@@ -15,12 +15,12 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 
 from bkm_space.validate import validate_bk_biz_id
-from bkmonitor.utils.request import get_request
 from bkmonitor.utils.serializers import (
     MetricJsonBaseSerializer,
     MetricJsonSerializer,
     StrictCharField,
 )
+from core.drf_resource.utils.request import get_request
 from monitor_web.commons.data_access import PluginDataAccessor
 from monitor_web.models.plugin import (
     CollectorPluginConfig,
