@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from django.contrib import admin
 
-from core.drf_resource.models import ResourceData
+from drf_resource.models import ResourceData
 
 
 class ResourceDataAdmin(admin.ModelAdmin):

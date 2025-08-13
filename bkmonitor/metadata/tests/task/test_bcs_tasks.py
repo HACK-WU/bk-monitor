@@ -225,7 +225,7 @@ def test_discover_bcs_clusters_and_change_bk_biz_id(create_or_delete_records, mo
             "project_id": "testprojectid123",
         },
     ]
-    mocker.patch("core.drf_resource.api.kubernetes.fetch_k8s_cluster_list", return_value=api_resp)
+    mocker.patch("drf_resource.api.kubernetes.fetch_k8s_cluster_list", return_value=api_resp)
     mocker.patch("django.conf.settings.BCS_API_GATEWAY_TOKEN", "test")
 
     # 模拟执行集群发现周期任务

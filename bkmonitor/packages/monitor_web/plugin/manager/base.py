@@ -32,7 +32,7 @@ from django.utils.translation import gettext
 
 from bkmonitor.utils import time_tools
 from bkmonitor.utils.serializers import MetricJsonSerializer
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from core.errors.plugin import (
     ExportPluginError,

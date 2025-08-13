@@ -23,7 +23,7 @@ from apm_web.service.resources import (
 
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import InstanceActionForDataPermission, ViewBusinessPermission
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class ServiceViewSet(ResourceViewSet):

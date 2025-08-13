@@ -54,7 +54,7 @@ from constants.strategy import (
     SYSTEM_EVENT_RT_TABLE_ID,
     DimensionFieldType,
 )
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
 from core.errors.api import BKAPIError
 from monitor_web.collecting.utils import chunks

@@ -12,7 +12,7 @@ from django.conf import settings
 from django.core.management import BaseCommand
 from monitor_web.models import CollectConfigMeta
 
-from core.drf_resource import api
+from drf_resource import api
 
 
 class Command(BaseCommand):

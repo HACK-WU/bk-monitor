@@ -2,7 +2,7 @@
 from django.core.management.base import BaseCommand
 from django.db.transaction import atomic
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.models.data_source import DataSource
 from metadata.models.space import Space

@@ -17,7 +17,7 @@ from bkmonitor.models import (
     StrategyModel,
     UserGroup,
 )
-from core.drf_resource import api
+from drf_resource import api
 from fta_web.constants import QuickSolutionsConfig
 from fta_web.fta_migrate.constants import FTA_MONITOR_MAPPING, NoticeGroupMapping
 from fta_web.fta_migrate.solution import MigrateDiySolution

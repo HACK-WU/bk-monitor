@@ -29,7 +29,7 @@ from bkmonitor.dataflow.node.source import StreamSourceNode
 from bkmonitor.dataflow.node.storage import HDFSStorageNode, TSpiderStorageNode
 from bkmonitor.dataflow.task.base import BaseTask
 from constants.aiops import SCENE_NAME_MAPPING, SceneSet
-from core.drf_resource import api
+from drf_resource import api
 
 
 class StrategyIntelligentModelDetectTask(BaseTask):

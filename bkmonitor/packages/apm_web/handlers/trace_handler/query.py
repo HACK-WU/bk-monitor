@@ -45,7 +45,7 @@ from constants.apm import (
     StandardField,
     ValueSource,
 )
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.alert import QueryStringParseError
 
 logger = logging.getLogger(__name__)

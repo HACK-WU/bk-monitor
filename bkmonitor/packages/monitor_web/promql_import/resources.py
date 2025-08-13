@@ -19,8 +19,8 @@ from bkmonitor.models import ActionSignal, MetricMappingConfigModel, UserGroup
 from bkmonitor.strategy.new_strategy import get_metric_id
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
+from drf_resource import api, resource
+from drf_resource.base import Resource
 from monitor_web.grafana.resources import ConvertGrafanaPromqlDashboardResource
 from monitor_web.promql_import.utils import check_metric_field
 

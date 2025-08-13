@@ -14,7 +14,7 @@ from elasticsearch5.exceptions import ConnectionError
 from rest_framework.exceptions import APIException
 
 from bkmonitor.views import serializers
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata.utils.es_tools import get_client_by_datasource_info
 from query_api.drivers import load_driver_by_sql
 

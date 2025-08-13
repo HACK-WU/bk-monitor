@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 from bkmonitor.models import GlobalConfig
 from bkmonitor.views import serializers
-from core.drf_resource.base import Resource
+from drf_resource.base import Resource
 
 
 class UpdateAlarmConfig(Resource):

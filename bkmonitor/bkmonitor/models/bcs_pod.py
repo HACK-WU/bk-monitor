@@ -20,7 +20,7 @@ from bkmonitor.models import BCSBase, BCSBaseManager, BCSBaseResources, BCSLabel
 from bkmonitor.utils.casting import force_float
 from bkmonitor.utils.common_utils import chunks
 from bkmonitor.utils.kubernetes import get_progress_value
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("kubernetes")
 

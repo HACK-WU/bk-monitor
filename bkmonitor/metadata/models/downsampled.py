@@ -17,7 +17,7 @@ from bkmonitor.utils import consul
 from bkmonitor.utils.common_utils import gen_bk_data_rt_id_without_biz_id
 from bkmonitor.utils.db import JsonField
 from bkmonitor.utils.time_tools import strftime_local
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.utils import consul_tools, go_time
 from metadata.utils.basic import getitems

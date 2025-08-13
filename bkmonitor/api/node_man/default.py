@@ -20,8 +20,8 @@ from bkmonitor.commons.tools import batch_request
 from core.cache import CacheType
 from bkmonitor.utils.user import get_backend_username, get_global_user, make_userinfo
 from constants.cmdb import TargetNodeType
-from core.drf_resource import APIResource
-from core.drf_resource.base import Resource
+from drf_resource import APIResource
+from drf_resource.base import Resource
 
 
 class NodeManAPIGWResource(six.with_metaclass(abc.ABCMeta, APIResource)):

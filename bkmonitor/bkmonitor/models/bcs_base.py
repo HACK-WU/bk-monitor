@@ -31,7 +31,7 @@ from humanize import naturaldelta
 from bkmonitor.models.bcs_label import BCSLabel
 from bkmonitor.utils.common_utils import chunks
 from bkmonitor.utils.kubernetes import BcsClusterType, BkmMetricbeatEndpointUpStatus
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("kubernetes")
 

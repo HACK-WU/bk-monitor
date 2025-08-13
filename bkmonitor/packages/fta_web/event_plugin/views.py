@@ -23,8 +23,8 @@ from rest_framework import permissions
 from bkmonitor.iam import ActionEnum, Permission
 from bkmonitor.iam.drf import BusinessActionPermission, IAMPermission
 from bkmonitor.models import EventPluginV2
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from core.errors.iam import PermissionDeniedError
 from fta_web.event_plugin.handler import PackageHandler
 from fta_web.event_plugin.resources import GetEventPluginTokenResource

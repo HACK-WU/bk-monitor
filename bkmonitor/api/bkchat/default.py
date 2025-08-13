@@ -16,8 +16,8 @@ from django.conf import settings
 from django.utils.translation import gettext as _
 from rest_framework import serializers
 
-from core.drf_resource import APIResource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import APIResource
+from drf_resource.exceptions import CustomException
 from core.errors.api import BKAPIError
 
 

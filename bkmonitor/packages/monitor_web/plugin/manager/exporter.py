@@ -16,7 +16,7 @@ from collections import namedtuple
 
 from django.utils.translation import gettext as _
 
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.commons.file_manager import PluginFileManager
 from monitor_web.plugin.constant import OS_TYPE_TO_DIRNAME, ParamMode
 from monitor_web.plugin.manager.base import PluginManager

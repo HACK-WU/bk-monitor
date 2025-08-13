@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 import pytest
 
-from core.drf_resource import resource
+from drf_resource import resource
 
 pytestmark = pytest.mark.django_db
 

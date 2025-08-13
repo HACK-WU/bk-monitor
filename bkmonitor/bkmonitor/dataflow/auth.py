@@ -15,7 +15,7 @@ from typing import List
 
 from django.conf import settings
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("bkmonitor.dataflow")

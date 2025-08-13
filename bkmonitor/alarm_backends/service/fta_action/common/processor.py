@@ -25,7 +25,7 @@ from alarm_backends.service.fta_action import (
 from bkmonitor.models import ActionPlugin
 from bkmonitor.utils.template import Jinja2Renderer, NoticeRowRenderer
 from constants.action import ActionStatus, FailureType
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from core.errors.alarm_backends import EmptyAssigneeError
 from core.errors.api import BKAPIError
 from core.errors.iam import APIPermissionDeniedError

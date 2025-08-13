@@ -12,7 +12,7 @@ from django.conf import settings
 
 from alarm_backends.core.cache.cmdb.base import CMDBCacheManager
 from api.cmdb.define import Business
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BusinessManager(CMDBCacheManager):

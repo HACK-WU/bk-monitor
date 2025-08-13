@@ -14,7 +14,7 @@ from typing import List, Optional
 from bkmonitor.models import StrategyModel
 from constants.action import ActionSignal
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.strategies.constant import (
     DEFAULT_ALARM_STRATEGY_ATTR_NAME_GSE,
     DEFAULT_ALARM_STRATEGY_LOADER_TYPE_GSE,

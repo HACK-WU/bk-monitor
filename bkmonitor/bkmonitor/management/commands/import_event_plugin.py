@@ -17,8 +17,8 @@ specific language governing permissions and limitations under the License.
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management.base import BaseCommand
 
-from core.drf_resource import resource
-from core.drf_resource.contrib import nested_api
+from drf_resource import resource
+from drf_resource.contrib import nested_api
 
 
 class Command(BaseCommand):

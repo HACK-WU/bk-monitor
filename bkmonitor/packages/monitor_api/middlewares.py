@@ -19,7 +19,7 @@ from django.utils.text import compress_sequence, compress_string
 from bkmonitor.utils.common_utils import DatetimeEncoder, failed
 from bkmonitor.utils.request import is_ajax_request
 from common.log import logger
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from core.errors import Error
 from core.errors.common import CustomError, UnknownError
 

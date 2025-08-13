@@ -21,9 +21,9 @@ from opentelemetry.trace.status import Status, StatusCode
 
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.thread_backend import ThreadPool
-from core.drf_resource.exceptions import CustomException, record_exception
-from core.drf_resource.tasks import run_perform_request
-from core.drf_resource.tools import (
+from drf_resource.exceptions import CustomException, record_exception
+from drf_resource.tasks import run_perform_request
+from drf_resource.tools import (
     format_serializer_errors,
     get_serializer_fields,
     render_schema,
@@ -92,7 +92,7 @@ class Resource(six.with_metaclass(abc.ABCMeta, object)):
     def __call__(self, *args, **kwargs):
         # thread safe
         tmp_resource = self.__class__()
-        from core.drf_resource.models import ResourceData
+        from drf_resource.models import ResourceData
 
         return ResourceData.objects.request(tmp_resource, args, kwargs)
 

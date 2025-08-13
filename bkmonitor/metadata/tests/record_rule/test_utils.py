@@ -48,7 +48,7 @@ def test_refine_bk_sql_and_metrics(mocker):
 
     # mocker promql to struct
     mocker.patch(
-        "core.drf_resource.api.unify_query.promql_to_struct",
+        "drf_resource.api.unify_query.promql_to_struct",
         return_value={
             "data": {
                 "query_list": [
@@ -70,7 +70,7 @@ def test_refine_bk_sql_and_metrics(mocker):
 
     # mocker struct to promql
     mocker.patch(
-        "core.drf_resource.api.unify_query.struct_to_promql",
+        "drf_resource.api.unify_query.struct_to_promql",
         return_value={
             "promql": "max_over_time(mem_usage_avg_1h[1d])",
             "start": "",

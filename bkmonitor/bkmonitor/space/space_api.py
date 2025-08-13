@@ -20,7 +20,7 @@ from rest_framework.exceptions import ValidationError
 from bkm_space import api as space_api
 from bkm_space.define import Space as SpaceDefine
 from bkm_space.define import SpaceTypeEnum
-from core.drf_resource import api
+from drf_resource import api
 
 local_mem = caches["space"]
 

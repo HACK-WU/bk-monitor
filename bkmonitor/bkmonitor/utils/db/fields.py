@@ -20,7 +20,7 @@ from django.db import models
 
 from bkmonitor.utils.common_utils import DatetimeEncoder
 from bkmonitor.utils.text import camel_to_underscore
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 
 def get_key_config(chiper_type: str):

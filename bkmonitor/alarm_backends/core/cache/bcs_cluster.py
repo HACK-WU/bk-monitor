@@ -16,7 +16,7 @@ import json
 from typing import Dict
 
 from alarm_backends.core.cache.base import CacheManager
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BcsClusterCacheManager(CacheManager):

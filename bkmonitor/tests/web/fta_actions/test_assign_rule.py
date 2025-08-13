@@ -23,7 +23,7 @@ from bkmonitor.utils.elasticsearch.fake_elasticsearch import FakeElasticsearchBu
 from constants.alert import EventStatus
 
 mock.patch(
-    "core.drf_resource.api.bk_login.get_all_user",
+    "drf_resource.api.bk_login.get_all_user",
     return_value={"results": [{"username": "admin", "display_name": "admin"}]},
 ).start()
 mock.patch(

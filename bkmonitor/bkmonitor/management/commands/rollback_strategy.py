@@ -13,7 +13,7 @@ import datetime
 from django.core.management.base import BaseCommand
 
 from bkmonitor.models import StrategyHistoryModel
-from core.drf_resource import resource
+from drf_resource import resource
 
 """
 --strategy_ids=46161 --timestamp=1721185500

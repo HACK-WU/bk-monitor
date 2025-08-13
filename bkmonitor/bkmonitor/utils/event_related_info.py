@@ -24,7 +24,7 @@ from constants.data_source import DataSourceLabel, DataTypeLabel
 
 __all__ = ["get_event_relation_info", "get_alert_relation_info"]
 
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("fta_action.run")
 

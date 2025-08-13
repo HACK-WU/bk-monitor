@@ -23,7 +23,7 @@ from six.moves import map
 
 from bk_dataview.views import ProxyView, StaticView, SwitchOrgView
 from bkmonitor.utils.common_utils import package_contents
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from kernel_api import views
 from monitor_web.grafana import views as grafana_views
 

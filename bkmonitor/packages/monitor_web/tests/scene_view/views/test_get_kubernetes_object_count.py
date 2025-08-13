@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import pytest
 
 from api.bcs_storage.default import FetchResource
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestGetKubernetesObjectCount:

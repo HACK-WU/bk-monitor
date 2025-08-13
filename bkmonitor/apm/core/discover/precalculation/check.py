@@ -19,7 +19,7 @@ from django.conf import settings
 from apm.core.discover.precalculation.daemon import DaemonTaskHandler
 from apm.models import ApmApplication
 from bkmonitor.utils.time_tools import get_datetime_range
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("apm")
 

@@ -15,7 +15,7 @@ from django.conf import settings
 
 from bkmonitor.utils.template import Jinja2Renderer
 from bkmonitor.utils.user import get_global_user
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 from core.errors.api import BKAPIError
 
 

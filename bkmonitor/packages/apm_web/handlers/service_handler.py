@@ -35,12 +35,12 @@ from apm_web.metric_handler import RequestCountInstance, ServiceFlowCount
 from apm_web.metrics import APPLICATION_LIST
 from apm_web.models import ApdexServiceRelation, Application, ApplicationCustomService
 from bkmonitor.utils import group_by
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from core.cache import using_cache
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import get_datetime_range
 from constants.apm import OtlpKey, TelemetryDataType
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger(__name__)

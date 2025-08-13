@@ -30,8 +30,8 @@ from bkmonitor.models import ReportContents, ReportItems
 from bkmonitor.utils.grafana import fetch_panel_title_ids
 from bkmonitor.utils.send import Sender
 from constants.report import GRAPH_ID_REGEX, LOGO, BuildInBizType, StaffChoice
-from core.drf_resource import api
-from core.drf_resource.exceptions import CustomException
+from drf_resource import api
+from drf_resource.exceptions import CustomException
 
 logger = logging.getLogger("bkmonitor.cron_report")
 

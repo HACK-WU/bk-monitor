@@ -20,7 +20,7 @@ from bkmonitor.models import StrategyLabel
 from bkmonitor.models.fta.assign import AlertAssignGroup, AlertAssignRule
 from bkmonitor.utils.common_utils import logger
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.models.collecting import CollectConfigMeta
 from monitor_web.strategies.default_settings.datalink.v1 import (
     DATALINK_GATHER_STATEGY_DESC,

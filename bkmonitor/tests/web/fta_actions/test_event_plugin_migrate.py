@@ -18,7 +18,7 @@ from django.test import TestCase
 
 from bkmonitor.event_plugin.serializers import HttpPullPluginInstSerializer
 from bkmonitor.models import EventPluginInstance, EventPluginV2
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from core.errors.event_plugin import PluginIDExistError
 from fta_web.event_plugin.resources import (
     CreateEventPluginInstanceResource,
@@ -483,7 +483,7 @@ class TestEventPluginMigrate(TestCase):
         self.assertEqual(data["updated_instances"]["succeed_instances"], [inst["id"]])
 
     def test_create_multi_cloud_event_plugin(self):
-        data_id_patch = mock.patch("core.drf_resource.api.metadata.get_data_id", return_value={"token": "test token"})
+        data_id_patch = mock.patch("drf_resource.api.metadata.get_data_id", return_value={"token": "test token"})
         data_id_patch.start()
         # 测试创建
         plugin_info = get_multi_cloud_plugin_info()

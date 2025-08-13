@@ -15,7 +15,7 @@ from django.utils.translation import gettext as _
 from bkmonitor.models.base import NoticeGroup
 from bkmonitor.strategy.serializers import NoticeGroupSerializer
 from bkmonitor.views import serializers
-from core.drf_resource.base import Resource
+from drf_resource.base import Resource
 from core.errors.notice_group import (
     NoticeGroupHasStrategy,
     NoticeGroupNameExist,

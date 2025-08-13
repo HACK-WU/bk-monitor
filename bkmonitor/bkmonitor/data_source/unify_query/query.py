@@ -32,7 +32,7 @@ from bkmonitor.data_source.unify_query.functions import (
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import time_interval_align
 from constants.data_source import GrayUnifyQueryDataSources, UnifyQueryDataSources
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 tracer = trace.get_tracer(__name__)

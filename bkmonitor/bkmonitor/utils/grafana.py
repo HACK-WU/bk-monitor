@@ -13,7 +13,7 @@ import concurrent.futures
 from django.conf import settings
 from django.utils.translation import gettext as _
 
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 
 
 def fetch_panel_title_ids(bk_biz_id, dashboard_uid, org=None):

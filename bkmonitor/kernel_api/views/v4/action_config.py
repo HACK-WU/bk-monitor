@@ -14,9 +14,9 @@ from rest_framework.exceptions import ValidationError
 
 from bkmonitor.action.serializers import ActionConfigDetailSlz
 from bkmonitor.models import ActionConfig, StrategyActionConfigRelation
-from core.drf_resource import Resource
-from core.drf_resource.exceptions import CustomException
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource
+from drf_resource.exceptions import CustomException
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 action_configs = ActionConfig.objects.exclude(plugin_id=ActionConfig.NOTICE_PLUGIN_ID).all()
 

@@ -25,14 +25,14 @@ from rest_framework.viewsets import GenericViewSet, ModelViewSet
 
 from bkmonitor.utils.common_utils import uniqid
 from bkmonitor.utils.text import camel_to_underscore, underscore_to_camel
-from core.drf_resource.routers import ResourceRouter
-from core.drf_resource.tools import (
+from drf_resource.routers import ResourceRouter
+from drf_resource.tools import (
     get_serializer_fields,
     get_underscore_viewset_name,
     render_schema,
 )
-from core.drf_resource.viewsets import ResourceViewSet
-from core.drf_resource.viewsets import ResourceViewSet as OldResourceViewSet
+from drf_resource.viewsets import ResourceViewSet
+from drf_resource.viewsets import ResourceViewSet as OldResourceViewSet
 
 django_engine = engines["django"]
 

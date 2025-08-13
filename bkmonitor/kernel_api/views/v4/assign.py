@@ -18,8 +18,8 @@ from bkmonitor.action.serializers import (
     BatchSaveAssignRulesSlz,
 )
 from bkmonitor.models import AlertAssignGroup, AlertAssignRule
-from core.drf_resource import Resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class SaveRuleGroupResource(Resource):

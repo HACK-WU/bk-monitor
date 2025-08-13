@@ -17,7 +17,7 @@ from django.utils.translation import gettext_lazy as _lazy
 
 from bkmonitor.utils.db.fields import JsonField, SymmetricJsonField
 from constants.cmdb import TargetNodeType, TargetObjectType
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.collecting.constant import (
     OperationResult,
     OperationType,

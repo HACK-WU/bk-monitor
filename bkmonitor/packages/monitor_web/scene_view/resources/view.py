@@ -25,7 +25,7 @@ from bkmonitor.data_source import UnifyQuery, load_data_source
 from bkmonitor.models import MetricListCache
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from constants.data_source import GRAPH_MAX_SLIMIT, DataSourceLabel
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor_web.models.scene_view import (
     SceneModel,
     SceneViewModel,

@@ -125,7 +125,7 @@ class TestOperateConsulConfig(object):
             base_channel_id += 1
             return {"channel_id": base_channel_id}
 
-        mocker.patch("core.drf_resource.api.gse.add_route", side_effect=gen_channel_id)
+        mocker.patch("drf_resource.api.gse.add_route", side_effect=gen_channel_id)
 
         mocker.patch("metadata.models.DataSource.create_mq", return_value=True)
         mocker.patch("metadata.models.DataSource.refresh_gse_config", return_value=True)

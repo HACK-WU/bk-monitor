@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from rest_framework import serializers
 
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 
 
 class SdkResource(APIResource):

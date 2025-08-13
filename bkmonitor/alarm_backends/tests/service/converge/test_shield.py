@@ -26,7 +26,7 @@ from alarm_backends.tests.utils.cmdb_data import ALL_HOSTS, TOPO_TREE
 from api.cmdb.define import Business, Host
 from bkmonitor.models import CacheNode
 from constants.data_source import KubernetesResultTableLabel
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 pytestmark = pytest.mark.django_db
 

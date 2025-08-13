@@ -20,7 +20,7 @@ from constants.action import ActionSignal
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import EVENT_DETECT_LIST, EVENT_QUERY_CONFIG_MAP
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.strategies.constant import (
     DEFAULT_ALARM_STRATEGY_ATTR_NAME_OS,
     DEFAULT_ALARM_STRATEGY_LOADER_TYPE_OS,

@@ -6,7 +6,7 @@ from monitor_web.search.handlers.base import SearchScope
 from rest_framework import serializers
 
 from bkmonitor.utils.serializers import StringSplitListField
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 logger = logging.getLogger("monitor_web")
 

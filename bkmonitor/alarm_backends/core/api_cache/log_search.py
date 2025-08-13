@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 # 日志平台接口缓存，celery定时任务
 
-from core.drf_resource import api
+from drf_resource import api
 
 
 def get_search_index_set_api(biz_id):

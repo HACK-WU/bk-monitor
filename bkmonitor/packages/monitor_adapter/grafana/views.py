@@ -27,7 +27,7 @@ from bk_dataview.api import get_or_create_org
 from bk_dataview.views import ProxyView, StaticView, SwitchOrgView
 from bkm_space.api import SpaceApi
 from bkmonitor.models.external_iam import ExternalPermission
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from monitor.models import GlobalConfig
 from monitor_web.grafana.utils import patch_home_panels

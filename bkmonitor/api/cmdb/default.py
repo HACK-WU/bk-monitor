@@ -28,8 +28,8 @@ from bkmonitor.utils.ip import exploded_ip, is_v6
 from bkmonitor.utils.thread_backend import ThreadPool
 from constants.cmdb import TargetNodeType
 from core.cache import CacheType, using_cache
-from core.drf_resource import CacheResource, api
-from core.drf_resource.base import Resource
+from drf_resource import CacheResource, api
+from drf_resource.base import Resource
 from core.errors.api import BKAPIError
 
 from . import client

@@ -17,7 +17,7 @@ from django.utils.functional import cached_property
 from apm_web.utils import get_interval_number
 from bkmonitor.models import BCSContainer, BCSPod, BCSWorkload
 from bkmonitor.utils.time_tools import hms_string
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.k8s.core.filters import load_resource_filter
 
 

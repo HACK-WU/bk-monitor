@@ -25,7 +25,7 @@ from bkmonitor.strategy.new_strategy import grafana_panel_to_config
 from bkmonitor.views.serializers import BusinessOnlySerializer
 from constants.aiops import SCENE_METRIC_MAP, SCENE_NAME_MAPPING
 from constants.alert import EventStatus
-from core.drf_resource import Resource, resource
+from drf_resource import Resource, resource
 from core.unit import UNITS, load_unit
 from monitor_web.strategies.constant import ValueableList
 from monitor_web.tasks import parse_scene_metrics

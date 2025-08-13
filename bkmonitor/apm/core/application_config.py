@@ -44,7 +44,7 @@ from apm.models import (
 from bkmonitor.utils.bcs import BcsKubeClient
 from bkmonitor.utils.common_utils import safe_int
 from constants.apm import BkCollectorComp
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("apm")

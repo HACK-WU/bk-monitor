@@ -5,7 +5,7 @@ from django.utils.translation import gettext as _
 from furl import furl
 
 from bkmonitor.iam import ActionEnum
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.search.handlers.base import BaseSearchHandler, SearchResultItem
 
 

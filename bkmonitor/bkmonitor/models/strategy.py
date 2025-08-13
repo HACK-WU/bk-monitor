@@ -25,7 +25,7 @@ from bkmonitor.utils.request import get_source_app
 from constants.action import NoticeWay
 from constants.common import DutyGroupType, SourceApp
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import resource
+from drf_resource import resource
 
 __all__ = [
     "StrategyModel",

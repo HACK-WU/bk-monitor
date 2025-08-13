@@ -14,7 +14,7 @@ from typing import Dict
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from metadata import config, models
 

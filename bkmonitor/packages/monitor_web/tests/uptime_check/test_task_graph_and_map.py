@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 import pytest
 from django.utils.translation import gettext as _
 
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.models.uptime_check import UptimeCheckNode
 
 

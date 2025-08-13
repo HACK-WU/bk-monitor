@@ -15,7 +15,7 @@ import abc
 import six
 from django.conf import settings
 
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 
 
 class IAMBaseResource(six.with_metaclass(abc.ABCMeta, APIResource)):

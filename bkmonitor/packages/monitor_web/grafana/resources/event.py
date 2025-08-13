@@ -16,7 +16,7 @@ from rest_framework import serializers
 
 from bkmonitor.models import MetricListCache
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import Resource
+from drf_resource import Resource
 from fta_web.alert.handlers.alert import AlertQueryHandler
 
 logger = logging.getLogger(__name__)

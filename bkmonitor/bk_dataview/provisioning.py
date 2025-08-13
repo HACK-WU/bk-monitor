@@ -20,7 +20,7 @@ from typing import Dict, List, Union
 import yaml
 from django.conf import settings
 
-from core.drf_resource import api
+from drf_resource import api
 
 from . import client
 from .models import Dashboard as DashboardModel

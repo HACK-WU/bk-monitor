@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 from rest_framework import serializers
 
 from apm_web.container.helpers import ContainerHelper
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor_web.collecting.constant import CollectStatus
 
 

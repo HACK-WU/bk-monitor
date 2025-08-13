@@ -14,7 +14,7 @@ from typing import List
 from django.utils.translation import gettext as _
 
 from constants.strategy import DataTarget
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.api import BKAPIError
 from monitor_web.models.plugin import CollectorPluginMeta
 from monitor_web.plugin.manager import BuiltInPluginManager

@@ -31,7 +31,7 @@ from constants.new_report import (
     YearOnYearChangeEnum,
     YearOnYearEnum,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 
 class ClusteringReportHandler(BaseReportHandler):

@@ -1,6 +1,6 @@
 import pytest
 
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from metadata.models import ESStorage, Event, EventGroup, ResultTable, TimeSeriesGroup
 from metadata.resources import GetEventGroupResource, QueryTimeSeriesGroupResource
 from metadata.tests.common_utils import any_return_model

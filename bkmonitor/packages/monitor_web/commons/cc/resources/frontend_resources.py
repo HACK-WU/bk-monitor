@@ -14,7 +14,7 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 
 from bkmonitor.commons.tools import get_host_view_display_fields
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor_web.commons.cc.utils import foreach_topo_tree
 
 

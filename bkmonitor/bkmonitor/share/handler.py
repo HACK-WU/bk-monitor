@@ -14,7 +14,7 @@ import json
 from django.db.models import Q
 
 from bkmonitor.models import ApiAuthToken, MetricListCache
-from core.drf_resource.utils.request import get_request
+from drf_resource.utils.request import get_request
 from core.errors.share import (
     InvalidParamsError,
     ParamsPermissionDeniedError,

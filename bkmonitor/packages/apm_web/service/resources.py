@@ -52,7 +52,7 @@ from bkmonitor.commons.tools import batch_request
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import get_datetime_range
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 
 
 class ApplicationListResource(Resource):

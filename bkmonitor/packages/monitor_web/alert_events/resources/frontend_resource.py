@@ -64,8 +64,8 @@ from constants.strategy import (
     DataTarget,
     SourceType,
 )
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api, resource
+from drf_resource.utils.request import get_request
 from core.errors.event import (
     AggmethodIsRealtimeError,
     EventNotExist,

@@ -20,7 +20,7 @@ from django.utils import timezone, translation
 from opentelemetry.context import attach, get_current
 
 from bkmonitor.utils.common_utils import ignored
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 logger = logging.getLogger(__name__)
 

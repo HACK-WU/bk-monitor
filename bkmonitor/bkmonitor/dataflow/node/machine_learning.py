@@ -24,7 +24,7 @@ from constants.aiops import (
     HOST_ANOMALY_SCENE_INPUT_FIELDS,
     MULTIVARIATE_ANOMALY_DETECTION_SCENE_INPUT_FIELD,
 )
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.aiops.metric_recommend.constant import (
     METRIC_RECOMMAND_SCENE_SERVICE_TEMPLATE,
 )

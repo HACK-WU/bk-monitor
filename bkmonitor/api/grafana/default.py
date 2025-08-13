@@ -22,7 +22,7 @@ from six.moves.urllib.parse import urljoin
 # from bk_dataview.views import ProxyBaseView
 # from bkmonitor.models.external_iam import ExternalPermission
 # from bkmonitor.utils.request import get_request
-from core.drf_resource import Resource
+from drf_resource import Resource
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger(__name__)

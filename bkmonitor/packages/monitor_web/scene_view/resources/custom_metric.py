@@ -12,7 +12,7 @@ from django.db import models
 from monitor_web.models import CustomTSTable
 from rest_framework import serializers
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 
 class GetCustomMetricTargetListResource(Resource):

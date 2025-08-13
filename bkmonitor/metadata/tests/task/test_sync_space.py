@@ -27,7 +27,7 @@ pytestmark = pytest.mark.django_db
 def test_sync_bkcc_space(create_and_delete_record, table_id, mocker):
     biz_id = 1
     mocker.patch(
-        "core.drf_resource.api.cmdb.get_business", return_value=[Business(bk_biz_id=biz_id, bk_biz_name="test")]
+        "drf_resource.api.cmdb.get_business", return_value=[Business(bk_biz_id=biz_id, bk_biz_name="test")]
     )
 
     mocker.patch("redis.Redis", side_effect=mock_redis_client)
@@ -71,7 +71,7 @@ def test_sync_bcs_space(create_and_delete_record, table_id, mocker):
         ],
     )
     mocker.patch(
-        "core.drf_resource.api.bcs_cluster_manager.get_project_clusters",
+        "drf_resource.api.bcs_cluster_manager.get_project_clusters",
         return_value=[
             {
                 "project_id": fake_project_id,
@@ -88,11 +88,11 @@ def test_sync_bcs_space(create_and_delete_record, table_id, mocker):
         ],
     )
     mocker.patch(
-        "core.drf_resource.api.bcs_cluster_manager.get_shared_clusters",
+        "drf_resource.api.bcs_cluster_manager.get_shared_clusters",
         return_value=[{"project_id": fake_project_id, "cluster_id": "BCS-K8S-00001"}],
     )
     mocker.patch(
-        "core.drf_resource.api.bcs.fetch_shared_cluster_namespaces",
+        "drf_resource.api.bcs.fetch_shared_cluster_namespaces",
         return_value=[
             {
                 "project_id": fake_project_id,
@@ -184,7 +184,7 @@ def test_refresh_cluster_resource(create_and_delete_record, create_and_delete_sp
     fake_project_cluster_id = "BCS-K8S-00001"
     fake_shared_cluster_id = "BCS-K8S-00002"
     mocker.patch(
-        "core.drf_resource.api.bcs_cluster_manager.get_project_clusters",
+        "drf_resource.api.bcs_cluster_manager.get_project_clusters",
         return_value=[
             {
                 "project_id": fake_project_id,
@@ -204,7 +204,7 @@ def test_refresh_cluster_resource(create_and_delete_record, create_and_delete_sp
         ],
     )
     mocker.patch(
-        "core.drf_resource.api.bcs.fetch_shared_cluster_namespaces",
+        "drf_resource.api.bcs.fetch_shared_cluster_namespaces",
         return_value=[],
     )
     mocker.patch("metadata.task.sync_space.get_metadata_cluster_list", return_value=["BCS-K8S-00001", "BCS-K8S-00002"])
@@ -230,7 +230,7 @@ def test_refresh_cluster_resource_with_share_clusters(create_and_delete_record, 
     fake_project_cluster_id = "BCS-K8S-00001"
     fake_shared_cluster_id = "BCS-K8S-00002"
     mocker.patch(
-        "core.drf_resource.api.bcs_cluster_manager.get_project_clusters",
+        "drf_resource.api.bcs_cluster_manager.get_project_clusters",
         return_value=[
             {
                 "project_id": fake_project_id,
@@ -245,7 +245,7 @@ def test_refresh_cluster_resource_with_share_clusters(create_and_delete_record, 
         ],
     )
     mocker.patch(
-        "core.drf_resource.api.bcs.fetch_shared_cluster_namespaces",
+        "drf_resource.api.bcs.fetch_shared_cluster_namespaces",
         return_value=[
             {
                 "project_id": fake_project_id,

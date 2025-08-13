@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 import pytest
 
-from core.drf_resource import resource
+from drf_resource import resource
 from constants.data_source import LabelType
 
 from .data import ALL_LABEL_MSG, HANDEL_LABEL_MSG

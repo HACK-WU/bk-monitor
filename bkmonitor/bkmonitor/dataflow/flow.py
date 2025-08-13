@@ -16,7 +16,7 @@ import time
 from django.conf import settings
 
 from constants.dataflow import ConsumingMode
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.bkmonitor.dataflow import DataFlowNotExists, DataFlowStartFailed
 
 logger = logging.getLogger("bkmonitor.dataflow")

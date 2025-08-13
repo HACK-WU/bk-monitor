@@ -48,7 +48,7 @@ from bkmonitor.utils.kubernetes import (
 )
 from bkmonitor.utils.thread_backend import ThreadPool
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import CacheResource, Resource, api
+from drf_resource import CacheResource, Resource, api
 from core.errors.bkmonitor.operator import OperatorVersionNotSupport
 from metadata import models
 

@@ -19,7 +19,7 @@ from django.utils.translation import gettext as _
 
 from bkmonitor import models as base_models
 from bkmonitor.utils.common_utils import DatetimeEncoder, DictObj, ignored, safe_int
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor.constants import STRATEGY_CHOICES
 
 INT_REG = re.compile(r"\d+")

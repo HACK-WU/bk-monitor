@@ -19,7 +19,7 @@ from bkm_space.errors import NoRelatedResourceError
 from bkm_space.validate import validate_bk_biz_id
 from core.cache import CacheType
 from bkmonitor.utils.user import get_backend_username
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 
 __all__ = [
     "search_module",

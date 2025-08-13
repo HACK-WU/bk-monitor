@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestHostComponentInfo(object):

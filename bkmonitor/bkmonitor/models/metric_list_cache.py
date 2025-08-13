@@ -17,7 +17,7 @@ from django.utils.translation import gettext_lazy as _
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.db.fields import JsonField
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource.utils.request import get_request
+from drf_resource.utils.request import get_request
 from metadata.models import TimeSeriesGroup
 
 logger = logging.getLogger(__name__)

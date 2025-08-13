@@ -164,11 +164,11 @@ class TestResource(TestCase):
         super().tearDown()
 
     def test_collector_status(self):
-        from core.drf_resource import resource
+        from drf_resource import resource
 
         resource.collecting.collect_config_detail
         with mock.patch(
-            "core.drf_resource.resource.collecting.collect_config_detail"
+            "drf_resource.resource.collecting.collect_config_detail"
         ) as patch_collect_config_detail, mock.patch(
             "elasticsearch_dsl.search.Search.execute"
         ) as patch_dsl_search_execute:

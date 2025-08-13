@@ -17,9 +17,9 @@ from django.utils.translation import ngettext as _
 from six.moves import range
 
 from bkmonitor.views import serializers
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.exceptions import CustomException
 
 
 class IPListRequestSerializer(serializers.Serializer):

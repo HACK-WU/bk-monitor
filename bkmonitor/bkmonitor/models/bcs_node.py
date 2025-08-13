@@ -26,7 +26,7 @@ from bkmonitor.models.bcs_base import BCSBase, BCSBaseUsageResources, BCSLabel
 from bkmonitor.utils.common_utils import chunks
 from bkmonitor.utils.ip import is_v6
 from bkmonitor.utils.kubernetes import BcsClusterType
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("kubernetes")
 

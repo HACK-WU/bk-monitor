@@ -13,7 +13,7 @@ from typing import List
 import arrow
 
 from alarm_backends.core.storage.kafka import KafkaQueue
-from core.drf_resource import api
+from drf_resource import api
 
 
 def oom_event_generator(ip, cloud_id):

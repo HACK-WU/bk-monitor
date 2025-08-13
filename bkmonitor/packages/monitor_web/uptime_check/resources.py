@@ -47,10 +47,10 @@ from bkmonitor.views import serializers
 from constants.alert import EventStatus
 from constants.cmdb import TargetNodeType
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.exceptions import CustomException
-from core.drf_resource.utils.local import with_client_operator
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.exceptions import CustomException
+from drf_resource.utils.local import with_client_operator
 from core.errors.api import BKAPIError
 from core.errors.dataapi import EmptyQueryException
 from monitor.models import UptimeCheckTaskSubscription

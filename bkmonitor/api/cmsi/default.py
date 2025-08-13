@@ -19,8 +19,8 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from core.drf_resource import api
-from core.drf_resource.contrib.api import APIResource
+from drf_resource import api
+from drf_resource.contrib.api import APIResource
 from core.errors.api import BKAPIError
 
 

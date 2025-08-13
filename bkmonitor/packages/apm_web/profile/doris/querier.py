@@ -17,7 +17,7 @@ from django.utils.translation import gettext_lazy as _
 from opentelemetry import trace
 
 from apm_web.models import Application
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger(__name__)

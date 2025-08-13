@@ -45,7 +45,7 @@ from constants.action import (
     ChatMessageType,
     ConvergeFunction,
 )
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 from fta_web.action.tasks import notify_to_appointee, scheduled_register_bk_plugin
 from fta_web.action.utils import parse_bk_plugin_deployed_info
 

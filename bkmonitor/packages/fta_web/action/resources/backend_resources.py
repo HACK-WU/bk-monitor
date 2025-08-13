@@ -31,7 +31,7 @@ from bkmonitor.models.fta import ActionConfig, ActionInstance, ActionPlugin
 from bkmonitor.utils.template import CustomTemplateRenderer, Jinja2Renderer
 from bkmonitor.views import serializers
 from constants.action import ActionSignal
-from core.drf_resource import Resource
+from drf_resource import Resource
 from drf_resource.utils.common import count_md5
 
 try:

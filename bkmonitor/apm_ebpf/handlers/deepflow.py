@@ -23,7 +23,7 @@ from bkm_space.api import SpaceApi
 from bkm_space.define import SpaceTypeEnum
 from bkmonitor.utils import group_by
 from bkmonitor.utils.bcs import BcsKubeClient
-from core.drf_resource import api
+from drf_resource import api
 
 
 @dataclass

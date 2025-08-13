@@ -580,9 +580,9 @@ def notice_template():
     ]
 
 
-mock.patch("core.drf_resource.api.cmsi.get_msg_type", return_value={}).start()
-mock.patch("core.drf_resource.api.cmsi.send_sms", return_value={}).start()
-mock.patch("core.drf_resource.api.cmsi.send_msg", return_value={}).start()
+mock.patch("drf_resource.api.cmsi.get_msg_type", return_value={}).start()
+mock.patch("drf_resource.api.cmsi.send_sms", return_value={}).start()
+mock.patch("drf_resource.api.cmsi.send_msg", return_value={}).start()
 mock.patch("alarm_backends.core.context.alarm.Alarm.chart_image", return_value=None).start()
 mock.patch("alarm_backends.service.fta_action.utils.run_converge.delay", return_value=11111).start()
 mock.patch("alarm_backends.service.fta_action.tasks.run_action.apply_async", return_value=11111).start()
@@ -702,15 +702,15 @@ class TestActionProcessor(TransactionTestCase):
             "bk_biz_id": 2,
         }
         self.send_weixin_patcher = patch(
-            "core.drf_resource.api.cmsi.send_weixin",
+            "drf_resource.api.cmsi.send_weixin",
             MagicMock(return_value={"username_check": {"invalid": []}, "message": _("发送成功")}),
         )
         self.send_mail_patcher = patch(
-            "core.drf_resource.api.cmsi.send_mail",
+            "drf_resource.api.cmsi.send_mail",
             MagicMock(return_value={"username_check": {"invalid": []}, "message": _("发送成功")}),
         )
         self.send_voice_patcher = patch(
-            "core.drf_resource.api.cmsi.send_voice",
+            "drf_resource.api.cmsi.send_voice",
             MagicMock(return_value={"result": True, "message": "OK"}),
         )
         self.send_wxwork_bot_patcher = patch(

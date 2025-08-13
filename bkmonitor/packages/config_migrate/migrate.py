@@ -26,7 +26,7 @@ from bkmonitor.as_code.parse import import_code_config
 from bkmonitor.as_code.parse_yaml import StrategyConfigParser
 from bkmonitor.strategy.new_strategy import Strategy
 from constants.action import ActionSignal
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from monitor_web.models import (
     CollectConfigMeta,
     CollectorPluginMeta,

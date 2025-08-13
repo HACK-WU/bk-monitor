@@ -17,7 +17,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from core.cache import CacheType
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 
 
 def get_base_url():

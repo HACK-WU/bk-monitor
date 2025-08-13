@@ -28,7 +28,7 @@ from bkm_space.api import SpaceApi, SpaceTypeEnum
 from bkmonitor.models import BCSBaseManager
 from bkmonitor.models.bcs_base import BCSBase, BCSLabel
 from bkmonitor.utils.kubernetes import get_progress_value
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("kubernetes")
 

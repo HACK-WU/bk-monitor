@@ -29,7 +29,7 @@ from apm_web.models import Application, AppServiceRelation
 from apm_web.topo.constants import BarChartDataType
 from apm_web.topo.handle import BaseQuery
 from apm_web.utils import fill_series, get_bar_interval_number
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.models.scene_view import SceneViewModel
 from monitor_web.scene_view.builtin.apm import ApmBuiltinProcessor
 

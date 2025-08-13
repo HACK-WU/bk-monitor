@@ -13,7 +13,7 @@ from rest_framework import permissions
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from calendars import resources
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class CalendarsViewSet(ResourceViewSet):

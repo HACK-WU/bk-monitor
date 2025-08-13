@@ -21,7 +21,7 @@ from requests import RequestException
 from rest_framework.status import HTTP_200_OK
 
 from apm_web.profile.models import Profile
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("root")
 

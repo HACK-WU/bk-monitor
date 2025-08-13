@@ -35,7 +35,7 @@ from bkmonitor.utils.model_manager import AbstractRecordModel, Model
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.report import StaffChoice
 from constants.shield import ShieldStatus, ShieldType
-from core.drf_resource import api
+from drf_resource import api
 
 # nodata dimension tag
 NO_DATA_TAG_DIMENSION = "__NO_DATA_DIMENSION__"

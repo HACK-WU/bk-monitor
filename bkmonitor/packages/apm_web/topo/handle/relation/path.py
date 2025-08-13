@@ -31,7 +31,7 @@ from apm_web.topo.handle.relation.define import (
     TreeInfo,
 )
 from apm_web.topo.handle.relation.query import RelationQ
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class Layer:

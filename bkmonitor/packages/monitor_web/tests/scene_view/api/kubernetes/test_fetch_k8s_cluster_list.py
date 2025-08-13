@@ -16,7 +16,7 @@ from api.kubernetes.default import (
     FetchK8sClusterListResource,
     FetchK8sNodeListByClusterResource,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 
 class TestFetchK8sClusterListResource:

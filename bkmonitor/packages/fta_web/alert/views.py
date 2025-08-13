@@ -17,8 +17,8 @@ from bkmonitor.documents import ActionInstanceDocument, AlertDocument
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.views.renderers import PlainTextRenderer
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from core.errors.iam import PermissionDeniedError
 from fta_web.alert.serializers import SearchFavoriteSerializer
 from fta_web.models.alert import SearchFavorite

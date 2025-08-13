@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Type
 
 from apm_web.topo.handle.relation.define import Node, Relation, Source, SourceProvider
-from core.drf_resource import api
+from drf_resource import api
 
 
 @dataclass

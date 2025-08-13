@@ -27,7 +27,7 @@ from apm_web.topo.handle.relation.query import RelationQ
 from bkmonitor.commons.tools import batch_request
 from core.cache import using_cache, CacheType
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("apm")
 

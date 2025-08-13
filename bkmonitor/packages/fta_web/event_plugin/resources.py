@@ -39,9 +39,9 @@ from bkmonitor.utils.cipher import transform_data_id_to_token
 from bkmonitor.utils.serializers import StringSplitListField
 from bkmonitor.utils.template import jinja_render
 from bkmonitor.utils.time_tools import utc2biz_str
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.exceptions import CustomException
-from core.drf_resource.tools import format_serializer_errors
+from drf_resource import Resource, api, resource
+from drf_resource.exceptions import CustomException
+from drf_resource.tools import format_serializer_errors
 from core.errors.event_plugin import (
     DataIDNotSetError,
     GetKafkaConfigError,

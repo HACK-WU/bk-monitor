@@ -18,7 +18,7 @@ from django.utils.translation import gettext as _
 from bkmonitor.models import ActionInstance, ActionPlugin
 from bkmonitor.utils.send import NoneTemplateSender
 from constants.action import ActionSignal, ActionStatus
-from core.drf_resource import api
+from drf_resource import api
 from fta_web.action.utils import (
     compile_assign_action_config,
     parse_bk_plugin_deployed_info,

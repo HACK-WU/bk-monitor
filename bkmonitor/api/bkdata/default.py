@@ -18,8 +18,8 @@ from rest_framework import serializers
 
 from constants.dataflow import AutoOffsetResets
 from core.cache import CacheType
-from core.drf_resource import APIResource
-from core.drf_resource.utils.request import get_request
+from drf_resource import APIResource
+from drf_resource.utils.request import get_request
 
 
 class UseSaaSAuthInfoMixin:

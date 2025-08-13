@@ -20,8 +20,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.serializers import Serializer
 
-from core.drf_resource.base import Resource
-from core.drf_resource.utils.local import local
+from drf_resource.base import Resource
+from drf_resource.utils.local import local
 
 """
 Resource的ViewSet定义

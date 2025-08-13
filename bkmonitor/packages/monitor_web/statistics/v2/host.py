@@ -16,7 +16,7 @@ from django.utils.functional import cached_property
 
 from bkmonitor.data_source import UnifyQuery, load_data_source
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 from core.statistics.metric import Metric, register
 from monitor_web.statistics.v2.base import BaseCollector
 

@@ -18,8 +18,8 @@ from bkmonitor.report.serializers import (
 )
 from bkmonitor.report.utils import create_send_record
 from bkmonitor.views import serializers
-from core.drf_resource import Resource, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class SendReport(Resource):

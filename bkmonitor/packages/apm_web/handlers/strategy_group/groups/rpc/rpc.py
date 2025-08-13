@@ -39,7 +39,7 @@ from bkmonitor.models import UserGroup
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE, PUBLIC_NOTICE_CONFIG
 from constants.apm import MetricTemporality, TRPCMetricTag
-from core.drf_resource import resource
+from drf_resource import resource
 
 from ... import base, define
 from ...builder import StrategyBuilder

@@ -25,7 +25,7 @@ from apm.core.discover.precalculation.consul_handler import ConsulHandler
 from apm.models import ApmApplication, MetricDataSource, TraceDataSource
 from bkmonitor.utils import group_by
 from bkmonitor.utils.time_tools import get_datetime_range
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("apm")

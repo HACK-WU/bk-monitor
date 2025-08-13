@@ -69,7 +69,7 @@ from bkmonitor.iam.drf import (
     ViewBusinessPermission,
     insert_permission_field,
 )
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class MetaInfoViewSet(ResourceViewSet):

@@ -15,7 +15,7 @@ from typing import List
 from django.conf import settings
 
 from bkmonitor.utils.version import get_max_version
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("metadata")
 

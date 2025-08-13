@@ -13,7 +13,7 @@ from unittest.mock import sentinel
 
 import pytest
 
-from core.drf_resource import api
+from drf_resource import api
 
 
 class TestBatchQueryTimeSeriesGroups:

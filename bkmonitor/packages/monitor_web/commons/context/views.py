@@ -15,8 +15,8 @@ from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
 
 from common.context_processors import get_default_biz_id
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from monitor_web.commons.context.resources import ContextType
 
 

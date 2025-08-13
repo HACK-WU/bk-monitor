@@ -20,7 +20,7 @@ from bkmonitor.models import StrategyModel
 from bkmonitor.models.bcs_cluster import BCSCluster
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import time_interval_align
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.alert import AlertNotFoundError
 
 logger = logging.getLogger("monitor_web")

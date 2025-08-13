@@ -17,7 +17,7 @@ from bkmonitor.models import DutyRule, DutyRuleSnap
 from bkmonitor.utils import time_tools
 from common.log import logger
 from constants.action import BKCHAT_TRIGGER_TYPE_MAPPING
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 
 
 class GetBkchatGroupResource(Resource):

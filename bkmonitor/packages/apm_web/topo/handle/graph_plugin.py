@@ -37,7 +37,7 @@ from apm_web.topo.constants import (
 from apm_web.topo.handle.bar_query import LinkHelper
 from apm_web.utils import merge_dicts
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 from core.unit import load_unit
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from monitor_web.models.scene_view import SceneViewModel

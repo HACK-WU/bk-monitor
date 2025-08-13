@@ -14,7 +14,7 @@ import logging
 from monitor_web.statistics.v2.factory import CollectorFactory
 from rest_framework import serializers
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 logger = logging.getLogger(__name__)
 

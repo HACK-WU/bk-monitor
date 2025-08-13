@@ -20,7 +20,7 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 
 from apm_web.utils import get_bar_interval_number, get_interval
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 from core.errors.api import BKAPIError
 from monitor_web.scene_view.resources.base import PageListResource
 from monitor_web.scene_view.table_format import StringTableFormat, TimestampTableFormat

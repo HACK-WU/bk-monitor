@@ -16,7 +16,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext as _
 
 from bkmonitor.models import BCSBase, BCSBaseManager, BCSBaseResources, BCSLabel, BCSPod
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BCSWorkloadManager(BCSBaseManager):

@@ -19,7 +19,7 @@ from django.conf import settings
 from django.utils.functional import cached_property
 from kubernetes import client
 
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 
 logger = logging.getLogger(__name__)
 

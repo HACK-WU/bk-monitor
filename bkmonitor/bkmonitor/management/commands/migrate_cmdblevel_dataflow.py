@@ -18,7 +18,7 @@ from django.core.management import BaseCommand
 
 from bkmonitor.dataflow.node.storage import TSpiderStorageNode
 from constants.dataflow import ConsumingMode
-from core.drf_resource import api
+from drf_resource import api
 
 
 class Command(BaseCommand):

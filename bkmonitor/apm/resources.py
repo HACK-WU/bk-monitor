@@ -71,8 +71,8 @@ from constants.apm import (
     TraceListQueryMode,
     TraceWaterFallDisplayKey,
 )
-from core.drf_resource import Resource, api
-from core.drf_resource.exceptions import CustomException
+from drf_resource import Resource, api
+from drf_resource.exceptions import CustomException
 from metadata import models
 from metadata.models import DataSource
 

@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 from rest_framework import serializers
 
 from bkmonitor.utils.user import get_global_user
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 
 
 class GetUserDepartmentsResource(Resource):

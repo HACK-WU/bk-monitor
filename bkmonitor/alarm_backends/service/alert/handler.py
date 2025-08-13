@@ -31,7 +31,7 @@ from alarm_backends.service.alert.builder.tasks import run_alert_builder
 from bkmonitor.models import EventPluginInstance
 from bkmonitor.utils.consul import BKConsul
 from bkmonitor.utils.thread_backend import InheritParentThread
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("alert.poller")
 

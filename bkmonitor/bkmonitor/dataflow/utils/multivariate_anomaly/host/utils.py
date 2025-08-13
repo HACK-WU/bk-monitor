@@ -21,7 +21,7 @@ from bkmonitor.dataflow.utils.multivariate_anomaly.host.constant import (
     AGG_TRANS_METRICS_SQL_EXPR,
     MERGE_SQL_EXPR,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("utils")
 

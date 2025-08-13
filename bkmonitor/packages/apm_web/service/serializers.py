@@ -18,7 +18,7 @@ from apm_web.models import (
     CMDBServiceRelation,
     LogServiceRelation,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 
 class CMDBServiceRelationSerializer(serializers.ModelSerializer):

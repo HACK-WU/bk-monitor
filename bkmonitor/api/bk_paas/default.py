@@ -15,7 +15,7 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 
 logger = logging.getLogger(__name__)
 

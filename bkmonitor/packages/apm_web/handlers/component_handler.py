@@ -21,7 +21,7 @@ from apm_web.handlers.service_handler import ServiceHandler
 from apm_web.metrics import COMPONENT_LIST
 from core.cache import using_cache, CacheType
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger(__name__)

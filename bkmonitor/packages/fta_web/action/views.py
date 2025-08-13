@@ -23,8 +23,8 @@ from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission, IAMPermission
 from bkmonitor.models import ActionConfig, ActionPlugin, StrategyActionConfigRelation
 from constants.action import GLOBAL_BIZ_ID, ActionDisplayStatus
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class ActionConfigViewSet(viewsets.ModelViewSet):

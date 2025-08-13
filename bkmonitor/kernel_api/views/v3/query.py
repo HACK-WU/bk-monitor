@@ -14,7 +14,7 @@ data query
 
 
 from bkmonitor.views.renderers import MonitorJSONRenderer
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from kernel_api.resource.permission import BusinessListByActions
 from kernel_api.resource.query import QueryEsResource
 from query_api.resources import GetTSDataResource

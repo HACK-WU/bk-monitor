@@ -16,7 +16,7 @@ from django.db.transaction import atomic
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata import config, models
 from metadata.models.constants import BULK_CREATE_BATCH_SIZE, BULK_UPDATE_BATCH_SIZE
 from metadata.service.space_redis import (

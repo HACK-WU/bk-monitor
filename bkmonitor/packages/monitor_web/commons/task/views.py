@@ -9,9 +9,9 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-from core.drf_resource.viewsets import ResourceViewSet
-from core.drf_resource.viewsets import ResourceRoute
-from core.drf_resource import resource
+from drf_resource.viewsets import ResourceViewSet
+from drf_resource.viewsets import ResourceRoute
+from drf_resource import resource
 
 
 class QueryAsyncTaskResultViewSet(ResourceViewSet):

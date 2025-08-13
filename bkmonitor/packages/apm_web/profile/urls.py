@@ -12,7 +12,7 @@ from django.urls import path
 from rest_framework.routers import SimpleRouter
 
 from apm_web.profile import views
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 
 router = SimpleRouter()
 router.register(r"query", views.ProfileQueryViewSet, basename="query")

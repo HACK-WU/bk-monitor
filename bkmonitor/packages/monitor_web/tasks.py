@@ -61,7 +61,7 @@ from bkmonitor.utils.user import get_global_user, set_local_username
 from constants.aiops import SCENE_NAME_MAPPING
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.dataflow import ConsumingMode
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.api import BKAPIError
 from core.errors.bkmonitor.dataflow import DataFlowNotExists
 from core.prometheus import metrics
@@ -1413,7 +1413,7 @@ def update_metric_json_from_ts_group():
 @celery_receiver(task_postrun)
 def task_postrun_handler(sender=None, headers=None, body=None, **kwargs):
     # 清理celery任务的线程变量
-    from core.drf_resource.utils.local import local
+    from drf_resource.utils.local import local
 
     local.clear()
 

@@ -35,7 +35,7 @@ from bkmonitor.models import StrategyModel
 from bkmonitor.utils.common_utils import get_local_ip
 from constants.action import ActionPluginType
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 from metadata.models import DataSource
 
 

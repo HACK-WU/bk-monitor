@@ -61,7 +61,7 @@ from bkmonitor.utils.kubernetes import (
 from bkmonitor.utils.thread_backend import ThreadPool
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.event import EventTypeNormal, EventTypeWarning
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from core.unit import load_unit
 from monitor_web.constants import (
     GRAPH_COLUMN_BAR,

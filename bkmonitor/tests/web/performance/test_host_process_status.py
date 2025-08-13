@@ -11,8 +11,8 @@ specific language governing permissions and limitations under the License.
 
 import pytest
 
-from core.drf_resource import resource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import resource
+from drf_resource.exceptions import CustomException
 from tests.web.performance import mock_cache, mock_cc
 
 

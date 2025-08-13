@@ -12,7 +12,7 @@ from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from calendars.models import CalendarItemModel, CalendarModel
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 
 class SaveCalendarResource(Resource):

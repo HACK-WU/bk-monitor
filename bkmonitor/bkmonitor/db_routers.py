@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from functools import wraps
 
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 backend_db_apps = ["monitor_api", "metadata", "bkmonitor", "apm", "calendars"]
 

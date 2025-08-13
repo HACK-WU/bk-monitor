@@ -22,7 +22,7 @@ from urllib.parse import urlunparse
 
 from django.conf import settings
 
-from core.drf_resource import resource
+from drf_resource import resource
 from metadata.models import ClusterInfo
 from metadata.utils import consul_tools
 

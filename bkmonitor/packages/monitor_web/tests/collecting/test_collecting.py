@@ -17,8 +17,8 @@ import mock
 from django.test import TestCase
 
 from config import celery_app
-from core.drf_resource import APIResource, resource
-from core.drf_resource.utils.local import local
+from drf_resource import APIResource, resource
+from drf_resource.utils.local import local
 from monitor_web.models import (
     CollectorPluginConfig,
     CollectorPluginInfo,

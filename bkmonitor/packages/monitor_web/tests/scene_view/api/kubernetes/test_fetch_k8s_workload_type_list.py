@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 import pytest
 
-from core.drf_resource import api
+from drf_resource import api
 
 
 class TestFetchK8sWorkloadTypeListResource:

@@ -19,7 +19,7 @@ from django.db.models import Q
 from django.db.transaction import atomic
 
 from alarm_backends.core.lock.service_lock import share_lock
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 from metadata import config, models
 from metadata.models.constants import BULK_CREATE_BATCH_SIZE, BULK_UPDATE_BATCH_SIZE

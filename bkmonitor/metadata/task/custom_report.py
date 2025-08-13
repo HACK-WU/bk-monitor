@@ -27,7 +27,7 @@ from bkmonitor.models import QueryConfigModel
 from bkmonitor.utils.time_tools import datetime_str_to_datetime
 from bkmonitor.utils.version import compare_versions, get_max_version
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 from metadata import models
 from metadata.models.constants import EVENT_GROUP_SLEEP_THRESHOLD, EventGroupStatus

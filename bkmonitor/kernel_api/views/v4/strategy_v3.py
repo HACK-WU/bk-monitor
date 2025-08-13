@@ -14,8 +14,8 @@ from rest_framework import serializers
 from bkmonitor.models import StrategyModel
 from bkmonitor.strategy.new_strategy import Strategy
 from constants.data_source import DATA_CATEGORY
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from monitor_web.strategies.resources import GetStrategyListV2Resource
 
 

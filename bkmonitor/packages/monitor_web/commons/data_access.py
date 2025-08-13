@@ -17,7 +17,7 @@ from django.utils.encoding import force_str
 from django.utils.translation import gettext as _
 
 from bkmonitor.utils.common_utils import safe_int
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from monitor.constants import UptimeCheckProtocol
 from monitor_web.plugin.constant import (

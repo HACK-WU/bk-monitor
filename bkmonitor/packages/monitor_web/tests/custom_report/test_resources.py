@@ -16,7 +16,7 @@ import mock
 import pytest
 from django.test import TestCase, override_settings
 
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 from core.errors.custom_report import CustomEventValidationError, CustomTSValidationError
 from monitor_web.custom_report.resources import (
     CreateCustomEventGroup,

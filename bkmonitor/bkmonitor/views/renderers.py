@@ -57,7 +57,7 @@ class UJSONRenderer(BaseRenderer):
 
 class MonitorJSONRenderer(UJSONRenderer):
     def get_result(self, data, renderer_context=None):
-        from core.drf_resource.exceptions import CustomException
+        from drf_resource.exceptions import CustomException
 
         if hasattr(self, "rendered_content"):
             return self.rendered_content

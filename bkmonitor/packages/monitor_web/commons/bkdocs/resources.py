@@ -14,7 +14,7 @@ from django.conf import settings
 from django.utils.translation import get_language
 
 from bkmonitor.views import serializers
-from core.drf_resource.base import Resource
+from drf_resource.base import Resource
 
 DOCS_LIST = ["产品白皮书", "应用运维文档", "开发架构文档"]
 

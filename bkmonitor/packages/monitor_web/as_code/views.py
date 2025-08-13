@@ -19,8 +19,8 @@ from rest_framework.authentication import SessionAuthentication
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.middlewares.authentication import NoCsrfSessionAuthentication
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 SCHEMA_CONFIGS = {}
 

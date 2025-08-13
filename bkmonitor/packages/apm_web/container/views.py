@@ -13,7 +13,7 @@ from apm_web.decorators import user_visit_record
 from apm_web.models import Application
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import BusinessActionPermission, InstanceActionForDataPermission
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class K8sViewSet(ResourceViewSet):

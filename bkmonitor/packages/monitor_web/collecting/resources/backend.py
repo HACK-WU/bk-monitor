@@ -22,9 +22,9 @@ from bkmonitor.utils import shortuuid
 from bkmonitor.utils.user import get_global_user
 from bkmonitor.views import serializers
 from constants.cmdb import TargetNodeType, TargetObjectType
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.collecting import (
     CollectConfigNotExist,

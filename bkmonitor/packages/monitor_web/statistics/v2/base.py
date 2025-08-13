@@ -13,7 +13,7 @@ from typing import List
 from django.utils.functional import cached_property
 
 from bkmonitor.models import StatisticsMetric
-from core.drf_resource import api
+from drf_resource import api
 from core.statistics.collector import Collector
 from core.statistics.metric import Metric
 from core.statistics.storage import Storage

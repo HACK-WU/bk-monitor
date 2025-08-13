@@ -9,7 +9,7 @@ import ujson
 from django.utils.translation import gettext as _
 
 from bkmonitor.models import ActionConfig
-from core.drf_resource import api
+from drf_resource import api
 from fta_web.fta_migrate.constants import SALT, SOPS_CONSTANTS_MAPPING
 from fta_web.fta_migrate.pipeline import builder
 from fta_web.fta_migrate.pipeline.flow import EmptyEndEvent, EmptyStartEvent

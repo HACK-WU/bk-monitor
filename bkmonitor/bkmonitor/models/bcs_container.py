@@ -19,7 +19,7 @@ from django.utils.translation import gettext as _
 from bkmonitor.models import BCSBaseManager
 from bkmonitor.models.bcs_base import BCSBase, BCSBaseResources, BCSLabel
 from bkmonitor.utils.common_utils import chunks
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("kubernetes")
 

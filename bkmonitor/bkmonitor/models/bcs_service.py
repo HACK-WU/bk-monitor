@@ -18,7 +18,7 @@ from bkmonitor.models import BCSBaseManager
 from bkmonitor.models.bcs_base import BCSBase, BCSLabel
 from bkmonitor.models.bcs_pod import BCSPod
 from bkmonitor.utils.common_utils import chunks
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BCSServiceManager(BCSBaseManager):

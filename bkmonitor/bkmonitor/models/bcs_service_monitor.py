@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 from django.db import models
 
 from bkmonitor.models import BCSBaseManager, BCSLabel, BCSMonitor
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BCSServiceMonitorManager(BCSBaseManager):

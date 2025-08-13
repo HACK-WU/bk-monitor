@@ -29,7 +29,7 @@ from bkmonitor.utils.custom_report_tools import custom_report_tool
 from bkmonitor.utils.time_tools import strftime_local
 from common.log import logger
 from constants.apm import TelemetryDataType
-from core.drf_resource import api
+from drf_resource import api
 
 
 class APMEvent(Enum):

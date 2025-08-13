@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 from django.urls import include, re_path
 
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from monitor_web.collecting import views as collecting_views
 
 router = ResourceRouter()

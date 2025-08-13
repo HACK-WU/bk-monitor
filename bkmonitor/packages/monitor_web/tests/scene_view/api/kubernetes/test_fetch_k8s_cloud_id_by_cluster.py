@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 import pytest
 from api.kubernetes.default import FetchK8sCloudIdByClusterResource
-from core.drf_resource import api
+from drf_resource import api
 
 pytestmark = pytest.mark.django_db
 

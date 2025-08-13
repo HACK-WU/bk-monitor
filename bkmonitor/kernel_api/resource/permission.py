@@ -16,8 +16,8 @@ from django.core.exceptions import ValidationError
 from bkmonitor.iam import Permission
 from bkmonitor.iam.action import ActionEnum
 from bkmonitor.views import serializers
-from core.drf_resource import Resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource
+from drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 

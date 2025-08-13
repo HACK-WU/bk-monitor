@@ -16,7 +16,7 @@ from django.core.exceptions import EmptyResultSet
 from django.utils.translation import gettext as _
 
 from bkmonitor.models import BCSNode, BCSPodMonitor, BCSServiceMonitor
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.models.scene_view import SceneViewModel, SceneViewOrderModel
 from monitor_web.scene_view.builtin import BuiltinProcessor
 from monitor_web.scene_view.builtin.constants import (

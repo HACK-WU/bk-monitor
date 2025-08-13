@@ -18,8 +18,8 @@ from bkmonitor.iam.permission import ActionIdMap, Permission
 from bkmonitor.models import ApiAuthToken, TokenAccessRecord
 from bkmonitor.utils.user import get_global_user
 from bkmonitor.views import serializers
-from core.drf_resource import Resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource
+from drf_resource.utils.request import get_request
 from core.errors.share import TokenDeletedError, TokenExpiredError, TokenValidatedError
 
 logger = logging.getLogger("monitor_web")

@@ -1,4 +1,4 @@
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 
 def get_request(peaceful=False):

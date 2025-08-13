@@ -21,7 +21,7 @@ from bkmonitor.commons.tools import is_ipv6_biz
 from bkmonitor.utils import time_tools
 from bkmonitor.utils.common_utils import fetch_biz_id_from_request, safe_int
 from common.log import logger
-from core.drf_resource import resource
+from drf_resource import resource
 from core.errors.api import BKAPIError
 
 

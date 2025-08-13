@@ -34,7 +34,7 @@ from api.cmdb.define import Host
 from bkmonitor.models import StrategyModel
 from bkmonitor.utils.common_utils import get_local_ip
 from bkmonitor.utils.supervisor_utils import get_supervisor_client
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger(__name__)
 

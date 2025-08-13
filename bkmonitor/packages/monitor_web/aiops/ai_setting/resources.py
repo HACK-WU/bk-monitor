@@ -14,7 +14,7 @@ from bkmonitor.aiops.utils import AiSetting
 from bkmonitor.dataflow.constant import AccessStatus
 from bkmonitor.views import serializers
 from constants.aiops import SCENE_METRIC_MAP
-from core.drf_resource import Resource
+from drf_resource import Resource
 from monitor_web.aiops.ai_setting.serializers import (
     KPIAnomalyDetectionSerializer,
     MultivariateAnomalyDetectionSerializer,

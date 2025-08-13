@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from apm_web.constants import TopoNodeKind
 from apm_web.handlers.service_handler import ServiceHandler
-from core.drf_resource import api
+from drf_resource import api
 
 
 class RelationMetricHandler:

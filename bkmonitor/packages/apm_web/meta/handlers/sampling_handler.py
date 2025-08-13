@@ -17,7 +17,7 @@ from apm_web.constants import SamplerTypeChoices
 from apm_web.models import ApmMetaConfig, Application
 from common.log import logger
 from constants.apm import DataSamplingLogTypeChoices, FlowType
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 tracer = trace.get_tracer(__name__)

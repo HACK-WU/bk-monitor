@@ -21,7 +21,7 @@ from bkmonitor.models import StrategyModel
 from bkmonitor.utils.user import set_local_username
 from constants.action import ActionPluginType, ActionStatus
 from constants.alert import EVENT_SEVERITY_DICT
-from core.drf_resource import resource
+from drf_resource import resource
 from core.statistics.metric import Metric, register
 
 

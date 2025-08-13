@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 from django.utils.translation import gettext as _
 from rest_framework.decorators import action
 
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from kernel_api.resource.collecting import CollectConfigInfoResource
 from monitor_api.views import *  # noqa
 from monitor_api.views import Response, viewsets

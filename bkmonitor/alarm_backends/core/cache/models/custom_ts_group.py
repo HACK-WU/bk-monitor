@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 
 from alarm_backends.core.cache.base import CacheManager
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from metadata.models import TimeSeriesGroup
 

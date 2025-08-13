@@ -19,7 +19,7 @@ from django.db import models
 
 from bkmonitor.utils.cipher import transform_data_id_to_token
 from bkmonitor.utils.db.fields import JsonField
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
 from metadata.models.constants import LOG_REPORT_MAX_QPS
 

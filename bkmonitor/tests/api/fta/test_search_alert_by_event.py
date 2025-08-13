@@ -19,7 +19,7 @@ from bkmonitor.documents import AlertDocument, EventDocument, ActionInstanceDocu
 from bkmonitor.models import EventPlugin
 from metadata.models import DataSource
 
-patch("core.drf_resource.api.cmsi.get_msg_type", return_value=[{"type": "voice", "label": "语音"}]).start()
+patch("drf_resource.api.cmsi.get_msg_type", return_value=[{"type": "voice", "label": "语音"}]).start()
 
 
 class TestSearchAlertByEventResource(TestCase):

@@ -20,7 +20,7 @@ from furl import furl
 from kubernetes.client.rest import ApiException
 
 from bkmonitor.models import BCSBase, BCSCluster
-from core.drf_resource import api
+from drf_resource import api
 
 
 class BCSMonitor(BCSBase):

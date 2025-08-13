@@ -26,7 +26,7 @@ from bkmonitor.models import NO_DATA_TAG_DIMENSION, MetricListCache
 from bkmonitor.utils.range import load_agg_condition_instance
 from bkmonitor.utils.time_tools import parse_time_compare_abbreviation
 from constants.data_source import TS_MAX_SLIMIT, DataSourceLabel
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from core.errors.api import BKAPIError
 from monitor_web.grafana.data_migrate import TimeSeriesPanel
 

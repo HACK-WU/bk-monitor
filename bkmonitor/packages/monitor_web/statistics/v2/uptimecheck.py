@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 from django.utils.functional import cached_property
 
-from core.drf_resource import resource
+from drf_resource import resource
 from core.statistics.metric import Metric, register
 from monitor_web.models.uptime_check import (
     UptimeCheckGroup,

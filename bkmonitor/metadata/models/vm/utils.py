@@ -19,7 +19,7 @@ from django.db.models import Q
 from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
 from constants.data_source import DATA_LINK_V3_VERSION_NAME, DATA_LINK_V4_VERSION_NAME
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 from metadata.models import (
     AccessVMRecord,

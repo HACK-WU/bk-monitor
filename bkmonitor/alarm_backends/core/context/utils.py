@@ -16,7 +16,7 @@ import time
 from alarm_backends.core.cache.cmdb.business import BusinessManager
 from alarm_backends.core.cache.key import NOTICE_MAPPING_KEY
 from constants.action import NoticeWay
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 logger = logging.getLogger("fta_action.run")

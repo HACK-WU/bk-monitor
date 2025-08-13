@@ -16,7 +16,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from core.cache import CacheType
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 
 
 class BkLoginAPIGWResource(six.with_metaclass(abc.ABCMeta, APIResource)):

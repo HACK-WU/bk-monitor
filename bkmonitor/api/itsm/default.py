@@ -15,8 +15,8 @@ import six
 from django.conf import settings
 from rest_framework import serializers
 
-from core.drf_resource.contrib.api import APIResource
-from core.drf_resource.utils.request import get_request
+from drf_resource.contrib.api import APIResource
+from drf_resource.utils.request import get_request
 
 
 class ITSMBaseResource(six.with_metaclass(abc.ABCMeta, APIResource)):

@@ -104,7 +104,7 @@ from constants.strategy import (
     DataTarget,
     TargetFieldType,
 )
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.strategy import CreateStrategyError, StrategyNotExist
 
 logger = logging.getLogger(__name__)

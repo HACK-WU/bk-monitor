@@ -61,10 +61,10 @@ from apm_web.profile.serializers import (
 from apm_web.tasks import profile_file_upload_and_parse
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import InstanceActionForDataPermission, ViewBusinessPermission
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from core.cache import using_cache
-from core.drf_resource import api
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import api
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("root")

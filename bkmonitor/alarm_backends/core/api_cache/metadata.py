@@ -14,7 +14,7 @@ cmdb接口缓存，celery定时任务
 
 
 from constants.data_source import LabelType
-from core.drf_resource import api
+from drf_resource import api
 
 list_result_table = {"api": api.metadata.list_result_table, "args": {}, "kwargs": {}}
 

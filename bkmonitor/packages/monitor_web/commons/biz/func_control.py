@@ -13,7 +13,7 @@ from api.cmdb import client
 # 空间功能控制
 from bkm_space.api import SpaceApi
 from bkm_space.define import SpaceFunction, SpaceTypeEnum
-from core.drf_resource import resource
+from drf_resource import resource
 from core.errors.api import BKAPIError
 from monitor_web.models.uptime_check import UptimeCheckTask
 

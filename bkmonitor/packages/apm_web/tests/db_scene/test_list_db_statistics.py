@@ -75,7 +75,7 @@ class TestListDbStatistics(django.test.TestCase):
             },
         }
 
-        mock.patch("core.drf_resource.api.apm_api.query_es", return_value=return_value).start()
+        mock.patch("drf_resource.api.apm_api.query_es", return_value=return_value).start()
 
         obj = ListDbStatisticsResource()
 

@@ -21,7 +21,7 @@ from bkmonitor.documents import AlertDocument, AlertLog
 from bkmonitor.utils.range import load_condition_instance
 from constants.action import ActionPluginType, AssignMode, UserGroupType
 from constants.alert import EVENT_SEVERITY_DICT
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("fta_action.run")

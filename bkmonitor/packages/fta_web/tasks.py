@@ -15,7 +15,7 @@ from celery import shared_task
 from django.utils.translation import gettext as _
 
 from bkmonitor.models import ActionConfig, AlertAssignGroup, AlertAssignRule
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from fta_web.constants import QuickSolutionsConfig
 from monitor_web.strategies.user_groups import create_default_notice_group
 

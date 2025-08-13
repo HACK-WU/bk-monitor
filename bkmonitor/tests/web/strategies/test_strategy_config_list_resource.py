@@ -14,7 +14,7 @@ import pytest
 from django.db.models.query import QuerySet
 
 from bkmonitor.models import Action, ActionNoticeMapping, Item, NoticeGroup, ResultTableSQLConfig, Shield, Strategy
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.shield.utils import ShieldDetectManager
 from monitor_web.strategies.constant import Scenario
 

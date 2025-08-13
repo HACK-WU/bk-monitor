@@ -34,7 +34,7 @@ from apm_web.trace.serializers import (
     QueryStatisticsSerializer,
     SpanIdInputSerializer,
 )
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from core.cache import using_cache
 from constants.apm import (
     OtlpKey,
@@ -43,8 +43,8 @@ from constants.apm import (
     TraceListQueryMode,
     TraceWaterFallDisplayKey,
 )
-from core.drf_resource import Resource, api
-from core.drf_resource.exceptions import CustomException
+from drf_resource import Resource, api
+from drf_resource.exceptions import CustomException
 from core.errors.api import BKAPIError
 from core.prometheus.base import OPERATION_REGISTRY
 from core.prometheus.metrics import safe_push_to_gateway

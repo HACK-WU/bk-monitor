@@ -86,7 +86,7 @@ class BaseTestCase(TestCase):
         DutyArrange.objects.all().delete()
 
         self.user_mock = mock.patch(
-            "core.drf_resource.api.bk_login.get_all_user",
+            "drf_resource.api.bk_login.get_all_user",
             return_value={"results": [{"username": "admin", "display_name": "admin"}]},
         )
 

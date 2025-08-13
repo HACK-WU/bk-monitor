@@ -243,7 +243,7 @@ class TestDataSource(object):
             base_channel_id += 1
             return {"channel_id": base_channel_id}
 
-        mocker.patch("core.drf_resource.api.gse.add_route", side_effect=gen_channel_id)
+        mocker.patch("drf_resource.api.gse.add_route", side_effect=gen_channel_id)
 
     @pytest.fixture
     def create_and_delete_record(self, mocker):

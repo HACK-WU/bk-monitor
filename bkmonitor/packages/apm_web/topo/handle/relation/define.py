@@ -14,7 +14,7 @@ from typing import List, Tuple
 
 from apm_web.topo.constants import SourceType
 from core.cache import using_cache, CacheType
-from core.drf_resource import api
+from drf_resource import api
 
 
 class SourceProvider:

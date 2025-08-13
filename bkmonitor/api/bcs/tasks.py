@@ -34,7 +34,7 @@ from bkmonitor.models import (
 )
 from bkmonitor.utils.common_utils import chunks
 from bkmonitor.utils.ip import exploded_ip
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 logger = logging.getLogger("kubernetes")

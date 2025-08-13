@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 
-CORE_DRF_RESOURCE_CONTRIB_API_MAKE_USERINFO = "core.drf_resource.contrib.api.make_userinfo"
+CORE_DRF_RESOURCE_CONTRIB_API_MAKE_USERINFO = "drf_resource.contrib.api.make_userinfo"
 
 BKMONITRO_RESOURCE_ALERT_EVENTS_GET_EVENT = "bkmonitor.resource.resource.alert_events.get_event"
 BKMONIT_MODELS_ANOMALYRECORD_OBJECTS_FILTER = "bkmonitor.models.AnomalyRecord.objects.filter"

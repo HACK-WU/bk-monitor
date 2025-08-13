@@ -87,7 +87,7 @@ def create_and_delete_resource(mocker):
 def test_sync_cmdb_space(mocker, create_and_delete_resource):
     # mocker cmdb biz
     mocker.patch(
-        "core.drf_resource.api.cmdb.get_business", return_value=[Business(bk_biz_id=fake_biz_id, bk_biz_name="test")]
+        "drf_resource.api.cmdb.get_business", return_value=[Business(bk_biz_id=fake_biz_id, bk_biz_name="test")]
     )
 
     call_command("sync_cmdb_space")

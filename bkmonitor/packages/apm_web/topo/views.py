@@ -21,7 +21,7 @@ from apm_web.topo.resources import (
 )
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import InstanceActionForDataPermission
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class GlobalViewSet(ResourceViewSet):

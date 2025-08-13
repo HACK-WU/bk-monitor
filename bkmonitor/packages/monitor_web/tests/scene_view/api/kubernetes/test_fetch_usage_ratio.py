@@ -15,7 +15,7 @@ from django.conf import settings
 
 from api.bcs_storage.default import FetchResource
 from api.kubernetes.default import FetchK8sClusterListResource
-from core.drf_resource import api
+from drf_resource import api
 
 pytestmark = pytest.mark.django_db
 

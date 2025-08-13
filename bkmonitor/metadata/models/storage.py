@@ -55,7 +55,7 @@ from bkmonitor.utils.common_utils import (
 from bkmonitor.utils.db.fields import JsonField
 from bkmonitor.utils.elasticsearch.curator import IndexList
 from bkmonitor.utils.time_tools import datetime_str_to_datetime
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.models import constants
 from metadata.models.influxdb_cluster import InfluxDBTool

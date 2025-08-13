@@ -15,7 +15,7 @@ import abc
 import six
 from django.conf import settings
 
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 
 
 class BKDocsCenterResource(six.with_metaclass(abc.ABCMeta, APIResource)):

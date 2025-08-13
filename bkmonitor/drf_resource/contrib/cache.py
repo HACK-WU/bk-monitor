@@ -13,8 +13,8 @@ import abc
 
 import six
 
-from core.drf_resource.base import Resource
-from core.drf_resource.cache import CacheTypeItem, using_cache
+from drf_resource.base import Resource
+from drf_resource.cache import CacheTypeItem, using_cache
 
 
 class CacheResource(six.with_metaclass(abc.ABCMeta, Resource)):

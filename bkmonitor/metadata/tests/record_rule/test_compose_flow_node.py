@@ -115,10 +115,10 @@ def test_create_flow_with_full_config(create_or_delete_records, create_default_r
     测试完整预计算配置能否正常组装
     """
     mocker.patch(
-        "core.drf_resource.api.bkdata.apply_data_flow",
+        "drf_resource.api.bkdata.apply_data_flow",
         return_value={"node_ids": [18263, 18264, 18265, 18266, 18267], "flow_id": 3079},
     )
-    mocker.patch("core.drf_resource.api.bkdata.query_auth_projects_data", return_value={})
+    mocker.patch("drf_resource.api.bkdata.query_auth_projects_data", return_value={})
     ResultTableFlow.create_flow(table_id)
 
     result_table_flow_ins = models.ResultTableFlow.objects.get(table_id=table_id)

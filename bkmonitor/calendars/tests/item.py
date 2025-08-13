@@ -21,7 +21,7 @@ from calendars.resources import (
     ItemListResource,
     ItemDetailResource,
 )
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 
 logger = logging.getLogger("calendars")
 

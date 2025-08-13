@@ -137,7 +137,7 @@ from constants.apm import (
 )
 from constants.data_source import ApplicationsResultTableLabel
 from constants.result_table import ResultTableField
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor.models import ApplicationConfig
 from monitor_web.constants import AlgorithmType
 from monitor_web.scene_view.resources.base import PageListResource

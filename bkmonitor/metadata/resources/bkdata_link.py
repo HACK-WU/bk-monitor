@@ -19,7 +19,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata import models
 from metadata.config import METADATA_RESULT_TABLE_WHITE_LIST
 from metadata.models import AccessVMRecord

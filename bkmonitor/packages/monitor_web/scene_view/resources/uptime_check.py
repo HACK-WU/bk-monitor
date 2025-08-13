@@ -21,7 +21,7 @@ from bkmonitor.data_source import UnifyQuery, load_data_source
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.utils.time_tools import strftime_local
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor.models import NODE_IP_TYPE_DICT
 from monitor_web.models.uptime_check import (
     UptimeCheckGroup,

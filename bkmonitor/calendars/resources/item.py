@@ -29,7 +29,7 @@ from calendars.constants import (
 )
 from calendars.models import CalendarItemModel, CalendarModel
 from calendars.serializers import RepeatSerializer
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 """
 时间的计算规则（以week为例）：

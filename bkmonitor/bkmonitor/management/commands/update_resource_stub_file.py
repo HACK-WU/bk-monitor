@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from django.core.management.base import BaseCommand
 
-from core.drf_resource.management.stub_file_generator import update_stub_file
+from drf_resource.management.stub_file_generator import update_stub_file
 
 
 class Command(BaseCommand):

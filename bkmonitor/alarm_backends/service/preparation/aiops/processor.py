@@ -37,7 +37,7 @@ from constants.aiops import (
     DEPEND_DATA_MIN_FETCH_TIME_RANGE,
     SDKDetectStatus,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("preparation.aiops")
 

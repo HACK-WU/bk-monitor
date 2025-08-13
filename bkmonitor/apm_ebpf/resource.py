@@ -16,7 +16,7 @@ from six.moves.urllib.parse import urljoin
 
 from apm_ebpf.handlers.deepflow import DeepflowHandler
 from bkmonitor.utils.thread_backend import ThreadPool
-from core.drf_resource import Resource
+from drf_resource import Resource
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("apm_ebpf")

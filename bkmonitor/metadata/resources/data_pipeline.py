@@ -15,7 +15,7 @@ from django.utils.translation import gettext as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata.models.data_pipeline import (
     DataPipeline,
     DataPipelineDataSource,

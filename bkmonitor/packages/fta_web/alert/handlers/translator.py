@@ -20,7 +20,7 @@ from bkmonitor.models import EventPluginV2, MetricListCache, StrategyModel
 from bkmonitor.strategy.new_strategy import get_metric_id, parse_metric_id
 from constants.action import ActionPluginType, ActionSignal
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import resource
+from drf_resource import resource
 
 logger = logging.getLogger(__name__)
 

@@ -19,7 +19,7 @@ from django.utils.translation import gettext_lazy as _
 from typing_extensions import TypedDict
 
 from common.log import logger
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from core.errors.datalink import ResultTableMetaError
 

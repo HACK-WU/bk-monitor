@@ -25,7 +25,7 @@ from apm_web.constants import (
 )
 from apm_web.handlers.component_handler import ComponentHandler
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 
 
 class EsOperator:

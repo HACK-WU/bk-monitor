@@ -37,7 +37,7 @@ from common.log import logger
 from constants.apm import FlowType, OtlpKey, SpanKind
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.result_table import ResultTableField
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.api import BKAPIError
 from metadata import models as metadata_models
 

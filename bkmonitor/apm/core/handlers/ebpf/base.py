@@ -21,7 +21,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 from apm.models import ApmApplication, EbpfApplicationConfig
-from core.drf_resource import resource
+from drf_resource import resource
 
 logger = logging.getLogger(__name__)
 

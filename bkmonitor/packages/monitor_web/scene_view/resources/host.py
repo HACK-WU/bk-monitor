@@ -23,8 +23,8 @@ from bkmonitor.data_source import UnifyQuery, load_data_source
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.utils.ip import is_v6
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api, resource
+from drf_resource.utils.request import get_request
 from monitor_web.constants import AGENT_STATUS
 
 

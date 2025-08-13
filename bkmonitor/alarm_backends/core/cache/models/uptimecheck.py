@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 import json
 
 from alarm_backends.core.cache.base import CacheManager
-from core.drf_resource import api
+from drf_resource import api
 
 
 class UptimecheckCacheManager(CacheManager):

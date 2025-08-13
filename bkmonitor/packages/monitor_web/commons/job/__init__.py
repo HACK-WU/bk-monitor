@@ -21,7 +21,7 @@ from django.template import Context, Template
 from django.utils.translation import gettext as _
 
 from bkmonitor.utils.common_utils import host_key
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 
 logger = logging.getLogger(__name__)
 

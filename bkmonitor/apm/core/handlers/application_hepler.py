@@ -18,7 +18,7 @@ to the current version of the project delivered to anyone in the future.
 from django.conf import settings
 
 from apm.models import DataLink
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class ApplicationHelper:

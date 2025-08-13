@@ -6,7 +6,7 @@ from copy import deepcopy
 import ujson as json
 from django.utils.translation import gettext as _
 
-from core.drf_resource import api
+from drf_resource import api
 from fta_web.fta_migrate.constants import (
     FTA_COMPONENTS_DICT,
     FTA_SOPS_MAPPING,

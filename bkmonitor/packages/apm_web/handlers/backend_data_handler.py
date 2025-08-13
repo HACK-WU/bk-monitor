@@ -24,7 +24,7 @@ from constants.data_source import (
     DataSourceLabel,
     DataTypeLabel,
 )
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 
 logger = logging.getLogger("apm")
 

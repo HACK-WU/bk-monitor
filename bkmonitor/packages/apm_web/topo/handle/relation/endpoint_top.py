@@ -20,7 +20,7 @@ from apm_web.models import Application
 from apm_web.topo.constants import BarChartDataType
 from apm_web.topo.handle.graph_plugin import NodeColor
 from constants.apm import OtlpKey, SpanKind
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class EndpointList:

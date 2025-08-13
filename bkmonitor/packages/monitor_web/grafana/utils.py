@@ -16,8 +16,8 @@ from django.conf import settings
 from django.utils.translation import gettext as _
 
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
-from core.drf_resource.utils.request import get_request
+from drf_resource import api
+from drf_resource.utils.request import get_request
 from monitor_web.constants import EVENT_TYPE
 from monitor_web.models.custom_report import CustomEventGroup
 

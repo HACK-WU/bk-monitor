@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from constants.cmdb import TargetNodeType
-from core.drf_resource import api
+from drf_resource import api
 
 
 def search_set(bk_biz_id):

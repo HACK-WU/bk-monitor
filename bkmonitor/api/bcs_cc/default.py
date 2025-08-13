@@ -11,9 +11,9 @@ from rest_framework import serializers
 
 from bkmonitor.commons.tools import batch_request
 from core.cache import CacheType
-from core.drf_resource import api
-from core.drf_resource.base import Resource
-from core.drf_resource.contrib.api import APIResource
+from drf_resource import api
+from drf_resource.base import Resource
+from drf_resource.contrib.api import APIResource
 
 
 class BcsCcBaseResource(six.with_metaclass(abc.ABCMeta, APIResource)):

@@ -34,8 +34,8 @@ from bkmonitor.models import MetricListCache, QueryConfigModel, StrategyModel
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.time_tools import date_convert, parse_time_range
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
+from drf_resource import api, resource
+from drf_resource.base import Resource
 from core.errors.api import BKAPIError
 from core.errors.custom_report import (
     CustomEventValidationError,

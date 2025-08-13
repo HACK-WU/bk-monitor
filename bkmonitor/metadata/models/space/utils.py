@@ -9,7 +9,7 @@ from django.db.models import Q
 from django.db.transaction import atomic
 from django.utils.translation import gettext as _
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.bkmonitor.space import SpaceNotFound
 from metadata import config
 from metadata.models import (

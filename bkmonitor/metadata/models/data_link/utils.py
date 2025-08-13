@@ -19,7 +19,7 @@ from jinja2 import Template
 from pypinyin import lazy_pinyin
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata import models
 from metadata.models.data_link.constants import MATCH_DATA_NAME_PATTERN
 

@@ -12,7 +12,7 @@ pytestmark = pytest.mark.django_db(databases=["default", "monitor_api"])
 @pytest.fixture(autouse=True)
 def get_all_user(mocker):
     """mock 获取所有用户。"""
-    return mocker.patch("core.drf_resource.api.bk_login.get_all_user", return_value={"results": []})
+    return mocker.patch("drf_resource.api.bk_login.get_all_user", return_value={"results": []})
 
 
 @pytest.fixture

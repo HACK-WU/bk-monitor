@@ -28,7 +28,7 @@ from core.cache import using_cache, CacheType
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from bkmonitor.utils.time_tools import get_datetime_range
 from constants.apm import OtlpKey
-from core.drf_resource import resource
+from drf_resource import resource
 
 logger = logging.getLogger("apm")
 

@@ -12,7 +12,7 @@ import logging
 
 from alarm_backends.service.alert.qos.influence import clear_failure, publish_failure
 from bkmonitor.views import serializers
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 logger = logging.getLogger(__name__)
 

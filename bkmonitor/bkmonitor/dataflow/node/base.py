@@ -16,7 +16,7 @@ import time
 
 import six
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.bkmonitor.dataflow import (
     DataFlowNodeCreateFailed,
     DataFlowNodeUpdateFailed,

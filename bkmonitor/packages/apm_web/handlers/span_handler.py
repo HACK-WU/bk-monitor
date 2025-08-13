@@ -16,7 +16,7 @@ from opentelemetry.semconv.trace import SpanAttributes
 
 from apm_web.models import Application
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 
 
 class SpanHandler:

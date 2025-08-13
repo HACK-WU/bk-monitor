@@ -26,7 +26,7 @@ from bkmonitor.commons.tools import is_ipv6_biz
 from bkmonitor.models import MetricListCache
 from constants.cmdb import TargetNodeType, TargetObjectType
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 
 
 def get_order_config(view: SceneViewModel) -> List:

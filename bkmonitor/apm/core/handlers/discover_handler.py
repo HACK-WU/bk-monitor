@@ -14,7 +14,7 @@ import pytz
 from django.utils.translation import gettext_lazy as _
 
 from apm.models import ApmApplication, HostInstance
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 
 
 class DiscoverHandler:

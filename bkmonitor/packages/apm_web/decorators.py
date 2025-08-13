@@ -19,7 +19,7 @@ def user_visit_record(func):
 
     Notice:
     - 仅限用于 APM 模块，如果其他模块也需要类似的能力，需要重新提取
-    - 仅限放置在 基类为 core.drf_resource.viewsets.ResourceRouteResource 的 decorators 属性中
+    - 仅限放置在 基类为 drf_resource.viewsets.ResourceRouteResource 的 decorators 属性中
     """
 
     @wraps(func)

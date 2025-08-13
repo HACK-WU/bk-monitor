@@ -36,7 +36,7 @@ from bkmonitor.utils.user import get_global_user
 from constants.apm import PreCalculateSpecificField
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.result_table import ResultTableField
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from drf_resource.utils.common import count_md5
 from metadata.models import ESStorage
 

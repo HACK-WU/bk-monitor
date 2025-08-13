@@ -19,7 +19,7 @@ import time
 
 from six.moves import map
 
-from core.drf_resource import resource
+from drf_resource import resource
 from utils.redis_client import redis_cli
 
 __all__ = [

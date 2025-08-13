@@ -15,7 +15,7 @@ from typing import Dict, Optional
 
 from django.conf import settings
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata.models.vm.config import BkDataClean, BkDataStorage
 from metadata.models.vm.constants import VM_RETENTION_TIME
 

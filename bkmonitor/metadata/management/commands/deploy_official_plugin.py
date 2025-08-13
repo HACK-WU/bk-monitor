@@ -14,7 +14,7 @@ from django.core.management import BaseCommand
 
 from bkmonitor.models import GlobalConfig
 from bkmonitor.utils.common_utils import split_list
-from core.drf_resource import api
+from drf_resource import api
 
 
 class Command(BaseCommand):

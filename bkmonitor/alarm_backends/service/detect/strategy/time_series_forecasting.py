@@ -28,7 +28,7 @@ from alarm_backends.templatetags.unit import unit_convert_min, unit_suffix
 from bkmonitor.strategy.serializers import TimeSeriesForecastingSerializer
 from bkmonitor.utils.time_tools import hms_string
 from constants.aiops import SDKDetectStatus
-from core.drf_resource import api
+from drf_resource import api
 from core.unit import load_unit
 
 logger = logging.getLogger("detect")

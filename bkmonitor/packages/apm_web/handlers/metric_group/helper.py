@@ -21,7 +21,7 @@ from bkmonitor.data_source.unify_query.builder import QueryConfigBuilder, UnifyQ
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.time_tools import time_interval_align
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import resource
+from drf_resource import resource
 
 logger = logging.getLogger(__name__)
 

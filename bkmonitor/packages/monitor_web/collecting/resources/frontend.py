@@ -15,8 +15,8 @@ from django.utils.translation import gettext as _
 from bkmonitor.commons.tools import get_host_view_display_fields
 from bkmonitor.views import serializers
 from constants.cmdb import TargetNodeType
-from core.drf_resource import resource
-from core.drf_resource.base import Resource
+from drf_resource import resource
+from drf_resource.base import Resource
 from core.errors.collecting import CollectConfigNotExist
 from monitor_web.collecting.constant import CollectStatus, OperationType
 from monitor_web.commons.cc.utils import foreach_topo_tree

@@ -15,7 +15,7 @@ from django.conf import settings
 from django.db.transaction import atomic
 from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.models import DataSource
 from metadata.models.bcs import BcsFederalClusterInfo

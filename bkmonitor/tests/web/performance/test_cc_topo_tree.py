@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 # -*- coding: utf-8 -*-
 
 
-from core.drf_resource import resource
+from drf_resource import resource
 from tests.web.performance import mock_cache, mock_cc
 
 

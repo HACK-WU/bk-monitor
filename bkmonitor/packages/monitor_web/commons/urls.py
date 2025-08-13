@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 from django.urls import include, re_path
 
 from bkm_ipchooser import views as ip_views
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from monitor_web.commons.biz import views as biz_views
 from monitor_web.commons.bkdocs import views as bkdocs_views
 from monitor_web.commons.cc import views as cc_views

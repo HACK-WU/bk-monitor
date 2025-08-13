@@ -12,7 +12,7 @@ import pytest
 from django.conf import settings
 
 from api.kubernetes.default import FetchK8sClusterListResource
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestGetSceneViewListResource:

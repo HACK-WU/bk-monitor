@@ -16,7 +16,7 @@ from django.db import models
 
 from bkmonitor.commons.tools import is_ipv6_biz
 from bkmonitor.utils.db import JsonField
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("metadata")

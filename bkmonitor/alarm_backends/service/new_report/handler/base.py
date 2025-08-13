@@ -23,7 +23,7 @@ from bkmonitor.models.report import (
 from bkmonitor.report.utils import send_email, send_wxbot
 from constants.new_report import StaffEnum
 from constants.report import StaffChoice
-from core.drf_resource import api
+from drf_resource import api
 from core.errors import logger
 
 

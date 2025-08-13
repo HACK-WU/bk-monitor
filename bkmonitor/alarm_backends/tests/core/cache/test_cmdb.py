@@ -30,7 +30,7 @@ from alarm_backends.tests.utils.cmdb_data import (
     TOPO_TREE,
 )
 from api.cmdb.define import Business, Host, Module, ServiceInstance, TopoNode
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 BIZ_IDS = [2, 3, 4, 5, 6, 10, 20, 21]
 

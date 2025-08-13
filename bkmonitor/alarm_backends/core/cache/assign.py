@@ -16,7 +16,7 @@ from alarm_backends.core.cache.cmdb.dynamic_group import DynamicGroupManager
 from bkmonitor.models.fta.assign import AlertAssignGroup, AlertAssignRule
 from bkmonitor.utils import extended_json
 from constants.action import GLOBAL_BIZ_ID
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 setattr(local, "assign_cache", {})
 

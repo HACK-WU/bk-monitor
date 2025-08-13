@@ -38,9 +38,9 @@ from bkmonitor.utils.user import get_local_username
 from bkmonitor.views import serializers
 from constants.data_source import DataSourceLabel
 from constants.strategy import TargetFieldType
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.tasks import step
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api, resource
+from drf_resource.tasks import step
+from drf_resource.utils.request import get_request
 from core.errors.export_import import (
     AddTargetError,
     ImportConfigError,

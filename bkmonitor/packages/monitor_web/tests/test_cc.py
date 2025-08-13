@@ -18,7 +18,7 @@ from monitor_web.constants import AGENT_STATUS
 
 from api.cmdb.mock import HOSTS, SERVICE_INSTANCES
 from constants.cmdb import TargetNodeType
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 @pytest.fixture
@@ -37,7 +37,7 @@ class TestParseTopoTarget:
     根据维度字段，将监控目标解析为主机/服务实例过滤条件
     """
 
-    @mock.patch("core.drf_resource.api.cmdb.get_host_by_id", return_value=HOSTS[0:1])
+    @mock.patch("drf_resource.api.cmdb.get_host_by_id", return_value=HOSTS[0:1])
     @pytest.mark.parametrize(
         "dimensions,target,expected,call_count",
         [
@@ -73,7 +73,7 @@ class TestParseTopoTarget:
         assert resource.cc.parse_topo_target(2, dimensions, target) == expected
         assert get_host_by_id.call_count == call_count
 
-    @mock.patch("core.drf_resource.api.cmdb.get_host_by_topo_node", return_value=HOSTS)
+    @mock.patch("drf_resource.api.cmdb.get_host_by_topo_node", return_value=HOSTS)
     @pytest.mark.parametrize(
         "dimensions,target,expected",
         [
@@ -106,7 +106,7 @@ class TestParseTopoTarget:
         """
         self._test_topo(get_host_by_topo_node, dimensions, target, expected)
 
-    @mock.patch("core.drf_resource.api.cmdb.get_host_by_template", return_value=HOSTS)
+    @mock.patch("drf_resource.api.cmdb.get_host_by_template", return_value=HOSTS)
     @pytest.mark.parametrize(
         "dimensions,target,expected",
         [
@@ -146,7 +146,7 @@ class TestParseTopoTarget:
         """
         self._test_template(get_host_by_template, dimensions, target, expected)
 
-    @mock.patch("core.drf_resource.api.cmdb.get_service_instance_by_topo_node", return_value=SERVICE_INSTANCES)
+    @mock.patch("drf_resource.api.cmdb.get_service_instance_by_topo_node", return_value=SERVICE_INSTANCES)
     @pytest.mark.parametrize(
         "dimensions,target,expected",
         [
@@ -173,7 +173,7 @@ class TestParseTopoTarget:
         """
         self._test_topo(get_service_instance_by_topo_node, dimensions, target, expected)
 
-    @mock.patch("core.drf_resource.api.cmdb.get_service_instance_by_template", return_value=SERVICE_INSTANCES)
+    @mock.patch("drf_resource.api.cmdb.get_service_instance_by_template", return_value=SERVICE_INSTANCES)
     @pytest.mark.parametrize(
         "dimensions,target,expected",
         [
@@ -224,7 +224,7 @@ class TestGetAgentStatus:
     """
 
     @mock.patch(
-        "core.drf_resource.api.gse.get_agent_status",
+        "drf_resource.api.gse.get_agent_status",
         return_value={
             f"{HOSTS[1].bk_cloud_id}:{HOSTS[0].bk_host_innerip}": {
                 "ip": HOSTS[0].bk_host_innerip,
@@ -265,7 +265,7 @@ class TestGetAgentStatus:
         assert get_agent_status.call_count == 1
 
     @mock.patch(
-        "core.drf_resource.api.gse.list_agent_state",
+        "drf_resource.api.gse.list_agent_state",
         return_value=[
             {
                 "bk_agent_id": HOSTS[0].bk_agent_id,

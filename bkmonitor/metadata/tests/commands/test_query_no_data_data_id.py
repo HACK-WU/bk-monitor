@@ -23,7 +23,7 @@ def test_input_params():
 
 
 def test_query_empty(mocker):
-    mocker.patch("core.drf_resource.api.unify_query.query_data_by_promql", return_value={})
+    mocker.patch("drf_resource.api.unify_query.query_data_by_promql", return_value={})
     out = StringIO()
     call_command("query_no_data_data_id", **{"bk_biz_id": 2}, stdout=out)
     output = out.getvalue()
@@ -54,7 +54,7 @@ def test_query(mocker):
             }
         ]
     }
-    mocker.patch("core.drf_resource.api.unify_query.query_data_by_promql", return_value=ret_data)
+    mocker.patch("drf_resource.api.unify_query.query_data_by_promql", return_value=ret_data)
 
     out = StringIO()
     call_command("query_no_data_data_id", **{"bk_biz_id": 2}, stdout=out)

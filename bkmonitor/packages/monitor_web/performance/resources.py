@@ -14,13 +14,13 @@ from typing import Dict, List
 from api.cmdb.define import Host, TopoNode
 from bkm_space.validate import validate_bk_biz_id
 from bkmonitor.utils import time_tools
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.views import serializers
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.contrib.cache import CacheResource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.contrib.cache import CacheResource
+from drf_resource.exceptions import CustomException
 from monitor_web.constants import AGENT_STATUS
 
 

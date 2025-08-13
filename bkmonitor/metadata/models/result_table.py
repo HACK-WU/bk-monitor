@@ -25,7 +25,7 @@ from django.db.transaction import atomic, on_commit
 from django.utils.translation import gettext as _
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.models.constants import BULK_CREATE_BATCH_SIZE
 from metadata.utils.basic import getitems

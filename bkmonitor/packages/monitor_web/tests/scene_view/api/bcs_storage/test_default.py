@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 from django.conf import settings
 
 from api.bcs_storage.default import FetchResource
-from core.drf_resource import api
+from drf_resource import api
 
 
 class TestFetchResource:

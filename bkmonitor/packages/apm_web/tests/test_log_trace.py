@@ -82,15 +82,15 @@ SETUP = {
 
 
 class TestLogTrace(object):
-    @mock.patch("core.drf_resource.api.apm_api.create_application", lambda _: API_APPLICATION)
+    @mock.patch("drf_resource.api.apm_api.create_application", lambda _: API_APPLICATION)
     @mock.patch("apm_web.models.Application.get_transfer_config", lambda _: {})
     @mock.patch("apm_web.models.Application.authorization", lambda _: {})
-    @mock.patch("core.drf_resource.api.apm_api.release_app_config", lambda _: {})
+    @mock.patch("drf_resource.api.apm_api.release_app_config", lambda _: {})
     @mock.patch("apm_web.models.Application.get_output_param", lambda _: OUTPUT_PARAM)
     @mock.patch("apm_web.tasks.update_application_config.delay", lambda _: {})
-    @mock.patch("core.drf_resource.api.node_man.create_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.create_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
     @pytest.mark.django_db(transaction=True)
     def test_create_application(self):
         validated_request_data = deepcopy(CREATE_APPLICATION)
@@ -111,32 +111,32 @@ class TestLogTrace(object):
         assert result.application_id == application["application_id"]
 
     @mock.patch("apm_web.models.Application.get_output_param", lambda _: OUTPUT_PARAM)
-    @mock.patch("core.drf_resource.api.node_man.update_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.update_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
     @pytest.mark.django_db(transaction=True)
     def test_setup(self, application_id=APPLICATION_ID):
         data = copy.deepcopy(PLUGIN_CONFIG)
         result = Application.update_plugin_config(application_id, data)
         assert result == data
 
-    @mock.patch("core.drf_resource.api.node_man.update_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.update_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
     @pytest.mark.django_db(transaction=True)
     def test_stop(self, application_id=APPLICATION_ID):
         result = Application.stop_plugin_config(application_id)
         assert result["subscription_id"] == SUBSCRIPTION_ID
 
-    @mock.patch("core.drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
     @pytest.mark.django_db(transaction=True)
     def test_start(self, application_id=APPLICATION_ID):
         result = Application.start_plugin_config(application_id)
         assert result["subscription_id"] == SUBSCRIPTION_ID
 
-    @mock.patch("core.drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
-    @mock.patch("core.drf_resource.api.node_man.delete_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.switch_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.run_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
+    @mock.patch("drf_resource.api.node_man.delete_subscription", lambda _: {"subscription_id": SUBSCRIPTION_ID})
     @pytest.mark.django_db(transaction=True)
     def test_delete(self, application_id=APPLICATION_ID):
         result = Application.delete_plugin_config(application_id)

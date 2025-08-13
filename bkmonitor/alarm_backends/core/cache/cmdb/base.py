@@ -20,7 +20,7 @@ from django.core.cache import caches
 from alarm_backends.constants import CONST_ONE_DAY
 from alarm_backends.core.cache.base import CacheManager
 from alarm_backends.core.storage.redis import Cache
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 mem_cache = caches["locmem"]

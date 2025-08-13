@@ -20,8 +20,8 @@ from django.conf import settings
 from django.utils.translation import gettext as _
 from jinja2 import Template as JTemplate
 
-from core.drf_resource import resource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import resource
+from drf_resource.exceptions import CustomException
 from core.errors.uptime_check import UnknownProtocolError
 from monitor.constants import UptimeCheckProtocol
 from monitor_web.commons.job import JobTaskClient

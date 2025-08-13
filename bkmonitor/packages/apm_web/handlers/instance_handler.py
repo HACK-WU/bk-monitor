@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 from apm_web.constants import InstanceDiscoverKeys
 
 from constants.apm import OtlpKey
-from core.drf_resource import api
+from drf_resource import api
 
 
 class InstanceHandler:

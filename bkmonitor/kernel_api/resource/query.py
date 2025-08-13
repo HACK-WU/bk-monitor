@@ -15,7 +15,7 @@ from typing import Any, Dict
 from rest_framework.exceptions import NotFound
 
 from bkmonitor.views import serializers
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata import models
 from query_api.resources import GetEsDataResource
 

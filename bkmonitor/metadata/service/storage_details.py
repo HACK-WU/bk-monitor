@@ -18,7 +18,7 @@ from django.db.models import Q
 from elasticsearch import Elasticsearch as Elasticsearch
 from kafka.admin import KafkaAdminClient
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from metadata import config, models
 from metadata.models.data_pipeline.utils import check_transfer_cluster_exist

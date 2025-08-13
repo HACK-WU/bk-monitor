@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 from bkmonitor.models import Shield
-from core.drf_resource import resource
+from drf_resource import resource
 from bkmonitor.strategy.strategy import StrategyConfig
 
 

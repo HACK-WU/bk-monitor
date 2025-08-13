@@ -16,8 +16,8 @@ from rest_framework.decorators import action
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from core.drf_resource import api, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import api, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class UserViewSet(viewsets.GenericViewSet):

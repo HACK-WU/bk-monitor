@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Dict, List
 
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger("metadata")

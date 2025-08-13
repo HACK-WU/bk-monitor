@@ -13,15 +13,15 @@ specific language governing permissions and limitations under the License.
 from django.conf import settings
 from django.utils.translation import gettext as _
 
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from core.cache import using_cache
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.views import serializers
 from common.log import logger
 from constants.data_source import LabelType
-from core.drf_resource import api, resource
-from core.drf_resource.contrib.cache import CacheResource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import api, resource
+from drf_resource.contrib.cache import CacheResource
+from drf_resource.exceptions import CustomException
 
 
 @using_cache(CacheType.DATA(60 * 60))

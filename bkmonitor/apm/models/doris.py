@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 
 from django.conf import settings
 
-from core.drf_resource import api
+from drf_resource import api
 
 if TYPE_CHECKING:
     from .datasource import ApmDataSourceConfigBase, ProfileDataSource  # noqa

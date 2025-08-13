@@ -32,7 +32,7 @@ from bkmonitor.utils.common_utils import to_dict
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.cmdb import TargetNodeType, TargetObjectType
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import CacheResource, Resource, api
+from drf_resource import CacheResource, Resource, api
 from monitor_web.collecting.constant import OperationType
 from monitor_web.commons.data_access import ResultTable
 from monitor_web.constants import EVENT_TYPE

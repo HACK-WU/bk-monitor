@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 from django.urls import include, re_path
 
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from monitor_web.aiops.ai_setting import views as ai_setting_views
 from monitor_web.aiops.host_monitor import views as host_monitor_views
 

@@ -14,7 +14,7 @@ import json
 import datetime
 from collections import defaultdict
 
-from core.drf_resource import api
+from drf_resource import api
 from bkmonitor.models import Alert, Event, Strategy, Shield, NoticeGroup
 from metadata.models import EventGroup
 from alarm_backends.core.cache.key import MAIL_REPORT_GROUP_CACHE_KEY

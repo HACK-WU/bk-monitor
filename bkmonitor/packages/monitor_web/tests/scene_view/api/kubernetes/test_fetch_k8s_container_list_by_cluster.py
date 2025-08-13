@@ -14,7 +14,7 @@ from api.kubernetes.default import (
     FetchK8sPodListByClusterResource,
 )
 from bkmonitor.utils.kubernetes import translate_timestamp_since
-from core.drf_resource import api
+from drf_resource import api
 
 
 class TestFetchK8sContainerListByClusterResource:

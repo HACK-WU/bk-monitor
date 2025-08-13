@@ -12,7 +12,7 @@ import pytest
 
 from api.metadata.default import GetClustersBySpaceUidResource
 from bkmonitor.utils.kubernetes import translate_timestamp_since
-from core.drf_resource import resource
+from drf_resource import resource
 from monitor_web.constants import OVERVIEW_ICON
 
 COLUMNS = [

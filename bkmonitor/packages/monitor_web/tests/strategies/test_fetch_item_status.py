@@ -12,7 +12,7 @@ from collections import defaultdict
 
 from monitor_web.strategies.resources.public import FetchItemStatus
 
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestFetchItemStatus:

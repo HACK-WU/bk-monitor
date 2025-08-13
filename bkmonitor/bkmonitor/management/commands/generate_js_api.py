@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from django.core.management.base import BaseCommand
 
-from core.drf_resource.management.js_api_generator import generate_js_api
+from drf_resource.management.js_api_generator import generate_js_api
 
 
 class Command(BaseCommand):

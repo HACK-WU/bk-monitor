@@ -14,7 +14,7 @@ from django.db.models.query import QuerySet
 from mock import PropertyMock
 
 from bkmonitor.models import Item, NoticeGroup, Strategy
-from core.drf_resource import resource
+from drf_resource import resource
 from bkmonitor.strategy.strategy import StrategyConfig
 from monitor_web.models.uptime_check import UptimeCheckTask
 

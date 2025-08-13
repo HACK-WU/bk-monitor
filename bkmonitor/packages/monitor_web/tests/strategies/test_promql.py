@@ -13,7 +13,7 @@ import traceback
 
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 def test_promql_to_query_config(mocker):

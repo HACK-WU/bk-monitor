@@ -16,7 +16,7 @@ from importlib import import_module
 from django.core.management.base import BaseCommand
 from django.template import engines
 
-from core.drf_resource.management.stub_file_generator import search_attr
+from drf_resource.management.stub_file_generator import search_attr
 
 django_engine = engines["django"]
 

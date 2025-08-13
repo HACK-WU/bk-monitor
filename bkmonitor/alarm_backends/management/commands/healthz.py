@@ -21,7 +21,7 @@ from django.core.management.base import BaseCommand
 
 from alarm_backends.management.commands.hash_ring import HashRing
 from alarm_backends.management.story import sc
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("self_monitor")
 

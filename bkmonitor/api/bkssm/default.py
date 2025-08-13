@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from common.context_processors import Platform
-from core.drf_resource.contrib.api import APIResource
+from drf_resource.contrib.api import APIResource
 
 
 class BkSSMBaseResource(six.with_metaclass(abc.ABCMeta, APIResource)):

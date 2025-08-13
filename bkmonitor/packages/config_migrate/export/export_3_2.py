@@ -23,7 +23,7 @@ from monitor_web.models import (
 
 from bkmonitor.models import NoticeGroup
 from bkmonitor.strategy.strategy import Strategy, StrategyConfig
-from core.drf_resource import api
+from drf_resource import api
 
 
 def export_config(bk_biz_id: int):

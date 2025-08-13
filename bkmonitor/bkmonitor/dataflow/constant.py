@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from django.conf import settings
 
 from bkmonitor.models import AlgorithmModel
-from core.drf_resource import api
+from drf_resource import api
 
 
 class VisualType:

@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 from django.conf import settings
 from django.core.management import BaseCommand
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata.models import TimeSeriesGroup
 
 

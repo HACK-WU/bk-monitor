@@ -25,7 +25,7 @@ class Command(BaseCommand):
 
     def handle(self, **kwargs):
         from config_migrate.migrate import ConfigMigrator
-        from core.drf_resource.utils.local import local
+        from drf_resource.utils.local import local
 
         local.username = "admin"
 

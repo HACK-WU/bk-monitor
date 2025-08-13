@@ -14,7 +14,7 @@ from django.urls import include, re_path
 from iam.contrib.django.dispatcher import DjangoBasicResourceApiDispatcher
 
 from bkmonitor.iam.permission import Permission
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from monitor_web.iam import views
 
 router = ResourceRouter()

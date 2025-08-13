@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 import pytest
 
 from api.bcs_cc.default import BatchGetProjects
-from core.drf_resource import api
+from drf_resource import api
 
 
 @pytest.fixture

@@ -36,9 +36,9 @@ from bkmonitor.utils.time_tools import (
 from bkmonitor.utils.user import get_global_user
 from bkmonitor.views import serializers
 from constants.shield import ScopeType, ShieldCategory, ShieldStatus
-from core.drf_resource import resource
-from core.drf_resource.base import Resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import resource
+from drf_resource.base import Resource
+from drf_resource.utils.request import get_request
 from core.errors.shield import DuplicateQuickShieldError, ShieldNotExist
 from fta_web.alert.handlers.base import AlertDimensionFormatter
 from monitor_web.alert_events.resources import EventDimensionMixin

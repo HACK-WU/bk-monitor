@@ -33,7 +33,7 @@ def test_notify_bkdata_log_data_id_changed(create_or_update_records):
     rt = models.ResultTable.objects.get(table_id="1001_bkmonitor_time_series_50010.__default__")
 
     # 使用 patch 来模拟 API 调用
-    with patch('core.drf_resource.api.bkdata.notify_log_data_id_changed') as mock_notify:
+    with patch('drf_resource.api.bkdata.notify_log_data_id_changed') as mock_notify:
         rt.notify_bkdata_log_data_id_changed(data_id=50010)
 
         # 验证 API 请求是否按照预期调用

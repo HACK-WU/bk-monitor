@@ -15,7 +15,7 @@ from rest_framework import serializers
 
 from bkmonitor.define.global_config import STANDARD_CONFIGS
 from bkmonitor.models import GlobalConfig
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 
 class ListGlobalConfig(Resource):

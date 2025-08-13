@@ -22,7 +22,7 @@ from alarm_backends.core.cache.cmdb import HostIPManager, HostManager
 from alarm_backends.service.alert.enricher.base import BaseAlertEnricher
 from api.cmdb.define import Host
 from bkmonitor.utils.thread_backend import ThreadPool
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("alert.enricher")
 

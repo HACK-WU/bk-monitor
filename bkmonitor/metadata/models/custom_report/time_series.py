@@ -25,7 +25,7 @@ from django.utils.timezone import now as tz_now
 from django.utils.translation import gettext as _
 
 from bkmonitor.utils.db.fields import JsonField
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config
 from metadata.models.constants import (
     BULK_CREATE_BATCH_SIZE,

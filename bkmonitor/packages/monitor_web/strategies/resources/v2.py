@@ -63,9 +63,9 @@ from constants.common import SourceApp
 from constants.data_source import DATA_CATEGORY, DataSourceLabel, DataTypeLabel
 from constants.strategy import SPLIT_DIMENSIONS, DataTarget, TargetFieldType
 from core.cache import CacheType
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.contrib.cache import CacheResource
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.contrib.cache import CacheResource
 from core.errors.bkmonitor.data_source import CmdbLevelValidateError
 from core.errors.strategy import StrategyNameExist
 from monitor.models import ApplicationConfig

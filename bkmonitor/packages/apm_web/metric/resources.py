@@ -97,8 +97,8 @@ from constants.apm import (
     SpanKindCachedEnum,
     TelemetryDataType,
 )
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api, resource
+from drf_resource.utils.request import get_request
 from core.unit import load_unit
 from monitor_web.collecting.constant import CollectStatus
 from monitor_web.scene_view.resources import GetHostOrTopoNodeDetailResource

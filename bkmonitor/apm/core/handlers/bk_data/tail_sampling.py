@@ -18,7 +18,7 @@ from apm.core.handlers.bk_data.flow import ApmFlow
 from apm.models import TraceDataSource
 from bkmonitor.dataflow.task.apm_tail_sampling import APMTailSamplingTask
 from constants.apm import FlowType
-from core.drf_resource import api
+from drf_resource import api
 from metadata.models import ClusterInfo
 
 

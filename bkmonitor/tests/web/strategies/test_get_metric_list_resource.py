@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 from django.db.models.query import QuerySet
 
-from core.drf_resource import resource
+from drf_resource import resource
 from bkmonitor.models.metric_list_cache import MetricListCache
 
 from .data import BASE_METRICS, UPTIMECHECK_METRICS

@@ -54,9 +54,9 @@ from bkmonitor.utils.consul import BKConsul
 from bkmonitor.utils.thread_backend import InheritParentThread
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import MULTI_METRIC_DATA_SOURCES
-from core.drf_resource import api
+from drf_resource import api
 from drf_resource.utils.common import count_md5
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 from core.errors.api import BKAPIError
 from core.prometheus import metrics
 

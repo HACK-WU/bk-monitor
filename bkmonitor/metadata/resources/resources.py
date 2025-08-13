@@ -34,8 +34,8 @@ from bkmonitor.utils import consul
 from bkmonitor.utils.k8s_metric import get_built_in_k8s_events, get_built_in_k8s_metrics
 from bkmonitor.utils.request import get_app_code_by_request
 from constants.data_source import DATA_LINK_V4_VERSION_NAME
-from core.drf_resource import Resource, api
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api
+from drf_resource.utils.request import get_request
 from metadata import config, models
 from metadata.config import (
     ES_ROUTE_ALLOW_URL,

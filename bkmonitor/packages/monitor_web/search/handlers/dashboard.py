@@ -4,7 +4,7 @@ from typing import List
 from django.utils.translation import gettext as _
 
 from bkmonitor.iam import ActionEnum
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.search.handlers.base import (
     BaseSearchHandler,
     SearchResultItem,

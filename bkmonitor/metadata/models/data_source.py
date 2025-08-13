@@ -26,7 +26,7 @@ from django.utils.translation import gettext as _
 
 from bkmonitor.utils import consul
 from constants.data_source import DATA_LINK_V3_VERSION_NAME, DATA_LINK_V4_VERSION_NAME
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from metadata import config
 from metadata.models.space.constants import SPACE_UID_HYPHEN, EtlConfigs, SpaceTypes

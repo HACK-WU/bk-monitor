@@ -19,7 +19,7 @@ from django.utils.text import compress_sequence, compress_string
 from bkmonitor.utils.common_utils import DatetimeEncoder, failed
 from bkmonitor.utils.request import is_ajax_request
 from common.log import logger
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from core.errors import Error
 from core.errors.common import CustomError, UnknownError
 
@@ -42,7 +42,7 @@ class OverrideMiddleware(MiddlewareMixin):
         request.META.update({"HTTP_X_REQUESTED_WITH": "XMLHttpRequest"})
         request.is_rio = is_rio
         request.is_wechat = is_wechat
-        from core.drf_resource.utils.local import local
+        from drf_resource.utils.local import local
 
         local.current_request = request
 

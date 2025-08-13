@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 from django.db.models import QuerySet
 
 from bkmonitor.models import SnapshotHostIndex
-from core.drf_resource import resource
+from drf_resource import resource
 from tests.web.performance import mock_request
 
 

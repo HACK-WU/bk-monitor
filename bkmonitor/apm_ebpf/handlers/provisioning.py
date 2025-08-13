@@ -17,7 +17,7 @@ from django.conf import settings
 
 from apm_ebpf.models import DeepflowDashboardRecord
 from bk_dataview.provisioning import Dashboard, Datasource, SimpleProvisioning
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger(__name__)
 

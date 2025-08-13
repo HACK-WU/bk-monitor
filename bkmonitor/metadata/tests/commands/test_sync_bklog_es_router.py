@@ -42,7 +42,7 @@ def test_query_bklog_es_router(mocker):
             },
         ],
     }
-    mocker.patch("core.drf_resource.api.log_search.list_es_router", return_value=es_router)
+    mocker.patch("drf_resource.api.log_search.list_es_router", return_value=es_router)
 
     cmd = Command()
     data_queue = cmd._list_es_router()

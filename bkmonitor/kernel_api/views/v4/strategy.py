@@ -14,8 +14,8 @@ from rest_framework import exceptions, serializers
 
 from bkmonitor.models import StrategyModel
 from bkmonitor.utils.user import get_global_user
-from core.drf_resource import Resource, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from kernel_api.views.v4.notice_group import (
     SaveNoticeGroupResource,
     SearchNoticeGroupResource,

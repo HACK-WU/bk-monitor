@@ -17,7 +17,7 @@ from opentelemetry.trace import get_current_span
 from bkmonitor.utils.common_utils import get_local_ip
 from bkmonitor.utils.custom_report_tools import custom_report_tool
 from bkmonitor.utils.request import get_request_username
-from core.drf_resource import api
+from drf_resource import api
 
 
 class EventReportHelper:

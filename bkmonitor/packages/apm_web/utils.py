@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import datetime
 import math
 
-from core.drf_resource import api
+from drf_resource import api
 
 
 def list_remote_service_callers(bk_biz_id, app_name, remote_service_name):

@@ -18,7 +18,7 @@ from django.conf import settings
 from alarm_backends.core.cache.cmdb import HostManager
 from alarm_backends.core.cache.cmdb.base import CMDBCacheManager, RefreshByBizMixin
 from api.cmdb.define import ServiceInstance, TopoTree
-from core.drf_resource import api
+from drf_resource import api
 
 
 class ServiceInstanceManager(RefreshByBizMixin, CMDBCacheManager):

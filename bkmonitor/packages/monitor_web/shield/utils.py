@@ -17,7 +17,7 @@ from bkmonitor.models import Shield
 from bkmonitor.utils.shield import BaseShieldDisplayManager
 from bkmonitor.utils.time_tools import localtime, now, str2datetime
 from constants.shield import ShieldCategory, ShieldCycleType
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from monitor_web.commons.cc.utils import CmdbUtil
 
 

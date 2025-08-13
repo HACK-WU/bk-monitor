@@ -16,7 +16,7 @@ from django.core.management.base import BaseCommand
 
 from alarm_backends.management.base.base import ConsulDispatchCommand
 from bkmonitor.utils.common_utils import get_local_ip
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("self_monitor")
 

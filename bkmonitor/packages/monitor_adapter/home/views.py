@@ -34,8 +34,8 @@ from bkmonitor.models.external_iam import ExternalPermission
 from bkmonitor.utils.common_utils import safe_int
 from common.decorators import timezone_exempt, track_site_visit
 from common.log import logger
-from core.drf_resource import resource
-from core.drf_resource.utils.local import local
+from drf_resource import resource
+from drf_resource.utils.local import local
 from core.errors.api import BKAPIError
 from fta_web.alert.handlers.alert import ActionInstance
 from fta_web.alert.serializers import ActionInstanceDocument

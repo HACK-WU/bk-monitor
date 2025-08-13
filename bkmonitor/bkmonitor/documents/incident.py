@@ -19,7 +19,7 @@ from elasticsearch_dsl import InnerDoc, Search, field
 from bkmonitor.documents.alert import AlertDocument
 from bkmonitor.documents.base import BaseDocument, Date
 from constants.incident import IncidentStatus
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.incident import IncidentNotFoundError
 
 logger = logging.getLogger("action")

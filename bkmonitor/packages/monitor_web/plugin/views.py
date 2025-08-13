@@ -26,8 +26,8 @@ from bkmonitor.iam.drf import BusinessActionPermission, IAMPermission
 from bkmonitor.middlewares.authentication import NoCsrfSessionAuthentication
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.time_tools import utc2biz_str
-from core.drf_resource import api, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import api, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from core.errors.api import BKAPIError
 from core.errors.plugin import (
     BizChangedError,

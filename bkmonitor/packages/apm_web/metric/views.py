@@ -36,7 +36,7 @@ from apm_web.metric.resources import (
 from apm_web.models import Application
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import BusinessActionPermission, InstanceActionForDataPermission
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class MetricEventViewSet(ResourceViewSet):

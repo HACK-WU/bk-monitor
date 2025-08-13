@@ -18,7 +18,7 @@ from rest_framework import serializers
 
 from apm_web.utils import get_interval_number
 from bkmonitor.models import BCSWorkload
-from core.drf_resource import Resource, resource
+from drf_resource import Resource, resource
 from monitor_web.k8s.core.filters import load_resource_filter
 from monitor_web.k8s.core.meta import K8sResourceMeta, load_resource_meta
 from monitor_web.k8s.scenario import get_metrics

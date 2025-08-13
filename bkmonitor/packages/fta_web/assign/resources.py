@@ -28,7 +28,7 @@ from bkmonitor.action.serializers import (
 from bkmonitor.documents import AlertDocument
 from bkmonitor.models import AlertAssignGroup, AlertAssignRule
 from constants.action import ASSIGN_CONDITION_KEYS, AssignMode
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 from drf_resource.utils.common import count_md5
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from fta_web.alert.handlers.translator import MetricTranslator

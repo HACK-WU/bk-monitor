@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 """
 
 from bkmonitor.views.renderers import MonitorJSONRenderer
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from metadata import resources as resource
 
 RENDER_CLASSES = [MonitorJSONRenderer]

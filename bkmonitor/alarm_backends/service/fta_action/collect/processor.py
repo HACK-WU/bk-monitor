@@ -25,7 +25,7 @@ from alarm_backends.service.fta_action import BaseActionProcessor
 from bkmonitor.models.fta import ActionInstance, ConvergeInstance
 from bkmonitor.utils.send import Sender
 from constants.action import ActionSignal, ActionStatus, ConvergeType, FailureType
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 from core.errors.action import RelatedAlertNotFoundError
 from core.errors.api import BKAPIError
 from core.errors.iam import APIPermissionDeniedError

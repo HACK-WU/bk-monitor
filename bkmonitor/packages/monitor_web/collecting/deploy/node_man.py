@@ -18,7 +18,7 @@ from django.utils.translation import gettext as _
 
 from api.cmdb.define import TopoNode, TopoTree
 from constants.cmdb import TargetNodeType, TargetObjectType
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.api import BKAPIError
 from core.errors.collecting import (
     CollectConfigNeedUpgrade,

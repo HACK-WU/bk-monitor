@@ -34,7 +34,7 @@ from bkmonitor.utils.range import load_agg_condition_instance
 from constants.alert import CLUSTER_PATTERN
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import SPLIT_DIMENSIONS
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.alert import (
     AIOpsAccessedError,
     AIOpsFunctionAccessedError,

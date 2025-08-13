@@ -44,7 +44,7 @@ def test_create_bksaas_space_resource(create_and_delete_record, mocker):
         {"bcs_cluster_id": DEFAULT_BCS_CLUSTER_ID_ONE, "namespace": "bkapp-test-m-stag"},
         {"bcs_cluster_id": DEFAULT_BCS_CLUSTER_ID_TWO, "namespace": "bkapp-test-m-prod"},
     ]
-    mocker.patch("core.drf_resource.api.bk_paas.get_app_cluster_namespace", return_value=api_resp)
+    mocker.patch("drf_resource.api.bk_paas.get_app_cluster_namespace", return_value=api_resp)
     utils.create_bksaas_space_resource(DEFAULT_SPACE_TYPE, DEFAULT_SPACE_ID, DEFAULT_CREATOR)
 
     # 检测数据源已经授权

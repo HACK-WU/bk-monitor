@@ -16,7 +16,7 @@ from django.db.models.sql import AND
 
 from bkmonitor.data_source.models.sql.where import WhereNode
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 
 DATA_SOURCE = {
     DataSourceLabel.BK_MONITOR_COLLECTOR: {

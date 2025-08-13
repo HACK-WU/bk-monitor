@@ -14,7 +14,7 @@ from datetime import datetime
 from apm.core.discover.metric.base import Discover
 from apm.models import TopoNode
 from constants.apm import TelemetryDataType
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger(__name__)
 

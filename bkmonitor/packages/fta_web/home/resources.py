@@ -11,12 +11,12 @@ from rest_framework import serializers
 from api.cmdb.define import Business
 from bkm_space.api import SpaceApi
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument, EventDocument
-from core.drf_resource.cache import CacheType
+from drf_resource.cache import CacheType
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.thread_backend import InheritParentThread, run_threads
 from constants.action import ActionDisplayStatus, ActionPluginType
 from constants.alert import EventSeverity, EventStatus
-from core.drf_resource import CacheResource, Resource, api, resource
+from drf_resource import CacheResource, Resource, api, resource
 from monitor.models import GlobalConfig, UserConfig
 
 FAVORITE_CONFIG_KEY = "fta_overview:favorite_biz"

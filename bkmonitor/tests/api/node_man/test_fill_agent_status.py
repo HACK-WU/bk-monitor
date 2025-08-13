@@ -28,7 +28,7 @@ def mock_host_info():
 def test_fill_agent_status(cc_hosts, mock_host_info):
     bk_biz_id = 2
 
-    with mock.patch("core.drf_resource.api.node_man.ipchooser_host_detail") as mock_ipchooser:
+    with mock.patch("drf_resource.api.node_man.ipchooser_host_detail") as mock_ipchooser:
         mock_ipchooser.return_value = mock_host_info
         result = fill_agent_status(cc_hosts, bk_biz_id)
     assert len(result) == 3

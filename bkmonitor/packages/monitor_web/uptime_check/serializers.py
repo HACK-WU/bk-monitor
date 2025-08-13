@@ -23,8 +23,8 @@ from bkmonitor.utils.ip import exploded_ip, is_v4, is_v6
 from bkmonitor.views import serializers
 from common.log import logger
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api, resource
-from core.drf_resource.exceptions import CustomException
+from drf_resource import api, resource
+from drf_resource.exceptions import CustomException
 from core.errors.uptime_check import UptimeCheckProcessError
 from monitor_web.models.uptime_check import (
     UptimeCheckGroup,

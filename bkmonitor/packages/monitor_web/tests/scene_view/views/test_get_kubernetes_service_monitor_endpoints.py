@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import pytest
 
 from api.kubernetes.default import FetchK8sMonitorEndpointList
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestGetKubernetesServiceMonitorEndpoints:

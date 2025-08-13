@@ -10,8 +10,8 @@ specific language governing permissions and limitations under the License.
 """
 
 
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
-from core.drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
 from kernel_api.resource.uptimecheck import ImportUptimeCheckNodeResource, ImportUptimeCheckTaskResource
 
 

@@ -16,7 +16,7 @@ from typing import Dict, List, Set, Tuple
 from django.core.management.base import BaseCommand
 from django.db.transaction import atomic
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata import config, models
 from metadata.models.constants import (
     BULK_CREATE_BATCH_SIZE,

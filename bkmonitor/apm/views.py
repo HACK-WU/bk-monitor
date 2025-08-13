@@ -58,7 +58,7 @@ from apm.resources import (
     StopApplicationSimpleResource,
     UpdateMetricFieldsResource,
 )
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class MetaInfoViewSet(ResourceViewSet):

@@ -23,8 +23,8 @@ from constants.shield import (
     ShieldCategory,
     ShieldStatus,
 )
-from core.drf_resource import resource
-from core.drf_resource.base import Resource
+from drf_resource import resource
+from drf_resource.base import Resource
 from monitor_web.shield.utils import ShieldDisplayManager
 
 from .backend_resources import ShieldListSerializer

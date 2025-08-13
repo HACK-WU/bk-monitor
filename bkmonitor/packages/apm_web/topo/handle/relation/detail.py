@@ -16,7 +16,7 @@ from rest_framework import serializers
 from apm_web.topo.constants import SourceType
 from apm_web.topo.handle.bar_query import LinkHelper
 from apm_web.topo.handle.relation.define import SourceSystem
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class ResourceDetail:

@@ -50,7 +50,7 @@ from bkmonitor.models import (
 from bkmonitor.strategy.new_strategy import Strategy
 from bkmonitor.utils.dict import nested_update
 from constants.action import ActionPluginType
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger(__name__)
 

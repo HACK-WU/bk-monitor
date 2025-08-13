@@ -12,8 +12,8 @@ specific language governing permissions and limitations under the License.
 
 from rest_framework import serializers
 
-from core.drf_resource import Resource
-from core.drf_resource.tasks import query_task_result
+from drf_resource import Resource
+from drf_resource.tasks import query_task_result
 
 
 class QueryAsyncTaskResultResource(Resource):

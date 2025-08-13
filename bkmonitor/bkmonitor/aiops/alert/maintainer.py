@@ -26,7 +26,7 @@ from bkmonitor.models import AlgorithmModel, QueryConfigModel, StrategyModel
 from bkmonitor.strategy.new_strategy import QueryConfig
 from bkmonitor.utils.common_utils import to_bk_data_rt_id
 from constants.data_source import DataSourceLabel
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 logger = logging.getLogger("aiops.maintainer")

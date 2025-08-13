@@ -49,7 +49,7 @@ class IpChooserApi(AbstractBkApi):
 
     @staticmethod
     def get_agent_status(params: dict = None):
-        from core.drf_resource import api
+        from drf_resource import api
 
         return api.node_man.ipchooser_host_detail(params)
 

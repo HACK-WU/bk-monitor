@@ -16,7 +16,7 @@ from django.db import transaction
 from django.utils.translation import gettext as _
 
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.commons.data_access import EventDataAccessor
 from monitor_web.models.custom_report import CustomEventGroup, CustomEventItem
 from monitor_web.models.plugin import CollectorPluginMeta, PluginVersionHistory

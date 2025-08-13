@@ -31,7 +31,7 @@ from bkmonitor.utils.text import (
 )
 from common.context_processors import Platform
 from constants.action import ActionPluginType, NoticeType, NoticeWay
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 
 try:

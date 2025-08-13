@@ -15,7 +15,7 @@ from django.conf import settings
 from django.db import models, transaction
 from tenacity import RetryError, retry, stop_after_attempt, wait_exponential
 
-from core.drf_resource import api
+from drf_resource import api
 from metadata.models.data_link import utils
 from metadata.models.data_link.constants import DataLinkKind, DataLinkResourceStatus
 from metadata.models.data_link.data_link_configs import (

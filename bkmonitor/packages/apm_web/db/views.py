@@ -14,7 +14,7 @@ from apm_web.db.resources import (
     ListDbStatisticsResource,
     ListDbSystemResource,
 )
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class DbViewSet(ResourceViewSet):

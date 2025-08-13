@@ -19,7 +19,7 @@ from bkmonitor.models import (
 from bkmonitor.strategy.new_strategy import Strategy
 from constants.alert import EVENT_SEVERITY_DICT
 from constants.data_source import DataSourceLabel
-from core.drf_resource import resource
+from drf_resource import resource
 from core.statistics.metric import Metric, register
 from monitor_web.statistics.v2.base import BaseCollector
 

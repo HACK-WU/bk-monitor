@@ -43,10 +43,10 @@ from constants.strategy import (
     DataTarget,
     TargetFieldType,
 )
-from core.drf_resource import Resource, api, resource
-from core.drf_resource.exceptions import CustomException
-from core.drf_resource.management.exceptions import ResourceNotRegistered
-from core.drf_resource.utils.request import get_request
+from drf_resource import Resource, api, resource
+from drf_resource.exceptions import CustomException
+from drf_resource.management.exceptions import ResourceNotRegistered
+from drf_resource.utils.request import get_request
 from core.errors.strategy import StrategyNotExist
 from core.unit import load_unit
 from monitor_web.alert_events.constant import EventStatus

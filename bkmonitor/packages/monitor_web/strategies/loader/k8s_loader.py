@@ -13,7 +13,7 @@ from typing import List, Optional
 
 from bkmonitor.models import StrategyLabel
 from constants.alert import DEFAULT_NOTICE_MESSAGE_TEMPLATE
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from monitor_web.strategies.constant import (
     DEFAULT_ALARM_STRATEGY_ATTR_NAME_K8S,
     DEFAULT_ALARM_STRATEGY_LOADER_TYPE_K8S,

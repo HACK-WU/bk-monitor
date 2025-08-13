@@ -17,7 +17,7 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.staticfiles.finders import BaseFinder
 
-from core.drf_resource.management.exceptions import ErrorSettingsWithResourceDirs
+from drf_resource.management.exceptions import ErrorSettingsWithResourceDirs
 
 logger = logging.getLogger(__name__)
 

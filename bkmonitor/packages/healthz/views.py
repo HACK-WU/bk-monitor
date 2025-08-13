@@ -12,8 +12,8 @@ specific language governing permissions and limitations under the License.
 
 from django.shortcuts import render
 
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 def index(request, cc_biz_id):

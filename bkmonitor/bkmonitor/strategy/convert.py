@@ -33,7 +33,7 @@ from constants.strategy import (
     UPTIMECHECK_ERROR_CODE_MAP,
     TargetFieldType,
 )
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger(__name__)
 

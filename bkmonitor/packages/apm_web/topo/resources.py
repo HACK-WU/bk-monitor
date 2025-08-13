@@ -26,7 +26,7 @@ from apm_web.topo.serializers import (
     TopoQueryRequestSerializer,
 )
 from apm_web.utils import fill_series, get_bar_interval_number
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 
 class DataTypeBarQueryResource(Resource):

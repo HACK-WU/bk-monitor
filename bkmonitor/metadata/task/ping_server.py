@@ -17,7 +17,7 @@ from django.conf import settings
 
 from alarm_backends.management.hashring import HashRing
 from bkmonitor.commons.tools import is_ipv6_biz
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 from metadata.models.custom_report.subscription_config import get_proxy_host_ids
 from metadata.models.ping_server import PingServerSubscriptionConfig

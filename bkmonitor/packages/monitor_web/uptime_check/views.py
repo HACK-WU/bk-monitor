@@ -20,8 +20,8 @@ from rest_framework.response import Response
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.utils.common_utils import host_key, safe_int
-from core.drf_resource import api, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import api, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from monitor_api.filtersets import get_filterset
 from monitor_web.models.uptime_check import (
     UptimeCheckGroup,

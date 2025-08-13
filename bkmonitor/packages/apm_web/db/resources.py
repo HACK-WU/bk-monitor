@@ -29,7 +29,7 @@ from apm_web.handlers.db_handler import DbInstanceHandler, DbQuery, DbStatistics
 from apm_web.handlers.service_handler import ServiceHandler
 from apm_web.models import Application
 from constants.apm import OtlpKey
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 from monitor_web.scene_view.resources.base import PageListResource
 from monitor_web.scene_view.table_format import (
     LinkListTableFormat,

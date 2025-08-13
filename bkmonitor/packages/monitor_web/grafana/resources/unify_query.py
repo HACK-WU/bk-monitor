@@ -51,7 +51,7 @@ from constants.data_source import (
     UnifyQueryDataSources,
 )
 from constants.strategy import SYSTEM_EVENT_RT_TABLE_ID, UPTIMECHECK_ERROR_CODE_MAP
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from core.errors.api import BKAPIError
 from core.prometheus.base import OPERATION_REGISTRY
 from core.prometheus.metrics import safe_push_to_gateway

@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import pytest
 
 from bkmonitor.utils.kubernetes import translate_timestamp_since
-from core.drf_resource import resource
+from drf_resource import resource
 
 
 class TestGetKubernetesService:

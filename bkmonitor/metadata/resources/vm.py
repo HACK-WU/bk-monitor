@@ -17,7 +17,7 @@ from django.db.transaction import atomic
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource import Resource
+from drf_resource import Resource
 from metadata import config, models
 from metadata.models.space.constants import SpaceTypes
 from metadata.service.data_source import query_biz_plugin_data_id_list

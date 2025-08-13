@@ -14,7 +14,7 @@ from django.conf import settings
 from django.template import engines
 from django.utils.translation import get_language
 
-from core.drf_resource.base import Resource
+from drf_resource.base import Resource
 
 django_engine = engines["django"]
 

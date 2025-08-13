@@ -9,8 +9,8 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from fta_web.alert.views import AlertViewSet as FTAAlertViewSet
 from kernel_api.resource.qos import FailurePublishResource, FailureRecoveryResource
 

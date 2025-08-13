@@ -23,7 +23,7 @@ from bkmonitor.dataflow.auth import batch_add_permission
 from bkmonitor.utils.db import JsonField
 from bkmonitor.utils.time_format import parse_duration
 from constants.dataflow import ConsumingMode
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from metadata.models.common import BaseModelWithTime
 from metadata.models.record_rule import utils

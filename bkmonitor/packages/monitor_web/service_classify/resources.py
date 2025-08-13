@@ -20,8 +20,8 @@ from bkmonitor.models import ItemModel, StrategyModel
 from bkmonitor.models.metric_list_cache import MetricListCache
 from bkmonitor.views import serializers
 from constants.strategy import TargetFieldType
-from core.drf_resource import api
-from core.drf_resource.base import Resource
+from drf_resource import api
+from drf_resource.base import Resource
 
 
 class ServiceCategoryList(Resource):

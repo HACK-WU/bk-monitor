@@ -14,7 +14,7 @@ from django.utils.functional import cached_property
 from monitor_web.models import CollectConfigMeta
 from monitor_web.statistics.v2.base import BaseCollector
 
-from core.drf_resource import resource
+from drf_resource import resource
 from core.statistics.metric import Metric, register
 
 logger = logging.getLogger(__name__)

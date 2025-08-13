@@ -22,8 +22,8 @@ from django.utils.translation import gettext as _
 from requests.exceptions import HTTPError, ReadTimeout
 
 from bkmonitor.utils.user import make_userinfo
-from core.drf_resource.contrib.cache import CacheResource
-from core.drf_resource.utils.request import get_request
+from drf_resource.contrib.cache import CacheResource
+from drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from core.errors.iam import APIPermissionDeniedError
 from core.prometheus import metrics

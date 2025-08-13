@@ -16,8 +16,8 @@ from rest_framework.exceptions import ValidationError
 from bkmonitor.commons.tools import batch_request
 from core.cache import CacheType
 from bkmonitor.utils.user import get_local_username, get_request_username
-from core.drf_resource import CacheResource, Resource, api
-from core.drf_resource.contrib.nested_api import KernelAPIResource
+from drf_resource import CacheResource, Resource, api
+from drf_resource.contrib.nested_api import KernelAPIResource
 
 
 class MetaDataAPIGWResource(KernelAPIResource):

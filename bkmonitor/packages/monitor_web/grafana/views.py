@@ -14,8 +14,8 @@ from rest_framework.authentication import SessionAuthentication
 from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.middlewares.authentication import NoCsrfSessionAuthentication
-from core.drf_resource import api, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import api, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from monitor_web.grafana.permissions import (
     GrafanaReadPermission,
     GrafanaWritePermission,

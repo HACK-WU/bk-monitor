@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 
 from django.conf.urls import include, url
 
-from core.drf_resource.routers import ResourceRouter
+from drf_resource.routers import ResourceRouter
 from monitor_web.uptime_check import views as uptime_check_views
 
 router = ResourceRouter()

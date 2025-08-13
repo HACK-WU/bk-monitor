@@ -15,8 +15,8 @@ from django.utils.translation import gettext as _
 
 from bkmonitor.utils.common_utils import logger
 from constants.cmdb import TargetNodeType
-from core.drf_resource import api, resource
-from core.drf_resource.utils.local import local
+from drf_resource import api, resource
+from drf_resource.utils.local import local
 from monitor_web.commons.cc.utils import topo_tree_tools
 from utils import business
 from utils.time_status import TimeStats

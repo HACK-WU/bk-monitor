@@ -21,7 +21,7 @@ from bkmonitor.models import ActionInstance
 from bkmonitor.utils.time_tools import hms_string, utc2localtime
 from constants.alert import EventStatus, EventTargetType
 from constants.shield import ShieldType
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from core.errors.weixin.event import AlertCollectNotFound
 from fta_web.alert.handlers.base import AlertDimensionFormatter
 from fta_web.alert.resources import (

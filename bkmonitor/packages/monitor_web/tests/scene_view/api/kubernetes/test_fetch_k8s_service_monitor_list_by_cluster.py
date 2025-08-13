@@ -12,7 +12,7 @@ import pytest
 
 from api.kubernetes.default import FetchK8sServiceMonitorListByClusterResource
 from bkmonitor.utils.kubernetes import translate_timestamp_since
-from core.drf_resource import api
+from drf_resource import api
 
 
 @pytest.mark.django_db

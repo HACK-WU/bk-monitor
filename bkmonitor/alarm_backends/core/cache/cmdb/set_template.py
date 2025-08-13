@@ -14,7 +14,7 @@ from collections import defaultdict
 from django.conf import settings
 
 from alarm_backends.core.cache.cmdb.base import CMDBCacheManager, RefreshByBizMixin
-from core.drf_resource import api
+from drf_resource import api
 
 
 class SetTemplateManager(RefreshByBizMixin, CMDBCacheManager):

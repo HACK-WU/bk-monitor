@@ -22,7 +22,7 @@ from bkmonitor.models import MetricListCache, StrategyModel
 from bkmonitor.strategy.new_strategy import Strategy, get_metric_id
 from bkmonitor.views import serializers
 from constants.data_source import DataSourceLabel
-from core.drf_resource import Resource, resource
+from drf_resource import Resource, resource
 from monitor_web.aiops.host_monitor.constant import (
     GROUP_BY_METRIC_FIELDS,
     NO_ACCESS_METRIC_ANOMALY_RANGE_COLOR,

@@ -27,8 +27,8 @@ from bkmonitor.models import (
 )
 from bkmonitor.strategy.serializers import NoticeGroupSerializer
 from constants.action import ActionSignal, NoticeWay, NotifyStep
-from core.drf_resource import Resource, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from core.errors.notice_group import NoticeGroupHasStrategy
 
 

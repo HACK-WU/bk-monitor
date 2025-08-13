@@ -14,7 +14,7 @@ from apm_web.log.resources import ServiceLogInfoResource, ServiceRelationListRes
 from apm_web.models import Application
 from bkmonitor.iam import ActionEnum, ResourceEnum
 from bkmonitor.iam.drf import InstanceActionForDataPermission
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class LogViewSet(ResourceViewSet):

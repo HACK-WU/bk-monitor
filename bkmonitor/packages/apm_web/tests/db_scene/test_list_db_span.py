@@ -143,7 +143,7 @@ class TestListDbSpan(django.test.TestCase):
             "bk_biz_id": 2,
         }
 
-        mock.patch("core.drf_resource.api.apm_api.query_span_list", return_value=DB_SPAN_RES).start()
+        mock.patch("drf_resource.api.apm_api.query_span_list", return_value=DB_SPAN_RES).start()
 
         obj = ListDbSpanResource()
 

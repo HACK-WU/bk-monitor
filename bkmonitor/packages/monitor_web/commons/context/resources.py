@@ -27,9 +27,9 @@ from common.context_processors import (
     json_formatter,
 )
 from common.log import logger
-from core.drf_resource import resource
-from core.drf_resource.base import Resource
-from core.drf_resource.utils.request import get_request
+from drf_resource import resource
+from drf_resource.base import Resource
+from drf_resource.utils.request import get_request
 from core.errors.api import BKAPIError
 from monitor.models.models import UserConfig
 from monitor_web.tasks import run_init_builtin

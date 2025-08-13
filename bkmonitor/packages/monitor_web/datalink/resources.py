@@ -24,8 +24,8 @@ from bkmonitor.utils.user import get_global_user
 from bkmonitor.views import serializers
 from common.log import logger
 from constants.alert import EVENT_STATUS_DICT, EventStatus
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
+from drf_resource import api, resource
+from drf_resource.base import Resource
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from metadata import models
 from metadata.models.space.space_data_source import get_real_biz_id

@@ -20,7 +20,7 @@ from constants.incident import (
     IncidentGraphEdgeEventType,
     IncidentGraphEdgeType,
 )
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.incident import IncidentEntityNotFoundError
 
 

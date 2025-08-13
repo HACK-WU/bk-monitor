@@ -26,7 +26,7 @@ from django.utils.translation import gettext_lazy as _lazy
 from bkmonitor.commons.storage import get_default_image_storage
 from bkmonitor.utils.db.fields import JsonField, YamlField
 from bkmonitor.utils.user import get_global_user
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.commons.data_access import PluginDataAccessor
 from monitor_web.models import OperateRecordModelBase
 from monitor_web.plugin.constant import (

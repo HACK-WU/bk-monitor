@@ -14,8 +14,8 @@ from rest_framework.exceptions import ValidationError
 from bkmonitor.models import UserGroup
 from bkmonitor.strategy.new_strategy import Action, Detect
 from constants.action import ActionSignal
-from core.drf_resource import Resource, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class SaveStrategyResource(Resource):

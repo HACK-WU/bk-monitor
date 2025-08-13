@@ -15,7 +15,7 @@ import typing
 from dataclasses import asdict, dataclass, field
 
 from apm.constants import ProfileApiType
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("apm")
 

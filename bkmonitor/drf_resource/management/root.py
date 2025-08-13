@@ -18,13 +18,13 @@ from typing import Optional
 
 from django.conf import settings
 
-from core.drf_resource.base import Resource
-from core.drf_resource.management.exceptions import (
+from drf_resource.base import Resource
+from drf_resource.management.exceptions import (
     ResourceModuleConflict,
     ResourceModuleNotRegistered,
     ResourceNotRegistered,
 )
-from core.drf_resource.management.finder import API_DIR, ResourceFinder, ResourcePath
+from drf_resource.management.finder import API_DIR, ResourceFinder, ResourcePath
 
 logger = logging.getLogger(__name__)
 

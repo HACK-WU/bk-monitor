@@ -24,7 +24,7 @@ from constants.alert import EventStatus
 from constants.cmdb import TargetNodeType
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import HOST_SCENARIO, TargetFieldType
-from core.drf_resource import api
+from drf_resource import api
 from monitor.constants import AGENT_STATUS
 
 logger = logging.getLogger(__name__)

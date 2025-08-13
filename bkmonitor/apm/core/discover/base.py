@@ -29,7 +29,7 @@ from apm.utils.base import divide_biscuit
 from apm.utils.es_search import limits
 from bkmonitor.utils.thread_backend import ThreadPool
 from constants.apm import OtlpKey, SpanKind, TelemetryDataType
-from core.drf_resource.exceptions import CustomException
+from drf_resource.exceptions import CustomException
 
 logger = logging.getLogger("apm")
 

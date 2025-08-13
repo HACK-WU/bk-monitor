@@ -13,7 +13,7 @@ from django.core.management.base import BaseCommand
 
 from monitor_web.commons.job import linux_system_info
 
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from metadata.models import CustomReportSubscription, TimeSeriesGroup
 from metadata.models.storage import EventGroup
 

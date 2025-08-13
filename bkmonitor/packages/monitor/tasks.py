@@ -20,7 +20,7 @@ from django.core.cache import cache
 
 from common import log
 from common.log import logger
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 if "celery" in sys.argv:
     log.logger_detail = logging.getLogger("celery")

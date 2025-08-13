@@ -85,7 +85,7 @@ class TestReportItem(TestCase):
         "monitor_web.report.resources.ReportCreateOrUpdateResource.fetch_group_members",
         return_value=[{"id": "admin", "is_enabled": True, "type": "user"}],
     )
-    @mock.patch("core.drf_resource.resource.report.group_list", return_value=[])
+    @mock.patch("drf_resource.resource.report.group_list", return_value=[])
     @mock.patch(
         "monitor_web.report.resources.ReportListResource.get_request_user",
         return_value=namedtuple("user", {"username": "admin", "is_superuser": True}),
@@ -143,7 +143,7 @@ class TestReportItem(TestCase):
         "monitor_web.report.resources.ReportCreateOrUpdateResource.fetch_group_members",
         return_value=[{"id": "admin", "is_enabled": True, "type": "user"}],
     )
-    @mock.patch("core.drf_resource.resource.report.group_list", return_value=[])
+    @mock.patch("drf_resource.resource.report.group_list", return_value=[])
     @mock.patch(
         "monitor_web.report.resources.ReportListResource.get_request_user",
         return_value=namedtuple("user", {"username": "admin", "is_superuser": True}),

@@ -42,7 +42,7 @@ from alarm_backends.service.access.event.records.custom_event import (
 )
 from alarm_backends.service.access.priority import PriorityChecker
 from constants.strategy import MAX_RETRIEVE_NUMBER
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.alarm_backends import LockError
 from core.prometheus import metrics
 

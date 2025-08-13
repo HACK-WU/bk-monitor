@@ -28,7 +28,7 @@ from bkmonitor.models.external_iam import (
 )
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.user import get_local_username
-from core.drf_resource import Resource, api, resource
+from drf_resource import Resource, api, resource
 from monitor.models import GlobalConfig
 from monitor_web.grafana.permissions import DashboardPermission
 from monitor_web.iam.serializers import (

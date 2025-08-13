@@ -47,7 +47,7 @@ from constants.strategy import (
     SPLIT_DIMENSIONS,
     AdvanceConditionMethod,
 )
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.bkmonitor.data_source import (
     FunctionNotFoundError,
     FunctionNotSupportedError,

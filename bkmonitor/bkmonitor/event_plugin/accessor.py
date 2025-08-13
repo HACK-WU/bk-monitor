@@ -14,7 +14,7 @@ from bkmonitor.models import DataSourceLabel, DataTypeLabel, EventPluginInstance
 from bkmonitor.utils.common_utils import safe_int
 from bkmonitor.utils.request import get_request_username
 from constants.data_source import ResultTableLabelObj
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 
 

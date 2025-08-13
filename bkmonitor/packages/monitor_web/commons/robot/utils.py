@@ -17,7 +17,7 @@ from django.core.cache import cache
 from elasticsearch_dsl import Q
 
 from constants.aiops import SceneSet
-from core.drf_resource import resource
+from drf_resource import resource
 from core.errors.api import BKAPIError
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from monitor_web.aiops.host_monitor.constant import NoAccessException

@@ -26,7 +26,7 @@ from bkmonitor.models import AnomalyRecord
 from bkmonitor.utils import time_tools
 from bkmonitor.utils.template import NoticeRowRenderer
 from constants.alert import TARGET_DIMENSIONS
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.api import BKAPIError
 from core.unit import load_unit
 

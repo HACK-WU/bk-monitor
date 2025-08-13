@@ -7,7 +7,7 @@ from django.conf import settings
 from django.utils.translation import gettext as _
 
 from api.cmdb.define import Host
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from monitor_web.search.handlers.base import (
     BaseSearchHandler,
     SearchResultItem,

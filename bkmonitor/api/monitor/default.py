@@ -13,7 +13,7 @@ from django.conf import settings
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.drf_resource.contrib.nested_api import KernelAPIResource
+from drf_resource.contrib.nested_api import KernelAPIResource
 
 
 class MonitorAPIGWResource(KernelAPIResource):

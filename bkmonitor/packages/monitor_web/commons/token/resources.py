@@ -13,7 +13,7 @@ specific language governing permissions and limitations under the License.
 from rest_framework import serializers
 
 from bkmonitor.models import ApiAuthToken
-from core.drf_resource import Resource
+from drf_resource import Resource
 
 
 class GetApiTokenResource(Resource):

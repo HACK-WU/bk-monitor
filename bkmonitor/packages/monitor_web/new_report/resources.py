@@ -43,10 +43,10 @@ from constants.new_report import (
     SendStatusEnum,
     StaffEnum,
 )
-from core.drf_resource import api, resource
-from core.drf_resource.base import Resource
-from core.drf_resource.exceptions import CustomException
-from core.drf_resource.utils.request import get_request
+from drf_resource import api, resource
+from drf_resource.base import Resource
+from drf_resource.exceptions import CustomException
+from drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)
 GlobalConfig = apps.get_model("bkmonitor.GlobalConfig")

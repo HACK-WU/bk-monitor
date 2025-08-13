@@ -42,7 +42,7 @@ from constants.data_source import (
     DataTypeLabel,
     OthersResultTableLabel,
 )
-from core.drf_resource import resource
+from drf_resource import resource
 from fta_web.alert.handlers.base import (
     AlertDimensionFormatter,
     BaseBizQueryHandler,

@@ -20,8 +20,8 @@ from bk_dataview.api import get_or_create_org
 from bkmonitor.action.serializers import DutyRuleDetailSlz, UserGroupDetailSlz
 from bkmonitor.models import ActionConfig, DutyRule, StrategyModel, UserGroup
 from bkmonitor.strategy.new_strategy import Strategy
-from core.drf_resource import api, resource
-from core.drf_resource.utils.local import local
+from drf_resource import api, resource
+from drf_resource.utils.local import local
 from core.errors.export_import import ImportConfigError
 from monitor_web.collecting.constant import OperationResult, OperationType
 from monitor_web.collecting.deploy import get_collect_installer

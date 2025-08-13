@@ -12,7 +12,7 @@ specific language governing permissions and limitations under the License.
 
 import copy
 
-from core.drf_resource import resource
+from drf_resource import resource
 from bkmonitor.utils.thread_backend import InheritParentThread
 
 

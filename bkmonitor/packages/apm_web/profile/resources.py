@@ -23,7 +23,7 @@ from apm_web.profile.doris.querier import APIType, QueryTemplate
 from apm_web.profile.serializers import ProfileQuerySerializer, QueryBaseSerializer
 from apm_web.utils import get_interval, split_by_interval
 from bkmonitor.utils.thread_backend import ThreadPool
-from core.drf_resource import Resource, api
+from drf_resource import Resource, api
 
 logger = logging.getLogger("apm")
 

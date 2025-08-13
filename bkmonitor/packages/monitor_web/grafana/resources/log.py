@@ -21,7 +21,7 @@ from rest_framework.exceptions import ValidationError
 from bkmonitor.data_source import load_data_source
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import resource
+from drf_resource import resource
 
 logger = logging.getLogger(__name__)
 

@@ -30,7 +30,7 @@ from bkmonitor.models.strategy import (
 )
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import TargetFieldType
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.models import CollectorPluginMeta
 
 target_biz_list = list(

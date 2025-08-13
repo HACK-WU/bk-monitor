@@ -19,7 +19,7 @@ from apm_ebpf.apps import logger
 from apm_ebpf.models import ClusterRelation
 from bkm_space.api import SpaceApi
 from bkmonitor.utils import group_by
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.bkmonitor.space import SpaceNotFound
 from metadata.models.space.constants import SPACE_UID_HYPHEN, SpaceTypes
 

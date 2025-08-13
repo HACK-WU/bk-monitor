@@ -12,8 +12,8 @@ from rest_framework.authentication import SessionAuthentication
 
 from bkmonitor.middlewares.authentication import NoCsrfSessionAuthentication
 from bkmonitor.views.renderers import PlainTextRenderer
-from core.drf_resource import resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class EventViewSet(ResourceViewSet):

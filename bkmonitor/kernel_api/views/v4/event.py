@@ -22,8 +22,8 @@ from bkmonitor.utils.time_tools import (
     parse_time_range,
     utc2localtime,
 )
-from core.drf_resource import Resource, resource
-from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
+from drf_resource import Resource, resource
+from drf_resource.viewsets import ResourceRoute, ResourceViewSet
 
 
 class SearchEvent(Resource):

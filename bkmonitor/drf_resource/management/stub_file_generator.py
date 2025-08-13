@@ -110,7 +110,7 @@ def search_attr(instance):
 def update_stub_file():
     import os
 
-    from core.drf_resource import resource
+    from drf_resource import resource
 
     tree = search_attr(resource)
 

@@ -1,6 +1,6 @@
 from django.utils.deprecation import MiddlewareMixin
 
-from core.drf_resource.utils.local import local
+from drf_resource.utils.local import local
 
 
 class RequestProvider(MiddlewareMixin):

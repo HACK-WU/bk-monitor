@@ -15,7 +15,7 @@ from django.conf import settings
 from django.http import StreamingHttpResponse
 from rest_framework import serializers
 
-from core.drf_resource import APIResource
+from drf_resource import APIResource
 
 
 class AidevAPIGWResource(APIResource):

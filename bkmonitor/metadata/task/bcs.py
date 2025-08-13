@@ -18,7 +18,7 @@ from django.conf import settings
 
 from alarm_backends.core.lock.service_lock import share_lock
 from alarm_backends.service.scheduler.app import app
-from core.drf_resource import api
+from drf_resource import api
 from core.prometheus import metrics
 from metadata import models
 from metadata.config import PERIODIC_TASK_DEFAULT_TTL

@@ -18,7 +18,7 @@ from django.conf import settings
 
 from bkmonitor.iam.action import _all_actions, ActionMeta
 from bkmonitor.iam.resource import ResourceMeta, ResourceEnum
-from core.drf_resource import api
+from drf_resource import api
 from monitor_web.models.config import RolePermission
 
 

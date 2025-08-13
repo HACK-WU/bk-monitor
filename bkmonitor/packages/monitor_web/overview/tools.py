@@ -22,7 +22,7 @@ from bkmonitor.models import StrategyModel
 from bkmonitor.utils.common_utils import host_key
 from bkmonitor.utils.time_tools import hms_string, localtime, now
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource import api, resource
+from drf_resource import api, resource
 from monitor_web.models import CollectConfigMeta
 from monitor_web.models.uptime_check import UptimeCheckNode, UptimeCheckTask
 from monitor_web.uptime_check.constants import BEAT_STATUS, UPTIME_CHECK_DB

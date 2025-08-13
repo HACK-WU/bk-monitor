@@ -55,7 +55,7 @@ def test():
 ## 2、API缓存
 
 ```python
-from core.drf_resource.contrib.cache import CacheResource
+from drf_resource.contrib.cache import CacheResource
 from core.cache import CacheType
 
 
@@ -82,7 +82,7 @@ class HostPerformanceResource(CacheResource):
 
 ```python
 from constants.data_source import LabelType
-from core.drf_resource import api
+from drf_resource import api
 
 get_label_api = {
     'api': api.metadata.get_label,

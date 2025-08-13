@@ -19,7 +19,7 @@ from rest_framework.exceptions import ValidationError
 from bkmonitor.action.serializers import UserGroupDetailSlz
 from bkmonitor.models import UserGroup
 from constants.alert import DEFAULT_NOTICE_GROUPS, PUBLIC_NOTICE_CONFIG
-from core.drf_resource import api
+from drf_resource import api
 
 
 def create_default_notice_group(bk_biz_id: int, group_name=None) -> int:

@@ -2,7 +2,7 @@ import logging
 from typing import Dict, List
 
 from bkm_ipchooser.constants import ScopeType
-from core.drf_resource import api
+from drf_resource import api
 
 logger = logging.getLogger("bkm_ipchooser")
 

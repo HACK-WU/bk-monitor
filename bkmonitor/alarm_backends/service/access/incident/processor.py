@@ -31,7 +31,7 @@ from constants.incident import (
     IncidentStatus,
     IncidentSyncType,
 )
-from core.drf_resource import api
+from drf_resource import api
 from core.errors.incident import IncidentNotFoundError
 
 logger = logging.getLogger("access.incident")
