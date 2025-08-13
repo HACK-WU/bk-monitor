@@ -29,47 +29,46 @@ except Exception:
     mem_cache = cache
 
 
+class CacheTypeItem(object):
+    """
+    缓存类型定义
+    """
+
+    def __init__(self, key, timeout, user_related=None, label=""):
+        """
+        :param key: 缓存名称
+        :param timeout: 缓存超时，单位：s
+        :param user_related: 是否用户相关
+        :param label: 详细说明
+        """
+        self.key = key
+        self.timeout = timeout
+        self.label = label
+        self.user_related = user_related
+
+    def __call__(self, timeout):
+        return CacheTypeItem(self.key, timeout, self.user_related, self.label)
+
+
+class BaseCacheType:
+    """
+    缓存类型基类
+    """
+
+    #  user = CacheTypeItem(key="user", timeout=60 user_related=True)
+    #  backend = CacheTypeItem(key="backend", timeout=60, user_related=False)
+    pass
+
+
+class DefaultCacheType(BaseCacheType):
+    user = CacheTypeItem(key="user", timeout=60, user_related=True)
+    backend = CacheTypeItem(key="backend", timeout=60, user_related=False)
+
+
 class BaseUsingCache(object):
-    min_length = 15
-    preset = 6
-    key_prefix = "web_cache"
-    default_user_info = "backend"
-
-    def __init__(
-        self,
-        cache_type,
-        backend_cache_type=None,
-        user_related=None,
-        compress=True,
-        cache_write_trigger=lambda res: True,
-        func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
-    ):
-        """
-        :param cache_type: 缓存类型
-        :param user_related: 是否与用户关联
-        :param compress: 是否进行压缩
-        :param cache_write_trigger: 缓存函数，当函数返回true时，则进行缓存
-        :param func_key_generator: 函数标识key的生成逻辑
-        """
-        self.cache_type = cache_type
-        self.backend_cache_type = backend_cache_type
-        self.compress = compress
-        self.cache_write_trigger = cache_write_trigger
-        self.func_key_generator = func_key_generator
-        # 先看用户是否提供了user_related参数
-        # 若无，则查看cache_type是否提供了user_related参数
-        # 若都没有定义，则user_related默认为True
-        if user_related is not None:
-            self.user_related = user_related
-        elif getattr(cache_type, "user_related", None) is not None:
-            self.user_related = self.cache_type.user_related
-        else:
-            self.user_related = True
-
-        self.user_info = self.default_user_info
-        if user_related:
-            self.user_info = self.get_user_info()
-        self.using_cache_type = self.get_using_cache_type()
+    """
+    使用缓存基类
+    """
 
     def __call__(self, target_fun: Callable) -> Callable:
         """
@@ -99,6 +98,58 @@ class BaseUsingCache(object):
         default_wrapper.cacheless = cacheless_wrapper
 
         return default_wrapper
+
+    def _cached(self, target_fun, args, kwargs):
+        raise NotImplementedError
+
+    def _refresh(self, target_fun, args, kwargs):
+        raise NotImplementedError
+
+    def _cacheless(self, target_fun, args, kwargs):
+        raise NotImplementedError
+
+
+class DefaultUsingCache(BaseUsingCache):
+    min_length = 15
+    preset = 6
+    key_prefix = "web_cache"
+    default_user_info = "backend"
+
+    def __init__(
+            self,
+            cache_type,
+            backend_cache_type=None,
+            user_related=None,
+            compress=True,
+            cache_write_trigger=lambda res: True,
+            func_key_generator=lambda func: "{}.{}".format(func.__module__, func.__name__),
+    ):
+        """
+        :param cache_type: 缓存类型
+        :param user_related: 是否与用户关联
+        :param compress: 是否进行压缩
+        :param cache_write_trigger: 缓存函数，当函数返回true时，则进行缓存
+        :param func_key_generator: 函数标识key的生成逻辑
+        """
+        self.cache_type = cache_type
+        self.backend_cache_type = backend_cache_type
+        self.compress = compress
+        self.cache_write_trigger = cache_write_trigger
+        self.func_key_generator = func_key_generator
+        # 先看用户是否提供了user_related参数
+        # 若无，则查看cache_type是否提供了user_related参数
+        # 若都没有定义，则user_related默认为True
+        if user_related is not None:
+            self.user_related = user_related
+        elif getattr(cache_type, "user_related", None) is not None:
+            self.user_related = self.cache_type.user_related
+        else:
+            self.user_related = True
+
+        self.user_info = self.default_user_info
+        if user_related:
+            self.user_info = self.get_user_info()
+        self.using_cache_type = self.get_using_cache_type()
 
     def _refresh(self, target_fun: Callable, args, kwargs):
         """
@@ -235,36 +286,5 @@ class BaseUsingCache(object):
             # 缓存出错不影响主流程
             logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
 
-
-using_cache = BaseUsingCache
-
-
-class CacheTypeItem(object):
-    """
-    缓存类型定义
-    """
-
-    def __init__(self, key, timeout, user_related=None, label=""):
-        """
-        :param key: 缓存名称
-        :param timeout: 缓存超时，单位：s
-        :param user_related: 是否用户相关
-        :param label: 详细说明
-        """
-        self.key = key
-        self.timeout = timeout
-        self.label = label
-        self.user_related = user_related
-
-    def __call__(self, timeout):
-        return CacheTypeItem(self.key, timeout, self.user_related, self.label)
-
-
-class BaseCacheType:
-    """
-    缓存类型基类
-    """
-
-    #  USER = CacheTypeItem(key="user", timeout=60 user_related=True)
-    #  backend = CacheTypeItem(key="backend", timeout=60, user_related=False)
-    pass
+# todo 后续将其挂载到Resource类上
+using_cache = DefaultUsingCache
