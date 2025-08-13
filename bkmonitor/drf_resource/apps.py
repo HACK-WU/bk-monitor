@@ -16,7 +16,7 @@ from .management.root import setup
 
 # AppConfig 相关文档：https://docs.djangoproject.com/zh-hans/5.1/ref/applications/
 class DRFResourceConfig(AppConfig):
-    name = "core.drf_resource"
+    name = "drf_resource"
     verbose_name = "drf_resource"
     label = "drf_resource"
 

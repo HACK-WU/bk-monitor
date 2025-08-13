@@ -14,7 +14,7 @@ import logging
 from audit.instance import push_event
 from bkmonitor.utils.common_utils import fetch_biz_id_from_request
 from bkmonitor.utils.request import is_ajax_request
-from core.drf_resource.middlewares.request import RequestProvider as BaseRequestProvider
+from drf_resource.middlewares import RequestProvider as BaseRequestProvider
 
 logger = logging.getLogger(__name__)
 

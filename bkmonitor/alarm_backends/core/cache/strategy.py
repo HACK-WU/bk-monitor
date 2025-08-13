@@ -49,7 +49,7 @@ from constants.strategy import (
     TargetFieldType,
 )
 from core.drf_resource import api
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.prometheus import metrics
 from core.unit import load_unit
 

@@ -37,7 +37,7 @@ from constants.action import (
     NoticeWayChannel,
     UserGroupType,
 )
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("fta_action.run")
 

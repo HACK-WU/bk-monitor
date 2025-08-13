@@ -17,7 +17,7 @@ from alarm_backends.constants import CONST_ONE_DAY, NO_DATA_TAG_DIMENSION
 from alarm_backends.core.cache.key import ALERT_BUILD_QOS_COUNTER
 from bkmonitor.documents import AlertDocument
 from constants.alert import EventStatus
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 
 class Command(BaseCommand):

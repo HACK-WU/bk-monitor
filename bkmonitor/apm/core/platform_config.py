@@ -31,7 +31,7 @@ from apm.models.subscription_config import SubscriptionConfig
 from bkmonitor.utils.bcs import BcsKubeClient
 from constants.apm import BkCollectorComp, SpanKindKey
 from core.drf_resource import api
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("apm")
 

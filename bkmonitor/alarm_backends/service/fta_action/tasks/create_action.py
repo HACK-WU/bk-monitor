@@ -39,7 +39,7 @@ from constants.action import (
     UserGroupType,
 )
 from constants.alert import EventSeverity, EventStatus, HandleStage
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 from core.prometheus import metrics
 

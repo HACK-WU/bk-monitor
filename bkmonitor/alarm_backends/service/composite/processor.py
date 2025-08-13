@@ -36,7 +36,7 @@ from bkmonitor.strategy.expression import AlertExpressionValue, parse_expression
 from constants.action import ActionSignal
 from constants.alert import EventStatus
 from constants.data_source import DataSourceLabel, DataTypeLabel
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 from core.prometheus import metrics
 

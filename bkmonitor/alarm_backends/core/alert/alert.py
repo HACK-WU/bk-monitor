@@ -36,7 +36,7 @@ from bkmonitor.utils import extended_json
 from constants.action import ActionSignal, AssignMode
 from constants.alert import EventStatus
 from constants.data_source import DataTypeLabel
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.prometheus import metrics
 
 logger = logging.getLogger("alert")

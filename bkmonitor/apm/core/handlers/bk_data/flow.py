@@ -23,7 +23,7 @@ from apm.models import ApmApplication, BkdataFlowConfig
 from bkmonitor.dataflow.auth import check_has_permission
 from core.drf_resource import api, resource
 from core.drf_resource.exceptions import CustomException
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors.api import BKAPIError
 from metadata.models.storage import DataBusStatus
 

@@ -27,7 +27,7 @@ from alarm_backends.constants import (
 from alarm_backends.core.cache import key
 from alarm_backends.core.cache.cmdb.host import HostManager
 from alarm_backends.core.detect_result import ANOMALY_LABEL, CheckResult
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("core.control")
 

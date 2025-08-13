@@ -40,7 +40,7 @@ from bkmonitor.utils import time_tools
 from bkmonitor.utils.text import camel_to_underscore
 from constants.cmdb import BIZ_ID_FIELD_NAMES
 from constants.result_table import RT_RESERVED_WORD_EXACT, RT_RESERVED_WORD_FUZZY
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors import ErrorDetails
 from core.errors.dataapi import TSDBParseError
 

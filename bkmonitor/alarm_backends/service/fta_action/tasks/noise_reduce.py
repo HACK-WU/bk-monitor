@@ -18,7 +18,7 @@ from bkmonitor.documents.base import BulkActionType
 from bkmonitor.models import ActionInstance
 from constants.action import ActionSignal
 from constants.alert import HandleStage
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 
 logger = logging.getLogger("fta_action.run")

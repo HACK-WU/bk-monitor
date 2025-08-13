@@ -54,7 +54,7 @@ INSTALLED_APPS += (
     "kernel_api",
     "metadata",
     "calendars",
-    "core.drf_resource",
+    "drf_resource",
     "django_celery_beat",
     "django_celery_results",
     "audit",

@@ -16,7 +16,7 @@ from django.utils.translation import gettext_lazy as _
 
 from bkmonitor.utils.db import JsonField
 from bkmonitor.utils.model_manager import AbstractRecordModel
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 
 class SearchType:

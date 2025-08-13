@@ -16,7 +16,7 @@ from django.test import TestCase
 from bkmonitor.documents import AlertDocument, EventDocument
 from bkmonitor.models import ActionInstance, Shield
 from constants.action import ActionPluginType, ActionStatus
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from fta_web.alert.resources import QuickAlertAck, QuickAlertShield
 from monitor_web.shield.resources.backend_resources import (
     AddShieldResource,

@@ -20,7 +20,7 @@ from django.utils.functional import cached_property
 
 from alarm_backends import constants
 from alarm_backends.service.access.base import Filterer
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("access.event")
 

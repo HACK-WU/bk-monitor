@@ -37,7 +37,7 @@ from constants.apm import PreCalculateSpecificField
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.result_table import ResultTableField
 from core.drf_resource import api, resource
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from metadata.models import ESStorage
 
 logger = logging.getLogger("apm")

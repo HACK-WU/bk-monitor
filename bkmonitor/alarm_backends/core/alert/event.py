@@ -16,7 +16,7 @@ from alarm_backends.constants import DEFAULT_DEDUPE_FIELDS
 from bkmonitor.documents import EventDocument
 from constants.alert import EventStatus, EventTargetType
 from constants.data_source import LABEL_ORDER_LIST, DataTypeLabel, ResultTableLabelObj
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 
 class Event:

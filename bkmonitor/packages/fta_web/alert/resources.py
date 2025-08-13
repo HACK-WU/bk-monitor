@@ -81,7 +81,7 @@ from constants.alert import (
 from constants.data_source import DataSourceLabel, DataTypeLabel, UnifyQueryDataSources
 from core.drf_resource import Resource, api, resource
 from core.drf_resource.exceptions import CustomException
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.drf_resource.utils.request import get_request
 from core.errors.alert import AIOpsMultiAnomlayDetectError, AlertNotFoundError
 from core.unit import load_unit

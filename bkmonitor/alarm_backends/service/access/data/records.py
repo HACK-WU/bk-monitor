@@ -24,7 +24,7 @@ from constants.strategy import (
     SYSTEM_PROC_PORT_DYNAMIC_DIMENSIONS,
     SYSTEM_PROC_PORT_METRIC_ID,
 )
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 if TYPE_CHECKING:
     from alarm_backends.core.control.item import Item

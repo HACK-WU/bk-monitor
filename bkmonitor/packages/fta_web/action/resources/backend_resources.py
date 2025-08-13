@@ -32,7 +32,7 @@ from bkmonitor.utils.template import CustomTemplateRenderer, Jinja2Renderer
 from bkmonitor.views import serializers
 from constants.action import ActionSignal
 from core.drf_resource import Resource
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 try:
     # 后台接口，需要引用后台代码

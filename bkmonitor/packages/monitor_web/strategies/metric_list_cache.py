@@ -55,7 +55,7 @@ from constants.strategy import (
     DimensionFieldType,
 )
 from core.drf_resource import api
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 from core.errors.api import BKAPIError
 from monitor_web.collecting.utils import chunks
 from monitor_web.models import (

@@ -15,7 +15,7 @@ import logging
 from django.conf import settings
 
 from alarm_backends.core.cache import key
-from core.drf_resource.utils.common import count_md5
+from drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("access.qos")
 

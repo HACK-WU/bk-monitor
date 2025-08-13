@@ -58,7 +58,7 @@ INSTALLED_APPS += (  # noqa: F405
     "alarm_backends",
     "apm",
     "apm_ebpf",
-    "core.drf_resource",
+    "drf_resource",
 )
 
 # 系统名称
