@@ -461,10 +461,13 @@ class CustomTimeSeriesList(Resource):
         if not table_ids:
             return {}
 
+        # 先查询策略ID（当有业务过滤条件时）
+        strategy_ids = None
+        if request_bk_biz_id:
+            strategy_ids = set(StrategyModel.objects.filter(bk_biz_id=request_bk_biz_id).values_list("pk", flat=True))
+
         # 查询自定义时间序列类型的查询配置
-        # 使用reduce+Q组合实现多结果表ID过滤
-        # 获取结果表ID与策略ID的关联关系
-        query_configs = (
+        query_configs_queryset = (
             QueryConfigModel.objects.annotate(result_table_id=models.F("config__result_table_id"))
             .filter(
                 reduce(lambda x, y: x | y, (Q(result_table_id=table_id) for table_id in table_ids)),
@@ -474,21 +477,15 @@ class CustomTimeSeriesList(Resource):
             .values("result_table_id", "strategy_id")
         )
 
-        # 当存在业务ID过滤条件时
-        # 获取该业务下所有有效策略ID
-        strategy_ids = []
-        if request_bk_biz_id:
-            strategy_ids = StrategyModel.objects.filter(bk_biz_id=request_bk_biz_id).values_list("pk", flat=True)
+        # 如果有业务过滤条件，进一步筛选query_configs
+        if strategy_ids:
+            query_configs_queryset = query_configs_queryset.filter(strategy_id__in=strategy_ids)
+
+        query_configs = list(query_configs_queryset)
 
         # 构建结果表ID到策略ID的映射关系
-        # 当存在业务ID过滤时，仅保留符合条件的策略
         table_id_strategy_mapping = defaultdict(set)
         for query_config in query_configs:
-            # 业务ID过滤条件验证
-            if request_bk_biz_id and query_config["strategy_id"] not in strategy_ids:
-                continue
-
-            # 建立结果表与策略的关联映射
             table_id_strategy_mapping[query_config["result_table_id"]].add(query_config["strategy_id"])
 
         # 返回结果表ID到策略数量的统计结果
