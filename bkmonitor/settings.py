@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,9 +7,11 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 import os
 import sys
+from pathlib import Path
 
 import monkey
 from config.tools.environment import ENVIRONMENT, ROLE
@@ -22,10 +23,10 @@ except ImportError:
 
     pymysql.install_as_MySQLdb()
 
-
+BASE_DIR = str(Path(__file__).resolve().parent)
 # settings加载顺序 config.default -> blueapps.patch -> config.{env} -> config.role.{role}
 
-patch_module = ['json', 'shutil', 'furl', 're']
+patch_module = ["json", "shutil", "furl", "re"]
 patch_target = {_module: None for _module in patch_module}
 
 # patch backend celery beat only
@@ -60,7 +61,7 @@ for key, value in list(os.environ.items()):
     if upper_key.startswith(SETTING_ENV_PREFIX):
         settings_key = upper_key.replace(SETTING_ENV_PREFIX, "")
         locals()[settings_key] = value
-        print('[Django Settings] Set config from env: {} = "{}"'.format(settings_key, value))
+        print(f'[Django Settings] Set config from env: {settings_key} = "{value}"')
 
 
 # 多人开发时，无法共享的本地配置可以放到新建的 local_settings.py 文件中

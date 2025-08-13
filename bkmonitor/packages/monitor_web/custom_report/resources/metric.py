@@ -195,13 +195,40 @@ class CreateCustomTimeSeries(Resource):
 
     @atomic()
     def perform_request(self, validated_request_data):
-        # 如果是平台级，则ts_group 及对应表的业务id为0
-        # 当前业务为关联的平台级业务id，内置到data_id的data_name里面
-        # data_id有个业务归属，而对应的table可以在各业务下使用
+        """
+        执行时间序列组创建的核心事务处理函数
+
+        参数:
+            validated_request_data: 经过验证的请求数据字典，包含以下关键字段：
+                - is_platform: 布尔值，是否为平台级配置
+                - bk_biz_id: 业务ID，当is_platform为True时无效
+                - name: 时间序列组名称
+                - scenario: 场景标签
+                - metric_info_list: 指标信息列表
+                - is_split_measurement: 是否分表存储
+                - data_label: 数据标签
+                - table_id: 可选的表ID
+                - protocol: 接入协议
+                - desc: 描述信息
+
+        返回值:
+            包含创建结果的字典：
+            {
+                "time_series_group_id": 创建的时间序列组ID,
+                "bk_data_id": 对应的数据ID
+            }
+
+        该函数实现以下核心流程：
+        1. 业务ID与操作者身份解析
+        2. 数据ID存在性校验与复用逻辑
+        3. 时间序列组创建与参数处理
+        4. 元数据持久化存储
+        """
+        # 处理平台级与业务级配置的业务ID映射逻辑
         input_bk_biz_id = 0 if validated_request_data["is_platform"] else validated_request_data["bk_biz_id"]
         operator = get_request_username() or settings.COMMON_USERNAME
 
-        # 当前业务
+        # 构建数据名称与空间UID
         data_name = self.data_name(validated_request_data["bk_biz_id"], validated_request_data["name"])
         # 如果 bk_biz_id 为 0，意味着是全局业务配置，这种情况不需要空间
         space_uid = (
@@ -209,6 +236,8 @@ class CreateCustomTimeSeries(Resource):
             if validated_request_data["bk_biz_id"] == 0
             else self.get_space_uid(int(validated_request_data["bk_biz_id"]))
         )
+
+        # 数据ID存在性校验与冲突检测
         try:
             # 保证 data id 已存在
             bk_data_id = self.get_data_id(data_name, operator, space_uid)
@@ -221,8 +250,7 @@ class CreateCustomTimeSeries(Resource):
                 # ts group 已存在，不需要再额外创建
                 raise CustomValidationNameError(msg=_("数据源名称[{}]已存在").format(data_name))
 
-        # data_id 存在，但 ts group 不存在，继续执行
-        # 2. 调用接口创建 time_series_group
+        # 构建时间序列组创建参数
         params = {
             "operator": operator,
             "bk_data_id": bk_data_id,
@@ -236,8 +264,11 @@ class CreateCustomTimeSeries(Resource):
         }
         if validated_request_data["table_id"]:
             params["table_id"] = validated_request_data["table_id"]
+
+        # 调用API创建时间序列组
         group_info = api.metadata.create_time_series_group(params)
 
+        # 持久化自定义时间序列组元数据
         CustomTSTable.objects.create(
             bk_tenant_id=get_request_tenant_id(),
             bk_biz_id=validated_request_data["bk_biz_id"],
@@ -247,10 +278,11 @@ class CreateCustomTimeSeries(Resource):
             bk_data_id=group_info["bk_data_id"],
             table_id=group_info["table_id"],
             is_platform=validated_request_data["is_platform"],
-            data_label=validated_request_data["data_label"],
+            data_label=group_info["data_label"],
             protocol=validated_request_data["protocol"],
             desc=validated_request_data["desc"],
         )
+
         return {"time_series_group_id": group_info["time_series_group_id"], "bk_data_id": group_info["bk_data_id"]}
 
 
@@ -411,11 +443,27 @@ class CustomTimeSeriesList(Resource):
     @staticmethod
     def get_strategy_count(table_ids, request_bk_biz_id: int | None = None):
         """
-        获取绑定的策略数
+        获取绑定的策略数统计信息
+
+        参数:
+            table_ids: 可迭代对象，包含需要查询的结果表ID集合
+            request_bk_biz_id: 业务ID过滤条件（可选），当存在该参数时仅统计对应业务的策略
+
+        返回值:
+            dict: 结果表ID到策略数量的映射字典，格式为 {result_table_id: count}
+
+        执行流程:
+        1. 查询自定义时间序列类型的查询配置信息
+        2. 根据业务ID过滤有效策略（当提供request_bk_biz_id时）
+        3. 建立结果表ID到策略ID的映射关系
+        4. 统计每个结果表关联的唯一策略数量
         """
         if not table_ids:
             return {}
 
+        # 查询自定义时间序列类型的查询配置
+        # 使用reduce+Q组合实现多结果表ID过滤
+        # 获取结果表ID与策略ID的关联关系
         query_configs = (
             QueryConfigModel.objects.annotate(result_table_id=models.F("config__result_table_id"))
             .filter(
@@ -426,32 +474,64 @@ class CustomTimeSeriesList(Resource):
             .values("result_table_id", "strategy_id")
         )
 
+        # 当存在业务ID过滤条件时
+        # 获取该业务下所有有效策略ID
         strategy_ids = []
         if request_bk_biz_id:
             strategy_ids = StrategyModel.objects.filter(bk_biz_id=request_bk_biz_id).values_list("pk", flat=True)
 
+        # 构建结果表ID到策略ID的映射关系
+        # 当存在业务ID过滤时，仅保留符合条件的策略
         table_id_strategy_mapping = defaultdict(set)
         for query_config in query_configs:
-            # 当存在 biz 请求条件且策略 id 未命中时不纳入统计
+            # 业务ID过滤条件验证
             if request_bk_biz_id and query_config["strategy_id"] not in strategy_ids:
                 continue
 
+            # 建立结果表与策略的关联映射
             table_id_strategy_mapping[query_config["result_table_id"]].add(query_config["strategy_id"])
 
+        # 返回结果表ID到策略数量的统计结果
         return {key: len(value) for key, value in table_id_strategy_mapping.items()}
 
     def perform_request(self, validated_request_data):
+        """
+        执行自定义时序表查询请求的主流程方法
+
+        参数:
+            validated_request_data: dict类型，包含经过验证的请求参数，可能包含以下字段：
+                - is_platform: bool，是否查询全平台数据
+                - bk_biz_id: int，业务ID（0表示全部业务）
+                - search_key: str，搜索关键字（支持名称模糊匹配和ID精确匹配）
+                - page_size: int，分页大小
+                - page: int，当前页码
+
+        返回值:
+            dict类型，包含以下字段：
+                - list: list，当前页序列化后的表格数据列表
+                - total: int，查询结果的总记录数
+
+        该方法实现完整的数据查询与处理流程：
+        1. 多条件动态过滤查询集构建
+        2. 分页处理与序列化
+        3. 关联策略计数补充
+        4. 标签显示字段转换
+        """
+
+        # 构建基础查询集并按更新时间降序排列
         queryset = CustomTSTable.objects.filter(bk_tenant_id=get_request_tenant_id()).order_by("-update_time")
         context = {"request_bk_biz_id": validated_request_data["bk_biz_id"]}
-        # 区分本空间 和 全平台
-        if validated_request_data.get("is_platform"):
-            # 只查全平台, 不关注业务
-            queryset = queryset.filter(is_platform=True)
 
+        # 多条件动态过滤逻辑
+        # 处理全平台/业务范围过滤
+        if validated_request_data.get("is_platform"):
+            # 全平台场景：仅查询is_platform=True的记录
+            queryset = queryset.filter(is_platform=True)
         elif validated_request_data.get("bk_biz_id"):
-            # 非全平台，查当前业务(0表示全部业务)
+            # 业务场景：查询指定bk_biz_id的记录（0表示全部业务）
             queryset = queryset.filter(bk_biz_id=validated_request_data["bk_biz_id"])
 
+        # 处理搜索条件过滤
         if validated_request_data.get("search_key"):
             search_key = validated_request_data["search_key"]
             conditions = models.Q(name__contains=search_key)
@@ -460,19 +540,27 @@ class CustomTimeSeriesList(Resource):
             except ValueError:
                 pass
             else:
+                # 支持通过主键或数据ID精确匹配
                 conditions = conditions | models.Q(pk=search_key) | models.Q(bk_data_id=search_key)
             queryset = queryset.filter(conditions)
+
+        # 分页处理与数据序列化
         paginator = Paginator(queryset, validated_request_data["page_size"])
         serializer = CustomTSTableSerializer(paginator.page(validated_request_data["page"]), many=True, context=context)
         tables = serializer.data
 
+        # 补充关联策略计数信息
         table_ids = [table["table_id"] for table in tables]
         strategy_count_mapping = self.get_strategy_count(table_ids, validated_request_data.get("bk_biz_id"))
 
+        # 数据后处理：转换显示字段
         label_display_dict = get_label_display_dict()
         for table in tables:
+            # 补充场景标签的展示名称
             table["scenario_display"] = label_display_dict.get(table["scenario"], [table["scenario"]])
+            # 补充关联策略数量
             table["related_strategy_count"] = strategy_count_mapping.get(table["table_id"], 0)
+
         return {
             "list": tables,
             "total": queryset.count(),
@@ -621,6 +709,24 @@ class ModifyCustomTsFields(Resource):
         delete_fields = serializers.ListField(label="删除字段列表", child=FieldSerializer(), default=list)
 
     def perform_request(self, params: dict):
+        """
+        执行自定义时序数据表的字段管理操作，包含字段删除、更新和创建功能
+
+        参数:
+            params: 包含操作参数的字典，必须包含以下键：
+                bk_biz_id: 业务ID(int)
+                time_series_group_id: 时序分组ID(int)
+                delete_fields: 需要删除的字段列表(list of dict)
+                update_fields: 需要更新/创建的字段列表(list of dict)
+
+        返回值:
+            None: 操作成功完成时返回None
+            当params["update_fields"]为空时提前返回
+
+        异常:
+            ValidationError: 当指定的CustomTSTable不存在时抛出
+        """
+        # 查询目标时序表
         table = CustomTSTable.objects.filter(
             bk_biz_id=params["bk_biz_id"],
             time_series_group_id=params["time_series_group_id"],
@@ -631,7 +737,7 @@ class ModifyCustomTsFields(Resource):
                 f"time_series_group_id: {params['time_series_group_id']}"
             )
 
-        # 删除字段
+        # 执行字段删除操作
         if params["delete_fields"]:
             CustomTSField.objects.filter(time_series_group_id=table.time_series_group_id).filter(
                 reduce(
@@ -642,27 +748,26 @@ class ModifyCustomTsFields(Resource):
         if not params["update_fields"]:
             return
 
-        # 获取存量字段
+        # 查询现有字段并构建映射关系
         fields = CustomTSField.objects.filter(time_series_group_id=table.time_series_group_id).filter(
             reduce(lambda x, y: x | y, (Q(name=field["name"], type=field["type"]) for field in params["update_fields"]))
         )
         field_map = {(item.name, item.type): item for item in fields}
 
-        # 需要更新的字段
+        # 分离需要更新和创建的字段
         need_update_fields = []
-        # 需要创建的字段
         need_create_fields = []
         for update_field in params["update_fields"]:
             field = field_map.get((update_field["name"], update_field["type"]))
 
-            # 根据字段类型，生成 config
+            # 根据字段类型生成配置
             if update_field["type"] == CustomTSField.MetricType.DIMENSION:
                 field_keys = CustomTSField.DimensionConfigFields
             else:
                 field_keys = CustomTSField.MetricConfigFields
             field_config = {field_key: update_field[field_key] for field_key in field_keys if field_key in update_field}
 
-            # 如果字段存在，则更新字段
+            # 处理字段更新
             if field:
                 field.config.update(field_config)
                 if "description" in update_field:
@@ -671,7 +776,7 @@ class ModifyCustomTsFields(Resource):
                     field.disabled = update_field["disabled"]
                 need_update_fields.append(field)
             else:
-                # 如果字段不存在，则创建字段
+                # 构建新字段对象
                 need_create_fields.append(
                     CustomTSField(
                         time_series_group_id=table.time_series_group_id,
@@ -683,12 +788,11 @@ class ModifyCustomTsFields(Resource):
                     )
                 )
 
-        # 批量创建字段
+        # 批量持久化字段变更
         CustomTSField.objects.bulk_create(need_create_fields, batch_size=500)
-        # 批量更新字段
         CustomTSField.objects.bulk_update(need_update_fields, ["description", "disabled", "config"], batch_size=500)
 
-        # 同步metadata
+        # 将变更同步到元数据
         table.save_to_metadata(with_fields=True)
 
 
