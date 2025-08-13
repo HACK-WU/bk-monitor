@@ -7,11 +7,11 @@ import time
 
 from django.conf import settings
 
-from drf_resource.cache import BaseUsingCache, BaseCacheType, CacheTypeItem
+from drf_resource.cache import DefaultUsingCache, BaseCacheType, CacheTypeItem
 from drf_resource.utils.local import local
 
 
-class UsingCache(BaseUsingCache):
+class UsingCache(DefaultUsingCache):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
