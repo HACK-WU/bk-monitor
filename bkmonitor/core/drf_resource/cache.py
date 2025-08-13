@@ -236,6 +236,9 @@ class BaseUsingCache(object):
             logger.exception("存缓存[key:{}]时报错：{}\n value: {!r}\nurl: {}".format(key, e, value, request_path))
 
 
+using_cache = BaseUsingCache
+
+
 class CacheTypeItem(object):
     """
     缓存类型定义

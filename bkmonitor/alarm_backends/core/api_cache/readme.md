@@ -114,7 +114,7 @@ API_CRONTAB = [
             backend_cache_type=self.backend_cache_type,
             user_related=self.cache_user_related,
             compress=self.cache_compress,
-            is_cache_func=self.cache_write_trigger,
+            cache_write_trigger=self.cache_write_trigger,
             func_key_generator=func_key_generator
         )(self.request)
 ```

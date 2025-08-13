@@ -23,11 +23,11 @@ from rest_framework import serializers
 from api.cmdb.define import _split_member_list
 from bkm_space.api import SpaceApi
 from bkmonitor.commons.tools import batch_request
-from core.cache import using_cache, CacheType
 from bkmonitor.utils.common_utils import to_dict
 from bkmonitor.utils.ip import exploded_ip, is_v6
 from bkmonitor.utils.thread_backend import ThreadPool
 from constants.cmdb import TargetNodeType
+from core.cache import CacheType, using_cache
 from core.drf_resource import CacheResource, api
 from core.drf_resource.base import Resource
 from core.errors.api import BKAPIError
@@ -45,7 +45,7 @@ def split_inner_host(bk_host_innerip_str):
     return bk_host_innerip[0]
 
 
-@using_cache(CacheType.DEVOPS, is_cache_func=lambda res: res)
+@using_cache(CacheType.DEVOPS, cache_write_trigger=lambda res: res)
 def get_host_dict_by_biz(bk_biz_id, fields):
     """
     按业务查询主机（未实例化）
@@ -176,7 +176,7 @@ def _get_topo_tree(bk_biz_id):
     return sort_topo_tree_by_pinyin([response_data])[0]
 
 
-@using_cache(CacheType.CC_CACHE_ALWAYS, is_cache_func=lambda res: res)
+@using_cache(CacheType.CC_CACHE_ALWAYS, cache_write_trigger=lambda res: res)
 def get_service_instance_by_biz(bk_biz_id):
     """
     获取业务下所有服务实例
@@ -262,13 +262,13 @@ class GetHostByTopoNode(CacheResource):
     def perform_request(self, params):
         """
         执行请求并返回主机对象列表。
-    
+
         该方法首先根据业务ID和所需的字段获取主机字典。如果提供了拓扑节点参数，则将这些节点转换为模块ID，并过滤主机以仅包含属于这些模块的主机。
         最后，为每个主机获取完整的云区域信息，并将每个主机封装到Host对象中返回。
-    
+
         参数:
         - params (dict): 包含请求参数的字典，必须包括业务ID('bk_biz_id')和字段('fields')，可选地包括拓扑节点('topo_nodes')。
-    
+
         返回:
         - list[Host]: 主机对象列表，每个对象都包含根据参数筛选后的主机信息。
         """
@@ -432,8 +432,7 @@ class GetBusiness(Resource):
     """
 
     class RequestSerializer(serializers.Serializer):
-        bk_biz_ids = serializers.ListField(label="业务ID列表", child=serializers.IntegerField(), required=False,
-                                           default=[])
+        bk_biz_ids = serializers.ListField(label="业务ID列表", child=serializers.IntegerField(), required=False, default=[])
         all = serializers.BooleanField(default=False, help_text="return all space list in Business")
         is_archived = serializers.BooleanField(default=False, help_text="if True return archived Business")
 
@@ -597,8 +596,7 @@ class GetProcess(Resource):
     class RequestSerializer(serializers.Serializer):
         bk_biz_id = serializers.IntegerField(label="业务ID")
         bk_host_id = serializers.IntegerField(label="主机ID", required=False, allow_null=True)
-        include_multiple_bind_info = serializers.BooleanField(required=False, label="是否返回多个绑定信息",
-                                                              default=False)
+        include_multiple_bind_info = serializers.BooleanField(required=False, label="是否返回多个绑定信息", default=False)
 
     def perform_request(self, validated_request_data):
         include_multiple_bind_info = validated_request_data["include_multiple_bind_info"]

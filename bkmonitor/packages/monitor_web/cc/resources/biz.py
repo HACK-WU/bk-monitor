@@ -18,8 +18,8 @@ import logging
 from django.conf import settings
 from django.utils.translation import gettext as _
 
-from core.cache import using_cache, CacheType
 from bkmonitor.utils.common_utils import to_dict
+from core.cache import CacheType, using_cache
 from core.drf_resource import api
 from core.drf_resource.exceptions import CustomException
 
@@ -75,7 +75,7 @@ def _init(biz_info):
     return Business(biz_info)
 
 
-@using_cache(CacheType.BIZ, is_cache_func=lambda res: res)
+@using_cache(CacheType.BIZ, cache_write_trigger=lambda res: res)
 def _get_application():
     """
     拉取全部业务信息，超级权限
