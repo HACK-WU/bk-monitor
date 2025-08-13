@@ -16,7 +16,7 @@ from alarm_backends.constants import NO_DATA_LEVEL, NO_DATA_TAG_DIMENSION
 from alarm_backends.core.cache import key
 from alarm_backends.core.control.mixins.nodata import CheckMixin
 from alarm_backends.service.detect import DataPoint
-from bkmonitor.utils.common_utils import count_md5
+from core.drf_resource.utils.common import count_md5
 
 RECORDS = [
     {

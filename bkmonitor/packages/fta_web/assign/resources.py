@@ -16,7 +16,8 @@ from itertools import chain
 from typing import Dict
 
 from rest_framework import serializers
-from api.cmdb.define import Host, Set, Module
+
+from api.cmdb.define import Host, Module, Set
 from bkmonitor.action.alert_assign import AlertAssignMatchManager
 from bkmonitor.action.serializers import (
     AssignGroupSlz,
@@ -26,9 +27,9 @@ from bkmonitor.action.serializers import (
 )
 from bkmonitor.documents import AlertDocument
 from bkmonitor.models import AlertAssignGroup, AlertAssignRule
-from bkmonitor.utils.common_utils import count_md5
 from constants.action import ASSIGN_CONDITION_KEYS, AssignMode
 from core.drf_resource import Resource, api
+from core.drf_resource.utils.common import count_md5
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from fta_web.alert.handlers.translator import MetricTranslator
 from fta_web.constants import GLOBAL_BIZ_ID
@@ -121,20 +122,21 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
         # 获取到指定业务下的集群信息
         sets: Dict[str, Set] = {str(bk_set.bk_set_id): bk_set for bk_set in api.cmdb.get_set(bk_biz_id=bk_biz_id)}
         # 获取到指定业务下的模块信息
-        modules: Dict[str, Module] = {str(bk_module.bk_module_id): bk_module for bk_module in
-                                      api.cmdb.get_module(bk_biz_id=bk_biz_id)}
+        modules: Dict[str, Module] = {
+            str(bk_module.bk_module_id): bk_module for bk_module in api.cmdb.get_module(bk_biz_id=bk_biz_id)
+        }
 
         return hosts, sets, modules
 
     def get_alert_cmdb_attributes(self, alert):
         """
         根据告警信息获取CMDB属性
-    
+
         当没有可用的主机信息时，直接返回None
-    
+
         参数:
         - alert: 告警对象，包含事件信息
-    
+
         返回:
         - alert_cmdb_attributes: 包含主机、集群和模块信息的字典，如果无法获取则为None
         """
@@ -195,7 +197,7 @@ class MatchDebugResource(Resource, metaclass=abc.ABCMeta):
             "page_size": validated_request_data["max_alert_count"],
             "ordering": ["-create_time"],
             "start_time": validated_request_data["start_time"]
-                          or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
+            or int((current_time - timedelta(days=validated_request_data["days"])).timestamp()),
             "end_time": validated_request_data["end_time"] or int(current_time.timestamp()),
         }
         handler = AlertQueryHandler(**search_params)

@@ -16,8 +16,8 @@ from elasticsearch_dsl import Q
 from alarm_backends.constants import CONST_ONE_DAY, NO_DATA_TAG_DIMENSION
 from alarm_backends.core.cache.key import ALERT_BUILD_QOS_COUNTER
 from bkmonitor.documents import AlertDocument
-from bkmonitor.utils.common_utils import count_md5
 from constants.alert import EventStatus
+from core.drf_resource.utils.common import count_md5
 
 
 class Command(BaseCommand):
@@ -33,17 +33,16 @@ class Command(BaseCommand):
         current_time = int(time.time())
         end_time = current_time
         start_time = current_time - CONST_ONE_DAY
-        search = (
-            AlertDocument.search(start_time=start_time, end_time=end_time)
-            .filter(Q("term", status=EventStatus.ABNORMAL) & Q('term', is_blocked=True))
-
+        search = AlertDocument.search(start_time=start_time, end_time=end_time).filter(
+            Q("term", status=EventStatus.ABNORMAL) & Q('term', is_blocked=True)
         )
         if strategy != "all":
             search = search.filter("term", strategy_id=strategy)
         if severity != "all":
             search = search.filter("term", severity=severity)
-        search = search.source(fields=["id", "strategy_id", "status", "severity", "alert_name",
-                                       "event.bk_biz_id", "event.tags"])
+        search = search.source(
+            fields=["id", "strategy_id", "status", "severity", "alert_name", "event.bk_biz_id", "event.tags"]
+        )
         alerts = [hit.to_dict() for hit in search.params(size=5000).scan() if getattr(hit, "id", None)]
         alert_qos_keys = []
         redis_client = ALERT_BUILD_QOS_COUNTER.client
@@ -73,5 +72,7 @@ class Command(BaseCommand):
                 redis_client.delete(qos_key)
                 invalid_keys_count += 1
 
-        print("clear alert qos key for strategy({}), severity({}) finished, "
-              "total invalid keys count({})".format(strategy, severity, invalid_keys_count))
+        print(
+            "clear alert qos key for strategy({}), severity({}) finished, "
+            "total invalid keys count({})".format(strategy, severity, invalid_keys_count)
+        )

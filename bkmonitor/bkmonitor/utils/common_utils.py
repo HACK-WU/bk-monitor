@@ -14,7 +14,6 @@ import datetime
 import decimal
 import gzip
 import hashlib
-import inspect
 import json
 import logging
 import math
@@ -41,6 +40,7 @@ from bkmonitor.utils import time_tools
 from bkmonitor.utils.text import camel_to_underscore
 from constants.cmdb import BIZ_ID_FIELD_NAMES
 from constants.result_table import RT_RESERVED_WORD_EXACT, RT_RESERVED_WORD_FUZZY
+from core.drf_resource.utils.common import count_md5
 from core.errors import ErrorDetails
 from core.errors.dataapi import TSDBParseError
 
@@ -449,54 +449,7 @@ def tree():
     return defaultdict(tree)
 
 
-def _count_md5(content):
-    if content is None:
-        return None
-    m2 = hashlib.md5()
-    if isinstance(content, str):
-        m2.update(content.encode("utf8"))
-    else:
-        m2.update(content)
-    return m2.hexdigest()
-
-
-def count_md5(content, dict_sort=True, list_sort=True):
-    if dict_sort and isinstance(content, dict):
-        # dict的顺序受到hash的影响，所以这里先排序再计算MD5
-        return count_md5(
-            [(str(k), count_md5(content[k], dict_sort, list_sort)) for k in sorted(content.keys())],
-            dict_sort,
-            list_sort,
-        )
-    elif isinstance(content, (list, tuple)):
-        content = (
-            sorted([count_md5(k, dict_sort) for k in content])
-            if list_sort
-            else [count_md5(k, dict_sort, list_sort) for k in content]
-        )
-    elif callable(content):
-        return make_callable_hash(content)
-    return _count_md5(str(content))
-
-
-def make_callable_hash(content):
-    """
-    计算callable的hash
-    """
-    if inspect.isclass(content):
-        h = []
-        for attr in [i for i in sorted(dir(content)) if not i.startswith("__")]:
-            v = getattr(content, attr)
-            h.append(count_md5(v))
-
-        return _count_md5("".join(h))
-    try:
-        return _count_md5(content.__name__)
-    except AttributeError:
-        try:
-            return _count_md5(content.func.__name__)
-        except AttributeError:
-            return _count_md5(str(content))
+# 预处理基础类型（避免无效递归）
 
 
 def get_md5(content):

@@ -16,9 +16,9 @@ from alarm_backends.service.scheduler.app import app
 from bkmonitor.documents import AlertDocument, AlertLog
 from bkmonitor.documents.base import BulkActionType
 from bkmonitor.models import ActionInstance
-from bkmonitor.utils.common_utils import count_md5
 from constants.action import ActionSignal
 from constants.alert import HandleStage
+from core.drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 
 logger = logging.getLogger("fta_action.run")

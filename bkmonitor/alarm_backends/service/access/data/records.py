@@ -19,11 +19,12 @@ from django.utils.functional import cached_property
 
 from alarm_backends import constants
 from alarm_backends.service.access import base
-from bkmonitor.utils.common_utils import count_md5, number_format
+from bkmonitor.utils.common_utils import number_format
 from constants.strategy import (
     SYSTEM_PROC_PORT_DYNAMIC_DIMENSIONS,
     SYSTEM_PROC_PORT_METRIC_ID,
 )
+from core.drf_resource.utils.common import count_md5
 
 if TYPE_CHECKING:
     from alarm_backends.core.control.item import Item

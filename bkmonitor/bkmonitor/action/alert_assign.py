@@ -12,17 +12,17 @@ import json
 import logging
 import time
 from collections import defaultdict
-from typing import List, Dict, Union
+from typing import Dict, List, Union
 
 from django.utils.translation import gettext as _
 
-from api.cmdb.define import Host, Set, Module
+from api.cmdb.define import Host, Module, Set
 from bkmonitor.documents import AlertDocument, AlertLog
-from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.range import load_condition_instance
 from constants.action import ActionPluginType, AssignMode, UserGroupType
 from constants.alert import EVENT_SEVERITY_DICT
 from core.drf_resource import api
+from core.drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("fta_action.run")
 
@@ -296,13 +296,13 @@ class AlertAssignMatchManager:
     """
 
     def __init__(
-            self,
-            alert: AlertDocument,
-            notice_users: List = None,
-            group_rules: List[Dict] = None,
-            assign_mode: List[str] = None,
-            notice_type=None,
-            cmdb_attrs: Dict[str, Union[Host, Set, Module]] = None,
+        self,
+        alert: AlertDocument,
+        notice_users: List = None,
+        group_rules: List[Dict] = None,
+        assign_mode: List[str] = None,
+        notice_type=None,
+        cmdb_attrs: Dict[str, Union[Host, Set, Module]] = None,
     ):
         """
         :param alert: 告警
@@ -349,7 +349,7 @@ class AlertAssignMatchManager:
     def get_match_cmdb_dimensions(self, cmdb_attrs: Dict[str, Union[Host, Set, Module]]):
         """
         获取CMDB相关的维度信息
-        
+
         根据提供的CMDB属性信息，提取并构建CMDB维度数据。
 
         example:
@@ -453,13 +453,13 @@ class AlertAssignMatchManager:
     def get_host_ids_by_dynamic_groups(self, dynamic_group_ids):
         """
         根据动态分组ID获取主机ID列表。
-    
+
         该函数通过调用CMDB接口，批量执行动态分组，从而获取属于这些动态分组的所有主机ID，
         并以列表形式返回。这种方式能够高效地获取大量主机ID，且只依赖于CMDB系统的API调用。
-    
+
         参数:
         dynamic_group_ids (list): 动态分组ID列表，用于指定需要获取主机ID的动态分组。
-    
+
         返回:
         list: 主机ID列表，包含所有属于指定动态分组的主机ID。
         """
@@ -558,7 +558,7 @@ class AlertAssignMatchManager:
     def get_matched_rule_info(self):
         """
         整理匹配到的规则和告警信息。
-        
+
         此方法遍历所有匹配的规则对象，收集通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和规则快照信息。
         它还根据通知类型决定是否获取升级用户组，并处理用户组的去重和更新。
         """

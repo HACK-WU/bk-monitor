@@ -33,10 +33,10 @@ from alarm_backends.core.lock.service_lock import service_lock
 from alarm_backends.service.fta_action.tasks import create_actions
 from bkmonitor.documents import AlertLog
 from bkmonitor.strategy.expression import AlertExpressionValue, parse_expression
-from bkmonitor.utils.common_utils import count_md5
 from constants.action import ActionSignal
 from constants.alert import EventStatus
 from constants.data_source import DataSourceLabel, DataTypeLabel
+from core.drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 from core.prometheus import metrics
 

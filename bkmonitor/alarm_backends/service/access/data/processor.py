@@ -49,12 +49,13 @@ from alarm_backends.service.access.data.filters import (
 from alarm_backends.service.access.data.fullers import TopoNodeFuller
 from alarm_backends.service.access.data.records import DataRecord
 from alarm_backends.service.access.priority import PriorityChecker
-from bkmonitor.utils.common_utils import count_md5, get_local_ip
+from bkmonitor.utils.common_utils import get_local_ip
 from bkmonitor.utils.consul import BKConsul
 from bkmonitor.utils.thread_backend import InheritParentThread
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from constants.strategy import MULTI_METRIC_DATA_SOURCES
 from core.drf_resource import api
+from core.drf_resource.utils.common import count_md5
 from core.drf_resource.utils.local import local
 from core.errors.api import BKAPIError
 from core.prometheus import metrics

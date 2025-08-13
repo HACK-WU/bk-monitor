@@ -27,7 +27,6 @@ from bkmonitor.models import (
     ConvergeRelation,
     GlobalConfig,
 )
-from bkmonitor.utils.common_utils import count_md5
 from constants import alert as alert_constants
 from constants.action import (
     ActionSignal,
@@ -38,6 +37,7 @@ from constants.action import (
     NoticeWayChannel,
     UserGroupType,
 )
+from core.drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("fta_action.run")
 

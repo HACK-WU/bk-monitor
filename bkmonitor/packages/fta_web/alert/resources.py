@@ -57,7 +57,6 @@ from bkmonitor.models import (
 )
 from bkmonitor.share.api_auth_resource import ApiAuthResource
 from bkmonitor.strategy.new_strategy import Strategy, parse_metric_id
-from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.event_related_info import get_alert_relation_info
 from bkmonitor.utils.range import load_agg_condition_instance
 from bkmonitor.utils.time_tools import (
@@ -82,6 +81,7 @@ from constants.alert import (
 from constants.data_source import DataSourceLabel, DataTypeLabel, UnifyQueryDataSources
 from core.drf_resource import Resource, api, resource
 from core.drf_resource.exceptions import CustomException
+from core.drf_resource.utils.common import count_md5
 from core.drf_resource.utils.request import get_request
 from core.errors.alert import AIOpsMultiAnomlayDetectError, AlertNotFoundError
 from core.unit import load_unit

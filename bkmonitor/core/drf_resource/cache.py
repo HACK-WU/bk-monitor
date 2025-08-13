@@ -18,7 +18,7 @@ from typing import Callable, Optional
 from django.core.cache import cache, caches
 from django.utils.encoding import force_bytes
 
-from bkmonitor.utils.common_utils import count_md5
+from core.drf_resource.utils.common import count_md5
 from core.drf_resource.utils.request import get_request
 
 logger = logging.getLogger(__name__)

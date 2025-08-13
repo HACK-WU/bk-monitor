@@ -28,11 +28,11 @@ from bkmonitor.documents import AlertLog
 from bkmonitor.documents.alert import AlertDocument
 from bkmonitor.documents.base import BulkActionType
 from bkmonitor.models.fta import ActionConfig, ActionInstance, ActionPlugin
-from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.template import CustomTemplateRenderer, Jinja2Renderer
 from bkmonitor.views import serializers
 from constants.action import ActionSignal
 from core.drf_resource import Resource
+from core.drf_resource.utils.common import count_md5
 
 try:
     # 后台接口，需要引用后台代码

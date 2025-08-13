@@ -30,7 +30,6 @@ from bkmonitor.documents import AlertDocument, AlertLog
 from bkmonitor.documents.base import BulkActionType
 from bkmonitor.models import ActionInstance, ActionPlugin
 from bkmonitor.utils import extended_json
-from bkmonitor.utils.common_utils import count_md5
 from constants.action import (
     DEFAULT_NOTICE_ACTION,
     ActionNoticeType,
@@ -40,6 +39,7 @@ from constants.action import (
     UserGroupType,
 )
 from constants.alert import EventSeverity, EventStatus, HandleStage
+from core.drf_resource.utils.common import count_md5
 from core.errors.alarm_backends import LockError
 from core.prometheus import metrics
 
@@ -48,17 +48,17 @@ logger = logging.getLogger("fta_action.run")
 
 @app.task(ignore_result=True, queue="celery_action")
 def create_actions(
-        strategy_id,
-        signal,
-        alert_ids=None,
-        alerts: List[AlertDocument] = None,
-        severity=None,
-        dimensions=None,
-        dimension_hash="",
-        relation_id=None,
-        execute_times=0,
-        is_unshielded=False,
-        notice_type=ActionNoticeType.NORMAL,
+    strategy_id,
+    signal,
+    alert_ids=None,
+    alerts: List[AlertDocument] = None,
+    severity=None,
+    dimensions=None,
+    dimension_hash="",
+    relation_id=None,
+    execute_times=0,
+    is_unshielded=False,
+    notice_type=ActionNoticeType.NORMAL,
 ):
     """
     根据策略产生任务
@@ -107,8 +107,9 @@ def create_actions(
                 is_unshielded,
                 notice_type,
             ).do_create_actions()
-        logger.info("[create actions(end)](%s) for alert(%s), action count(%s)", notice_type, alert_id,
-                    len(actions))  # 记录结束创建动作的日志
+        logger.info(
+            "[create actions(end)](%s) for alert(%s), action count(%s)", notice_type, alert_id, len(actions)
+        )  # 记录结束创建动作的日志
     except BaseException as e:  # 捕获所有异常
         exc = e  # 设置异常变量
         logger.exception("create actions for alert(%s) failed: %s", alert_id, e)  # 记录异常日志
@@ -124,15 +125,15 @@ def create_actions(
 
 @app.task(ignore_result=True, queue="celery_interval_action")
 def create_interval_actions(
-        strategy_id,
-        signal,
-        alert_ids=None,
-        alerts: List[AlertDocument] = None,
-        severity=None,
-        dimensions=None,
-        dimension_hash="",
-        relation_id=None,
-        execute_times=0,
+    strategy_id,
+    signal,
+    alert_ids=None,
+    alerts: List[AlertDocument] = None,
+    severity=None,
+    dimensions=None,
+    dimension_hash="",
+    relation_id=None,
+    execute_times=0,
 ):
     exc = None
     actions = []
@@ -262,8 +263,8 @@ class CreateIntervalActionProcessor:
             alert_latest_time = alert.latest_time if alert else 0
 
             if (
-                    action_instance.inputs.get("alert_latest_time", 0) < alert_latest_time
-                    and alert.status_detail == EventStatus.ABNORMAL
+                action_instance.inputs.get("alert_latest_time", 0) < alert_latest_time
+                and alert.status_detail == EventStatus.ABNORMAL
             ):
                 # 当前周期通知的最近异常点一定要大于历史异常点
                 # 当前告警的具体状态一定， 存在恢复中状态的周期通知不需要发送
@@ -342,18 +343,18 @@ class CreateIntervalActionProcessor:
 class CreateActionProcessor:
     # 初始化CreateActionProcessor类的实例
     def __init__(
-            self,
-            strategy_id,  # 策略ID
-            signal,  # 信号
-            alert_ids=None,  # 警报ID列表
-            alerts: List[AlertDocument] = None,  # 警报文档列表
-            severity=None,  # 严重性
-            dimensions=None,  # 维度
-            dimension_hash="",  # 维度哈希
-            relation_id=None,  # 关联ID
-            execute_times=0,  # 执行次数
-            is_unshielded=False,  # 是否为解除屏蔽
-            notice_type=ActionNoticeType.NORMAL,  # 通知类型
+        self,
+        strategy_id,  # 策略ID
+        signal,  # 信号
+        alert_ids=None,  # 警报ID列表
+        alerts: List[AlertDocument] = None,  # 警报文档列表
+        severity=None,  # 严重性
+        dimensions=None,  # 维度
+        dimension_hash="",  # 维度哈希
+        relation_id=None,  # 关联ID
+        execute_times=0,  # 执行次数
+        is_unshielded=False,  # 是否为解除屏蔽
+        notice_type=ActionNoticeType.NORMAL,  # 通知类型
     ):
         self.strategy_id = strategy_id  # 设置策略ID
         self.signal = signal  # 设置信号
@@ -463,8 +464,7 @@ class CreateActionProcessor:
             desc = _("用户已确认当前告警，系统自动忽略所有的通知和处理套餐的执行")
             current_timestamp = int(time.time())
             if not alert.is_ack:
-                desc = _("当前告警状态发生变化，系统自动忽略{}的所有通知和处理套餐的执行").format(
-                    ActionSignal.ACTION_SIGNAL_DICT.get(self.signal))
+                desc = _("当前告警状态发生变化，系统自动忽略{}的所有通知和处理套餐的执行").format(ActionSignal.ACTION_SIGNAL_DICT.get(self.signal))
             action_log = dict(
                 op_type=AlertLog.OpType.ACTION,
                 alert_id=[alert.id],
@@ -639,8 +639,9 @@ class CreateActionProcessor:
 
             itsm_actions = []  # 流程服务类型的告警套餐
             # 告警分派处理，并返回分派管理对象
-            assignee_manager: AlertAssigneeManager = self.alert_assign_handle(alert, action_configs, origin_action_ids,
-                                                                              itsm_actions)
+            assignee_manager: AlertAssigneeManager = self.alert_assign_handle(
+                alert, action_configs, origin_action_ids, itsm_actions
+            )
             # 自动分派负责人只能追加
             # 手动分派的情况下直接覆盖
             supervisors = []
@@ -766,7 +767,7 @@ class CreateActionProcessor:
         return alert_users
 
     def update_alert_documents(
-            self, alerts_assignee, shield_ids, is_handled, alerts_appointee, alerts_supervisor, alerts_follower
+        self, alerts_assignee, shield_ids, is_handled, alerts_appointee, alerts_supervisor, alerts_follower
     ):
         """
         更新告警内容
@@ -848,13 +849,13 @@ class CreateActionProcessor:
         new_actions.append(action_instance.id)
 
     def do_create_action(
-            self,
-            action_config: dict,
-            action_plugin: dict,
-            alert: AlertDocument,
-            action_relation=None,
-            assignee_manager=None,
-            shield_ids=None,
+        self,
+        action_config: dict,
+        action_plugin: dict,
+        alert: AlertDocument,
+        action_relation=None,
+        assignee_manager=None,
+        shield_ids=None,
     ):
         """
         根据套餐配置创建处理记录，并返回处理套餐实例
@@ -871,12 +872,12 @@ class CreateActionProcessor:
 
         # 初始化输入参数，包括告警最新时间、是否屏蔽、屏蔽ID等
         inputs = {
-            "alert_latest_time": alert.latest_time, # 最后的告警时间
+            "alert_latest_time": alert.latest_time,  # 最后的告警时间
             "is_alert_shielded": self.is_alert_shielded,  # 是否是告警屏蔽
-            "shield_ids": shield_ids,   # 告警屏蔽ID
-            "shield_detail": self.shield_detail,    # 屏蔽详情
-            "is_unshielded": self.is_unshielded,    # 是否是告警解除
-            "notice_type": self.notice_type,    # 通知类型
+            "shield_ids": shield_ids,  # 告警屏蔽ID
+            "shield_detail": self.shield_detail,  # 屏蔽详情
+            "is_unshielded": self.is_unshielded,  # 是否是告警解除
+            "notice_type": self.notice_type,  # 通知类型
             # 获取排除通知方式
             "exclude_notice_ways": action_relation["options"].get("exclude_notice_ways", {}).get(self.signal, []),
             "time_range": "--".join(
@@ -945,7 +946,7 @@ class CreateActionProcessor:
                 history_record = alert.cycle_handle_record.get(str(relation_id))
                 # 如果没有周期记录，或者当前记录的执行次数大于当前执行次数，则更新
                 if not history_record or (
-                        history_record and history_record["execute_times"] < handle_record["execute_times"]
+                    history_record and history_record["execute_times"] < handle_record["execute_times"]
                 ):
                     # 如果曾经没有对应的周期记录，则直接赋值
                     # 如果曾经有周期记录，并且当前记录的执行次数小于当前执行次数，则更新
@@ -967,7 +968,7 @@ class CreateActionProcessor:
             action_plugin=action_plugin,
             bk_biz_id=alert.event.bk_biz_id or action_config["bk_biz_id"],
             assignee=assignee_manager.get_appointees(action_id=action_config["id"])
-                     or assignee_manager.get_origin_notice_receivers(),
+            or assignee_manager.get_origin_notice_receivers(),
             generate_uuid=self.generate_uuid,
             dimensions=self.dimensions or [],
             dimension_hash=self.dimension_hash,

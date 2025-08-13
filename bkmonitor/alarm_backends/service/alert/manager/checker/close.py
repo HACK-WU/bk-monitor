@@ -31,11 +31,11 @@ from alarm_backends.service.alert.manager.checker.base import BaseChecker
 from api.cmdb.define import TopoNode
 from bkmonitor.documents import AlertLog
 from bkmonitor.models import AlgorithmModel
-from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.time_tools import hms_string
 from constants.action import AssignMode
 from constants.alert import EventStatus, EventTargetType
 from constants.data_source import DataTypeLabel
+from core.drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("alert.manager")
 

@@ -33,10 +33,10 @@ from bkmonitor.documents import ActionInstanceDocument, AlertDocument, AlertLog
 from bkmonitor.models import ActionInstance
 from bkmonitor.strategy.expression import AlertExpressionValue
 from bkmonitor.utils import extended_json
-from bkmonitor.utils.common_utils import count_md5
 from constants.action import ActionSignal, AssignMode
 from constants.alert import EventStatus
 from constants.data_source import DataTypeLabel
+from core.drf_resource.utils.common import count_md5
 from core.prometheus import metrics
 
 logger = logging.getLogger("alert")
@@ -915,7 +915,7 @@ class Alert:
     def qos_calc(self, signal, qos_counter=COMPOSITE_QOS_COUNTER, threshold=None, need_incr=True):
         """
         根据信号和QOS规则计算是否超过阈值
-        
+
         :param signal: 信号
         :param qos_counter: qos计数器
         :param threshold: QOS规则
@@ -924,7 +924,7 @@ class Alert:
         """
         # 初始化QOS维度信息，包括策略ID、信号和告警级别
         qos_dimension = dict(strategy_id=self.strategy_id or 0, signal=signal, severity=self.severity)
-        
+
         # 对于没有策略ID的情况，计算告警的MD5值作为维度的一部分
         alert_md5 = ""
         if not self.strategy_id:
@@ -936,39 +936,39 @@ class Alert:
                     severity=self.severity,
                 )
             )
-        
+
         # 更新QOS维度信息，加入告警MD5值
         qos_dimension.update({"alert_md5": alert_md5})
-        
+
         # 根据QOS维度信息获取QOS计数器的键
         qos_counter_key = qos_counter.get_key(**qos_dimension)
-        
+
         # 获取QOS计数器对应的客户端
         client = qos_counter.client
-        
+
         # 如果未提供阈值，则使用默认的阈值
         if threshold is None:
             threshold = {"threshold": settings.QOS_DROP_ACTION_THRESHOLD, "window": settings.QOS_DROP_ACTION_WINDOW}
-        
+
         # 如果阈值为0，表示不做QOS处理，直接返回
         if threshold["threshold"] == 0:
             return False, 0
-        
+
         # 获取QOS窗口时间
         qos_window = threshold["window"]
-        
+
         # 初始化当前计数为1
         current_count = 1
-        
+
         # 如果需要增加计数
         if need_incr:
             # 尝试设置QOS计数器的值为1，如果键不存在则创建
             result = client.set(qos_counter_key, current_count, nx=True, ex=qos_window)
-            
+
             # 如果设置失败（即键已存在），则增加计数器的值
             if not result:
                 current_count = client.incr(qos_counter_key)
-                
+
                 # 检查QOS计数器的过期时间，如果不符合预期则设置过期时间
                 ttl = client.ttl(qos_counter_key)
                 if ttl is None or ttl < 0:
@@ -976,7 +976,7 @@ class Alert:
         else:
             # 如果不需要增加计数，直接获取当前计数器的值
             current_count = int(client.get(qos_counter_key) or 0)
-        
+
         # 返回是否超过阈值的判断和当前计数
         return current_count > threshold["threshold"], current_count
 

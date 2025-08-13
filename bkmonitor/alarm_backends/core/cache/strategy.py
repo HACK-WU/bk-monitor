@@ -39,7 +39,7 @@ from bkmonitor.models import (
     StrategyModel,
 )
 from bkmonitor.strategy.new_strategy import Strategy, parse_metric_id
-from bkmonitor.utils.common_utils import chunks, count_md5
+from bkmonitor.utils.common_utils import chunks
 from bkmonitor.utils.kubernetes import is_k8s_target
 from constants.cmdb import TargetNodeType
 from constants.data_source import DataSourceLabel, DataTypeLabel, UnifyQueryDataSources
@@ -49,6 +49,7 @@ from constants.strategy import (
     TargetFieldType,
 )
 from core.drf_resource import api
+from core.drf_resource.utils.common import count_md5
 from core.prometheus import metrics
 from core.unit import load_unit
 

@@ -22,7 +22,7 @@ from django.conf import settings
 from alarm_backends.core.cache import key
 from alarm_backends.service.access.data import AccessBatchDataProcess, AccessDataProcess
 from bkmonitor.models import CacheNode
-from bkmonitor.utils.common_utils import count_md5
+from core.drf_resource.utils.common import count_md5
 
 from .config import (
     RAW_DATA,

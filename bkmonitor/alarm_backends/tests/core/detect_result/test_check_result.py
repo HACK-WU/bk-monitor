@@ -14,7 +14,7 @@ from django.test import TestCase
 
 from alarm_backends.core.detect_result import CheckResult
 from bkmonitor.models import CacheNode
-from bkmonitor.utils.common_utils import count_md5
+from core.drf_resource.utils.common import count_md5
 
 DIMENSION = {"bk_target_ip": "127.0.0.1", "bk_target_cloud_id": 0}
 

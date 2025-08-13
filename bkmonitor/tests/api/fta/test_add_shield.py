@@ -12,6 +12,11 @@ import datetime
 import time
 
 from django.test import TestCase
+
+from bkmonitor.documents import AlertDocument, EventDocument
+from bkmonitor.models import ActionInstance, Shield
+from constants.action import ActionPluginType, ActionStatus
+from core.drf_resource.utils.common import count_md5
 from fta_web.alert.resources import QuickAlertAck, QuickAlertShield
 from monitor_web.shield.resources.backend_resources import (
     AddShieldResource,
@@ -20,11 +25,6 @@ from monitor_web.shield.resources.backend_resources import (
 )
 from monitor_web.shield.utils import ShieldDetectManager
 from monitor_web.tests import mock
-
-from bkmonitor.documents import AlertDocument, EventDocument
-from bkmonitor.models import ActionInstance, Shield
-from bkmonitor.utils.common_utils import count_md5
-from constants.action import ActionPluginType, ActionStatus
 
 
 class TestBatchShieldResource(TestCase):

@@ -29,9 +29,9 @@ from apm.core.cluster_config import ClusterConfig
 from apm.models import BcsClusterDefaultApplicationRelation
 from apm.models.subscription_config import SubscriptionConfig
 from bkmonitor.utils.bcs import BcsKubeClient
-from bkmonitor.utils.common_utils import count_md5
 from constants.apm import BkCollectorComp, SpanKindKey
 from core.drf_resource import api
+from core.drf_resource.utils.common import count_md5
 
 logger = logging.getLogger("apm")
 

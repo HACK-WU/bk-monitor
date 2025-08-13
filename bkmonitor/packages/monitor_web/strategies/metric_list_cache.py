@@ -37,7 +37,6 @@ from bkmonitor.models import (
 )
 from bkmonitor.models.metric_list_cache import MetricListCache
 from bkmonitor.utils import get_metric_category
-from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.k8s_metric import get_built_in_k8s_metrics
 from common.context_processors import Platform
 from constants.alert import IGNORED_TAGS, EventTargetType
@@ -56,6 +55,7 @@ from constants.strategy import (
     DimensionFieldType,
 )
 from core.drf_resource import api
+from core.drf_resource.utils.common import count_md5
 from core.errors.api import BKAPIError
 from monitor_web.collecting.utils import chunks
 from monitor_web.models import (
