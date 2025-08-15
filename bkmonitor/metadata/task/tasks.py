@@ -1584,6 +1584,7 @@ def create_system_proc_datalink_for_bkcc(bk_tenant_id: str, bk_biz_id: int, stor
             )
 
         # 创建AccessVMRecord
+        vm_rt = f"{bk_biz_id}_base_{bk_biz_id}_{data_name_to_data_link_strategy[data_link_type]}"
         AccessVMRecord.objects.update_or_create(
             bk_tenant_id=bk_tenant_id,
             result_table_id=table_id,
@@ -1592,7 +1593,7 @@ def create_system_proc_datalink_for_bkcc(bk_tenant_id: str, bk_biz_id: int, stor
             defaults={
                 "vm_cluster_id": cluster.cluster_id,
                 "storage_cluster_id": cluster.cluster_id,
-                "vm_result_table_id": f"{bk_biz_id}_base_{bk_biz_id}_{data_name_to_data_link_strategy[data_link_type]}",
+                "vm_result_table_id": vm_rt,
             },
         )
 
