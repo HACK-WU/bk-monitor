@@ -180,6 +180,24 @@ def refresh_bcs_metrics_label():
 def discover_bcs_clusters():
     """
     BCS集群同步周期任务,调用BCS侧API全量拉取集群信息（包含联邦集群）,并进行同步逻辑
+
+    该函数实现以下核心功能：
+    1. 获取所有租户并遍历处理
+    2. 调用BCS API获取租户下的K8S集群列表
+    3. 获取联邦集群信息并调整排序（联邦集群优先处理）
+    4. 处理BCS集群信息，包含：
+       - 集群信息变更检测（状态/API密钥/业务ID/项目ID）
+       - 云区域ID更新
+       - 联邦集群关系同步
+       - 集群资源初始化
+    5. 清理已删除集群（排除始终运行的假集群）
+    6. 统计任务耗时并上报监控指标
+
+    参数:
+        无显式参数（由定时任务触发）
+
+    返回值:
+        None（异常情况下可能提前返回）
     """
     # 统计&上报 任务状态指标
     metrics.METADATA_CRON_TASK_STATUS_TOTAL.labels(
@@ -189,15 +207,19 @@ def discover_bcs_clusters():
     # BCS 接口仅返回非 DELETED 状态的集群信息
     start_time = time.time()
     logger.info("discover_bcs_clusters: start to discover bcs clusters")
+
+    # 获取所有租户并遍历处理
     cluster_list: list[str] = []
     for tenant in api.bk_login.list_tenant():
         bk_tenant_id = tenant["id"]
         try:
+            # 调用BCS API获取租户下的K8S集群列表
             bcs_clusters = api.kubernetes.fetch_k8s_cluster_list(bk_tenant_id=bk_tenant_id)
         except Exception as e:  # pylint: disable=broad-except
             logger.error(f"discover_bcs_clusters: get bcs clusters failed, error:{e}")
             return
-        # 获取所有联邦集群 ID
+
+        # 获取联邦集群信息并调整排序（联邦集群优先处理）
         fed_clusters = {}
         try:
             fed_clusters = api.bcs.get_federation_clusters(bk_tenant_id=bk_tenant_id)
@@ -206,10 +228,10 @@ def discover_bcs_clusters():
             fed_cluster_id_list = []
             logger.warning(f"discover_bcs_clusters: get federation clusters failed, error:{e}")
 
-        # 联邦集群顺序调整到前面，因为创建链路时依赖联邦关系记录
+        # 联邦集群排序前置（创建链路依赖联邦关系记录）
         bcs_clusters = sorted(bcs_clusters, key=lambda x: x["cluster_id"] not in fed_cluster_id_list)
 
-        # bcs 集群中的正常状态
+        # 处理BCS集群信息，更新或注册新集群
         for bcs_cluster in bcs_clusters:
             logger.info("discover_bcs_clusters: get bcs cluster:{},start to register".format(bcs_cluster["cluster_id"]))
             project_id = bcs_cluster["project_id"]
@@ -219,12 +241,10 @@ def discover_bcs_clusters():
             cluster_list.append(cluster_id)
             is_fed_cluster = cluster_id in fed_cluster_id_list
 
-            # todo 同一个集群在切换业务时不能重复接入
+            # 检测集群是否存在（支持集群迁移场景）
             cluster = BCSClusterInfo.objects.filter(cluster_id=cluster_id).first()
             if cluster:
-                # 更新集群信息，兼容集群迁移场景
-                # 场景1:集群迁移业务，项目ID不变，只会变业务ID
-                # 场景2:集群迁移项目，项目ID和业务ID都可能变化
+                # 检测集群信息变更并更新数据库记录
                 update_fields = []
                 # NOTE: 现阶段完全以 BCS 的集群状态为准，
                 if cluster_raw_status != cluster.status:
@@ -235,13 +255,12 @@ def discover_bcs_clusters():
                     cluster.api_key_content = settings.BCS_API_GATEWAY_TOKEN
                     update_fields.append("api_key_content")
 
+                # 处理业务ID变更场景
                 if int(bk_biz_id) != cluster.bk_biz_id:
                     # 记录旧业务ID，更新新业务ID
                     old_bk_biz_id = cluster.bk_biz_id
                     cluster.bk_biz_id = int(bk_biz_id)
-                    update_fields.append("bk_biz_id")
-
-                    # 若业务ID变更，其RT对应的业务ID也应一并变更
+                    update_fields.extend(["bk_biz_id", "last_modify_time"])
                     logger.info(
                         f"discover_bcs_clusters: cluster_id:{cluster_id},project_id:{project_id} change bk_biz_id to {int(bk_biz_id)}"
                     )
@@ -254,19 +273,22 @@ def discover_bcs_clusters():
                         is_fed_cluster=is_fed_cluster,
                     )
 
-                # 如果project_id改动，需要更新集群信息
+                # 处理项目ID变更场景
                 if project_id != cluster.project_id:
                     cluster.project_id = project_id
                     update_fields.append("project_id")
 
+                # 执行数据库更新
                 if update_fields:
                     update_fields.append("last_modify_time")
                     cluster.save(update_fields=update_fields)
 
+                # 更新云区域ID配置
                 if cluster.bk_cloud_id is None:
                     # 更新云区域ID
                     update_bcs_cluster_cloud_id_config(bk_biz_id, cluster_id)
 
+                # 同步联邦集群关系
                 if is_fed_cluster:
                     # 创建联邦集群记录
                     try:
@@ -277,6 +299,7 @@ def discover_bcs_clusters():
                 logger.info(f"cluster_id:{cluster_id},project_id:{project_id} already exists,skip create it")
                 continue
 
+            # 注册新集群到元数据系统
             cluster = BCSClusterInfo.register_cluster(
                 bk_tenant_id=bk_tenant_id,
                 bk_biz_id=bk_biz_id,
@@ -289,6 +312,7 @@ def discover_bcs_clusters():
                 f"discover_bcs_clusters: cluster_id:{cluster.cluster_id},project_id:{cluster.project_id},bk_biz_id:{cluster.bk_biz_id} registered"
             )
 
+            # 初始化集群资源信息
             try:
                 logger.info(
                     f"cluster_id:{cluster.cluster_id},project_id:{cluster.project_id},bk_biz_id:{cluster.bk_biz_id} start to init resource"
@@ -300,26 +324,25 @@ def discover_bcs_clusters():
                 )
                 continue
 
-            # 更新云区域ID
+            # 更新云区域ID配置
             update_bcs_cluster_cloud_id_config(bk_biz_id, cluster_id)
 
             logger.info(
                 f"cluster_id:{cluster.cluster_id},project_id:{cluster.project_id},bk_biz_id:{cluster.bk_biz_id} init resource finished"
             )
 
-    # 如果是不存在的集群列表则更新当前状态为删除，加上>0的判断防止误删
+    # 清理已删除集群（排除始终运行的假集群）
     if cluster_list:
         logger.info(
             "discover_bcs_clusters: enable always running fake clusters->[%s]",
             settings.ALWAYS_RUNNING_FAKE_BCS_CLUSTER_ID_LIST,
         )
         cluster_list.extend(settings.ALWAYS_RUNNING_FAKE_BCS_CLUSTER_ID_LIST)
-
         BCSClusterInfo.objects.exclude(cluster_id__in=cluster_list).update(
             status=BCSClusterInfo.CLUSTER_RAW_STATUS_DELETED
         )
 
-    # 统计耗时，并上报指标
+    # 统计任务耗时并上报监控指标
     cost_time = time.time() - start_time
     logger.info("discover_bcs_clusters finished, cost time->[%s]", cost_time)
     metrics.METADATA_CRON_TASK_STATUS_TOTAL.labels(
