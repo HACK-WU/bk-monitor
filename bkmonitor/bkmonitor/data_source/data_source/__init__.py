@@ -44,7 +44,7 @@ from bkmonitor.utils.time_tools import (
     time_interval_align,
 )
 from constants.alert import EventStatus
-from constants.apm import OtlpKey, PreCalculateSpecificField
+from constants.apm import OtlpKey, PreCalculateSpecificField, DEFAULT_DATA_LABEL as APM_METRIC_DATA_LABEL
 from constants.data_source import RECOVERY, DataSourceLabel, DataTypeLabel
 from constants.strategy import (
     AGG_METHOD_REAL_TIME,
@@ -1146,6 +1146,9 @@ class TimeSeriesDataSource(DataSource):
             # 数据表名标准化处理
             if self.data_source_label == DataSourceLabel.BK_DATA:
                 table = self.table
+            elif self.table == f"{APM_METRIC_DATA_LABEL}.__default__":
+                # APM data_label 大小写敏感，且需要去掉 __default__ 前缀。
+                table = APM_METRIC_DATA_LABEL
             else:
                 table = self.table.lower()
 
