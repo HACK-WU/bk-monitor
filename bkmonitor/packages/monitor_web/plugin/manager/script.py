@@ -10,6 +10,7 @@ specific language governing permissions and limitations under the License.
 
 import base64
 import os
+from pathlib import Path
 
 import yaml
 from django.utils.translation import gettext as _
@@ -251,7 +252,7 @@ class ScriptPluginManager(PluginManager):
             )
         return deploy_steps
 
-    def _get_collector_json(self, plugin_params):
+    def _get_collector_json(self, plugin_params: dict[str, bytes]):
         meta_dict = yaml.load(plugin_params["meta.yaml"], Loader=yaml.FullLoader)
 
         if "scripts" not in meta_dict:
@@ -259,8 +260,11 @@ class ScriptPluginManager(PluginManager):
 
         collector_json = {}
         for os_name, file_info in list(meta_dict["scripts"].items()):
-            script_path = os.path.join(OS_TYPE_TO_DIRNAME[os_name], self.plugin.plugin_id, file_info["filename"])
-            script_content = self._read_file(os.path.join(self.tmp_path, script_path))
+            script_path = os.path.join(
+                self.plugin.plugin_id, OS_TYPE_TO_DIRNAME[os_name], self.plugin.plugin_id, file_info["filename"]
+            )
+
+            script_content = self._decode_file(self.plugin_configs[Path(script_path)])
             collector_json[os_name] = {
                 "filename": file_info["filename"],
                 "type": file_info["type"],

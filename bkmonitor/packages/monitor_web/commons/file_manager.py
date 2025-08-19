@@ -9,9 +9,11 @@ specific language governing permissions and limitations under the License.
 """
 
 import hashlib
+import io
 import os
 import shutil
 import tarfile
+import zipfile
 
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
@@ -79,6 +81,30 @@ class BaseFileManager:
             file_content = f.read()
 
         return cls.save_file(file_data=file_content, file_name=tar_name, is_dir=True)
+
+    @classmethod
+    def save_from_memory(cls, file_dict: dict, dir_name: str):
+        """
+        从内存中的文件字典创建压缩包
+        :param file_dict: {Path: bytes} 文件路径和内容的字典
+        :param dir_name: 目录名称
+        :return: 文件管理器实例
+        """
+
+        # 创建内存中的zip文件
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for path, content in file_dict.items():
+                # 确保路径使用正斜杠
+                zip_path = str(path).replace("\\", "/")
+                zipf.writestr(zip_path, content)
+
+        # 获取zip文件内容
+        zip_buffer.seek(0)
+        zip_content = zip_buffer.getvalue()
+        zip_name = f"{dir_name}.zip"
+
+        return cls.save_file(file_data=zip_content, file_name=zip_name, is_dir=True)
 
     @classmethod
     def save_file(cls, file_data, file_name=None, is_dir=False, *args, **kwargs):
