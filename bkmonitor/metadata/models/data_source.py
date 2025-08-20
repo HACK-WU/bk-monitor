@@ -351,12 +351,19 @@ class DataSource(models.Model):
         cls, data_name: str, bk_biz_id: int = settings.DEFAULT_BKDATA_BIZ_ID, is_base: bool = False, event_type="metric"
     ) -> int:
         """
-        从计算平台申请data_id
-        :param data_name: 数据源名称
-        :param bk_biz_id: 业务ID
-        :param is_base: 是否是基础数据源
-        :param event_type: 数据类型
-        :return: data_id
+        从计算平台(BkData)申请data_id
+
+        该方法用于向BkData平台申请新的data_id，主要用于V4数据链路。整个申请流程包括：
+        1. 调用apply_data_id_v2接口提交申请
+        2. 循环查询申请状态，最多重试5次，每次间隔3秒
+        3. 根据查询结果返回data_id或抛出异常
+
+        :param data_name: 数据源名称，用于在BkData中标识数据源
+        :param bk_biz_id: 业务ID，默认使用settings.DEFAULT_BKDATA_BIZ_ID
+        :param is_base: 是否是基础数据源，默认为False
+        :param event_type: 数据类型，可选值为"metric"或"log"，默认为"metric"
+        :return: int，成功申请到的data_id
+        :raises BKAPIError: 当申请失败或超时时抛出异常
         """
         # 下发配置
         from metadata.models.data_link.constants import DataLinkResourceStatus
@@ -365,32 +372,39 @@ class DataSource(models.Model):
             get_data_id_v2,
         )
 
+        # 如果未指定业务ID，则使用默认业务ID
         if not bk_biz_id:
             logger.info("apply_for_data_id_from_bkdata:data_name->[%s], bk_biz_id is None,will use default", data_name)
             bk_biz_id = settings.DEFAULT_BKDATA_BIZ_ID
 
         try:
+            # 提交data_id申请
             apply_data_id_v2(data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type)
             # 写入记录
         except BKAPIError as e:
             logger.error("apply data id from bkdata error: %s", e)
             raise
         # NOTE: 因为是同步接口，阻塞请求，间隔请求为3s，最大重试 5 次，如果超过7次仍然失败，则抛出异常
+        # 循环查询申请状态，最多重试5次
         for i in range(5):
             # 等待 3s 后查询一次，减少请求次数
             time.sleep(3)
             try:
+                # 查询data_id申请状态
                 data = get_data_id_v2(data_name=data_name, is_base=is_base, bk_biz_id=bk_biz_id)
             except BKAPIError as e:
                 logger.error("get data id from bkdata error: %s", e)
                 continue
             # 如果正常直接返回data_id
+            # 检查申请状态，如果成功则返回data_id
             if data["status"] == DataLinkResourceStatus.OK.value:
                 return data["data_id"]
             # 如果失败，则抛出异常
+            # 如果申请失败则抛出异常
             if data["status"] == DataLinkResourceStatus.FAILED.value:
                 raise BKAPIError(f"apply data id from bkdata failed, status is {data['status']}")
 
+        # 超过最大重试次数，抛出超时异常
         raise BKAPIError("apply data id from bkdata timeout")
 
     @classmethod
@@ -416,15 +430,24 @@ class DataSource(models.Model):
         bk_tenant_id: str = DEFAULT_TENANT_ID,
         authorized_spaces: list | None = None,
     ):
-        """保存空间数据源关系表
+        """
+        保存空间数据源关系表
 
-        :param creator: 创建者
-        :param space_type_id: 空间类型
-        :param space_id: 空间英文名称
-        :param bk_data_id: 数据源ID
-        :param authorized_spaces: 授权的使用的空间 ID
+        该方法用于建立空间与数据源之间的关联关系，包括创建当前空间与数据源的直接关系，
+        以及为授权的空间创建关联记录。主要流程包括：
+        1. 创建当前空间与数据源的关联关系
+        2. 检查授权空间是否存在
+        3. 为授权空间批量创建关联记录
+
+        :param creator: 创建者，记录创建该关联关系的用户
+        :param space_type_id: 空间类型，标识空间的类型（如业务、项目等）
+        :param space_id: 空间英文名称，标识具体的空间
+        :param bk_data_id: 数据源ID，标识关联的数据源
+        :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+        :param authorized_spaces: 授权的使用的空间 ID，格式为包含space_type_id和space_id的字典列表
         """
         # 1. 保存当前空间和数据源的关系
+        # 创建当前空间与数据源的关联关系记录
         SpaceDataSource.objects.create(
             creator=creator,
             space_type_id=space_type_id,
@@ -433,15 +456,19 @@ class DataSource(models.Model):
             bk_tenant_id=bk_tenant_id,
             from_authorization=False,
         )
+        # 如果没有授权空间，则直接返回
         if not authorized_spaces:
             return
         # 2. 授权的空间必须存在
+        # 构建查询条件，检查所有授权空间是否存在
         filter_q = Q()
         for s in authorized_spaces:
             filter_q |= Q(space_type_id=s["space_type_id"], space_id=s["space_id"])
+        # 验证所有授权空间都存在
         if Space.objects.filter(filter_q).count() != len(authorized_spaces):
             raise ValueError(_("设置的空间部分不存在"))
         # 3. 创建关联记录
+        # 为所有授权空间批量创建与数据源的关联关系记录
         space_datasource_list = [
             SpaceDataSource(
                 creator=creator,
@@ -485,31 +512,44 @@ class DataSource(models.Model):
     ):
         """
         创建一个新的数据源, 如果创建过程失败则会抛出异常
-        :param transfer_cluster_id: transfer 集群ID，默认为 default
-        :param data_name: 数据源名称
-        :param bk_data_id: 数据源ID，如果未None则自增配置
-        :param bk_tenant_id: 租户ID
+
+        该方法负责创建数据源的完整流程，包括参数验证、集群配置、数据源实例创建、MQ配置、选项配置等。
+        整个创建流程包括以下几个主要步骤：
+        1. 标签有效性验证 - 检查源标签和类型标签是否存在
+        2. 数据源名称唯一性检查 - 确保在同一租户下数据源名称唯一
+        3. MQ集群配置 - 获取或指定MQ集群信息
+        4. DataID分配 - 根据配置从GSE或BkData获取或自动生成DataID
+        5. 数据源实例创建 - 在数据库中创建数据源记录
+        6. MQ配置创建 - 创建消息队列相关配置
+        7. 选项配置 - 创建数据源选项配置
+        8. 空间数据源关系保存 - 建立空间与数据源的关联关系
+        9. 配置刷新 - 刷新外部配置如Consul
+
+        :param data_name: 数据源名称，用于标识数据源，在同一租户下必须唯一
+        :param etl_config: 清洗配置，可以为json格式字符串，或者默认内置的清洗配置函数名
+        :param operator: 操作者，记录创建该数据源的用户
+        :param source_label: 数据源标签，描述数据来源类型
+        :param type_label: 数据类型标签，描述数据的类型
+        :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+        :param bk_data_id: 数据源ID，如果为None则自动生成
         :param mq_cluster: Kafka 集群ID，如果为None时，则使用默认的Kafka集群
         :param mq_config: Kafka 集群配置 {"topic": "xxxx", "partition": 1}
-        :param etl_config: 清洗配置，可以为json格式字符串，或者默认内置的清洗配置函数名
-        :param operator: 操作者
-        :param source_label: 数据源标签
-        :param type_label: 数据类型标签
-        :param is_custom_source: 是否自定义数据源
-        :param data_description: 数据源描述
-        :param is_refresh_config: 是否需要刷新外部依赖配置
-        :param custom_label: 自定义标签配置信息
-        :param option: 额外配置项，格式应该为字典（object）方式传入，key为配置项，value为配置内容
-        :param source_system: 来源注册系统
-        :param space_type_id: 空间类型
-        :param space_id: 空间ID
-        :param is_platform_data_id: 是否为平台级 ID
-        :param authorized_spaces: 授权使用的空间ID
-        :param space_uid: 空间 UID
-        :param created_from: 数据源 ID 来源
-        :param bcs_cluster_id: bcs 集群 ID
-        :param bk_biz_id: 业务ID
-        :return: DataSource instance | raise Exception
+        :param data_description: 数据源描述，默认为空字符串
+        :param is_custom_source: 是否自定义数据源，默认为True
+        :param is_refresh_config: 是否需要刷新外部依赖配置，默认为True
+        :param custom_label: 自定义标签配置信息，默认为None
+        :param option: 额外配置项，格式应该为字典（object）方式传入，key为配置项，value为配置内容，默认为None
+        :param transfer_cluster_id: transfer 集群ID，默认为 settings.DEFAULT_TRANSFER_CLUSTER_ID
+        :param source_system: 来源注册系统，默认为 settings.SAAS_APP_CODE
+        :param space_type_id: 空间类型，默认为None
+        :param space_id: 空间ID，默认为None
+        :param is_platform_data_id: 是否为平台级 ID，默认为False
+        :param authorized_spaces: 授权使用的空间ID，默认为None
+        :param space_uid: 空间 UID，默认为None
+        :param created_from: 数据源 ID 来源，默认为DataIdCreatedFromSystem.BKGSE.value
+        :param bk_biz_id: 业务ID，默认为None
+        :param bcs_cluster_id: bcs 集群 ID，默认为None
+        :return: DataSource instance，返回创建的数据源实例，如果创建失败则抛出异常
         """
         # 判断两个使用到的标签是否存在
         logger.info(
@@ -523,6 +563,7 @@ class DataSource(models.Model):
             bk_tenant_id,
         )
 
+        # 验证源标签和类型标签是否存在
         if not Label.exists_label(label_id=source_label, label_type=Label.LABEL_TYPE_SOURCE) or not Label.exists_label(
             label_id=type_label, label_type=Label.LABEL_TYPE_TYPE
         ):
@@ -534,6 +575,7 @@ class DataSource(models.Model):
 
         # 1. 判断参数是否符合预期
         # 数据源名称是否重复
+        # 检查同一租户下是否已存在相同名称的数据源
         if cls.objects.filter(data_name=data_name, bk_tenant_id=bk_tenant_id).exists():
             logger.error(
                 "data_name->[%s] in bk_tenant_id->[%s] is already exists, maybe something go wrong?",
@@ -545,6 +587,7 @@ class DataSource(models.Model):
         # TODO: 多租户 V4链路中,理论上用户不再能指定Kafka集群,且多租户场景下,Kafka集群需要读取SpaceRelatedStorageInfo关联信息
         try:
             # 如果集群信息无提供，则使用默认的MQ集群信息
+            # 获取MQ集群信息，如果未指定则使用默认集群
             if mq_cluster is None:
                 mq_cluster = ClusterInfo.objects.get(cluster_type=cls.DEFAULT_MQ_TYPE, is_default_cluster=True)
             else:
@@ -557,43 +600,53 @@ class DataSource(models.Model):
             )
             raise ValueError(_("缺少数据源MQ集群信息，请联系管理员协助处理"))
 
+        # 如果需要由GSE分配DataID，则从GSE或BkData获取
         if bk_data_id is None and settings.IS_ASSIGN_DATAID_BY_GSE:
             # 如果由GSE来分配DataID的话，那么从GSE获取data_id，而不是走数据库的自增id
             # 现阶段仅支持指标的数据，因为现阶段指标的数据都为单指标单表
             # 添加过滤条件，只接入单指标单表时序数据到V4链路
             from metadata.models.space.constants import ENABLE_V4_DATALINK_ETL_CONFIGS
 
+            # 判断是否启用V2版本的BkData GSE资源，并且ETL配置在V4链路支持列表中
             if settings.ENABLE_V2_BKDATA_GSE_RESOURCE and etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS:
                 logger.info(f"apply for data id from bkdata,type_label->{type_label},etl_config->{etl_config}")
                 # TODO: 多租户 等待BkBase多租户协议,传递租户ID
                 is_base = False
 
                 # 根据清洗类型判断是否是系统基础数据
+                # 判断是否为系统基础数据ETL配置
                 if etl_config in SYSTEM_BASE_DATA_ETL_CONFIGS:
                     is_base = True
 
+                # 判断是否为日志事件ETL配置
                 if etl_config in LOG_EVENT_ETL_CONFIGS:
                     event_type = "log"
                 else:
                     event_type = "metric"
 
+                # 从BkData申请DataID
                 bk_data_id = cls.apply_for_data_id_from_bkdata(
                     data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type
                 )
                 created_from = DataIdCreatedFromSystem.BKDATA.value
             else:
+                # 从GSE申请DataID
                 bk_data_id = cls.apply_for_data_id_from_gse(operator)
 
         # TODO: 通过空间及类型获取默认管道
+        # 设置默认空间类型
         space_type_id = space_type_id if space_type_id else SpaceTypes.ALL.value
 
         # 此处启动DB事务，创建默认的信息
+        # 启动数据库事务，确保数据源创建过程的原子性
         with atomic(config.DATABASE_CONNECTION_NAME):
+            # 设置默认transfer集群ID
             if transfer_cluster_id is None:
                 transfer_cluster_id = settings.DEFAULT_TRANSFER_CLUSTER_ID
 
             # 3. 创建新的实例及数据源配置
             # 注意：此处由于已经开启事务，MySQL会保留PK给该新实例，因此可以放心将该PK传给其他依赖model
+            # 创建数据源实例
             data_source = cls.objects.create(
                 bk_data_id=bk_data_id,
                 data_name=data_name,
@@ -621,8 +674,10 @@ class DataSource(models.Model):
             )
 
             # 由监控自己分配的dataid需要校验是否在合理的范围内
+            # 如果不是由GSE分配DataID，则需要校验DataID范围
             if not settings.IS_ASSIGN_DATAID_BY_GSE:
                 # 判断DATA_ID是否有问题
+                # 检查DataID是否小于最小值
                 if data_source.bk_data_id < config.MIN_DATA_ID:
                     # 如果小于的最小的data_id，需要判断最小ID是否已经分配了，如果没有分配，则使用之
                     if cls.objects.filter(bk_data_id=config.MIN_DATA_ID).exists():
@@ -638,6 +693,7 @@ class DataSource(models.Model):
                     data_source.save()
 
                 # 达到了最大值的判断
+                # 检查DataID是否超过最大值
                 if data_source.bk_data_id > config.MAX_DATA_ID:
                     logger.info(
                         "new data_id->[{}] is lager than max data id->[{}], nothing will create.".format(
@@ -652,6 +708,7 @@ class DataSource(models.Model):
             )
 
             # 获取这个数据源对应的配置记录model，并创建一个新的配置记录
+            # 创建MQ配置
             if not mq_config:
                 mq_config = {}
             mq_config = cls.MQ_CONFIG_DICT[mq_cluster.cluster_type].create_info(
@@ -663,6 +720,7 @@ class DataSource(models.Model):
                 f"data_id->[{data_source.bk_data_id}] now is relate to its mq config id->[{data_source.mq_config_id}]"
             )
 
+            # 处理空间UID
             if space_uid:
                 # 校验 space_uid 格式
                 try:
@@ -675,6 +733,7 @@ class DataSource(models.Model):
                     raise ValueError(_("空间唯一标识{}错误").format(space_uid))
 
             # 创建option配置
+            # 初始化并创建数据源选项配置
             option = {} if option is None else option
             # 添加允许指标为空时，丢弃记录选项
             option.update({DataSourceOption.OPTION_DROP_METRICS_ETL_CONFIGS: True})
@@ -687,9 +746,11 @@ class DataSource(models.Model):
                 )
 
             # 添加时间 option
+            # 添加时间单位选项
             cls._add_time_unit_options(operator, data_source.bk_data_id, etl_config)
 
         # 写入 空间与数据源的关系表，如果 data id 为全局不需要记录
+        # 保存空间与数据源的关系
         try:
             if not is_platform_data_id and space_type_id and space_id:
                 cls()._save_space_datasource(
@@ -704,6 +765,7 @@ class DataSource(models.Model):
             logger.exception("save the relationship for space and datasource error")
 
         # 5. 触发consul刷新, 只有提交了事务后，其他人才可以看到DB记录
+        # 刷新外部配置（如Consul）
         if is_refresh_config:
             try:
                 data_source.refresh_outer_config()
@@ -935,24 +997,41 @@ class DataSource(models.Model):
         return result.get("channel_id", -1) == self.bk_data_id
 
     def refresh_gse_config_to_gse(self):
-        """同步路由配置到gse"""
+        """
+        同步路由配置到GSE（数据管道服务）
+
+        该方法用于将数据源的路由配置同步到GSE服务。主要流程包括：
+        1. 检查消息队列是否已初始化
+        2. 查询GSE中现有的路由配置
+        3. 比较现有配置与新配置的差异
+        4. 如果配置不一致，则更新GSE中的路由配置
+
+        :return: None
+        :raises ValueError: 当数据源的消息队列未初始化时抛出异常
+        """
+        # 检查消息队列是否已初始化，-1表示未初始化
         if self.mq_cluster.gse_stream_to_id == -1:
             raise ValueError(_("dataid({})的消息队列未初始化，请联系管理员处理").format(self.bk_data_id))
 
+        # 构造查询GSE路由配置的参数
         params = {
             "condition": {"plat_name": config.DEFAULT_GSE_API_PLAT_NAME, "channel_id": self.bk_data_id},
             "operation": {"operator_name": settings.COMMON_USERNAME},
         }
         try:
+            # 查询GSE中的路由配置
             result = api.gse.query_route(**params)
+            # 如果查询结果为空，则记录错误并返回
             if not result:
                 logger.error("can not find route info from gse, please check your datasource config")
                 return
         except BKAPIError as e:
+            # 如果查询路由配置失败，则记录异常并尝试添加内置channel_id到GSE
             logger.exception(f"query gse route failed, error:({e})")
             self.add_built_in_channel_id_to_gse()
             return
 
+        # 查找匹配的路由配置
         old_route = None
         for route_info in result:
             if old_route:
@@ -964,15 +1043,17 @@ class DataSource(models.Model):
 
             for stream_to_info in stream_to_info_list:
                 route_name = stream_to_info.get("name", "")
+                # 如果路由名称匹配，则保存旧的路由配置
                 if route_name != self.gse_route_config["name"]:
                     continue
 
                 old_route = {"name": route_name, "stream_to": stream_to_info["stream_to"]}
                 break
 
-        # 有的话，先比对是否一致
+        # 比较现有配置与新配置的差异
         old_hash = hash_util.object_md5(old_route)
         new_hash = hash_util.object_md5(self.gse_route_config)
+        # 如果配置一致，则直接返回
         if old_hash == new_hash:
             return
 
@@ -980,11 +1061,13 @@ class DataSource(models.Model):
             f"data_id->[{self.bk_data_id}] gse route config->[{new_hash}] is different from gse->[{old_hash}], will refresh it."
         )
 
+        # 如果配置不一致，则更新GSE中的路由配置
         params = {
             "condition": {"channel_id": self.bk_data_id, "plat_name": config.DEFAULT_GSE_API_PLAT_NAME},
             "operation": {"operator_name": self.creator},
             "specification": {"route": [self.gse_route_config]},
         }
+        # 调用GSE API更新路由配置
         api.gse.update_route(**params)
         logger.info(f"data_id->[{self.bk_data_id}] success to push route info to gse")
 

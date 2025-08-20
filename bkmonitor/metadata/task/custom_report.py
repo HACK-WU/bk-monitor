@@ -145,18 +145,33 @@ def check_event_update():
 
 
 def refresh_custom_report_2_node_man(bk_biz_id=None):
+    """
+    刷新自定义上报配置到节点管理的中间件逻辑
+
+    参数:
+        bk_biz_id (Optional[int]): 业务ID，当存在时仅刷新指定业务的配置，否则刷新所有租户配置
+
+    该方法实现完整的配置刷新流程控制，包含：
+    1. 节点管理插件版本兼容性检查
+    2. 租户ID集合构建与过滤
+    3. 分布式配置刷新事务处理
+    4. 异常安全回退机制
+    """
     # 判定节点管理是否上传支持v2新配置模版的bk-collector版本0.16.1061
     default_version = "0.0.0"
     plugin_infos = api.node_man.plugin_info(name="bk-collector")
     version_str_list = [p.get("version", default_version) for p in plugin_infos if p.get("is_ready", True)]
     max_version = get_max_version(default_version, version_str_list)
 
+    # 版本兼容性判定与路由
     if compare_versions(max_version, RECOMMENDED_VERSION["bk-collector"]) > 0:
+        # 租户ID集合构建逻辑
         if bk_biz_id is not None:
             bk_tenant_ids = [bk_biz_id_to_bk_tenant_id(bk_biz_id)]
         else:
             bk_tenant_ids = [tenant["id"] for tenant in api.bk_login.list_tenant()]
 
+        # 分布式配置刷新事务处理
         for bk_tenant_id in bk_tenant_ids:
             try:
                 models.CustomReportSubscription.refresh_collector_custom_conf(
@@ -167,6 +182,7 @@ def refresh_custom_report_2_node_man(bk_biz_id=None):
                     f"refresh custom report config to collector error, bk_tenant_id({bk_tenant_id}), bk_biz_id({bk_biz_id}), error({e})"
                 )
     else:
+        # 安全回退机制
         logger.info(
             f"当前节点管理已上传的bk-collector版本（{max_version}）低于支持新配置模版版本"
             f"（{RECOMMENDED_VERSION['bk-collector']}），暂不下发bk-collector配置文件"

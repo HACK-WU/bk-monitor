@@ -111,30 +111,46 @@ class CustomGroupBase(models.Model):
         cls, label: str, bk_data_id: int, custom_group_name: str, bk_biz_id: int, bk_tenant_id=DEFAULT_TENANT_ID
     ) -> dict:
         """
-        pre check name, label, bk_data_id
+        在创建自定义分组前进行参数检查
+
+        该方法用于验证创建自定义分组所需的各项参数是否合法，包括标签有效性、数据源唯一性以及分组名称唯一性。
+        主要完成以下检查：
+        1. 验证标签是否存在且为结果表类型标签
+        2. 检查数据源ID是否已被其他自定义分组占用
+        3. 验证在指定业务和租户下是否已存在同名分组
+
+        :param label: 标签ID，用于标识监控对象分类
+        :param bk_data_id: 数据源ID，需要确保唯一性
+        :param custom_group_name: 自定义分组名称，需要在业务范围内唯一
+        :param bk_biz_id: 业务ID，标识分组所属业务
+        :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+        :return: filter_kwargs字典，包含用于查询分组名称的过滤条件
+        :raises ValueError: 当标签不存在、数据源已被占用或分组名称已存在时抛出异常
         """
 
         # 确认label是否存在
+        # 检查提供的标签是否为有效的结果表标签
         if not Label.objects.filter(label_type=Label.LABEL_TYPE_RESULT_TABLE, label_id=label).exists():
             logger.error(f"label->[{label}] is not exists as a rt label")
             raise ValueError(_("标签[{}]不存在，请确认后重试").format(label))
 
         # 判断同一个data_id是否已经被其他事件绑定了
+        # 确保同一数据源ID不会被多个自定义分组绑定
         if cls.objects.filter(bk_data_id=bk_data_id).exists():
             logger.error("bk_data_id->[{}] is already used by other custom group, use it first?")
             raise ValueError(_("数据源[{}]已经被其他自定义组注册使用，请更换数据源").format(bk_data_id))
 
         # 判断同一个业务下是否有重名的custom_group_name
+        # 构造用于查询分组名称的过滤条件
         filter_kwargs = {
             cls.GROUP_NAME_FIELD: custom_group_name,
         }
+        # 检查在指定业务和租户下是否已存在同名且未删除的分组
         if cls.objects.filter(
             bk_biz_id=bk_biz_id, bk_tenant_id=bk_tenant_id, is_delete=False, **filter_kwargs
         ).exists():
             logger.error(
-                "biz_id->[{}] of bk_tenant_id->[{}] already has {}->[{}], should change {} and try again.".format(
-                    bk_biz_id, bk_tenant_id, cls.__name__, cls.GROUP_NAME_FIELD, custom_group_name
-                )
+                f"biz_id->[{bk_biz_id}] of bk_tenant_id->[{bk_tenant_id}] already has {cls.__name__}->[{cls.GROUP_NAME_FIELD}], should change {custom_group_name} and try again."
             )
             raise ValueError(_("自定义组名称已存在，请确认后重试"))
 
@@ -177,9 +193,7 @@ class CustomGroupBase(models.Model):
             **filter_kwargs,
         )
         logger.info(
-            "{}->[{}] now is created from data_id->[{}] by operator->[{}],bk_tenant_id->[{}]".format(
-                cls.__name__, custom_group.custom_group_id, bk_data_id, operator, bk_tenant_id
-            )
+            f"{cls.__name__}->[{custom_group.custom_group_id}] now is created from data_id->[{bk_data_id}] by operator->[{operator}],bk_tenant_id->[{bk_tenant_id}]"
         )
 
         return table_id, custom_group
@@ -203,20 +217,31 @@ class CustomGroupBase(models.Model):
     ):
         """
         创建一个新的自定义分组记录
-        :param bk_data_id: 数据源ID
-        :param bk_biz_id: 业务ID
-        :param custom_group_name: 自定义组名称
-        :param label: 标签，描述事件监控对象
-        :param operator: 操作者
-        :param metric_info_list: metric列表
-        :param table_id: 需要制定的table_id，否则通过默认规则创建得到
-        :param is_builtin: 是否为内置指标
-        :param is_split_measurement: 是否需要单指标单表存储，主要针对容器大量指标的情况适配
-        :param default_storage_config: 默认存储的配置
-        :param additional_options: 附带创建的 ResultTableOption
-        :param data_label: 数据标签
-        :param bk_tenant_id: 租户ID
-        :return: group object
+
+        该方法负责创建自定义监控组，包括数据源检查、分组创建、结果表创建和相关配置的初始化。
+        整个创建流程包括以下几个步骤：
+        1. 参数校验 - 检查标签、数据源ID和分组名称的有效性
+        2. 分组创建 - 创建自定义分组对象
+        3. 存储配置处理 - 处理默认存储配置和附加选项
+        4. 结果表创建 - 创建关联的结果表
+        5. 指标更新 - 更新分组的指标信息
+        6. 数据源选项配置 - 为数据源添加必要的选项
+        7. 配置刷新 - 异步刷新配置到节点管理
+
+        :param bk_data_id: 数据源ID，用于标识数据来源
+        :param bk_biz_id: 业务ID，标识该分组所属的业务
+        :param custom_group_name: 自定义组名称，用于标识该监控分组
+        :param label: 标签，描述事件监控对象的分类
+        :param operator: 操作者，记录创建该分组的用户
+        :param metric_info_list: metric列表，包含该分组的指标信息，默认为None
+        :param table_id: 需要制定的table_id，否则通过默认规则创建得到，默认为None
+        :param is_builtin: 是否为内置指标，默认为False
+        :param is_split_measurement: 是否需要单指标单表存储，主要针对容器大量指标的情况适配，默认为False
+        :param default_storage_config: 默认存储的配置，默认为None
+        :param additional_options: 附带创建的 ResultTableOption，默认为None
+        :param data_label: 数据标签，用于标识数据分类，默认为None
+        :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+        :return: group object，返回创建的自定义分组对象
         """
         # 创建流程：pre_check -> _create -> create_result_table -> 配置更新
 
@@ -233,6 +258,7 @@ class CustomGroupBase(models.Model):
         )
 
         # 1. 参数检查
+        # 检查标签是否存在、数据源是否已被使用、分组名称是否重复
         filter_kwargs = cls.pre_check(
             label=label,
             bk_data_id=bk_data_id,
@@ -242,6 +268,7 @@ class CustomGroupBase(models.Model):
         )
 
         # 2. 创建group
+        # 调用内部_create方法创建自定义分组对象
         table_id, custom_group = cls._create(
             table_id=table_id,
             bk_biz_id=bk_biz_id,
@@ -259,9 +286,7 @@ class CustomGroupBase(models.Model):
         final_metric_info_list = metric_info_list
         if metric_info_list is None:
             logger.info(
-                "{}->[{}] is created with none metric_info_list are set.".format(
-                    cls.__name__, custom_group.custom_group_id
-                )
+                f"{cls.__name__}->[{custom_group.custom_group_id}] is created with none metric_info_list are set."
             )
             final_metric_info_list = []
 
@@ -269,13 +294,16 @@ class CustomGroupBase(models.Model):
         # 如果是自动分表逻辑，则该表为默认路由表，
         # 如果是旧版自定义上报逻辑，则该表作为该dataid的唯一写入表
 
+        # 合并默认存储配置和传入的配置
         if default_storage_config is not None:
             default_storage_config.update(cls.DEFAULT_STORAGE_CONFIG)
         else:
             default_storage_config = cls.DEFAULT_STORAGE_CONFIG
 
+        # 处理默认存储配置
         cls.process_default_storage_config(custom_group, default_storage_config)
 
+        # 构建结果表选项，包括是否单指标单表和附加选项
         option = {"is_split_measurement": is_split_measurement}
         option.update(additional_options or {})
 
@@ -284,6 +312,7 @@ class CustomGroupBase(models.Model):
         if DataSourceResultTable.objects.filter(bk_data_id=bk_data_id).exists():
             DataSourceResultTable.objects.filter(bk_data_id=bk_data_id).delete()
 
+        # 创建结果表，关联到该自定义分组
         ResultTable.create_result_table(
             bk_data_id=custom_group.bk_data_id,
             bk_biz_id=custom_group.bk_biz_id,
@@ -305,10 +334,12 @@ class CustomGroupBase(models.Model):
             bk_tenant_id=bk_tenant_id,
         )
 
+        # 更新分组的指标信息
         custom_group.update_metrics(metric_info=final_metric_info_list)
         logger.info(f"{cls.__name__}->[{custom_group.custom_group_id}] object now has created")
 
         # 4. 需要为datasource增加一个option，否则transfer无法得知需要拆解的字段内容
+        # 为数据源添加必要的选项配置
         for item in custom_group.get_datasource_options():
             DataSourceOption.create_option(bk_data_id=bk_data_id, bk_tenant_id=bk_tenant_id, creator="system", **item)
 
@@ -317,6 +348,7 @@ class CustomGroupBase(models.Model):
         # 改为异步任务，因为节点管理接口会超时，update_subscription接口
         from metadata.task.tasks import refresh_custom_report_config
 
+        # 异步刷新自定义上报配置到节点管理
         refresh_custom_report_config.delay(bk_biz_id=bk_biz_id)
 
         return custom_group
@@ -349,9 +381,7 @@ class CustomGroupBase(models.Model):
         # 不可修改已删除的事件组
         if self.is_delete:
             logger.error(
-                "op->[{}] try to update the deleted {}->[{}], but nothing will do.".format(
-                    self.__class__.__name__, operator, self.custom_group_id
-                )
+                f"op->[{self.__class__.__name__}] try to update the deleted {operator}->[{self.custom_group_id}], but nothing will do."
             )
             raise ValueError(_("自定义组已删除，请确认后重试"))
 
@@ -362,9 +392,7 @@ class CustomGroupBase(models.Model):
             self.custom_group_name = custom_group_name
             is_change = True
             logger.info(
-                "{}->[{}] name is changed to->[{}]".format(
-                    self.__class__.__name__, self.custom_group_id, custom_group_name
-                )
+                f"{self.__class__.__name__}->[{self.custom_group_id}] name is changed to->[{custom_group_name}]"
             )
 
         # 给分组打新的标签
@@ -389,9 +417,7 @@ class CustomGroupBase(models.Model):
             self.update_metrics(metric_info_list)
             is_change = True
             logger.info(
-                "{}->[{}] has create now metric list->[{}]".format(
-                    self.__class__.__name__, self.custom_group_id, len(metric_info_list)
-                )
+                f"{self.__class__.__name__}->[{self.custom_group_id}] has create now metric list->[{len(metric_info_list)}]"
             )
 
         # 判断是否修改速率
@@ -470,9 +496,7 @@ class CustomGroupBase(models.Model):
         # 不可修改已删除的事件组
         if self.is_delete:
             logger.error(
-                "op->[{}] try to update the deleted {}->[{}], but nothing will do.".format(
-                    self.__class__.__name__, operator, self.custom_group_id
-                )
+                f"op->[{self.__class__.__name__}] try to update the deleted {operator}->[{self.custom_group_id}], but nothing will do."
             )
             raise ValueError(_("自定义组已删除，请确认后重试"))
 
@@ -486,9 +510,7 @@ class CustomGroupBase(models.Model):
         # 需要标记对应的结果表也是清除的状态
         self.set_table_id_disable()
         logger.info(
-            "{}->[{}] set result_table->[{}] and mark it delete.".format(
-                self.__class__.__name__, self.custom_group_id, self.table_id
-            )
+            f"{self.__class__.__name__}->[{self.custom_group_id}] set result_table->[{self.table_id}] and mark it delete."
         )
 
         logger.info(f"{self.__class__.__name__}->[{self.custom_group_id}] now is delete.")
