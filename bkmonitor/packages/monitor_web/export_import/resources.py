@@ -1014,8 +1014,8 @@ class ImportConfigResource(Resource):
                 collect_config_list,
                 strategy_config_list,
                 view_config_list,
-                validated_request_data["folder_id"],
-                validated_request_data["is_overwrite_mode"],
+                folder_id=validated_request_data["folder_id"],
+                is_overwrite_mode=validated_request_data["is_overwrite_mode"],
             )
 
             # 更新导入状态
