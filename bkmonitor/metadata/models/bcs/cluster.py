@@ -25,17 +25,52 @@ logger = logging.getLogger("metadata")
 class BCSClusterInfo(models.Model):
     """kubernetes集群信息"""
 
+    """
+    定义监控数据类型标识符常量
+    
+    这些常量用于标识不同来源的监控数据类型，包括：
+    - K8S指标数据类型
+    - 自定义指标数据类型
+    - K8S事件数据类型
+    """
     DATA_TYPE_K8S_METRIC = "k8s_metric"
     DATA_TYPE_K8S_EVENT = "k8s_event"
     DATA_TYPE_CUSTOM_METRIC = "custom_metric"
 
+    """
+    定义集群状态标识符常量
+    
+    包含集群运行和删除状态的表示：
+    - 运行状态（running）
+    - 已删除状态（deleted）
+    原始集群状态标识符（大写形式）
+    """
     CLUSTER_STATUS_RUNNING = "running"
     CLUSTER_STATUS_DELETED = "deleted"
     CLUSTER_RAW_STATUS_RUNNING = "RUNNING"
     CLUSTER_RAW_STATUS_DELETED = "DELETED"
 
+    """
+    默认服务监控维度项配置
+    
+    该列表定义了服务监控默认使用的维度组合，包含：
+    - 监控名称（bk_monitor_name）
+    - 命名空间与监控名称组合（bk_monitor_namespace/bk_monitor_name）
+    """
     DEFAULT_SERVICE_MONITOR_DIMENSION_TERM = ["bk_monitor_name", "bk_monitor_namespace/bk_monitor_name"]
 
+    """
+    数据源注册配置信息字典
+    
+    该字典存储各数据源类型的注册配置参数，包含以下配置项：
+    etl_config: ETL处理配置标识（bk_standard_v2_time_series/bk_standard_v2_event）
+    report_class: 报告类引用（TimeSeriesGroup/EventGroup）
+    datasource_name: 数据源名称标识符
+    is_split_measurement: 是否按指标拆分存储（True/False）
+    is_system: 是否为系统级数据源（True/False）
+    usage: 数据用途分类（metric/event）
+    data_label: 数据标签（仅K8S事件特有）
+    """
     DATASOURCE_REGISTER_INFO = {
         DATA_TYPE_K8S_METRIC: {
             "etl_config": "bk_standard_v2_time_series",
@@ -168,32 +203,48 @@ class BCSClusterInfo(models.Model):
         is_fed_cluster: bool | None = False,
     ) -> "BCSClusterInfo":
         """
-        注册一个新的bcs集群信息
-        :param bk_biz_id: 业务ID
-        :param cluster_id: 集群ID(BCS SaaS的集群ID)
-        :param project_id: 项目ID
-        :param creator: 创建者
-        :param domain_name: BCS集群域名，默认为空时，直接使用BCS-API的IP或域名
-        :param port: 集群端口号，默认是BCS-API的https端口
-        :param is_skip_ssl_verify: 是否跳过SSL认证
-        :param api_key_type: 集群链接认证类型，默认是authorization
-        :param api_key_prefix: 认证类型前缀，默认是Bearer
-        :param transfer_cluster_id: 默认使用的transfer集群ID
-        :param bk_env: 集群环境标签
-        :param bk_tenant_id: 租户ID
-        :param is_fed_cluster: 是否是联邦集群
-        :return: 新建的集群信息；否则直接抛出异常
+        注册一个新的BCS集群信息并初始化相关监控资源配置
+
+        参数:
+            bk_biz_id: 业务ID，整数类型
+            cluster_id: 集群ID（BCS SaaS的集群ID），字符串类型
+            project_id: 项目ID，字符串类型
+            creator: 创建者用户名，字符串类型
+            domain_name: BCS集群域名，默认使用BCS-API的IP或域名
+            port: 集群端口号，默认使用BCS-API的HTTPS端口
+            api_key_type: 集群链接认证类型，默认为"authorization"
+            api_key_prefix: 认证类型前缀，默认为"Bearer"
+            is_skip_ssl_verify: 是否跳过SSL认证，默认为True
+            transfer_cluster_id: 默认使用的transfer集群ID（可选）
+            bk_env: 集群环境标签，默认使用settings.BCS_CLUSTER_BK_ENV_LABEL
+            bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+            is_fed_cluster: 是否为联邦集群标志位（True|False|None），默认为False
+
+        返回值:
+            成功返回新创建的BCSClusterInfo对象，失败时抛出ValueError异常
+
+        核心流程说明：
+        1. 集群唯一性校验（防止重复注册）
+        2. 集群基础信息写入数据库
+        3. 数据源注册与配置初始化：
+           - 创建6个必要data_id（3种类型）
+           - 创建对应的自定义指标组/事件组
+           - 建立数据源与集群的关联关系
+        4. 配置数据持久化保存
         """
-        # 1. 判断集群ID是否已经接入
-        # todo 同一个集群在切换业务时不能重复接入
+
+        # 1. 集群唯一性校验
+        # 防止同一集群ID重复接入，支持集群迁移场景的业务ID变更
         if cls.objects.filter(cluster_id=cluster_id).exists():
             logger.error(
-                "failed to register cluster_id->[%s] under project_id->[%s] for cluster is already register"
-                ", nothing will do any more"
+                "failed to register cluster_id->[%s] under project_id->[%s] for cluster is already register",
+                cluster_id,
+                project_id,
             )
             raise ValueError(_("集群已经接入，请确认后重试"))
 
-        # 直接基于环境变量进行bcs纳管k8s信息的填充
+        # 2. 集群基础信息初始化
+        # 使用默认配置创建集群记录，包含认证信息和网络配置
         api_key_content = settings.BCS_API_GATEWAY_TOKEN
         server_address_path = "clusters"
 
@@ -220,13 +271,19 @@ class BCSClusterInfo(models.Model):
             bk_tenant_id,
         )
 
+        # 3. 转发集群配置初始化
+        # 使用默认转发集群配置，确保数据采集链路可用
         if transfer_cluster_id is None:
             transfer_cluster_id = settings.DEFAULT_TRANSFER_CLUSTER_ID_FOR_K8S
             logger.debug("k8s cluster config is None, will use settings instead->[%s]", transfer_cluster_id)
 
-        # 3. 注册6个必要的data_id和自定义事件及自定义时序上报内容
+        # 4. 监控数据源注册流程
+        # 遍历预定义的DATASOURCE_REGISTER_INFO配置项，执行以下操作：
+        # - 创建数据源（DataSource）
+        # - 创建自定义指标组（TimeSeriesGroup/EventGroup）
+        # - 建立数据源与集群的关联关系
         for usage, register_info in cluster.DATASOURCE_REGISTER_INFO.items():
-            # 注册data_id
+            # 注册监控数据源
             data_source = cluster.create_datasource(
                 usage=usage,
                 bk_tenant_id=bk_tenant_id,
@@ -242,18 +299,20 @@ class BCSClusterInfo(models.Model):
                 data_source.bk_data_id,
             )
 
-            # 注册自定义时序 或 自定义事件
+            # 创建自定义指标/事件组
             report_class = register_info["report_class"]
             if register_info["usage"] == "metric":
-                # 如果是指标的类型，需要考虑增加influxdb proxy的集群隔离配置
+                # 指标类型配置
                 default_storage_config = {"proxy_cluster_name": settings.INFLUXDB_DEFAULT_PROXY_CLUSTER_NAME_FOR_K8S}
                 additional_options = {
                     ResultTableOption.OPTION_CUSTOM_REPORT_DIMENSION_VALUES: cls.DEFAULT_SERVICE_MONITOR_DIMENSION_TERM
                 }
             else:
+                # 事件类型配置
                 default_storage_config = {"cluster_id": settings.BCS_CUSTOM_EVENT_STORAGE_CLUSTER_ID}
                 additional_options = copy.deepcopy(EventGroup.DEFAULT_RESULT_TABLE_OPTIONS)
 
+            # 生成自定义分组名称并创建
             report_group = report_class.create_custom_group(
                 bk_data_id=data_source.bk_data_id,
                 bk_biz_id=bk_biz_id,
@@ -276,8 +335,7 @@ class BCSClusterInfo(models.Model):
                 usage,
             )
 
-            # 记录data_id信息
-            # k8s不支持下划线,python不支持中划线
+            # 建立集群与data_id的映射关系
             setattr(cluster, register_info["datasource_name"], data_source.bk_data_id)
             logger.info(
                 "cluster->[%s] of bk_tenant_id->[%s] usage->[%s] datasource_name->[%s] with data_id->[%s] is mark now.",
@@ -288,7 +346,8 @@ class BCSClusterInfo(models.Model):
                 data_source.bk_data_id,
             )
 
-        # 由于改了4个data_id，所以此处需要save一波，否则临时修改的配置未持久化
+        # 5. 持久化集群配置
+        # 保存所有data_id关联配置到数据库
         cluster.save()
         logger.info("cluster->[%s] all datasource info save to database success.", cluster.cluster_id)
 
@@ -373,7 +432,28 @@ class BCSClusterInfo(models.Model):
         self.save()
 
     def make_config(self, item, usage, is_fed_cluster: bool = False) -> dict:
-        # 获取全局的replace配置
+        """
+        构建Kubernetes集群DataID资源配置字典
+
+        参数:
+            item: 数据源配置字典，包含datasource_name、is_system等元数据
+            usage: 数据源用途标识，用于区分系统指标/自定义指标等类型
+            is_fed_cluster: 是否为联邦集群标志位，默认为False
+
+        返回值:
+            符合Kubernetes CRD规范的资源配置字典，包含以下核心字段：
+            - apiVersion: API版本信息
+            - kind: 资源类型标识
+            - metadata: 资源元数据（名称、标签）
+            - spec: 资源规格定义（dataID、标签、替换规则等）
+
+        该方法实现以下核心逻辑：
+        1. 合并全局与集群级替换配置
+        2. 构建资源标签体系（usage/isCommon/isSystem）
+        3. 生成符合BCS规范的资源配置对象
+        4. 处理联邦集群特殊配置逻辑（isCommon字段）
+        """
+        # 获取全局与集群级替换配置并合并
         replace_config = ReplaceConfig.get_common_replace_config()
         cluster_replace_config = ReplaceConfig.get_cluster_replace_config(cluster_id=self.cluster_id)
         replace_config[ReplaceConfig.REPLACE_TYPES_METRIC].update(
@@ -383,13 +463,14 @@ class BCSClusterInfo(models.Model):
             cluster_replace_config[ReplaceConfig.REPLACE_TYPES_DIMENSION]
         )
 
-        """在k8s集群里建立的dataid资源配置"""
-        # 联邦集群的自定义指标的isCommon配置为false
+        # 构建资源配置标签体系
         labels = {
             "usage": item["usage"],
             "isCommon": "false" if usage == self.DATA_TYPE_CUSTOM_METRIC and is_fed_cluster else "true",
             "isSystem": "true" if item["is_system"] else "false",
         }
+
+        # 生成最终资源配置对象
         result = {
             "apiVersion": f"{config.BCS_RESOURCE_GROUP_NAME}/{config.BCS_RESOURCE_VERSION}",
             "kind": f"{config.BCS_RESOURCE_DATA_ID_RESOURCE_KIND}",
@@ -407,7 +488,32 @@ class BCSClusterInfo(models.Model):
         return result
 
     def init_resource(self, is_fed_cluster: bool | None = False) -> bool:
-        """初始化resource信息并绑定data_id"""
+        """
+        初始化监控数据源资源并绑定DataID配置
+
+        参数:
+            is_fed_cluster: 布尔值或None，指示是否为联邦集群环境
+                           True表示当前为联邦集群模式
+                           False表示普通集群模式
+                           默认值为False
+
+        返回值:
+            bool类型，表示初始化结果
+            True表示所有数据源资源初始化成功
+            False表示任一数据源资源初始化失败
+
+        执行流程说明：
+        1. 遍历预定义的数据源注册信息字典DATASOURCE_REGISTER_INFO
+        2. 对于联邦集群模式：
+           - 跳过非自定义指标类型（DATA_TYPE_CUSTOM_METRIC）的数据源
+           - 防止向联邦集群下发K8s内置指标的DataID配置
+        3. 对每个有效数据源执行以下操作：
+           a) 通过make_config方法生成资源配置
+           b) 使用compose_dataid_resource_name生成资源名称
+           c) 调用ensure_data_id_resource确保资源存在
+           d) 任一环节失败立即返回False终止流程
+        4. 所有资源成功处理后返回True
+        """
         # 基于各dataid，生成配置并写入bcs集群
         for usage, register_info in self.DATASOURCE_REGISTER_INFO.items():
             # 针对联邦集群，跳过 k8s 内置指标的 data_id 下发

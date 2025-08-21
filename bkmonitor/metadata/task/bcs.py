@@ -355,7 +355,22 @@ def discover_bcs_clusters():
 
 
 def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
-    """补齐云区域ID ."""
+    """
+    补齐云区域ID配置的主函数，通过BCS集群节点信息自动补全缺失的云区域ID
+
+    参数:
+        bk_biz_id: 业务ID，用于过滤特定业务的集群（可选）
+        cluster_id: 集群ID，用于指定单个集群处理（可选）
+
+    返回值:
+        None: 函数通过直接修改数据库记录完成更新，无显式返回值
+
+    处理流程包含以下核心步骤：
+    1. 过滤出运行状态且缺失云区域ID的集群
+    2. 并发请求BCS接口获取集群节点IP信息
+    3. 通过CMDB接口查询节点IP对应的云区域信息
+    4. 统计节点云区域分布并更新集群配置
+    """
     # 获得缺失云区域的集群配置
     filter_kwargs = {}
     if bk_biz_id:
@@ -369,6 +384,8 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
         }
     )
     clusters = BCSClusterInfo.objects.filter(**filter_kwargs).values("bk_tenant_id", "bk_biz_id", "cluster_id")
+
+    # 分批次处理集群节点信息
     for start in range(0, len(clusters), BCS_SYNC_SYNC_CONCURRENCY):
         cluster_chunk = clusters[start : start + BCS_SYNC_SYNC_CONCURRENCY]
         # 从BCS获取集群的节点IP
@@ -386,6 +403,8 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
         except Exception as exc_info:  # noqa
             logger.exception(exc_info)
             continue
+
+        # 构建节点IP与业务/集群的映射关系
         node_ip_map = {}
         for node in itertools.chain.from_iterable(item for item in api_nodes if item):
             bcs_cluster_id = node["bcs_cluster_id"]
@@ -397,11 +416,11 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
                 continue
             node_ip_map.setdefault(bk_biz_id, {}).setdefault(bcs_cluster_id, []).append(node_ip)
 
-        # 从cmdb根据ip获得主机信息，包括云区域
+        # 构造CMDB查询参数
         cmdb_params = []
         for bk_biz_id, cluster_info in node_ip_map.items():
             for node_ips in cluster_info.values():
-                # 防止ip过多，超过接口限制
+                # 防止ip过多超过接口限制
                 node_ips = node_ips[:CMDB_IP_SEARCH_MAX_SIZE]
                 cmdb_params.append(
                     {
@@ -416,11 +435,15 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
                 )
         if not cmdb_params:
             continue
+
+        # 从CMDB获取主机云区域信息
         try:
             host_infos = api.cmdb.get_host_by_ip.bulk_request(cmdb_params)
         except Exception as exc_info:  # noqa
             logger.exception(exc_info)
             continue
+
+        # 构建IP到云区域ID的映射表
         bk_cloud_map = {}
         for item in itertools.chain.from_iterable(host_info_chunk for host_info_chunk in host_infos if host_info_chunk):
             ip_map = {}
@@ -430,11 +453,11 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
                 ip_map[item.bk_host_innerip_v6] = item.bk_cloud_id
             bk_cloud_map.setdefault(item.bk_biz_id, {}).update(ip_map)
 
-        # 计算每个集群云区域的top1
+        # 计算集群云区域分布
         update_params = {}
         for bk_biz_id, cluster_info in node_ip_map.items():
             for bcs_cluster_id, node_ips in cluster_info.items():
-                # 获取node ip对应的云区域ID
+                # 获取节点IP对应的云区域ID
                 bk_cloud_ids = []
                 for node_ip in node_ips:
                     bk_cloud_id = bk_cloud_map.get(bk_biz_id, {}).get(node_ip)
@@ -443,13 +466,13 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
                     bk_cloud_ids.append(bk_cloud_id)
                 if not bk_cloud_ids:
                     continue
-                # 计算每个集群云区域的计数
+
+                # 统计云区域计数并取最高频值
                 counter = collections.Counter(bk_cloud_ids)
-                # 获取计数最大的一个云区域，当做集群的云区域
                 most_common_bk_cloud_id = counter.most_common(1)[0][0]
                 update_params.setdefault(most_common_bk_cloud_id, []).append(bcs_cluster_id)
 
-        # 更新云区域
+        # 批量更新集群云区域配置
         for bk_cloud_id, bcs_cluster_ids in update_params.items():
             BCSClusterInfo.objects.filter(cluster_id__in=bcs_cluster_ids).update(bk_cloud_id=bk_cloud_id)
 

@@ -69,18 +69,34 @@ class DataSource(models.Model):
     1001数据的RT直接变成 system.io@{bk_tenant_id},以避免在DSRT过滤时混淆
     """
 
-    # 标识 transfer 可以写入的存储表
+    """
+    TRANSFER_STORAGE_LIST: 允许transfer写入的存储类型列表
+    包含所有支持的存储引擎类（Elasticsearch/InfluxDB/Kafka），用于限制数据写入目标
+    """
     TRANSFER_STORAGE_LIST = [ESStorage, InfluxDBStorage, KafkaStorage]
 
-    # 默认使用的MQ类型
+    """
+    DEFAULT_MQ_TYPE: 默认消息队列类型常量
+    指定系统默认使用的MQ类型（Kafka），对应ClusterInfo.TYPE_KAFKA定义
+    """
     DEFAULT_MQ_TYPE = ClusterInfo.TYPE_KAFKA
-    # DATA_LIST列表
+
+    """
+    CONSUL_DATA_LIST_PATH: Consul存储路径常量
+    由CONSUL_PATH基础路径和"data_list"子路径拼接而成，用于存储数据列表配置
+    """
     CONSUL_DATA_LIST_PATH = "{}/{}".format(config.CONSUL_PATH, "data_list")
 
-    # 消息队列配置对应关系配置
+    """
+    MQ_CONFIG_DICT: 消息队列配置映射字典
+    建立MQ类型（Kafka）与具体配置类（KafkaTopicInfo）的对应关系
+    """
     MQ_CONFIG_DICT = {ClusterInfo.TYPE_KAFKA: KafkaTopicInfo}
 
-    # 需要指定是纳秒级别的清洗配置内容
+    """
+    NS_TIMESTAMP_ETL_CONFIG: 纳秒时间戳ETL配置集合
+    包含需要使用纳秒级时间戳的清洗配置标识，当前支持事件和时序标准协议
+    """
     NS_TIMESTAMP_ETL_CONFIG = {"bk_standard_v2_event", "bk_standard_v2_time_series"}
 
     bk_data_id = models.AutoField("数据源ID", primary_key=True)
@@ -492,7 +508,7 @@ class DataSource(models.Model):
         type_label,
         bk_tenant_id=DEFAULT_TENANT_ID,
         bk_data_id=None,
-        mq_cluster=None,
+        mq_cluster_id=None,
         mq_config=None,
         data_description="",
         is_custom_source=True,
@@ -532,7 +548,7 @@ class DataSource(models.Model):
         :param type_label: 数据类型标签，描述数据的类型
         :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
         :param bk_data_id: 数据源ID，如果为None则自动生成
-        :param mq_cluster: Kafka 集群ID，如果为None时，则使用默认的Kafka集群
+        :param mq_cluster_id: Kafka 集群ID，如果为None时，则使用默认的Kafka集群
         :param mq_config: Kafka 集群配置 {"topic": "xxxx", "partition": 1}
         :param data_description: 数据源描述，默认为空字符串
         :param is_custom_source: 是否自定义数据源，默认为True
@@ -588,10 +604,10 @@ class DataSource(models.Model):
         try:
             # 如果集群信息无提供，则使用默认的MQ集群信息
             # 获取MQ集群信息，如果未指定则使用默认集群
-            if mq_cluster is None:
+            if mq_cluster_id is None:
                 mq_cluster = ClusterInfo.objects.get(cluster_type=cls.DEFAULT_MQ_TYPE, is_default_cluster=True)
             else:
-                mq_cluster = ClusterInfo.objects.get(cluster_id=mq_cluster)
+                mq_cluster = ClusterInfo.objects.get(cluster_id=mq_cluster_id)
         except ClusterInfo.DoesNotExist:
             # 此时，用户无提供新的数据源配置的集群信息，而也没有配置默认的集群信息，新的数据源无法配置集群信息
             # 需要抛出异常

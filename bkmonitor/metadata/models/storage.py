@@ -95,14 +95,49 @@ class ClusterInfo(models.Model):
     CONSUL_PREFIX_PATH = f"{config.CONSUL_PATH}/unify-query/data/storage"
     CONSUL_VERSION_PATH = f"{config.CONSUL_PATH}/unify-query/version/storage"
 
+    """
+    存储和消息队列类型标识符常量
+    
+    这些常量用于标识系统中使用的不同存储后端和消息队列类型，包含：
+    - 时间序列数据库类型（InfluxDB/VictoriaMetrics）
+    - 消息队列类型（Kafka/Redis）
+    - 数据平台类型（蓝鲸数据平台/Elasticsearch）
+    - 分析引擎类型（Doris）
+    """
+
+    """
+    存储后端类型标识符
+    
+    定义支持的存储引擎类型：
+    - TYPE_INFLUXDB: InfluxDB 时序数据库
+    - TYPE_ES: Elasticsearch 分析引擎
+    - TYPE_VM: VictoriaMetrics 时序数据库
+    - TYPE_DORIS: Doris 分析型数据库
+    """
     TYPE_INFLUXDB = "influxdb"
-    TYPE_KAFKA = "kafka"
-    TYPE_REDIS = "redis"
-    TYPE_BKDATA = "bkdata"
     TYPE_ES = "elasticsearch"
-    TYPE_ARGUS = "argus"
     TYPE_VM = "victoria_metrics"
     TYPE_DORIS = "doris"
+
+    """
+    消息队列中间件标识符
+    
+    定义支持的消息队列类型：
+    - TYPE_KAFKA: Apache Kafka 分布式消息中间件
+    - TYPE_REDIS: Redis 消息队列（通过List/Stream实现）
+    """
+    TYPE_KAFKA = "kafka"
+    TYPE_REDIS = "redis"
+
+    """
+    数据平台与监控系统标识符
+    
+    定义集成的数据平台和监控系统类型：
+    - TYPE_BKDATA: 蓝鲸数据平台
+    - TYPE_ARGUS: Argus 监控系统
+    """
+    TYPE_BKDATA = "bkdata"
+    TYPE_ARGUS = "argus"
 
     CLUSTER_TYPE_CHOICES = (
         (TYPE_INFLUXDB, "influxDB"),

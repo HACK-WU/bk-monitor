@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 import logging
 
 from django.db import models
@@ -8,12 +6,25 @@ logger = logging.getLogger("metadata")
 
 
 class ReplaceConfig(models.Model):
+    # 模块级常量定义
+    # 本模块定义了以下常量分类：
+    # - 替换类型（REPLACE_TYPES）：用于标识替换操作的目标类型
+    # - 自定义层级（CUSTOM_LEVELS）：表示自定义配置的适用层级
+    # - 资源类型（RESOURCE_TYPES）：指定监控资源的类型分类
+    # 每个常量组通过全大写变量名约定其用途范围
+
+    # 替换类型定义
+    # 用于标识替换操作的目标类型
     REPLACE_TYPES_METRIC = "metric"
     REPLACE_TYPES_DIMENSION = "dimension"
 
+    # 自定义层级定义
+    # 表示自定义配置的适用层级
     CUSTOM_LEVELS_CLUSTER = "cluster"
     CUSTOM_LEVELS_RESOURCE = "resource"
 
+    # 资源类型定义
+    # 指定监控资源的类型分类
     RESOURCE_TYPES_SERVICE = "ServiceMonitor"
     RESOURCE_TYPES_POD = "PodMonitor"
 
@@ -84,6 +95,24 @@ class ReplaceConfig(models.Model):
 
     @classmethod
     def get_replace_config(cls, items) -> dict:
+        """
+        生成替换配置字典，根据替换类型分类指标和维度替换项
+
+        参数:
+            cls: 类对象本身，用于访问类常量REPLACE_TYPES_METRIC和REPLACE_TYPES_DIMENSION
+            items: 可迭代对象，包含具有replace_type、source_name和target_name属性的元素
+
+        返回值:
+            包含两个键值对的字典：
+            - cls.REPLACE_TYPES_METRIC: 指标替换字典 {源名称: 目标名称}
+            - cls.REPLACE_TYPES_DIMENSION: 维度替换字典 {源名称: 目标名称}
+
+        执行流程:
+        1. 初始化空字典metric_replace和dimension_replace
+        2. 遍历items中的每个元素：
+           - 根据元素的replace_type属性分类存储到对应字典
+        3. 返回包含完整替换配置的字典结构
+        """
         metric_replace = {}
         dimension_replace = {}
         for item in items:
@@ -175,15 +204,15 @@ class ReplaceConfig(models.Model):
         for info in delete_list:
             data = info.__dict__
             info.delete()
-            print("delete replace config:{}".format(data))
-            logger.info("delete replace config:{}".format(data))
+            print(f"delete replace config:{data}")
+            logger.info(f"delete replace config:{data}")
 
         # 新增或更新主机信息
         for item in items:
             obj, created = cls.objects.update_or_create(rule_name=item["rule_name"], defaults=item)
             if created:
-                print("created replace config:{}".format(item))
-                logger.info("create new replace config:{}".format(str(item)))
+                print(f"created replace config:{item}")
+                logger.info(f"create new replace config:{str(item)}")
             else:
-                print("updated replace config:{}".format(item))
-                logger.info("update replace config to:{}".format(str(item)))
+                print(f"updated replace config:{item}")
+                logger.info(f"update replace config to:{str(item)}")
