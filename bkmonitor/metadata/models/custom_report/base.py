@@ -16,7 +16,6 @@ from django.db import models
 from django.db.transaction import atomic
 from django.utils.translation import gettext as _
 
-from constants.common import DEFAULT_TENANT_ID
 from metadata import config
 from metadata.models.common import Label
 from metadata.models.data_source import DataSourceOption, DataSourceResultTable
@@ -84,7 +83,7 @@ class CustomGroupBase(models.Model):
         return {}
 
     @staticmethod
-    def make_table_id(bk_biz_id, bk_data_id, table_name: str = None, bk_tenant_id=DEFAULT_TENANT_ID) -> str:
+    def make_table_id(bk_biz_id, bk_data_id, bk_tenant_id: str, table_name: str = None) -> str:
         raise NotImplementedError
 
     def update_metrics(self, metric_info):
@@ -107,9 +106,7 @@ class CustomGroupBase(models.Model):
         pass
 
     @classmethod
-    def pre_check(
-        cls, label: str, bk_data_id: int, custom_group_name: str, bk_biz_id: int, bk_tenant_id=DEFAULT_TENANT_ID
-    ) -> dict:
+    def pre_check(cls, label: str, bk_data_id: int, custom_group_name: str, bk_biz_id: int, bk_tenant_id: str) -> dict:
         """
         在创建自定义分组前进行参数检查
 
@@ -166,8 +163,8 @@ class CustomGroupBase(models.Model):
         label: str,
         operator: str,
         is_split_measurement: bool,
+        bk_tenant_id: str,
         max_rate: int = -1,
-        bk_tenant_id=DEFAULT_TENANT_ID,
         **filter_kwargs,
     ) -> (str, "CustomGroupBase"):
         """
@@ -176,7 +173,7 @@ class CustomGroupBase(models.Model):
 
         if table_id is None:
             # 如果是公共结果表记录，则需要创建公共结果表ID，否则填充None
-            table_id = cls.make_table_id(bk_biz_id, bk_data_id, custom_group_name, bk_tenant_id=bk_tenant_id)
+            table_id = cls.make_table_id(bk_biz_id, bk_data_id, bk_tenant_id=bk_tenant_id, table_name=custom_group_name)
 
         custom_group = cls.objects.create(
             bk_data_id=bk_data_id,
@@ -206,6 +203,7 @@ class CustomGroupBase(models.Model):
         custom_group_name,
         label,
         operator,
+        bk_tenant_id: str,
         metric_info_list=None,
         table_id=None,
         is_builtin=False,
@@ -213,7 +211,6 @@ class CustomGroupBase(models.Model):
         default_storage_config=None,
         additional_options: dict | None = None,
         data_label: str | None = None,
-        bk_tenant_id: str | None = DEFAULT_TENANT_ID,
     ):
         """
         创建一个新的自定义分组记录
