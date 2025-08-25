@@ -1,0 +1,9 @@
+{
+    "python.analysis.typeCheckingMode": "standard",
+    "basedpyright.analysis.typeCheckingMode": "off",
+    "[search-result]": {
+        "editor.lineNumbers": "on"
+    },
+    "search.showLineNumbers": true,
+    "notebook.lineNumbers": "on",
+}

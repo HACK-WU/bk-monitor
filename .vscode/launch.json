@@ -1,0 +1,67 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "run: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/bkmonitor",
+        },
+        {
+            "name": "run server",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/bkmonitor",
+            "program": "manage.py",
+            "args": [
+                "runserver",
+                "bkm-dev.paas3-dev.bktencent.com:8080"
+            ],
+            "envFile": "${workspaceFolder}/.env",
+            "django": true,
+            "autoStartBrowser": false,
+            "autoReload": {
+                "enable": true
+            },
+            "justMyCode": true,
+            "console": "integratedTerminal",
+        },
+        {
+            "name": "debug: run celery",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd": "${workspaceFolder}/bkmonitor",
+            "args": [
+                // "export BKAPP_DEPLOY_PLATFORM=enterprise",
+                // "export BK_PAAS_HOST=https://paas3-dev.bktencent.com/",
+                // "export BKPAAS_APP_SECRET=446f11f1-50d8-4458-93d5-4a5ee9c36c75",
+                "-A", "config",
+                "worker",
+                "-l", "INFO",
+                "-Q", "celery_resource",
+                "-P", "solo"
+            ],
+            "module": "celery",
+            "autoReload": {
+                "enable": true
+            },
+            "justMyCode": false,
+            "envFile": "${workspaceFolder}/.env"
+        },
+        {
+            "name": "init space data",
+            "type": "debugpy",
+            "request": "launch",
+            "cwd":"${workspaceFolder}",
+            "program": "manage.py",
+            "args": ["init_space_data", "--init_redis", "False"],
+            "envFile": "${workspaceFolder}/.env",
+            "console": "integratedTerminal",
+        }
+    ]
+}
