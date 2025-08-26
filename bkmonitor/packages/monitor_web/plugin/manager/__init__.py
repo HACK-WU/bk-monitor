@@ -70,10 +70,11 @@ class PluginManagerFactory:
     def get_manager(
         cls,
         bk_tenant_id=None,
-        plugin: int | str | CollectorPluginMeta = None,
+        plugin: str | CollectorPluginMeta = None,
         plugin_type: str = None,
         operator="",
         tmp_path=None,
+        plugin_configs=None,
     ) -> PluginManager:
         """
         根据插件标识或元数据获取对应类型的插件管理对象
@@ -93,8 +94,8 @@ class PluginManagerFactory:
         :raises KeyError: 当插件类型不在支持列表SUPPORTED_PLUGINS中时抛出
         """
         # 检查临时路径是否存在，若提供且不存在则抛出异常
-        if tmp_path and not os.path.exists(tmp_path):
-            raise OSError(_("文件夹不存在：%s") % tmp_path)
+        if (tmp_path and not os.path.exists(tmp_path)) and not plugin_configs:
+            raise OSError(_("文件夹不存在：%s ，或指标插件配置不存在：plugin_configs") % tmp_path)
 
         # 处理插件元数据：当输入为ID时尝试查询数据库，不存在则创建新实例
         if not isinstance(plugin, CollectorPluginMeta):
@@ -110,7 +111,7 @@ class PluginManagerFactory:
         # 验证插件类型合法性
         plugin_type = plugin.plugin_type
         if plugin_type not in SUPPORTED_PLUGINS:
-            raise KeyError("Unsupported plugin type: %s" % plugin_type)
+            raise KeyError(f"Unsupported plugin type: {plugin_type}")
 
         # 根据类型获取对应的管理器类
         plugin_manager_cls = SUPPORTED_PLUGINS[plugin_type]
@@ -120,7 +121,7 @@ class PluginManagerFactory:
             operator = get_global_user()
 
         # 实例化具体的插件管理器
-        return plugin_manager_cls(plugin, operator, tmp_path)
+        return plugin_manager_cls(plugin, operator, tmp_path, plugin_configs)
 
 
 class PluginFileManagerFactory:

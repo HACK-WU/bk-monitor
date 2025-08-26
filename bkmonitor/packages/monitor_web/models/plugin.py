@@ -723,8 +723,8 @@ class CollectorPluginConfig(OperateRecordModelBase):
     PluginVersionHistory-->CollectorPluginConfig: one-to-one
     """
 
-    config_json = JsonField("参数配置", default=None)
-    collector_json = JsonField("采集器配置", default=None)
+    config_json = JsonField("参数配置", default=[])
+    collector_json = JsonField("采集器配置", default={})
     is_support_remote = models.BooleanField("是否支持远程采集", default=False)
 
     def __str__(self):
@@ -885,8 +885,16 @@ class PluginVersionHistory(OperateRecordModelBase):
         """
         if getattr(self, "_plugin", None):
             return self._plugin
-
-        return CollectorPluginMeta.objects.get(bk_tenant_id=self.bk_tenant_id, plugin_id=self.plugin_id)
+        try:
+            obj = CollectorPluginMeta.objects.get(bk_tenant_id=self.bk_tenant_id, plugin_id=self.plugin_id)
+        except CollectorPluginMeta.DoesNotExist:
+            # 当数据库中不存在该插件时，检查是否有临时插件对象
+            tmp_plugin = getattr(self, "tmp_plugin", None)
+            if tmp_plugin is not None:
+                return tmp_plugin
+            # 如果没有临时插件对象，则重新抛出异常
+            raise
+        return obj
 
     @plugin.setter
     def plugin(self, value: CollectorPluginMeta):
