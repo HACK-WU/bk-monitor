@@ -156,6 +156,7 @@ class DataAccessor:
 
     def __init__(
         self,
+        bk_tenant_id: str,
         bk_biz_id,
         db_name,
         tables,
@@ -180,7 +181,7 @@ class DataAccessor:
         :param data_label: 数据标签（可选），未指定时默认使用数据库名的小写格式
         """
         self.bk_biz_id = bk_biz_id
-        self.bk_tenant_id = bk_biz_id_to_bk_tenant_id(bk_biz_id)
+        self.bk_tenant_id = bk_tenant_id
         self.db_name = db_name.lower()
         # 数据标签处理逻辑：当未指定时使用数据库名作为默认值，并统一转为小写
         self.data_label = data_label.lower() if data_label else self.db_name
@@ -511,6 +512,7 @@ class PluginDataAccessor(DataAccessor):
 
         # 调用父类初始化完成最终配置
         super().__init__(
+            bk_tenant_id=plugin_version.plugin.bk_tenant_id,
             bk_biz_id=0,
             db_name=db_name,
             tables=tables,
@@ -672,7 +674,7 @@ class PluginDataAccessor(DataAccessor):
 class EventDataAccessor:
     def __init__(self, current_version, operator):
         self.bk_biz_id = current_version.plugin.bk_biz_id
-        self.bk_tenant_id = bk_biz_id_to_bk_tenant_id(self.bk_biz_id)
+        self.bk_tenant_id = current_version.plugin.bk_tenant_id
         self.name = f"{current_version.plugin.plugin_type}_{current_version.plugin_id}"
         self.label = current_version.plugin.label
         self.operator = operator
