@@ -140,13 +140,7 @@ sequenceDiagram
 
 ----
 
-# 2、api.kubernetes.fetch_k8s_cluster_list(bk_tenant_id=bk_tenant_id) 获取到集群信息后，存到数据库就行了呀，为什么还要进行集群注册操作，注册集群是为了什么，后面有什么用么？
-
-
-
-这是一个很好的问题！简单地将集群信息存储到数据库确实只是第一步，而集群注册操作实际上是一个复杂的初始化过程，它为后续的监控功能奠定了基础。让我详细解释为什么需要集群注册以及它的作用：
-
-## 集群注册的核心作用
+## 2、集群注册的核心作用
 
 ### 1. **监控数据源体系建设**
 
@@ -288,11 +282,6 @@ def init_resource(self, is_fed_cluster: bool | None = False) -> bool:
 - **PodMonitor CRD**：定义Pod级监控采集规则
 
 ### 2. **数据采集组件的工作原理**
-
-```toolCall::search_codebase
-
-```
-
 现在让我详细解释注册集群后如何获取监控数据的完整流程：
 
 ## 监控数据获取的完整链路
@@ -320,11 +309,6 @@ dataid_config = {
 ```
 
 ### 2. **采集器工作机制**
-
-```toolCall::search_codebase
-
-```
-
 基于代码分析，现在我可以完整解释注册集群后如何获取监控数据的流程：
 
 ## 监控数据获取的完整流程
@@ -405,10 +389,6 @@ spec:
 ```
 
 ### 4. **数据采集过程**
-
-```toolCall::search_codebase
-
-```
 
 **bk-collector** 会从以下数据源采集监控数据：
 
