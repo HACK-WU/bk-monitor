@@ -6,4 +6,5 @@
     },
     "search.showLineNumbers": true,
     "notebook.lineNumbers": "on",
+    "workbench.editor.languageDetection": false,
 }
