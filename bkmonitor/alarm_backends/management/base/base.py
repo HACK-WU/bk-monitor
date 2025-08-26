@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,7 +7,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-
 
 import logging
 import signal
@@ -28,6 +26,18 @@ logger = logging.getLogger(__name__)
 
 
 class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.AbstractWorker):
+    """
+    基础命令类，提供可扩展的生命周期管理和信号处理功能
+
+    功能特性:
+    1. 支持最小执行间隔控制
+    2. 提供最大运行周期和运行时长限制
+    3. 实现完整的生命周期钩子系统
+    4. 支持信号中断处理
+
+    生命周期流程:
+    on_create() -> on_start() -> on_stop() -> on_destroy()
+    """
 
     # options
     _MIN_INTERVAL_ = 1  # seconds
@@ -42,7 +52,19 @@ class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.A
     __UPTIME__ = time.time()
 
     def add_arguments(self, parser):
-        super(BaseCommand, self).add_arguments(parser)
+        """
+        添加命令行参数
+
+        参数:
+            parser: 参数解析器对象
+
+        支持参数:
+        --min-interval: 最小执行间隔(秒)
+        --max-cycles: 最大运行周期数
+        --max-uptime: 最大运行时长(秒)
+        --pdb: 启用调试模式
+        """
+        super().add_arguments(parser)
         parser.add_argument(
             "--min-interval",
             type=int,
@@ -65,16 +87,38 @@ class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.A
         )
 
     def _onsignal(self, signum, frame):
+        """
+        信号处理回调函数
+
+        参数:
+            signum: 信号编号
+            frame: 当前堆栈帧
+        """
         self.__SHUTDOWN_RECEIVED__ = True
         logger.info("shutdown received.")
 
     def break_loop(self):
+        """
+        检查循环是否需要终止
+
+        返回值:
+            布尔值表示是否需要终止循环
+        """
         if self.__SHUTDOWN_RECEIVED__:
             return True
         else:
             self.__CYCLES__ += 1
 
     def can_continue(self):
+        """
+        检查并控制循环执行条件
+
+        功能:
+        1. 检查关闭标志
+        2. 处理异常状态
+        3. 控制最小执行间隔
+        4. 检查最大运行周期和时长限制
+        """
         if self.__SHUTDOWN_RECEIVED__ or self.__EXC_INFO__ is not None:
             return False
 
@@ -87,31 +131,41 @@ class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.A
         return True
 
     def execute(self, *args, **options):
+        """
+        执行命令入口方法
+
+        参数:
+            *args: 位置参数
+            **options: 命令选项参数
+        """
         if options.get("pdb"):
             import pdb
 
             pdb.set_trace()
 
-        super(BaseCommand, self).execute(*args, **options)
+        super().execute(*args, **options)
 
     def handle(self, *args, **options):
+        """
+        主处理逻辑
+
+        参数:
+            *args: 位置参数
+            **options: 命令选项参数
+
+        核心流程:
+        1. 注册信号处理函数
+        2. 初始化生命周期钩子
+        3. 执行主循环
+        4. 处理异常和退出条件
+        """
         signal.signal(signal.SIGTERM, self._onsignal)
         signal.signal(signal.SIGINT, self._onsignal)
 
         for option, value in six.iteritems(options):
             if option not in ("no_color", "pythonpath", "settings", "traceback", "verbosity") and value is not None:
-                attr = "_{}_".format(option.upper())
+                attr = f"_{option.upper()}_"
                 setattr(self, attr, options[option])
-
-        #
-        # Worker Lifecycle
-        #
-        #                     ....can_continue....
-        #                     v                  :
-        # +-----------+     +----------+       +---------+     +------------+
-        # | on_create | --> | on_start | ----> | on_stop | --> | on_destroy |
-        # +-----------+     +----------+       +---------+     +------------+
-        #
 
         self.on_create(*args)
 
@@ -136,21 +190,37 @@ class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.A
             six.reraise(*self.__EXC_INFO__)
 
     def on_start(self, *args, **kwargs):
+        """
+        生命周期钩子方法：启动阶段
+        子类可重写此方法实现启动逻辑
+        """
         pass
 
     def on_create(self, *args, **kwargs):
+        """
+        生命周期钩子方法：创建阶段
+        子类可重写此方法实现初始化逻辑
+        """
         close_old_connections()
 
     def on_stop(self, *args, **kwargs):
+        """
+        生命周期钩子方法：停止阶段
+        子类可重写此方法实现停止逻辑
+        """
         pass
 
     def on_destroy(self, *args, **kwargs):
+        """
+        生命周期钩子方法：销毁阶段
+        子类可重写此方法实现清理逻辑
+        """
         pass
 
 
 class ConsulDispatchCommand(dispatch.DefaultDispatchMixin, service_discovery.ConsulServiceDiscoveryMixin, BaseCommand):
     def add_arguments(self, parser):
-        super(ConsulDispatchCommand, self).add_arguments(parser)
+        super().add_arguments(parser)
         parser.add_argument(
             "--path-prefix",
         )
@@ -163,11 +233,9 @@ class ConsulDispatchCommand(dispatch.DefaultDispatchMixin, service_discovery.Con
     __COMMAND_NAME__ = None
 
     def __init__(self, *args, **kwargs):
-        super(ConsulDispatchCommand, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
-        self._PATH_PREFIX_ = "{}_{}_{}_{}/{}".format(
-            settings.APP_CODE, settings.PLATFORM, settings.ENVIRONMENT, get_cluster().name, self.__COMMAND_NAME__
-        )
+        self._PATH_PREFIX_ = f"{settings.APP_CODE}_{settings.PLATFORM}_{settings.ENVIRONMENT}_{get_cluster().name}/{self.__COMMAND_NAME__}"
 
     def dispatch(self):
         self.register()
@@ -187,7 +255,7 @@ class ConsulDispatchCommand(dispatch.DefaultDispatchMixin, service_discovery.Con
                 path = "/".join([self._PATH_PREFIX_, host_addr, instance])
                 info = self.get_registration_info(path)
                 if info:
-                    result.append(("{}/{}".format(host_addr, instance), info))
+                    result.append((f"{host_addr}/{instance}", info))
 
         return result
 

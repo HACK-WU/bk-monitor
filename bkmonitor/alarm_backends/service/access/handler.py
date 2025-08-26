@@ -180,10 +180,32 @@ class AccessBeater(MonitorBeater):
 
 class AccessHandler(base.BaseHandler):
     """
-    AccessHandler
+    数据接入处理器基类，实现多类型数据处理分发机制
+
+    功能特性:
+    1. 支持多种接入类型分发(数据/实时数据/事件/故障)
+    2. 提供统一的处理接口和执行流程
+    3. 实现处理器实例的静态方法封装
+
+    依赖关系:
+    - 需要预定义的ACCESS_TYPE_TO_CLASS类型映射
+    - 依赖AccessBeater实现周期任务调度
     """
 
     def __init__(self, targets=None, *args, **option):
+        """
+        初始化接入处理器
+
+        参数:
+            targets: 目标列表，用于指定处理目标范围
+            *args: 父类BaseHandler需要的位置参数
+            **option: 配置选项，包含以下关键参数:
+                access_type: 接入类型标识符(必填)
+                service: 关联服务实例(必填)
+
+        异常:
+            Exception: 当access_type未在类型映射中注册时抛出
+        """
         access_type = option.get("access_type")
         self.service = option.get("service")
         if access_type not in ACCESS_TYPE_TO_CLASS:
@@ -195,6 +217,18 @@ class AccessHandler(base.BaseHandler):
         super().__init__(*args, **option)
 
     def handle_data(self):
+        """
+        处理周期性数据接入任务
+
+        前置条件:
+            self.service必须已初始化
+
+        执行流程:
+        1. 初始化访问调度器(AccessBeater)
+        2. 注册策略分组刷新任务
+        3. 注册目标刷新任务
+        4. 启动调度器执行周期任务
+        """
         assert self.service is not None, "access data handler missing required argument: 'service'"
 
         access_beater = AccessBeater(name="access_beater", targets=self.targets, service=self.service)
@@ -215,17 +249,32 @@ class AccessHandler(base.BaseHandler):
         access_beater.beater()
 
     def handle_real_time(self):
+        """
+        处理实时数据接入任务
+
+        执行流程:
+        1. 创建实时数据处理器实例
+        2. 执行数据处理流程
+        """
         p = AccessRealTimeDataProcess(self.service)
         p.process()
 
     def handle_event(self):
-        # 将几种自定义事件的Data ID推入处理队列
+        """
+        处理自定义事件接入任务
+
+        执行流程:
+        1. 获取预定义的事件数据ID列表
+        2. 从环境变量获取禁用ID列表
+        3. 过滤已禁用ID后执行事件处理
+        """
+        # 获取预定义事件数据ID
         data_ids = [
             settings.GSE_BASE_ALARM_DATAID,
             settings.GSE_CUSTOM_EVENT_DATAID,
             settings.GSE_PROCESS_REPORT_DATAID,
         ]
-        # 新增通过环境变量控制 dataid 禁用入口
+        # 从环境变量获取禁用ID列表
         DISABLE_EVENT_DATAID = os.getenv("DISABLE_EVENT_DATAID", "0")
         disabled_data_ids = [safe_int(i) for i in DISABLE_EVENT_DATAID.split(",")]
         for data_id in data_ids:
@@ -235,18 +284,42 @@ class AccessHandler(base.BaseHandler):
             self.run_access(run_access_event_handler, data_id)
 
     def handle_event_v2(self):
-        # 直接在这里拉事件，并推送给worker处理
+        """
+        处理V2版本事件接入任务
+
+        执行流程:
+        1. 导入事件轮询器(EventPoller)
+        2. 启动事件处理流程
+        """
         from alarm_backends.service.access.event.event_poller import EventPoller
 
         EventPoller().start()
 
     def handle_incident(self) -> None:
+        """
+        处理故障分析结果同步任务
+
+        执行流程:
+        1. 使用预定义的Broker URL和队列名称
+        2. 执行故障处理流程
+        """
         run_access_incident_handler(
             settings.BK_DATA_AIOPS_INCIDENT_BROKER_URL,
             settings.BK_DATA_AIOPS_INCIDENT_SYNC_QUEUE,
         )
 
     def handle(self):
+        """
+        统一处理入口方法，根据接入类型分发处理任务
+
+        执行流程:
+        1. 检查access_type类型
+        2. 调用对应的处理方法:
+           - Data -> handle_data
+           - RealTimeData -> handle_real_time
+           - Event -> handle_event_v2
+           - Incident -> handle_incident
+        """
         if self.access_type == AccessType.Data:
             self.handle_data()
         elif self.access_type == AccessType.RealTimeData:
@@ -258,14 +331,24 @@ class AccessHandler(base.BaseHandler):
 
     @staticmethod
     def run_access(access_func, *args):
+        """
+        静态方法封装执行接入函数
+
+        参数:
+            access_func: 待执行的接入处理函数
+            *args: 传递给处理函数的位置参数
+        """
         access_func(*args)
 
 
 class AccessCeleryHandler(AccessHandler):
     """
     AccessCeleryHandler(run by celery worker)
+
+    会被autodiscover_handlers() 自动发现，从而被调用。
     """
 
     @staticmethod
     def run_access(access_func, *args):
+        # 使用异步执行
         access_func.delay(*args)

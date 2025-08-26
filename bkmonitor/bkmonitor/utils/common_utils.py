@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -27,8 +26,7 @@ import uuid
 from collections import OrderedDict, defaultdict
 from contextlib import contextmanager
 from io import StringIO
-from pipes import quote
-from typing import Dict, List, Union
+from shlex import quote
 from zipfile import ZipFile
 
 from django.conf import settings
@@ -48,12 +46,33 @@ logger = logging.getLogger(__name__)
 
 
 def package_contents(package):
+    """
+    获取指定Python包中的模块列表
+
+    参数:
+        package: 包名字符串或模块对象，支持两种输入形式：
+                 - 字符串形式：如"package_name"
+                 - 模块对象：如已导入的包模块
+
+    返回值:
+        list: 包含包内所有模块名称的字符串列表，不包含子包路径
+
+    执行流程:
+    1. 参数类型检查：判断输入是否为字符串形式的包名
+    2. 自动导入处理：若为字符串则执行模块导入并递归调用
+    3. 路径解析：获取模块文件所在目录路径
+    4. 内容扫描：使用pkgutil.iter_modules遍历目录下的模块
+    """
+    # 处理字符串形式的包名输入
     if isinstance(package, str):
-        return package_contents(__import__(package, fromlist=[str("*")]))
+        return package_contents(__import__(package, fromlist=["*"]))
+
+    # 获取包目录下的模块列表
+    # 使用pkgutil.iter_modules扫描目录，过滤出有效模块名称
     return [name for _, name, _ in pkgutil.iter_modules([os.path.dirname(package.__file__)])]
 
 
-class DictObj(object):
+class DictObj:
     __non_zero = False
 
     def __init__(self, kwargs=None):
@@ -66,9 +85,9 @@ class DictObj(object):
             try:
                 setattr(self, k, v)
             except AttributeError:
-                msg = "[%s] attribute: `%s` has already exists, " "check your class definition `@property`" % (
-                    self.__class__.__name__,
-                    k,
+                msg = (
+                    f"[{self.__class__.__name__}] attribute: `{k}` has already exists, "
+                    "check your class definition `@property`"
                 )
                 raise AttributeError(msg)
 
@@ -124,9 +143,9 @@ def _host_key(host_info):
     :param host_info: 至少包含的key：InnerIP Source
     :return:
     """
-    assert (
-        "InnerIP" in host_info and "Source" in host_info
-    ), '"InnerIP" in host_info and "Source" in host_info return false'
+    assert "InnerIP" in host_info and "Source" in host_info, (
+        '"InnerIP" in host_info and "Source" in host_info return false'
+    )
     # if host_info["Source"] == "0":
     #     host_info["Source"] = "1"
     return "{}|{}".format(host_info["InnerIP"], host_info["Source"])
@@ -207,7 +226,7 @@ def ok_data(data=None, **options):
 
 
 def href_link(text, href):
-    return """<a href="{}">{}</a>""".format(href, text)
+    return f"""<a href="{href}">{text}</a>"""
 
 
 def strip(obj):
@@ -247,9 +266,7 @@ def check_permission(obj, request_cc_biz_id):
     cc_biz_id = fetch_biz_id_from_obj(obj)
     if cc_biz_id and int(cc_biz_id) != int(request_cc_biz_id):
         logger.exception(
-            "权限不通过！ 当前请求的业务ID为{}，而对象[{}]({})所属业务ID为{}".format(
-                request_cc_biz_id, obj.__class__.__name__, obj.pk, cc_biz_id
-            )
+            f"权限不通过！ 当前请求的业务ID为{request_cc_biz_id}，而对象[{obj.__class__.__name__}]({obj.pk})所属业务ID为{cc_biz_id}"
         )
         return False
     return True
@@ -336,7 +353,7 @@ def parse_tsdb_rt(result_table_id, table_name="", has_biz_id=True):
     """
     sep = "_"
     if not has_biz_id:
-        result_table_id = "0{}{}".format(sep, result_table_id)
+        result_table_id = f"0{sep}{result_table_id}"
     try:
         if table_name:
             item_list = result_table_id[: result_table_id.rfind(table_name) - 1].split(sep)
@@ -377,7 +394,7 @@ def get_list(obj):
 
 
 def get_one(obj):
-    return obj[0] if isinstance(obj, (list, tuple)) else obj
+    return obj[0] if isinstance(obj, list | tuple) else obj
 
 
 def uniqid():
@@ -441,7 +458,7 @@ def file_rename(file, new_file_name=None):
         ext = file.name.split(".")[-1]
 
     if ext:
-        new_file_name = "{}.{}".format(new_file_name, ext)
+        new_file_name = f"{new_file_name}.{ext}"
     return new_file_name
 
 
@@ -468,7 +485,7 @@ def count_md5(content, dict_sort=True, list_sort=True):
             dict_sort,
             list_sort,
         )
-    elif isinstance(content, (list, tuple)):
+    elif isinstance(content, list | tuple):
         content = (
             sorted([count_md5(k, dict_sort) for k in content])
             if list_sort
@@ -510,7 +527,7 @@ REG_SPLIT_LIST = re.compile(r"\s*[;,]\s*")
 
 
 def split_list(raw_string):
-    if isinstance(raw_string, (tuple, list, set)):
+    if isinstance(raw_string, tuple | list | set):
         return raw_string
     return [x for x in REG_SPLIT_LIST.split(raw_string) if x]
 
@@ -532,7 +549,7 @@ def get_local_ip():
         (addr, port) = csock.getsockname()
         csock.close()
         return addr
-    except socket.error:
+    except OSError:
         return "127.0.0.1"
 
 
@@ -577,9 +594,9 @@ def convert_to_cmdline_args_str(kv_dict):
         else:
             v = ""
         if k.startswith("--"):
-            result += "{}={} ".format(k, v)
+            result += f"{k}={v} "
         else:
-            result += "{} {} ".format(k, v)
+            result += f"{k} {v} "
     return result
 
 
@@ -593,7 +610,7 @@ def escape_cmd_argument(arg):
 
     meta_chars = '()%!^"<>&|'
     meta_re = re.compile("(" + "|".join(re.escape(char) for char in list(meta_chars)) + ")")
-    meta_map = {char: "^%s" % char for char in meta_chars}
+    meta_map = {char: f"^{char}" for char in meta_chars}
 
     def escape_meta_chars(m):
         char = m.group(1)
@@ -640,7 +657,7 @@ def convert_img_to_base64(image, format="PNG"):
     img_buffer = StringIO()
     image.save(img_buffer, format=format, quality=95)
     base64_value = base64.b64encode(img_buffer.getvalue().encode("utf8"))
-    return "data:image/{format};base64,{value}".format(format=format.lower(), value=base64_value)
+    return f"data:image/{format.lower()};base64,{base64_value}"
 
 
 def fetch_biz_id_from_dict(data, default=None):
@@ -695,7 +712,7 @@ def safe_float(value):
 
 
 def proxy(obj):
-    class Proxy(object):
+    class Proxy:
         def __getattribute__(self, item):
             return getattr(obj, item)
 
@@ -777,14 +794,14 @@ def chunks(data, n):
     return (data[i : i + n] for i in range(0, len(data), n))
 
 
-def camel_obj_key_to_underscore(obj: Union[List, Dict, str]) -> object:
+def camel_obj_key_to_underscore(obj: list | dict | str) -> object:
     """将一个对象中包含的字典的key全部转换为下划线格式 ."""
     if isinstance(obj, str):
         return camel_to_underscore(obj)
     if isinstance(obj, dict):
         new_obj = {}
         for key, value in obj.items():
-            if isinstance(value, (list, dict)):
+            if isinstance(value, list | dict):
                 value = camel_obj_key_to_underscore(value)
             if isinstance(key, str):
                 new_obj[camel_to_underscore(key)] = value
@@ -806,14 +823,14 @@ def compress_and_serialize(data):
     json_str = json.dumps(data)
 
     # 压缩 JSON 字符串
-    compressed_data = gzip.compress(json_str.encode('utf-8'))
+    compressed_data = gzip.compress(json_str.encode("utf-8"))
 
     return compressed_data
 
 
 def deserialize_and_decompress(compressed_data):
     # 解压缩数据
-    json_str = gzip.decompress(compressed_data).decode('utf-8')
+    json_str = gzip.decompress(compressed_data).decode("utf-8")
 
     # 将 JSON 字符串转换回字典
     data = json.loads(json_str)
@@ -821,9 +838,7 @@ def deserialize_and_decompress(compressed_data):
     return data
 
 
-def format_percent(
-    percent: Union[int, float], precision: int = 2, sig_fig_cnt: int = 2, readable_precision=6
-) -> Union[int, float]:
+def format_percent(percent: int | float, precision: int = 2, sig_fig_cnt: int = 2, readable_precision=6) -> int | float:
     if isinstance(percent, int):
         return percent
 

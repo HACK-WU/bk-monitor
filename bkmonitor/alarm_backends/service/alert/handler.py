@@ -92,14 +92,36 @@ class AlertHandler(base.BaseHandler):
         return [host_key.split("/")[-2] for host_key in host_keys]
 
     def handle(self):
-        # 需要拉取的topic分两部分
-        # 1. 内置topic，直接将事件写入到 kafka 中
-        # 2. 自定义topic，通过常规事件源接入
+        """
+        事件处理主流程，包含内置/自定义事件源的双线程处理机制
+
+        参数:
+            无
+
+        返回值:
+            无返回值（通过线程异步处理事件流）
+
+        执行流程:
+        1. 初始化信号处理机制
+        2. 启动三个核心线程：
+           - 领导者选举线程
+           - 消费者管理线程
+           - 事件轮询线程
+        3. 持续执行服务注册/续约
+        4. 异常处理与资源回收
+        """
+        # 事件源分类处理说明:
+        # 1. 内置topic: 直接写入Kafka的标准化事件流
+        # 2. 自定义topic: 通过通用事件源接入管道处理
         signal.signal(signal.SIGTERM, self._stop)
         signal.signal(signal.SIGINT, self._stop)
+
+        # 核心线程初始化:
         leader = InheritParentThread(target=self.run_leader)
         consumer_manager = InheritParentThread(target=self.run_consumer_manager)
         poller = InheritParentThread(target=self.run_poller)
+
+        # 并行启动线程
         leader.start()
         consumer_manager.start()
         poller.start()
@@ -112,17 +134,20 @@ class AlertHandler(base.BaseHandler):
                     logger.exception(
                         "[main poller thread] register service failed, retry later, error info %s", str(error)
                     )
+
+                # 停止信号检测与优雅退出:
                 if self._stop_signal:
-                    leader.join()
-                    consumer_manager.join()
-                    poller.join()
-                    self.service.unregister()
+                    leader.join()  # 等待领导线程结束
+                    consumer_manager.join()  # 等待消费者管理线程结束
+                    poller.join()  # 等待轮询线程结束
+                    self.service.unregister()  # 服务注销
                     break
 
                 time.sleep(15)
         except Exception as e:
             logger.exception("Do event poller task in host(%s) failed %s", self.ip, str(e))
         finally:
+            # 资源清理: 关闭所有消费者连接
             map(lambda c: self.close_consumer(c), self.consumers.values())
 
     @always_retry(10)
