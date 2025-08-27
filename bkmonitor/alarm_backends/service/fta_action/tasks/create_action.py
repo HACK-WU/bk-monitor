@@ -12,6 +12,7 @@ from alarm_backends.constants import CONST_SECOND
 from alarm_backends.core.alert import Alert, AlertCache
 from alarm_backends.core.alert.alert import AlertKey
 from alarm_backends.core.cache.action_config import ActionConfigCacheManager
+from alarm_backends.core.cache.subscribe import SubscribeCacheManager
 from alarm_backends.core.cache.assign import AssignCacheManager
 from alarm_backends.core.cache.key import ACTION_POLL_KEY_LOCK
 from alarm_backends.core.cluster import get_cluster_bk_biz_ids
@@ -466,6 +467,21 @@ class CreateActionProcessor:
         # 返回MD5哈希值作为UUID
         return count_md5(md5_elements)
 
+    def _merge_notify_info(self, target_notify_info: dict, source_notify_info: dict):
+        """
+        合并两个通知信息字典，去重处理
+        :param target_notify_info: 目标通知信息字典
+        :param source_notify_info: 源通知信息字典
+        """
+        for notice_way, users in source_notify_info.items():
+            if notice_way not in target_notify_info:
+                target_notify_info[notice_way] = []
+
+            # 去重：避免同一用户在同一渠道重复通知
+            for user in users:
+                if user not in target_notify_info[notice_way]:
+                    target_notify_info[notice_way].append(user)
+
     def get_action_relations(self):
         """
         获取处理动作，并对通知动作进行降噪
@@ -905,6 +921,8 @@ class CreateActionProcessor:
 
         # 资源清理模块
         AssignCacheManager.clear()
+        # 清理订阅缓存
+        SubscribeCacheManager.clear()
 
         # 批量持久化处理模块
         if action_instances:
@@ -1164,7 +1182,12 @@ class CreateActionProcessor:
                 notify_configs = {notice_way: [] for notice_way in follow_notify_info.keys()}
                 notify_info = assignee_manager.get_appointee_notify_info(notify_configs)
 
-            # 去重处理：确保关注人列表不含负责人
+            # 获取并合并订阅用户信息
+            subscription_notify_info, subscription_follow_notify_info = assignee_manager.get_subscription_notify_info()
+            self._merge_notify_info(notify_info, subscription_notify_info)
+            self._merge_notify_info(follow_notify_info, subscription_follow_notify_info)
+
+            # 如果当前用户即是负责人，又是通知人, 需要进行去重, 以通知人为准
             for notice_way, receivers in follow_notify_info.items():
                 valid_receivers = [
                     receiver for receiver in receivers if receiver not in notify_info.get(notice_way, [])
