@@ -1074,7 +1074,7 @@ class Detect(AbstractConfig):
                 calendars = serializers.ListField(
                     label="不生效日历列表", allow_empty=True, default=[], child=serializers.IntegerField()
                 )
-                active_calendar = serializers.ListField(
+                active_calendars = serializers.ListField(
                     label="生效日历列表", allow_empty=True, default=[], child=serializers.IntegerField()
                 )
 
@@ -2294,7 +2294,7 @@ class Strategy(AbstractConfig):
                             }
                         ],
                         "calendars": [],
-                        "active_calendar": [],
+                        "active_calendars": [],
                     }
                 }
             )
