@@ -110,31 +110,59 @@ def get_bkdata_data_id_name(data_name: str) -> str:
 
 def compose_bkdata_data_id_name(data_name: str, strategy: str | None = None) -> str:
     """
-    组装bkdata数据源名称，支持中文处理
-    @param data_name: 监控平台数据源名称
-    @param strategy: 链路策略
+    组装bkdata数据源名称，支持中文处理并确保命名规范
+
+    参数:
+        data_name (str): 监控平台数据源名称，原始输入字符串
+        strategy (str | None): 链路策略标识，可选参数，默认为None。
+            当指定为models.DataLink.BCS_FEDERAL_SUBSET_TIME_SERIES时，
+            会添加联邦学习专用前缀
+
+    返回值:
+        str: 格式化后的数据源名称，符合以下特征：
+            - 以'bkm_'开头
+            - 包含处理后的英文字符和中文拼音
+            - 长度超过45时自动截断并添加MD5哈希后缀
+            - 特定策略下添加'fed_'前缀
+
+    处理流程说明：
+    1. 首先使用正则表达式去除所有非法字符（包含中文）
+    2. 单独提取中文字符并转换为全拼拼音（无声调）
+    3. 规范化下划线格式（连续下划线转单下划线）
+    4. 超长处理：截断+哈希后缀保证唯一性
+    5. 根据策略添加联邦学习专用前缀
     """
-    # 先按原正则剔除特殊字符（包括中文）
+
+    # 使用正则表达式移除所有非法字符（包含中文）
+    # MATCH_DATA_NAME_PATTERN 定义了允许保留的字符范围
     refine_data_name = re.sub(MATCH_DATA_NAME_PATTERN, "", data_name)
 
-    # 针对剔除掉的中文字符进行处理
+    # 提取并处理中文字符：
+    # 1. 遍历原始字符串提取所有中文字符
+    # 2. 使用lazy_pinyin转换为无声调全拼格式
+    # 3. 将拼音追加到已处理的字符串末尾
     chinese_characters = "".join(char for char in data_name if "\u4e00" <= char <= "\u9fff")
     if chinese_characters:
-        chinese_pinyin = "".join(lazy_pinyin(chinese_characters))  # 转为全拼音
-        refine_data_name += chinese_pinyin  # 拼接拼音到 refined_name
+        chinese_pinyin = "".join(lazy_pinyin(chinese_characters))
+        refine_data_name += chinese_pinyin
 
-    # 替换连续的下划线为单个下划线
+    # 标准化命名格式：
+    # 1. 添加固定前缀'bkm_'
+    # 2. 使用正则替换连续下划线为单个下划线
     data_id_name = f"bkm_{re.sub(r'_+', '_', refine_data_name)}"
 
-    # 控制长度
+    # 超长名称处理机制：
+    # 1. 当长度超过45字符时触发截断逻辑
+    # 2. 截取后39字符并转小写（保留最新鲜部分）
+    # 3. 添加5位MD5哈希保证唯一性（基于原始完整名称）
     if len(refine_data_name) > 45:
-        # 截取长度为45的字符串
         truncated_name = refine_data_name[-39:].lower().strip("_")
-        # 计算哈希值
         hash_suffix = hashlib.md5(refine_data_name.encode()).hexdigest()[:5]
         data_id_name = f"bkm_{truncated_name}_{hash_suffix}"
 
-    # 拼装前缀和哈希值
+    # 策略模式扩展：
+    # 当使用联邦学习子集策略时，添加专用前缀
+    # 该策略定义在models.DataLink.BCS_FEDERAL_SUBSET_TIME_SERIES
     if strategy == models.DataLink.BCS_FEDERAL_SUBSET_TIME_SERIES:
         data_id_name = "fed_" + data_id_name
 

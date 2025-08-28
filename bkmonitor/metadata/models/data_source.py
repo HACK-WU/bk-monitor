@@ -258,18 +258,47 @@ class DataSource(models.Model):
         self._mq_config = None
 
     def to_json(self, is_consul_config=False, with_rt_info=True):
-        """返回当前data_id的配置字符串"""
+        """
+        将数据源配置转换为JSON格式的配置字典
 
+        参数:
+            is_consul_config: 布尔值，控制是否包含Consul配置信息
+            with_rt_info: 布尔值，控制是否包含结果表(ResultTable)相关配置
+
+        返回值:
+            dict: 包含完整数据源配置的字典对象，包含以下核心字段：
+                - mq_config: 消息队列配置信息
+                - etl_config: ETL处理配置
+                - option: 数据源选项参数
+                - result_table_list: 结果表配置列表（当with_rt_info=True时）
+
+        该方法实现以下核心逻辑:
+        1. 构建并整合消息队列配置
+        2. 获取并处理空间/业务关联信息
+        3. 条件性地处理结果表配置信息
+        4. 生成完整的配置字典供后续使用
+        """
+        # 构建消息队列配置
+        # 从对象属性中提取核心MQ配置参数
         mq_config = {
             "storage_config": {"topic": self.mq_config.topic, "partition": self.mq_config.partition},
             "batch_size": self.mq_config.batch_size,
             "flush_interval": self.mq_config.flush_interval,
             "consume_rate": self.mq_config.consume_rate,
         }
-        # 添加集群信息
+
+        # 整合集群配置信息
+        # 1. 添加Consul集群配置
+        # 2. 移除最后修改时间字段（非必要信息）
         mq_config.update(self.mq_cluster.consul_config)
         mq_config["cluster_config"].pop("last_modify_time")
+
+        # 获取空间/业务关联信息
+        # 通过数据ID获取空间UID和业务ID
         bk_biz_id, space_uid = get_space_uid_and_bk_biz_id_by_bk_data_id(self.bk_tenant_id, self.bk_data_id)
+
+        # 构建基础配置信息
+        # 包含数据源核心参数和基本元信息
         result_config = {
             "bk_data_id": self.bk_data_id,
             "data_id": self.bk_data_id,
@@ -289,7 +318,8 @@ class DataSource(models.Model):
         }
 
         if with_rt_info:
-            # 获取ResultTable的配置,1001等数据存在 1--N 结果表映射关系
+            # 查询结果表配置
+            # 获取与当前数据源关联的所有结果表ID
             result_table_id_list = [
                 info.table_id
                 for info in DataSourceResultTable.objects.filter(
@@ -298,7 +328,9 @@ class DataSource(models.Model):
             ]
 
             result_table_info_list = []
-            # 获取存在的结果表
+
+            # 查询有效结果表
+            # 过滤未删除且启用的状态的结果表
             real_table_ids = {
                 rt["table_id"]: rt
                 for rt in ResultTable.objects.filter(
@@ -308,12 +340,15 @@ class DataSource(models.Model):
 
             real_table_id_list = list(real_table_ids.keys())
 
-            # TODO: 多租户 需要适配多租户查询RTField和Option
-            # 批量获取结果表级别选项
+            # 批量获取结果表配置
+            # 1. 获取结果表级别选项
+            # 2. 获取字段信息
+            # 3. 构建结果表信息列表
             table_id_option_dict = ResultTableOption.batch_result_table_option(real_table_id_list)
-            # 获取字段信息
             table_field_dict = ResultTableField.batch_get_fields(real_table_id_list, is_consul_config)
-            # 判断需要未删除，而且在启用状态的结果表
+
+            # 生成结果表配置列表
+            # 包含基础信息、存储配置、字段列表和选项参数
             for rt, rt_info in real_table_ids.items():
                 result_table_info_list.append(
                     {
@@ -321,7 +356,6 @@ class DataSource(models.Model):
                         "bk_tenant_id": rt_info["bk_tenant_id"],
                         "result_table": rt,
                         "shipper_list": self.get_transfer_storage_conf(rt),
-                        # 如果是自定义上报的情况，不需要将字段信息写入到consul上
                         "field_list": table_field_dict.get(rt, []) if not self.is_custom_timeseries_report else [],
                         "schema_type": rt_info["schema_type"],
                         "option": table_id_option_dict.get(rt, {}),
@@ -634,9 +668,9 @@ class DataSource(models.Model):
 
                 # 根据ETL配置判断数据事件类型，影响后续数据处理流程
                 if etl_config in LOG_EVENT_ETL_CONFIGS:
-                    event_type = "log"    # 日志事件类型
+                    event_type = "log"  # 日志事件类型
                 else:
-                    event_type = "metric" # 指标数据类型
+                    event_type = "metric"  # 指标数据类型
 
                 # 获取租户关联的业务ID，V4链路中业务ID是必需的
                 bk_biz_id = get_tenant_datalink_biz_id(bk_tenant_id=bk_tenant_id, bk_biz_id=bk_biz_id).label_biz_id
@@ -705,7 +739,9 @@ class DataSource(models.Model):
                         )
                         raise ValueError(_("数据源ID生成异常，请联系管理员协助处理"))
 
-                    # 最小ID未被使用，先删除当前记录再使用最小ID重新创建
+                    # 表示不存在最小的ID，使用之
+                    # 但在替换DATA_ID之前，需要先将已有的记录清理，否则对于django操作会有两条记录
+                    # delete确实删除了记录，但是当前代码中的data_source对象熟悉信息依旧存在，没有清空，当执行save时，就可以创建新的记录了
                     data_source.delete()
                     data_source.bk_data_id = config.MIN_DATA_ID
                     data_source.save()
@@ -805,9 +841,22 @@ class DataSource(models.Model):
 
     @classmethod
     def _add_time_unit_options(cls, operator: str, bk_data_id: int, etl_config: str):
-        """添加时间相关 option"""
-        # 判断是否NS支持的etl配置，如果是，则需要追加option内容
-        # NOTE: 这里实际的时间单位为 ms, 为防止其它未预料问题，其它类型单独添加为毫秒
+        """
+        为数据源添加时间单位相关配置选项
+
+        参数:
+            cls: 调用类本身（DataSource类）
+            operator: 操作者用户名，用于记录日志
+            bk_data_id: 数据源ID，用于关联配置
+            etl_config: ETL配置标识，决定时间单位处理方式
+
+        该方法实现以下核心逻辑:
+        1. 针对NS支持的ETL配置，添加时间戳单位为毫秒的选项
+        2. 对非事件类型的ETL配置，统一设置对齐时间单位为毫秒
+        3. 所有操作都会记录详细的日志信息
+        """
+        # 处理NS支持的ETL配置
+        # 当配置属于NS时间戳支持类型时，强制设置时间单位为毫秒
         if etl_config in cls.NS_TIMESTAMP_ETL_CONFIG:
             DataSourceOption.create_option(
                 bk_data_id=bk_data_id,
@@ -821,9 +870,10 @@ class DataSource(models.Model):
                 etl_config,
                 DataSourceOption.OPTION_TIMESTAMP_UNIT,
             )
-        # 非事件的etl配置，则统一使用毫秒作为时间单位，避免丢掉某些类型
+
+        # 统一处理非事件类型的时间单位
+        # 对除bk_standard_v2_event外的所有配置设置对齐时间单位为毫秒
         if etl_config != "bk_standard_v2_event":
-            # 时间单位统一为毫秒
             DataSourceOption.create_option(
                 bk_data_id=bk_data_id,
                 name=DataSourceOption.OPTION_ALIGN_TIME_UNIT,

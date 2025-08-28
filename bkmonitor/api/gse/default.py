@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
@@ -8,7 +7,6 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
-
 
 import abc
 
@@ -273,7 +271,9 @@ class AddRoute(GseBaseResource):
         class StreamFilterInfoSerializer(serializers.Serializer):
             name = serializers.CharField(required=True, label="filter名字")
             field_index = serializers.IntegerField(required=True, label="字段索引")
-            field_data_type = serializers.ChoiceField(required=True, label="数据类型", choices=["int", "string", "bytes"])
+            field_data_type = serializers.ChoiceField(
+                required=True, label="数据类型", choices=["int", "string", "bytes"]
+            )
             field_data_value = serializers.CharField(required=True, label="数据值")
             field_separator = serializers.CharField(required=False, label="分隔符")
             field_in = serializers.ChoiceField(
@@ -289,6 +289,28 @@ class AddRoute(GseBaseResource):
 class UpdateRoute(GseBaseResource):
     """
     修改路由配置
+
+    响应数据结构示例：
+    {
+        "condition":{
+            "plat_name":"tgdp",
+            "channel_id":1024
+        },
+        "specification":{
+            "route":[
+                {
+                    "name":"stream_to_tgdp_kafka_cfg",
+                    "stream_to":{
+                        "stream_to_id":1024,
+                        "kafka":{
+                            "topic_name":"test"
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
     """
 
     action = "config_update_route/"
@@ -377,7 +399,9 @@ class DeleteRoute(GseBaseResource):
 
         class SpecificationSerializer(serializers.Serializer):
             route = serializers.ListField(required=False, label="路由名称列表", child=serializers.CharField())
-            stream_filters = serializers.ListField(required=False, label="过滤条件名称列表", child=serializers.CharField())
+            stream_filters = serializers.ListField(
+                required=False, label="过滤条件名称列表", child=serializers.CharField()
+            )
 
         condition = ConditionSerializer(required=True, label="条件信息")
         operation = OperationSerializer(required=True, label="操作配置")
@@ -387,6 +411,33 @@ class DeleteRoute(GseBaseResource):
 class QueryRoute(GseBaseResource):
     """
     查询路由配置
+
+    查询结果数据结构：
+     [
+        {
+            "metadata": {
+                "channel_id": 1024,
+                "plat_name": "tgdp"
+            },
+            "route": [
+                {
+                    "name": "stream_to_tgdp_kafka_cfg",
+                    "stream_to": {
+                        "stream_to_id": 1024,
+                        "kafka": {
+                            "topic_name": "test"
+                        }
+                        # "redis": {
+                        #     "channel_name": "test"
+                        # },
+                        # "pulsar": {
+                        #     "name": "test"
+                        # }
+                    }
+                }
+                ]
+            }
+    ]
     """
 
     action = "config_query_route/"
