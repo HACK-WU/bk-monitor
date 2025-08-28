@@ -572,7 +572,9 @@ class DataSource(models.Model):
             bk_tenant_id,
         )
 
-        # 验证源标签和类型标签是否存在
+        # ===== 步骤2: 标签有效性验证 =====
+        # 检查source_label和type_label是否在Label模型中存在
+        # 这是Label与DataSource关系的前置条件，确保数据源标签系统的完整性
         if not Label.exists_label(label_id=source_label, label_type=Label.LABEL_TYPE_SOURCE) or not Label.exists_label(
             label_id=type_label, label_type=Label.LABEL_TYPE_TYPE
         ):
@@ -582,9 +584,9 @@ class DataSource(models.Model):
             )
             raise ValueError(_("标签[{} | {}]不存在，请确认后重试").format(source_label, type_label))
 
-        # 1. 判断参数是否符合预期
-        # 数据源名称是否重复
-        # 检查同一租户下是否已存在相同名称的数据源
+        # ===== 步骤3: 数据源名称唯一性检查 =====
+        # 在同一租户下，数据源名称必须唯一，这是多租户隔离的重要保证
+        # 防止数据源命名冲突导致的数据混乱和权限泄露
         if cls.objects.filter(data_name=data_name, bk_tenant_id=bk_tenant_id).exists():
             logger.error(
                 "data_name->[%s] in bk_tenant_id->[%s] is already exists, maybe something go wrong?",
@@ -593,71 +595,78 @@ class DataSource(models.Model):
             )
             raise ValueError(_("数据源名称[%s]在租户[%s]下已经存在，请确认后重试"), data_name, bk_tenant_id)
 
-        # TODO: 多租户 V4链路中,理论上用户不再能指定Kafka集群,且多租户场景下,Kafka集群需要读取SpaceRelatedStorageInfo关联信息
+        # ===== 步骤4: MQ集群资源获取 =====
+        # 根据租户隔离原则，获取指定或默认的MQ集群
+        # 多租户下DataSource与MQ集群是多对一关系，保证资源隔离
+        # TODO: V4链路下需要通过SpaceRelatedStorageInfo读取集群关联信息
         try:
-            # 如果集群信息无提供，则使用默认的MQ集群信息
-            # 获取MQ集群信息，如果未指定则使用默认集群
             if mq_cluster_id is None:
+                # 获取租户的默认MQ集群，默认使用Kafka作为MQ类型
                 mq_cluster = ClusterInfo.objects.get(
                     bk_tenant_id=bk_tenant_id, cluster_type=cls.DEFAULT_MQ_TYPE, is_default_cluster=True
                 )
             else:
+                # 指定集群ID时，验证租户权限：确保集群属于当前租户
                 mq_cluster = ClusterInfo.objects.get(bk_tenant_id=bk_tenant_id, cluster_id=mq_cluster_id)
         except ClusterInfo.DoesNotExist:
-            # 此时，用户无提供新的数据源配置的集群信息，而也没有配置默认的集群信息，新的数据源无法配置集群信息
-            # 需要抛出异常
+            # MQ集群缺失是致命错误，数据源无法正常工作
             logger.error(
                 f"failed to get default MQ for cluster type->[{cls.DEFAULT_MQ_TYPE}], maybe admin set something wrong?"
             )
             raise ValueError(_("缺少数据源MQ集群信息，请联系管理员协助处理"))
 
-        # 如果需要由GSE分配DataID，则从GSE或BkData获取
+        # ===== 步骤5: DataID分配策略 =====
+        # 根据系统配置和ETL类型，智能选择V3（GSE）或V4（BkData）数据链路
+        # 链路版本选择的核心逻辑：通过etl_config在ENABLE_V4_DATALINK_ETL_CONFIGS中的包含关系判断
         if bk_data_id is None and settings.IS_ASSIGN_DATAID_BY_GSE:
-            # 如果由GSE来分配DataID的话，那么从GSE获取data_id，而不是走数据库的自增id
-            # 现阶段仅支持指标的数据，因为现阶段指标的数据都为单指标单表
-            # 添加过滤条件，只接入单指标单表时序数据到V4链路
             from metadata.models.space.constants import ENABLE_V4_DATALINK_ETL_CONFIGS
 
-            # 开启V4链路后，特定etl_config的data_id均从计算平台获取
+            # V3/V4链路判断逻辑：根据ETL配置和系统设置决定使用哪种链路
             if settings.ENABLE_V2_VM_DATA_LINK and etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS:
+                # === V4链路：从计算平台获取DataID ===
                 logger.info(f"apply for data id from bkdata,type_label->{type_label},etl_config->{etl_config}")
                 is_base = False
 
-                # 根据清洗类型判断是否是系统基础数据
-                # 判断是否为系统基础数据ETL配置
+                # 判断是否为系统基础数据配置（如主机监控、进程监控等）
                 if etl_config in SYSTEM_BASE_DATA_ETL_CONFIGS:
                     is_base = True
 
-                # 判断是否为日志事件ETL配置
+                # 根据ETL配置判断数据事件类型，影响后续数据处理流程
                 if etl_config in LOG_EVENT_ETL_CONFIGS:
-                    event_type = "log"
+                    event_type = "log"    # 日志事件类型
                 else:
-                    event_type = "metric"
+                    event_type = "metric" # 指标数据类型
 
-                # 如果没有指定业务ID，则使用默认业务ID
+                # 获取租户关联的业务ID，V4链路中业务ID是必需的
                 bk_biz_id = get_tenant_datalink_biz_id(bk_tenant_id=bk_tenant_id, bk_biz_id=bk_biz_id).label_biz_id
+                
+                # 从计算平台申请DataID，支持系统基础数据和日志事件数据
                 bk_data_id = cls.apply_for_data_id_from_bkdata(
                     data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type
                 )
+                # 设置为V4链路标识，用于后续的链路版本识别
                 created_from = DataIdCreatedFromSystem.BKDATA.value
             else:
-                # 从GSE申请DataID
+                # === V3链路：从GSE获取DataID ===
+                # 传统的GSE链路，适用于现有的监控数据接入
                 bk_data_id = cls.apply_for_data_id_from_gse(bk_tenant_id, operator)
 
-        # TODO: 通过空间及类型获取默认管道
-        # 设置默认空间类型
+        # ===== 步骤6: 空间类型默认值设置 =====
+        # 如果未指定空间类型，则设置为ALL，表示可被所有空间类型访问
+        # TODO: 未来需要通过空间及类型获取默认的数据处理管道
         space_type_id = space_type_id if space_type_id else SpaceTypes.ALL.value
 
-        # 此处启动DB事务，创建默认的信息
-        # 启动数据库事务，确保数据源创建过程的原子性
+        # ===== 步骤7: 数据库事务启动 =====
+        # 确保数据源创建过程的原子性，任何步骤失败都会回滚所有操作
         with atomic(config.DATABASE_CONNECTION_NAME):
-            # 设置默认transfer集群ID
+            # ===== 步骤7.1: Transfer集群配置 =====
+            # Transfer负责数据传输和处理，默认使用系统默认集群
             if transfer_cluster_id is None:
                 transfer_cluster_id = settings.DEFAULT_TRANSFER_CLUSTER_ID
 
-            # 3. 创建新的实例及数据源配置
-            # 注意：此处由于已经开启事务，MySQL会保留PK给该新实例，因此可以放心将该PK传给其他依赖model
-            # 创建数据源实例
+            # ===== 步骤7.2: 数据源实例创建 =====
+            # 在数据库中创建DataSource记录，这是数据源的核心实体
+            # 注意：事务中创建的实例会获得保留的主键，保证后续关联操作的正确性
             data_source = cls.objects.create(
                 bk_data_id=bk_data_id,
                 data_name=data_name,
@@ -667,43 +676,39 @@ class DataSource(models.Model):
                 mq_cluster_id=mq_cluster.cluster_id,
                 is_custom_source=is_custom_source,
                 data_description=data_description,
-                # 由于mq_config和data_source两者相互指向对方，所以只能先提供占位符，先创建data_source
+                # 由于mq_config和data_source两者相互指向，先用占位符，后续更新
                 mq_config_id=0,
                 last_modify_user=operator,
                 source_label=source_label,
                 type_label=type_label,
                 custom_label=custom_label,
                 source_system=source_system,
-                # 生成token
+                # 生成随机认证Token，用于数据上报验证
                 token=cls.make_token(),
                 is_enable=True,
                 transfer_cluster_id=transfer_cluster_id,
                 is_platform_data_id=is_platform_data_id,
-                # 如果空间类型为空，则默认为 all
                 space_type_id=space_type_id,
                 created_from=created_from,
             )
 
-            # 由监控自己分配的dataid需要校验是否在合理的范围内
-            # 如果不是由GSE分配DataID，则需要校验DataID范围
+            # ===== 步骤7.3: DataID范围校验 =====
+            # 对于非 GSE 分配的 DataID，需要校验其是否在合理范围内
             if not settings.IS_ASSIGN_DATAID_BY_GSE:
-                # 判断DATA_ID是否有问题
                 # 检查DataID是否小于最小值
                 if data_source.bk_data_id < config.MIN_DATA_ID:
-                    # 如果小于的最小的data_id，需要判断最小ID是否已经分配了，如果没有分配，则使用之
+                    # 如果小于最小ID，检查最小ID是否已被使用
                     if cls.objects.filter(bk_data_id=config.MIN_DATA_ID).exists():
                         logger.info(
                             f"new data_id->[{data_source.bk_data_id}] and min data_id is exists, maybe something go wrong?"
                         )
                         raise ValueError(_("数据源ID生成异常，请联系管理员协助处理"))
 
-                    # 表示不存在最小的ID，使用之
-                    # 但在替换DATA_ID之前，需要先将已有的记录清理，否则对于django操作会有两条记录
+                    # 最小ID未被使用，先删除当前记录再使用最小ID重新创建
                     data_source.delete()
                     data_source.bk_data_id = config.MIN_DATA_ID
                     data_source.save()
 
-                # 达到了最大值的判断
                 # 检查DataID是否超过最大值
                 if data_source.bk_data_id > config.MAX_DATA_ID:
                     logger.info(
@@ -718,23 +723,26 @@ class DataSource(models.Model):
                 f"data_id->[{data_source.bk_data_id}] data_name->[{data_source.data_name}] by operator->[{data_source.creator}] now is pre-create."
             )
 
-            # 获取这个数据源对应的配置记录model，并创建一个新的配置记录
-            # 创建MQ配置
+            # ===== 步骤7.4: MQ配置创建 =====
+            # 创建消息队列配置，用于数据传输和存储
             if not mq_config:
                 mq_config = {}
+            # 根据集群类型创建对应的MQ配置
             mq_config = cls.MQ_CONFIG_DICT[mq_cluster.cluster_type].create_info(
                 bk_data_id=data_source.bk_data_id, **mq_config
             )
+            # 更新数据源的MQ配置ID关联
             data_source.mq_config_id = mq_config.id
             data_source.save()
             logger.info(
                 f"data_id->[{data_source.bk_data_id}] now is relate to its mq config id->[{data_source.mq_config_id}]"
             )
 
-            # 处理空间UID
+            # ===== 步骤7.5: 空间UID处理 =====
+            # 如果提供了空间UID，需要解析并验证格式
             if space_uid:
-                # 校验 space_uid 格式
                 try:
+                    # 空间UID格式：{space_type}__{space_id}
                     space_type_id, space_id = space_uid.split(SPACE_UID_HYPHEN)
                     data_source.space_uid = space_uid
                     data_source.space_type_id = space_type_id
@@ -756,14 +764,15 @@ class DataSource(models.Model):
                     f"bk_data_id->[{data_source.bk_data_id}] now has option->[{option_name}] with value->[{option_value}]"
                 )
 
-            # 添加时间 option
-            # 添加时间单位选项
+            # ===== 步骤7.7: 时间单位选项添加 =====
+            # 根据ETL配置添加适当的时间单位选项
             cls._add_time_unit_options(operator, data_source.bk_data_id, etl_config)
 
-        # 写入 空间与数据源的关系表，如果 data id 为全局不需要记录
-        # 保存空间与数据源的关系
+        # ===== 步骤8: 空间与数据源关系建立 =====
+        # 在事务外处理空间关系，避免事务太长影响性能
         try:
             if not is_platform_data_id and space_type_id and space_id:
+                # 仅非平台级DataID需要记录空间关系
                 cls()._save_space_datasource(
                     creator=operator,
                     space_type_id=space_type_id,
@@ -775,13 +784,13 @@ class DataSource(models.Model):
         except Exception:
             logger.exception("save the relationship for space and datasource error")
 
-        # 5. 触发consul刷新, 只有提交了事务后，其他人才可以看到DB记录
-        # 刷新外部配置（如Consul）
+        # ===== 步骤9: 外部配置同步 =====
+        # 在事务提交后，同步配置到Consul等外部系统
+        # 这步在事务外执行，确保其他系统能看到数据库记录
         if is_refresh_config:
             try:
                 data_source.refresh_outer_config()
                 logger.info(f"data_id->[{data_source.bk_data_id}] refresh consul and outer_config done. ")
-
             except Exception:
                 logger.error(
                     f"data_id->[{data_source.bk_data_id}] refresh outer_config failed for->[{traceback.format_exc()}] will wait cron task to finish."
@@ -789,7 +798,8 @@ class DataSource(models.Model):
 
         logger.info(f"data->[{data_source.bk_data_id}] now IS READY, TRY IT~")
 
-        # 6. 返回新实例
+        # ===== 步骤10: 返回数据源实例 =====
+        # 返回完整配置的数据源实例，包含所有必要的关联信息
         return data_source
 
     @classmethod

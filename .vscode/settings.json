@@ -7,4 +7,9 @@
     "search.showLineNumbers": true,
     "notebook.lineNumbers": "on",
     "workbench.editor.languageDetection": false,
+    "python.languageServer": "None",
+    "color-highlight.languages": [
+        
+        "*"
+    ],
 }
