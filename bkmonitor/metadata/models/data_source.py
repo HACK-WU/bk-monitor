@@ -501,7 +501,7 @@ class DataSource(models.Model):
         type_label,
         bk_tenant_id=DEFAULT_TENANT_ID,
         bk_data_id=None,
-        mq_cluster_id=None,
+        mq_cluster=None,
         mq_config=None,
         data_description="",
         is_custom_source=True,
@@ -541,7 +541,7 @@ class DataSource(models.Model):
         :param type_label: 数据类型标签，描述数据的类型
         :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
         :param bk_data_id: 数据源ID，如果为None则自动生成
-        :param mq_cluster_id: Kafka 集群ID，如果为None时，则使用默认的Kafka集群
+        :param mq_cluster: Kafka 集群ID，如果为None时，则使用默认的Kafka集群
         :param mq_config: Kafka 集群配置 {"topic": "xxxx", "partition": 1}
         :param data_description: 数据源描述，默认为空字符串
         :param is_custom_source: 是否自定义数据源，默认为True
@@ -600,14 +600,15 @@ class DataSource(models.Model):
         # 多租户下DataSource与MQ集群是多对一关系，保证资源隔离
         # TODO: V4链路下需要通过SpaceRelatedStorageInfo读取集群关联信息
         try:
-            if mq_cluster_id is None:
-                # 获取租户的默认MQ集群，默认使用Kafka作为MQ类型
+            # 如果集群信息无提供，则使用默认的MQ集群信息
+            # 获取MQ集群信息，如果未指定则使用默认集群
+            if mq_cluster is None:
                 mq_cluster = ClusterInfo.objects.get(
                     bk_tenant_id=bk_tenant_id, cluster_type=cls.DEFAULT_MQ_TYPE, is_default_cluster=True
                 )
             else:
                 # 指定集群ID时，验证租户权限：确保集群属于当前租户
-                mq_cluster = ClusterInfo.objects.get(bk_tenant_id=bk_tenant_id, cluster_id=mq_cluster_id)
+                mq_cluster = ClusterInfo.objects.get(bk_tenant_id=bk_tenant_id, cluster_id=mq_cluster)
         except ClusterInfo.DoesNotExist:
             # MQ集群缺失是致命错误，数据源无法正常工作
             logger.error(
@@ -639,7 +640,7 @@ class DataSource(models.Model):
 
                 # 获取租户关联的业务ID，V4链路中业务ID是必需的
                 bk_biz_id = get_tenant_datalink_biz_id(bk_tenant_id=bk_tenant_id, bk_biz_id=bk_biz_id).label_biz_id
-                
+
                 # 从计算平台申请DataID，支持系统基础数据和日志事件数据
                 bk_data_id = cls.apply_for_data_id_from_bkdata(
                     data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type
