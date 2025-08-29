@@ -93,11 +93,38 @@ class TimeSeriesGroup(CustomGroupBase):
     # 组合一个默认的table_id
     @staticmethod
     def make_table_id(bk_biz_id, bk_data_id, table_name=None, bk_tenant_id=DEFAULT_TENANT_ID):
-        if settings.ENABLE_MULTI_TENANT_MODE:  # 若启用多租户模式,则在结果表前拼接租户ID
+        """
+        生成时间序列结果表ID
+
+        参数:
+            bk_biz_id: 业务ID，用于标识业务归属
+            bk_data_id: 数据源ID，用于唯一标识数据源
+            table_name: 表名称（未使用，保留兼容性）
+            bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+
+        返回值:
+            str: 生成的结果表ID，格式根据多租户模式状态变化：
+                - 多租户模式：{bk_tenant_id}_{bk_biz_id}_bkmonitor_time_series_{bk_data_id}.{DEFAULT_MEASUREMENT}
+                - 非多租户模式：{bk_biz_id}_bkmonitor_time_series_{bk_data_id}.{DEFAULT_MEASUREMENT}
+
+        核心逻辑:
+            1. 根据多租户模式开关状态选择生成策略
+            2. 业务ID非零时包含业务标识
+            3. 固定使用bkmonitor_time_series前缀和默认指标名
+        """
+        # 多租户模式处理逻辑
+        # 当启用多租户时：
+        # 1. 业务ID非0时，表ID包含租户ID+业务ID
+        # 2. 业务ID为0时，仅包含租户ID
+        if settings.ENABLE_MULTI_TENANT_MODE:
             logger.info("make_table_id: enable multi-tenant mode")
             if str(bk_biz_id) != "0":
                 return f"{bk_tenant_id}_{bk_biz_id}_bkmonitor_time_series_{bk_data_id}.{TimeSeriesGroup.DEFAULT_MEASUREMENT}"
             return f"{bk_tenant_id}_bkmonitor_time_series_{bk_data_id}.{TimeSeriesGroup.DEFAULT_MEASUREMENT}"
+
+        # 非多租户模式处理逻辑
+        # 1. 业务ID非0时，表ID包含业务ID
+        # 2. 业务ID为0时，使用纯时间序列格式
         else:
             if str(bk_biz_id) != "0":
                 return f"{bk_biz_id}_bkmonitor_time_series_{bk_data_id}.{TimeSeriesGroup.DEFAULT_MEASUREMENT}"

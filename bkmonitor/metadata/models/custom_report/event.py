@@ -131,18 +131,50 @@ class EventGroup(CustomGroupBase):
     @staticmethod
     def make_table_id(bk_biz_id, bk_data_id, bk_tenant_id: str, table_name=None):
         """
-        生成结果表table_id
-        涉及破坏性改造,通过是否开启多租户开关控制
-        """
+        生成事件类型结果表ID
 
+        参数:
+            bk_biz_id: 业务ID，用于标识业务归属
+            bk_data_id: 数据源ID，用于唯一标识数据源
+            bk_tenant_id: 租户ID，用于多租户隔离
+            table_name: 表名称（未使用，保留兼容性参数）
+
+        返回值:
+            str: 生成的结果表ID，格式根据多租户模式状态变化：
+                - 多租户模式：
+                    * 业务ID>0：{bk_tenant_id}_{bk_biz_id}_bkmonitor_event_{bk_data_id}
+                    * 业务ID<0：{bk_tenant_id}_bkmonitor_{abs(bk_biz_id)}_bkmonitor_event_{bk_data_id}
+                    * 业务ID=0：{bk_tenant_id}_bkmonitor_event_{bk_data_id}
+                - 非多租户模式：
+                    * 业务ID>0：{bk_biz_id}_bkmonitor_event_{bk_data_id}
+                    * 业务ID<0：bkmonitor_{abs(bk_biz_id)}_bkmonitor_event_{bk_data_id}
+                    * 业务ID=0：bkmonitor_event_{bk_data_id}
+
+        核心逻辑:
+            1. 多租户模式开关控制生成策略
+            2. 业务ID的正负值处理不同格式
+            3. 保留向后兼容的命名规则
+        """
         bk_biz_id_str = str(bk_biz_id)
-        if settings.ENABLE_MULTI_TENANT_MODE:  # 若启用多租户模式,则在结果表前拼接租户ID
+
+        # 多租户模式处理逻辑
+        # 包含三种业务ID场景：
+        # 1. 正业务ID：拼接租户+业务ID
+        # 2. 负业务ID：转换为绝对值路径格式
+        # 3. 零业务ID：仅包含租户标识
+        if settings.ENABLE_MULTI_TENANT_MODE:
             logger.info("make_table_id: enable multi-tenant mode")
             if bk_biz_id_str > "0":
                 return f"{bk_tenant_id}_{bk_biz_id}_bkmonitor_event_{bk_data_id}"
             elif bk_biz_id_str < "0":
                 return f"{bk_tenant_id}_bkmonitor_{bk_biz_id_str.split('-')[-1]}_bkmonitor_event_{bk_data_id}"
             return f"{bk_tenant_id}_bkmonitor_event_{bk_data_id}"
+
+        # 非多租户模式处理逻辑
+        # 业务ID处理规则与多租户模式对应：
+        # 1. 正业务ID：直接拼接业务ID
+        # 2. 负业务ID：转换为绝对值路径格式
+        # 3. 零业务ID：基础事件格式
         else:
             logger.info("make_table_id: disable multi-tenant mode")
             if bk_biz_id_str > "0":

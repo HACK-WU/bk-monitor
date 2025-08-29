@@ -306,33 +306,49 @@ class ResultTable(models.Model):
         bk_biz_id_alias=None,
     ):
         """
-        创建一个结果表
-        :param bk_data_id: 数据源ID
-        :param table_id: 结果表ID
-        :param table_name_zh: 结果表中文名
-        :param is_custom_table: 是否自定义结果表
-        :param schema_type: 字段类型
-        :param operator: 操作者
-        :param label: 结果表标签
-        :param default_storage: 默认存储，一个结果表必须存在一个存储，所以创建时需要提供默认存储
-        :param bk_tenant_id: 租户ID
-        :param default_storage_config: 默认存储创建的对应参数信息, 根据每种不同的存储类型，会有不同的参数传入
-        :param field_list: 字段列表，如果是无schema结果表，该参数可以为空
-        :param is_sync_db: 是否需要实际创建数据库
-        :param bk_biz_id: 结果表所属业务ID
-        :param include_cmdb_level: 是否需要创建的默认字段中是否需要带上CMDB层级字段
-        :param external_storage: 额外存储配置，格式为{${storage_type}: ${storage_config}}, storage_type可以为kafka等，
-            config为具体的配置字典内容
-        :param is_time_field_only: 是否仅需要创建时间字段，忽略其他的默认字段；以便兼容日志检索的需求
-        :param option: 结果表选项内容
-        :param time_alias_name: 时间字段的别名配置
-        :param time_option: 时间字段的配置内容
-        :param create_storage: 是否创建存储，默认为 True
-        :param data_label: 数据标签
-        :param is_builtin: 是否为系统内置的结果表
-        :param bk_biz_id_alias: 结果表所属业务名称
-        :return: result_table instance | raise Exception
+        创建结果表及其关联配置
+
+        参数:
+            bk_data_id: 数据源ID，关联数据源配置
+            table_id: 结果表唯一标识符
+            table_name_zh: 结果表中文名称
+            is_custom_table: 是否为自定义表标识
+            schema_type: 字段模式类型
+            operator: 操作者用户名
+            default_storage: 默认存储类型
+            bk_tenant_id: 租户ID，默认DEFAULT_TENANT_ID
+            default_storage_config: 存储配置参数
+            field_list: 字段定义列表
+            is_sync_db: 是否同步创建数据库
+            bk_biz_id: 业务ID，默认0
+            include_cmdb_level: 是否包含CMDB层级字段
+            label: 结果表标签
+            external_storage: 外部存储配置
+            is_time_field_only: 仅包含时间字段标志
+            option: 结果表选项参数
+            time_alias_name: 时间字段别名
+            time_option: 时间字段配置
+            create_storage: 是否创建存储
+            data_label: 数据分类标签
+            is_builtin: 是否为内置表
+            bk_biz_id_alias: 业务别名
+
+        返回值:
+            ResultTable对象: 创建的结果表实例
+
+        核心流程:
+        1. 参数校验：标签有效性、数据源存在性、表ID唯一性
+        2. 多租户模式处理：构建空间关联关系
+        3. 结果表创建：包含基础信息和选项配置
+        4. 字段处理：默认字段创建和用户字段绑定
+        5. 存储配置：存储实例创建和索引处理
+        6. 数据链路：根据存储类型触发后续数据处理
         """
+        # 参数校验阶段
+        # 1. 验证标签有效性
+        # 2. 检查数据源存在性
+        # 3. 校验表ID唯一性
+        # 4. 业务规则校验（如容器监控前缀限制）
         from metadata.models.space.constants import ENABLE_V4_DATALINK_ETL_CONFIGS
 
         logger.info(
@@ -355,6 +371,10 @@ class ResultTable(models.Model):
             )
             raise ValueError(_("标签[{}]不存在，请确认").format(label))
 
+        # 数据源与权限校验
+        # 1. 获取数据源对象
+        # 2. 校验容器监控表前缀权限
+        # 3. 检查表ID全局唯一性
         table_id = table_id.lower()
         # 1. 判断data_source是否存在
         datasource = DataSource.objects.filter(bk_data_id=bk_data_id, bk_tenant_id=bk_tenant_id).first()
@@ -449,7 +469,7 @@ class ResultTable(models.Model):
                     bk_data_id=bk_data_id,
                     bk_tenant_id=bk_tenant_id,
                     from_authorization=False,
-                    defaults={"space_id": space["space_id"], "space_type_id": space["space_type"]},
+                    defaults={"space_id": space_id, "space_type_id": space_type},
                 )
             except Exception as e:
                 logger.error(
@@ -550,6 +570,10 @@ class ResultTable(models.Model):
         # 6. 更新数据写入 consul
         result_table.refresh_etl_config()
 
+        # 数据链路处理
+        # 根据存储类型触发后续处理：
+        # 1. InfluxDB场景触发VM接入
+        # 2. ES场景创建索引
         if default_storage == ClusterInfo.TYPE_INFLUXDB:
             # 1. 如果influxdb被禁用，说明只能使用vm存储，此时需要使用bkbase v3链路
             # 2. 如果启用了新版数据链路，且etcl_config在启用的列表中，则使用vm存储，
@@ -1811,24 +1835,29 @@ class ResultTableField(models.Model):
         time_option: str | None = None,
         bk_tenant_id: str | None = DEFAULT_TENANT_ID,
     ) -> None:
-        """批量创建默认字段， 包含 time，bk_biz_id，bk_supplier_id，bk_cloud_id，ip，bk_cmdb_level
-
-        :param table_id: 结果表 ID
-        :param include_cmdb_level: 是否包含CMDB拆分字段，默认为 False
-        :param is_time_field_only: 是否仅包含创建时间字段，兼容ES的创建需求，默认为 False
-        :param time_alias_name: 时间字段的别名配置
-        :param time_option: 时间字段选项
-        :param bk_tenant_id: 租户ID
         """
-        # NOTE: 公共字段直接列举到对应的字段中，减少计算
-        # 组装要创建的默认字段数据
-        # 上报时间
-        logger.info(
-            "bulk_create_default_fields: table_id->[%s], bk_tenant_id->[%s] try to create default fields",
-            table_id,
-            bk_tenant_id,
-        )
+        批量创建结果表的默认字段集合
 
+        参数:
+            table_id: 结果表唯一标识符
+            include_cmdb_level: 是否包含CMDB层级字段，默认False
+            is_time_field_only: 是否仅创建时间字段，默认False
+            time_alias_name: 时间字段别名配置
+            time_option: 时间字段选项配置
+            bk_tenant_id: 租户ID，默认DEFAULT_TENANT_ID
+
+        返回值:
+            None: 无返回值，操作结果通过异常或日志体现
+
+        核心流程:
+        1. 时间字段创建：固定包含time字段
+        2. 条件分支处理：当is_time_field_only为True时仅创建时间字段
+        3. 默认字段集合：包含业务ID、开发商ID、云区域ID等标准字段
+        4. CMDB扩展处理：当include_cmdb_level为True时追加层级字段
+        5. 字段选项配置：为bk_cmdb_level字段添加InfluxDB禁用选项
+        """
+        # 时间字段初始化
+        # 创建基础时间字段定义，支持别名配置
         time_field_data = {
             "field_name": "time",
             "field_type": cls.FIELD_TYPE_TIMESTAMP,
@@ -1841,12 +1870,21 @@ class ResultTableField(models.Model):
             "alias_name": "" if time_alias_name is None else time_alias_name,
             "option": time_option,
         }
-        # 当限制仅包含时间字段时，创建时间字段，然后返回
+
+        # 仅时间字段模式处理
+        # 当开启is_time_field_only标志时，仅创建时间字段并立即返回
         if is_time_field_only:
             cls.create_field(table_id, bk_tenant_id=bk_tenant_id, is_reserved_check=False, **time_field_data)
             logger.info("table->[%s] is need time only, no more fields will create.", table_id)
             return
-        # 业务 ID
+
+        # 标准字段定义
+        # 定义以下核心字段：
+        # - bk_biz_id: 业务ID
+        # - bk_supplier_id: 开发商ID
+        # - bk_cloud_id: 云区域ID
+        # - ip: 采集器IP
+        # - bk_cmdb_level: CMDB层级信息
         bk_biz_id_field_data = {
             "field_name": "bk_biz_id",
             "field_type": cls.FIELD_TYPE_INT,
@@ -1906,7 +1944,9 @@ class ResultTableField(models.Model):
             "description": _("CMDB层级信息"),
             "alias_name": "",
         }
-        # 批量添加字段
+
+        # 批量字段创建
+        # 包含系统预定义字段（bk_agent_id、bk_host_id等）和标准字段
         cls.bulk_create_fields(
             table_id=table_id,
             field_data=[
@@ -1923,11 +1963,13 @@ class ResultTableField(models.Model):
             bk_tenant_id=bk_tenant_id,
         )
 
-        # 对于CMDB层级拆分结果表，需要追加两个相关的字段
+        # CMDB扩展字段处理
+        # 当需要包含CMDB层级字段时，调用专用方法追加相关字段
         if include_cmdb_level:
             cls.make_cmdb_default_fields(table_id=table_id, bk_tenant_id=bk_tenant_id)
 
-        # 当前cmdb_level默认都不需要写入influxdb, 防止维度增长问题
+        # 字段选项配置
+        # 为bk_cmdb_level字段添加InfluxDB写入禁用选项，防止维度爆炸
         ResultTableFieldOption.create_option(
             table_id=table_id,
             field_name="bk_cmdb_level",
