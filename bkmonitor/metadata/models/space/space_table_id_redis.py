@@ -206,9 +206,17 @@ class SpaceTableIDRedis:
     ):
         """
         推送ES结果表的详情信息至RESULT_TABLE_DETAIL路由
-        @param table_id_list: 结果表列表
-        @param is_publish: 是否执行推送
-        @param bk_tenant_id: 租户ID
+
+        该方法用于将Elasticsearch结果表的详细信息推送到Redis中，以便其他服务可以获取这些信息进行查询路由。
+        主要功能包括：处理表ID格式标准化、多租户支持、Redis数据存储以及变更通知发布。
+
+        参数:
+            bk_tenant_id (str): 租户ID，用于多租户环境下的数据隔离标识
+            table_id_list (list | None): 需要推送详情信息的结果表ID列表，None表示处理所有表
+            is_publish (bool): 是否执行推送操作并发布变更通知，默认为True
+
+        返回值:
+            无显式返回值（返回None），通过日志记录操作结果状态
         """
         logger.info(
             "push_es_table_id_detail： start to push table_id detail data, table_id_list->[%s],is_publish->[%s],"
@@ -219,6 +227,8 @@ class SpaceTableIDRedis:
         )
         _table_id_detail: dict[str, dict] = {}
         try:
+            # 获取ES结果表基础信息
+            # 调用_compose_es_table_id_detail方法生成原始表详情数据
             _table_id_detail.update(
                 self._compose_es_table_id_detail(table_id_list=table_id_list, bk_tenant_id=bk_tenant_id)
             )
@@ -230,6 +240,9 @@ class SpaceTableIDRedis:
                     json.dumps(_table_id_detail),
                     RESULT_TABLE_DETAIL_KEY,
                 )
+
+                # 表ID格式标准化处理
+                # 处理不符合规范的表ID格式（单段ID添加默认命名空间，多段ID校验有效性）
                 updated_table_id_detail: dict[str, dict] = {}
                 for key, value in _table_id_detail.items():
                     parts = key.split(".")  # 通过 "." 分割 key
@@ -237,22 +250,20 @@ class SpaceTableIDRedis:
                         logger.info(
                             "push_es_table_id_detail: key(table_id)->[%s] is missing '.', adding '.__default__'", key
                         )
-                        # 如果分割结果长度为 1，补充 ".__default__"
-                        new_key = f"{key}.__default__"
+                        new_key = f"{key}.__default__"  # 单段ID添加默认命名空间
                         updated_table_id_detail[new_key] = value
                     elif len(parts) == 2:
-                        # 如果分割结果长度为 2，保持原样
-                        updated_table_id_detail[key] = value
+                        updated_table_id_detail[key] = value  # 有效双段ID保持原样
                     else:
-                        # 如果分割结果长度超过 2，打印错误日志
+                        # 记录非法格式的表ID（超过两段）
                         logger.error(
                             "push_es_table_id_detail: key(table_id)->[%s] is invalid, contains too many dots", key
                         )
 
-                # 更新 _table_id_detail
-                _table_id_detail = updated_table_id_detail
+                _table_id_detail = updated_table_id_detail  # 更新处理后的表ID数据
 
-                # 若开启多租户模式,则在table_id前拼接bk_tenant_id
+                # 多租户模式适配
+                # 在启用多租户模式时，为每个表ID添加租户标识实现数据隔离
                 if settings.ENABLE_MULTI_TENANT_MODE:
                     logger.info(
                         "push_es_table_id_detail: enable multi tenant mode,will append bk_tenant_id->[%s]",
@@ -260,10 +271,15 @@ class SpaceTableIDRedis:
                     )
                     _table_id_detail = {f"{key}|{bk_tenant_id}": value for key, value in _table_id_detail.items()}
 
+                # 写入Redis哈希表
+                # 将标准化后的表详情数据存储到Redis指定key
                 RedisTools.hmset_to_redis(
                     RESULT_TABLE_DETAIL_KEY,
                     {key: json.dumps(value) for key, value in _table_id_detail.items()},
                 )
+
+                # 消息发布流程
+                # 当is_publish为True时，通过Redis频道发布变更通知
                 if is_publish:
                     logger.info(
                         "push_es_table_id_detail: table_id_list->[%s] got detail->[%s],try to push into channel->[%s]",
@@ -272,7 +288,7 @@ class SpaceTableIDRedis:
                         RESULT_TABLE_DETAIL_CHANNEL,
                     )
                     RedisTools.publish(RESULT_TABLE_DETAIL_CHANNEL, list(_table_id_detail.keys()))
-        except Exception as e:  # pylint: disable=broad-except
+        except Exception as e:  # 捕获所有异常防止流程中断
             logger.error(
                 "push_es_table_id_detail: failed to push es_table_detail for table_id_list->[%s],error->[%s]",
                 table_id_list,
@@ -280,6 +296,7 @@ class SpaceTableIDRedis:
             )
             return
         logger.info("push_es_table_id_detail: push es_table_detail for table_id_list->[%s] successfully", table_id_list)
+
 
     def _compose_doris_table_id_detail(self, bk_tenant_id: str, table_id_list: list[str]) -> dict[str, dict]:
         """组装doris结果表的详情"""
@@ -696,21 +713,33 @@ class SpaceTableIDRedis:
     def _compose_es_table_id_detail(
         self, table_id_list: list[str] | None = None, bk_tenant_id: str = DEFAULT_TENANT_ID
     ) -> dict[str, dict]:
-        """组装 es 结果表的详细信息"""
+        """
+        组装Elasticsearch结果表的详细信息字典
+
+        该方法从数据库中查询ES存储配置、结果表选项和数据标签等信息，组装成统一的数据结构。
+        主要功能包括：构建存储配置映射、处理选项参数、生成字段别名映射以及组装最终的数据结构。
+
+        参数:
+            table_id_list (list[str] | None): 需要查询的结果表ID列表，None表示所有表
+            bk_tenant_id (str): 租户ID，默认使用DEFAULT_TENANT_ID
+
+        返回值:
+            dict[str, dict]: 结果表详情数据字典，键为表ID，值为包含存储配置、选项等的字典
+        """
         logger.info("start to compose es table_id detail data")
-        # 这里要过来的结果表不会太多
+
+        # 数据库查询部分
+        # 查询ES存储配置、结果表选项和数据标签信息
         if table_id_list:
             table_ids = models.ESStorage.objects.filter(table_id__in=table_id_list, bk_tenant_id=bk_tenant_id).values(
                 "table_id", "storage_cluster_id", "source_type", "index_set"
             )
-            # 查询结果表选项
             tid_options = models.ResultTableOption.objects.filter(
                 table_id__in=table_id_list, bk_tenant_id=bk_tenant_id
             ).values("table_id", "name", "value", "value_type")
             data_label_map = models.ResultTable.objects.filter(
                 table_id__in=table_id_list, bk_tenant_id=bk_tenant_id
             ).values("table_id", "data_label")
-            # 构建字段别名map
             field_alias_map = self._get_field_alias_map(table_id_list, bk_tenant_id)
         else:
             table_ids = models.ESStorage.objects.filter(bk_tenant_id=bk_tenant_id).values(
@@ -726,10 +755,10 @@ class SpaceTableIDRedis:
             data_label_map = models.ResultTable.objects.filter(table_id__in=tids, bk_tenant_id=bk_tenant_id).values(
                 "table_id", "data_label"
             )
-            # 构建字段别名map
             field_alias_map = self._get_field_alias_map(tids, bk_tenant_id)
 
-        # data_label字典 {table_id:data_label}
+        # 数据处理部分
+        # 转换查询结果为映射字典
         data_label_map_dict = {item["table_id"]: item["data_label"] for item in data_label_map}
         tid_options_map = {}
         for option in tid_options:
@@ -744,9 +773,8 @@ class SpaceTableIDRedis:
 
             tid_options_map.setdefault(option["table_id"], {}).update(_option)
 
-        # 组装数据
-        # NOTE: 这里针对一段式的追加一个`__default__`
-        # 组装需要的数据，字段相同
+        # 数据组装部分
+        # 构建最终结果字典，包含存储配置、选项、数据标签等信息
         data = {}
         for record in table_ids:
             source_type = record["source_type"]
@@ -763,7 +791,7 @@ class SpaceTableIDRedis:
                 logger.warning("get table_id storage cluster record failed, table_id: %s, error: %s", tid, e)
                 storage_record = []
 
-            # 索引集，直接按照存储进行路由
+            # 组装单个结果表的详细信息
             data[tid] = {
                 "storage_id": storage_id,
                 "db": table_id_db,

@@ -483,7 +483,7 @@ class ResultTable(models.Model):
                 )
 
         # 2. 创建逻辑结果表内容
-        result_table = cls.objects.create(
+        result_table: ResultTable = cls.objects.create(
             table_id=table_id,
             bk_tenant_id=bk_tenant_id,
             table_name_zh=table_name_zh,
@@ -847,13 +847,25 @@ class ResultTable(models.Model):
     ):
         """
         创建结果表的一个实际存储
-        :param storage: 存储方案
-        :param is_sync_db: 是否需要将配置实际同步到DB
-        :param storage_config: 存储方案的配置参数
-        :param external_storage: 额外存储方案配置
-        :param bk_tenant_id: 租户ID
-        :return: True | raise Exception
+
+        参数:
+            storage: 存储方案类型（如ES/HDFS等）
+            is_sync_db: 是否将配置同步到数据库的布尔值
+            storage_config: 存储方案的配置参数字典
+            external_storage: 额外存储方案配置（字典类型，包含存储类型和对应配置）
+            bk_tenant_id: 蓝鲸租户ID（默认值为DEFAULT_TENANT_ID）
+
+        返回值:
+            True表示存储创建成功
+            异常抛出表示存储类型不支持或配置同步失败
+
+        执行流程:
+        1. 从REAL_STORAGE_DICT获取存储实体类
+        2. 配置存储参数并创建主存储
+        3. 遍历处理external_storage中的额外存储配置
+        4. 当is_sync_db为True时刷新ETL配置到consul
         """
+
         # 1. 创建该存储方案对应的实体类并创建存储
         try:
             real_storage = self.REAL_STORAGE_DICT[self.default_storage]

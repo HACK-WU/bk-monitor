@@ -2023,28 +2023,40 @@ class ESStorage(models.Model, StorageResultTable):
     ):
         """
         实际创建结果表
-        :param table_id: 结果表ID
-        :param bk_tenant_id: 租户ID
-        :param is_sync_db: 是否需要同步创建结果表
-        :param date_format: 时间格式，用于拼接index及别名
-        :param slice_size: 切分大小，不提供使用默认值
-        :param slice_gap: 切分时间间隔，不提供使用默认值
-        :param index_settings: index创建配置，如果不提供，默认为{}(无配置)
-        :param mapping_settings: index创建时的mapping配置，如果不提供，默认为{}，但是字段信息将会被覆盖
-        :param cluster_id: 集群ID，如果不提供使用默认的ES集群
-        :param retention: 保留时间
-        :param warm_phase_days: 暖数据执行分配的等待天数，默认为 0 (不开启)
-        :param warm_phase_settings: 暖数据切换配置，当 warm_phase_days > 0 时，此项必填
-        :param time_zone: 时区设置，默认零时区
-        :param enable_create_index: 启用创建索引，默认为 True；针对非内置的数据源，不能创建索引
-        :param source_type: 数据源类型，默认日志自建
-        :param index_set: 索引集
-        :param need_create_index: 是否需要创建索引，默认为 True
-        :param origin_table_id: 原始结果表ID
-        :param kwargs: 其他配置参数
-        :return:
+
+        该方法用于在Elasticsearch中创建一个新的结果表存储配置，包括验证参数、创建存储记录、
+        初始化索引配置以及推送相关信息到Redis等操作。
+
+        参数:
+            table_id (str): 结果表ID，唯一标识一个结果表
+            bk_tenant_id (str): 租户ID，默认为系统默认租户ID
+            is_sync_db (bool): 是否需要同步创建结果表，默认为True
+            date_format (str): 时间格式，用于拼接index及别名，默认为"%Y%m%d%H"
+            slice_size (int): 切分大小(GB)，默认为500GB
+            slice_gap (int): 切分时间间隔(分钟)，默认为120分钟
+            index_settings (dict): index创建配置，如果不提供，默认为{}(无配置)
+            mapping_settings (dict): index创建时的mapping配置，如果不提供，默认为{}，但是字段信息将会被覆盖
+            cluster_id (int): 集群ID，如果不提供使用默认的ES集群
+            retention (int): 数据保留时间(天)，默认为30天
+            warm_phase_days (int): 暖数据执行分配的等待天数，默认为 0 (不开启)
+            warm_phase_settings (dict): 暖数据切换配置，当 warm_phase_days > 0 时，此项必填
+            time_zone (int): 时区设置，默认零时区
+            enable_create_index (bool): 启用创建索引，默认为 True；针对非内置的数据源，不能创建索引
+            source_type (str): 数据源类型，默认日志自建
+            index_set (str): 索引集
+            need_create_index (bool): 是否需要创建索引，默认为 True
+            origin_table_id (str): 原始结果表ID
+            **kwargs: 其他配置参数
+
+        返回值:
+            ESStorage对象: 新创建的ES存储记录实例
+
+        异常:
+            ValueError: 当参数校验失败或配置有误时抛出
         """
+
         # 0. 判断是否需要使用默认集群信息
+        # 如果未指定集群ID，则获取默认的ES集群ID
         if cluster_id is None:
             try:
                 cluster_id = ClusterInfo.objects.get(
@@ -2054,7 +2066,7 @@ class ESStorage(models.Model, StorageResultTable):
                 logger.error(f"cluster_id->[{cluster_id}] is not exists or is not redis cluster, something go wrong?")
                 raise ValueError(_("存储集群配置有误，默认es集群不存在，请确认或联系管理员处理"))
 
-        # 如果有提供集群信息，需要判断
+        # 如果有提供集群信息，需要判断集群是否存在
         else:
             if not ClusterInfo.objects.filter(
                 bk_tenant_id=bk_tenant_id, cluster_type=ClusterInfo.TYPE_ES, cluster_id=cluster_id
@@ -2063,6 +2075,7 @@ class ESStorage(models.Model, StorageResultTable):
                 raise ValueError(_("存储集群配置有误，请确认或联系管理员处理"))
 
         # 1. 校验table_id， key是否存在冲突
+        # 检查相同table_id和bk_tenant_id的记录是否已存在
         if cls.objects.filter(table_id=table_id, bk_tenant_id=bk_tenant_id).exists():
             logger.error(
                 "result_table->[%s] already has es storage config under bk_tenant_id->[%s], nothing will add.",
@@ -2072,12 +2085,14 @@ class ESStorage(models.Model, StorageResultTable):
             raise ValueError(_("结果表[%s]配置已存在，请确认后重试") % table_id)
 
         # 测试date_format是否正确可用的 -- 格式化结果的数据只能包含数字，不能有其他结果
+        # 验证日期格式是否只包含数字
         test_str = datetime.datetime.utcnow().strftime(date_format)
         if re.match(r"^\d+$", test_str) is None:
             logger.error(f"result_table->[{table_id}] date_format contains none digit info, it is bad.")
             raise ValueError(_("时间格式不允许包含非数字格式"))
 
         # 校验分配配置
+        # 如果启用了暖数据分配，验证相关配置是否完整
         if warm_phase_days > 0:
             if not warm_phase_settings:
                 logger.error(f"result_table->[{table_id}] warm_phase_settings is empty, but min_days > 0.")
@@ -2087,16 +2102,19 @@ class ESStorage(models.Model, StorageResultTable):
                     raise ValueError(_("warm_phase_settings.{} 不能为空").format(required_field))
 
         # validate time_zone at 12 -> -12
+        # 验证时区设置是否在有效范围内(-12到12)
         if not (cls.TIME_ZONE_MAX >= time_zone >= cls.TIME_ZONE_MIN):
             raise ValueError(_("time_zone -> [{}] 设置不合法").format(time_zone))
 
         warm_phase_settings = {} if warm_phase_settings is None else warm_phase_settings
 
         # 判断两个TextField的配置内容
+        # 处理索引设置和映射设置的默认值
         index_settings = {} if index_settings is None else index_settings
         mapping_settings = {} if mapping_settings is None else mapping_settings
 
         # alias settings目前暂时没有用上，在参数和配置中都没有更新
+        # 创建ES存储记录
         new_record = cls.objects.create(
             table_id=table_id,
             bk_tenant_id=bk_tenant_id,
@@ -2117,6 +2135,7 @@ class ESStorage(models.Model, StorageResultTable):
         )
         logger.info(f"result_table->[{table_id}] now has es_storage will try to create index.")
 
+        # 更新或创建存储集群记录，用于追踪集群变更历史
         storage_record, tag = StorageClusterRecord.objects.update_or_create(
             table_id=table_id,
             cluster_id=cluster_id,
@@ -2133,10 +2152,12 @@ class ESStorage(models.Model, StorageResultTable):
         )
 
         # 判断是否启用创建索引，默认是启用
+        # 如果启用索引创建，则调用create_es_index方法创建ES索引
         if enable_create_index:
             new_record.create_es_index(is_sync_db)
 
         # 针对单个结果表推送数据很快，不用异步处理
+        # 推送ES表详情到Redis，用于查询路由
         try:
             from metadata.models.space.space_table_id_redis import SpaceTableIDRedis
 
@@ -2149,6 +2170,7 @@ class ESStorage(models.Model, StorageResultTable):
         except Exception as e:  # pylint: disable=broad-except
             logger.error("table_id: %s push detail failed, error: %s", table_id, e)
         return new_record
+
 
     @property
     def index_body(self):

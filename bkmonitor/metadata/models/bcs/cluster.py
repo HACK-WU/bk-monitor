@@ -1,5 +1,6 @@
 import copy
 import logging
+from typing import Any
 
 from django.conf import settings
 from django.db import models
@@ -247,7 +248,7 @@ class BCSClusterInfo(models.Model):
         api_key_content = settings.BCS_API_GATEWAY_TOKEN
         server_address_path = "clusters"
 
-        cluster = cls.objects.create(
+        cluster: BCSClusterInfo = cls.objects.create(
             cluster_id=cluster_id,
             bcs_api_cluster_id=cluster_id,
             bk_biz_id=bk_biz_id,
