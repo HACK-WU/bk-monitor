@@ -197,6 +197,16 @@ class Command(BaseCommand):
             space_permission_check = self.check_space_permissions(cluster_info)
             check_result["details"]["space_permissions"] = space_permission_check
             
+            # 15. 检查BCS API Token配置
+            self.stdout.write("正在检查BCS API Token配置...")
+            api_token_check = self.check_bcs_api_token(cluster_info)
+            check_result["details"]["api_token"] = api_token_check
+            
+            # 16. 检查云区域ID配置
+            self.stdout.write("正在检查云区域ID配置...")
+            cloud_id_check = self.check_cloud_id_configuration(cluster_info)
+            check_result["details"]["cloud_id"] = cloud_id_check
+            
             # 确定整体状态
             check_result["status"] = self.determine_overall_status(check_result["details"])
             
@@ -1252,6 +1262,71 @@ class Command(BaseCommand):
             
         return result
 
+    def check_bcs_api_token(self, cluster_info: BCSClusterInfo) -> Dict:
+        """检查BCS API Token配置状态"""
+        result = {
+            "status": "UNKNOWN",
+            "details": {},
+            "issues": []
+        }
+        
+        try:
+            # 检查API密钥是否配置
+            if not cluster_info.api_key_content:
+                result["issues"].append("BCS API Token未配置")
+                result["status"] = "ERROR"
+                result["details"] = {
+                    "api_key_configured": False
+                }
+                return result
+            
+            # 检查API密钥是否与当前配置一致
+            from django.conf import settings
+            if cluster_info.api_key_content != settings.BCS_API_GATEWAY_TOKEN:
+                result["issues"].append("BCS API Token与当前配置不一致")
+                result["status"] = "WARNING"
+            else:
+                result["status"] = "SUCCESS"
+            
+            result["details"] = {
+                "api_key_configured": True,
+                "api_key_match": cluster_info.api_key_content == settings.BCS_API_GATEWAY_TOKEN,
+                "token_length": len(cluster_info.api_key_content) if cluster_info.api_key_content else 0
+            }
+                
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"BCS API Token检查异常: {str(e)}")
+            
+        return result
+
+    def check_cloud_id_configuration(self, cluster_info: BCSClusterInfo) -> Dict:
+        """检查云区域ID配置状态"""
+        result = {
+            "status": "UNKNOWN",
+            "details": {},
+            "issues": []
+        }
+        
+        try:
+            # 检查云区域ID是否配置
+            if cluster_info.bk_cloud_id is None:
+                result["issues"].append("云区域ID未配置")
+                result["status"] = "WARNING"
+            else:
+                result["status"] = "SUCCESS"
+            
+            result["details"] = {
+                "bk_cloud_id": cluster_info.bk_cloud_id,
+                "cloud_id_configured": cluster_info.bk_cloud_id is not None
+            }
+                
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"云区域ID配置检查异常: {str(e)}")
+            
+        return result
+
     def is_federation_cluster(self, cluster_info: BCSClusterInfo) -> bool:
         """判断是否为联邦集群"""
         try:
@@ -1275,6 +1350,8 @@ class Command(BaseCommand):
             details.get("init_resources", {}).get("status", "UNKNOWN"),
             details.get("bk_collector", {}).get("status", "UNKNOWN"),
             details.get("space_permissions", {}).get("status", "UNKNOWN"),
+            details.get("api_token", {}).get("status", "UNKNOWN"),
+            details.get("cloud_id", {}).get("status", "UNKNOWN"),
         ]
         
         # 如果是联邦集群，添加联邦状态检查
@@ -1421,6 +1498,18 @@ class Command(BaseCommand):
                 correct_space_count = len([ds for ds in space_details.get('datasource_spaces', []) if ds.get('status') == 'correct'])
                 total_space_count = len(space_details.get('datasource_spaces', []))
                 self.stdout.write(f"    空间配置: {correct_space_count}/{total_space_count} 正确")
+                
+            elif component == "api_token" and result.get("details"):
+                token_details = result["details"]
+                self.stdout.write(f"    Token已配置: {token_details.get('api_key_configured', False)}")
+                if "token_length" in token_details:
+                    self.stdout.write(f"    Token长度: {token_details['token_length']} 字符")
+                    
+            elif component == "cloud_id" and result.get("details"):
+                cloud_details = result["details"]
+                self.stdout.write(f"    云区域ID已配置: {cloud_details.get('cloud_id_configured', False)}")
+                if cloud_details.get("bk_cloud_id") is not None:
+                    self.stdout.write(f"    云区域ID: {cloud_details['bk_cloud_id']}")
 
     def get_status_style(self, status: str):
         """根据状态获取样式函数"""
