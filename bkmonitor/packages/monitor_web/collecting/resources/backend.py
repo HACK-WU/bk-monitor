@@ -592,74 +592,78 @@ class CollectConfigDetailResource(Resource):
         except CollectConfigMeta.DoesNotExist:
             raise CollectConfigNotExist({"msg": config_id})
 
-        # 根据目标节点类型选择不同的采集目标获取方式
-        if (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.INSTANCE
-        ):
-            # 主机直连实例场景：通过IP列表获取主机实例
-            target_result = resource.commons.get_host_instance_by_ip(
-                {
-                    "bk_biz_id": collect_config_meta.bk_biz_id,
-                    "bk_biz_ids": [collect_config_meta.bk_biz_id],
-                    "ip_list": collect_config_meta.deployment_config.target_nodes,
-                }
-            )
-        elif (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.TOPO
-        ):
-            # 拓扑节点场景：标准化节点信息后获取主机实例
-            node_list = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                node_list.append(item)
-            target_result = resource.commons.get_host_instance_by_node(
-                {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
-            )
-        elif collect_config_meta.target_object_type in [
-            TargetObjectType.HOST,
-            TargetObjectType.SERVICE,
-        ] and collect_config_meta.deployment_config.target_node_type in [
-            TargetNodeType.SERVICE_TEMPLATE,
-            TargetNodeType.SET_TEMPLATE,
-        ]:
-            # 模板场景：获取模板实例名称并构建目标结果
+        if not collect_config_meta.deployment_config.target_nodes:
+            # 如果没有目标节点，直接返回空列表
             target_result = []
-            templates = {
-                template["bk_inst_id"]: template["bk_inst_name"]
-                for template in resource.commons.get_template(
-                    dict(
-                        bk_biz_id=collect_config_meta.bk_biz_id,
-                        bk_obj_id=collect_config_meta.deployment_config.target_node_type,
-                        bk_inst_type=collect_config_meta.target_object_type,
-                    )
-                ).get("children", [])
-            }
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                item.update({"bk_inst_name": templates.get(item["bk_inst_id"])})
-                target_result.append(item)
-        elif (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.DYNAMIC_GROUP
-        ):
-            bk_inst_ids = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                bk_inst_ids.append(item["bk_inst_id"])
-            target_result = api.cmdb.search_dynamic_group(
-                bk_biz_id=collect_config_meta.bk_biz_id,
-                bk_obj_id="host",
-                dynamic_group_ids=bk_inst_ids,
-                with_count=True,
-            )
-
         else:
-            # 服务实例场景：标准化节点信息后获取服务实例
-            node_list = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                node_list.append(item)
+            # 根据目标节点类型选择不同的采集目标获取方式
+            if (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.INSTANCE
+            ):
+                # 主机直连实例场景：通过IP列表获取主机实例
+                target_result = resource.commons.get_host_instance_by_ip(
+                    {
+                        "bk_biz_id": collect_config_meta.bk_biz_id,
+                        "bk_biz_ids": [collect_config_meta.bk_biz_id],
+                        "ip_list": collect_config_meta.deployment_config.target_nodes,
+                    }
+                )
+            elif (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.TOPO
+            ):
+                # 拓扑节点场景：标准化节点信息后获取主机实例
+                node_list = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    node_list.append(item)
+                target_result = resource.commons.get_host_instance_by_node(
+                    {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
+                )
+            elif collect_config_meta.target_object_type in [
+                TargetObjectType.HOST,
+                TargetObjectType.SERVICE,
+            ] and collect_config_meta.deployment_config.target_node_type in [
+                TargetNodeType.SERVICE_TEMPLATE,
+                TargetNodeType.SET_TEMPLATE,
+            ]:
+                # 模板场景：获取模板实例名称并构建目标结果
+                target_result = []
+                templates = {
+                    template["bk_inst_id"]: template["bk_inst_name"]
+                    for template in resource.commons.get_template(
+                        dict(
+                            bk_biz_id=collect_config_meta.bk_biz_id,
+                            bk_obj_id=collect_config_meta.deployment_config.target_node_type,
+                            bk_inst_type=collect_config_meta.target_object_type,
+                        )
+                    ).get("children", [])
+                }
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    item.update({"bk_inst_name": templates.get(item["bk_inst_id"])})
+                    target_result.append(item)
+            elif (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.DYNAMIC_GROUP
+            ):
+                bk_inst_ids = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    bk_inst_ids.append(item["bk_inst_id"])
+                target_result = api.cmdb.search_dynamic_group(
+                    bk_biz_id=collect_config_meta.bk_biz_id,
+                    bk_obj_id="host",
+                    dynamic_group_ids=bk_inst_ids,
+                    with_count=True,
+                )
+
+            else:
+                # 服务实例场景：标准化节点信息后获取服务实例
+                node_list = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    node_list.append(item)
             target_result = resource.commons.get_service_instance_by_node(
                 {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
             )
