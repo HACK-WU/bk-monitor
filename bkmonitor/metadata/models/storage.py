@@ -941,45 +941,62 @@ class InfluxDBStorage(models.Model, StorageResultTable, InfluxDBTool):
         proxy_cluster_name: str | None = None,
         storage_cluster_id: int | None = None,
     ) -> InfluxDBProxyStorage:
-        """获取 proxy 集群和存储集群名称
-
-        优先以 influxdb_proxy_storage_id 数据为准
-        1. 如果 influxdb_proxy_storage_id 存在，则查询到对应 proxy_cluster_name 和 storage_cluster_id
-        2. 如果 proxy_cluster_name 和 storage_cluster_id 都存在，则需要校验是否存在，如果不存在，则记录并使用默认值
-        3. 如果 proxy_cluster_name 或者 storage_cluster_id 只有一个存在时，则使用默认查询到的第一个记录
         """
-        # 满足条件 1
+        获取InfluxDB代理存储配置记录
+
+        优先级策略：
+        1. 优先使用显式传入的influxdb_proxy_storage_id
+        2. 其次匹配proxy_cluster_name和storage_cluster_id组合
+        3. 最后根据单个参数或默认配置查询
+
+        Args:
+            influxdb_proxy_storage_id: 代理存储映射关系ID
+            proxy_cluster_name: 代理集群名称
+            storage_cluster_id: 存储集群ID
+
+        Returns:
+            InfluxDBProxyStorage: 匹配的代理存储配置记录
+
+        Raises:
+            ValueError: 当指定的代理存储配置不存在时抛出异常
+        """
+        # 优先使用代理存储ID获取配置
+        # 直接通过ID查询，若不存在则抛出异常
         if influxdb_proxy_storage_id is not None:
             try:
                 return InfluxDBProxyStorage.objects.get(id=influxdb_proxy_storage_id)
             except InfluxDBProxyStorage.DoesNotExist:
                 raise ValueError("influxdb proxy storage: %s does not exist", influxdb_proxy_storage_id)
-        # 满足条件 2
+
+        # 尝试通过集群组合匹配配置
+        # 同时验证proxy集群名称和存储集群ID的组合有效性
         if proxy_cluster_name and storage_cluster_id:
             try:
                 return InfluxDBProxyStorage.objects.get(
-                    proxy_cluster_id=storage_cluster_id, instance_cluster_name=proxy_cluster_name
+                    proxy_cluster_id=storage_cluster_id,
+                    instance_cluster_name=proxy_cluster_name
                 )
             except InfluxDBProxyStorage.DoesNotExist:
                 err_msg = f"influxdb proxy storage: ({storage_cluster_id}, {proxy_cluster_name}) does not exist"
-                # 记录下日志，方便追踪
                 logger.error(err_msg)
                 raise ValueError(err_msg)
-        # 满足条件 3
-        # 去掉这里的[default]限制，因为 influxdb proxy 可能对应多个 influxdb 集群
+
+        # 最后尝试单参数匹配或默认配置
+        # 按优先级：storage_cluster_id > proxy_cluster_name > 默认配置
+        if storage_cluster_id:
+            logger.info("query influxdb proxy storage by proxy cluster id: %s", storage_cluster_id)
+            record = InfluxDBProxyStorage.objects.filter(proxy_cluster_id=storage_cluster_id).first()
+        elif proxy_cluster_name:
+            logger.info("query influxdb proxy storage by storage cluster name: %s", proxy_cluster_name)
+            record = InfluxDBProxyStorage.objects.filter(instance_cluster_name=proxy_cluster_name).first()
         else:
-            if storage_cluster_id:
-                logger.info("query influxdb proxy storage by proxy cluster id: %s", storage_cluster_id)
-                record = InfluxDBProxyStorage.objects.filter(proxy_cluster_id=storage_cluster_id).first()
-            elif proxy_cluster_name:
-                logger.info("query influxdb proxy storage by storage cluster name: %s", proxy_cluster_name)
-                record = InfluxDBProxyStorage.objects.filter(instance_cluster_name=proxy_cluster_name).first()
-            else:
-                logger.info("query influxdb proxy storage default record")
-                record = InfluxDBProxyStorage.objects.filter(is_default=True).first()
-            if not record:
-                raise ValueError("influxdb proxy storage has not record")
-            return record
+            logger.info("query influxdb proxy storage default record")
+            record = InfluxDBProxyStorage.objects.filter(is_default=True).first()
+
+        if not record:
+            raise ValueError("influxdb proxy storage has not record")
+        return record
+
 
     @property
     def storage_cluster(self):
@@ -1006,44 +1023,60 @@ class InfluxDBStorage(models.Model, StorageResultTable, InfluxDBTool):
         **kwargs,
     ):
         """
-        创建一个实际的结果表
-        :param table_id: 结果表ID
-        :param is_sync_db: 是否将创建同步到DB
-        :param storage_cluster_id: 数据库集群ID，如果没有指定，则直接使用默认集群
-        :param database: 数据库名，如果未None，则使用table_id.split['.'][0]
-        :param real_table_name: 实际的结果表名，如果为None, 则使用table_id.split('.')[1]
-        :param source_duration_time: 源数据保留的时间，默认是30d
-        :param proxy_cluster_name: 对于influxdb-proxy，这个结果表需要路由至哪个集群的配置
-        :param influxdb_proxy_storage_id: 添加 influxdb-proxy 和 后端存储的映射 ID
-        :param kwargs: 其他创建的参数
-        :return: storage object
+        创建一个实际的InfluxDB存储记录及关联配置
+
+        Args:
+            table_id: 结果表ID，格式需符合'database.table_name'格式
+            is_sync_db: 是否同步创建物理数据库
+            storage_cluster_id: 存储集群ID，未指定时使用默认集群
+            database: 数据库名称，未指定时从table_id解析
+            real_table_name: 实际表名称，未指定时从table_id解析
+            source_duration_time: 源数据保留时间，默认30天
+            proxy_cluster_name: influxdb-proxy路由集群名称
+            influxdb_proxy_storage_id: proxy与存储映射关系ID
+            **kwargs: 其他存储配置参数
+
+        Returns:
+            创建的存储对象实例
+
+        Raises:
+            ValueError: 当指定集群不存在时抛出异常
         """
-        # 获取存储的信息，用于后续的校验
+        # 优先获取存储配置信息
+        # 通过influxdb_proxy_storage_id、proxy_cluster_name、storage_cluster_id三级回退机制获取存储配置
         influxdb_proxy_storage = cls().get_influxdb_storage(
             influxdb_proxy_storage_id, proxy_cluster_name, storage_cluster_id
         )
+        # 从存储配置中提取核心参数
+        # 优先级：显式传入参数 > proxy配置 > 集群配置
         influxdb_proxy_storage_id, storage_cluster_id, proxy_cluster_name = (
             influxdb_proxy_storage.id,
             influxdb_proxy_storage.proxy_cluster_id,
             influxdb_proxy_storage.instance_cluster_name,
         )
-        # 校验后端是否存在
+
+        # 校验集群有效性
+        # 防止创建指向无效集群的存储记录
         if not InfluxDBClusterInfo.objects.filter(cluster_name=proxy_cluster_name).exists():
-            # 如果调入此处，表示指定的proxy并没有对应的任何机器
             logger.error(
                 f"proxy_cluster->[{proxy_cluster_name}] has no config, maybe something go wrong?Nothing will do."
             )
             raise ValueError(_("请求集群[%s]不存在，请确认后重试") % proxy_cluster_name)
 
-        # 如果未有指定对应的结果表及数据库，则从table_id中分割获取
+        # 解析table_id获取默认值
+        # 分割table_id为数据库名和实际表名两部分
+        # 示例：system.cpu -> database=system, real_table_name=cpu
         except_database, except_table_name = table_id.split(".")
+        # 数据库名优先级：显式参数 > table_id解析值
         if database is None:
             database = except_database
 
+        # 实际表名优先级：显式参数 > table_id解析值
         if real_table_name is None:
             real_table_name = except_table_name
 
-        # InfluxDB不需要实际创建结果表，只需要创建一条DB记录即可
+        # 创建存储记录到数据库
+        # InfluxDB仅需维护存储记录，物理表由proxy自动创建
         new_storage = cls.objects.create(
             table_id=table_id,
             storage_cluster_id=storage_cluster_id,
@@ -1056,15 +1089,18 @@ class InfluxDBStorage(models.Model, StorageResultTable, InfluxDBTool):
         )
         logger.info(f"result_table->[{new_storage.table_id}] now has create influxDB storage.")
 
+        # 数据库同步操作
+        # 包含物理数据库创建和保留策略配置
         if is_sync_db:
             new_storage.sync_db()
 
-        # 刷新一次结果表的路由信息至consul中
-        # 由于是创建结果表，必须强行刷新到consul配置中
+        # 强制刷新Consul配置
+        # 确保新创建的表路由信息及时生效
         new_storage.refresh_consul_cluster_config(is_version_refresh=True)
 
         logger.info(f"result_table->[{new_storage.table_id}] all database create is done.")
         return new_storage
+
 
     @property
     def consul_config(self):

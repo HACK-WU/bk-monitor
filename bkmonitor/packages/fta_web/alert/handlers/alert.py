@@ -527,7 +527,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
         """
         获取告警文档的查询对象，支持时间范围过滤、业务条件过滤、用户状态过滤等复杂条件组合
 
-        没有恢复的告警不受start_time和end_time限制
+        没有恢复的告警不受start_time的限制
 
         参数说明:
             start_time: 查询起始时间戳（可选，默认使用实例的start_time）

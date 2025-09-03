@@ -49,28 +49,53 @@ logger = logging.getLogger("metadata")
 
 
 def refine_bkdata_kafka_info(bk_tenant_id: str):
+    """获取接入计算平台时使用的Kafka信息
+
+    该函数实现从ClusterInfo中获取已注册的Kafka集群信息，并与计算平台API返回的
+    Kafka主机信息进行匹配，最终返回有效的集群ID和主机名。
+
+    :param bk_tenant_id: 蓝鲸租户ID（字符串格式）
+    :return: 包含 cluster_id（集群ID）和 host（主机名）的字典
+    :raises ValueError: 当计算平台未返回Kafka信息或主机未在ClusterInfo注册时抛出
+    """
     from metadata.models import ClusterInfo
 
-    """获取接入计算平台时，使用的 kafka 信息"""
-    kafka_clusters = ClusterInfo.objects.filter(bk_tenant_id=bk_tenant_id, cluster_type=ClusterInfo.TYPE_KAFKA).values(
-        "cluster_id", "domain_name"
-    )
-    kafka_domain_cluster_id = {obj["domain_name"]: obj["cluster_id"] for obj in kafka_clusters}
-    # 通过集群平台获取可用的 kafka host
+    # 获取已注册的Kafka集群信息
+    # 查询当前租户下所有Kafka类型集群，提取domain_name和cluster_id
+    kafka_clusters = ClusterInfo.objects.filter(
+        bk_tenant_id=bk_tenant_id,
+        cluster_type=ClusterInfo.TYPE_KAFKA
+    ).values("cluster_id", "domain_name")
+
+    # 构建域名到集群ID的映射表
+    kafka_domain_cluster_id = {
+        obj["domain_name"]: obj["cluster_id"] for obj in kafka_clusters
+    }
+
+    # 调用计算平台API获取Kafka信息
     bkdata_kafka_data: list[dict[str, Any]] = api.bkdata.get_kafka_info(bk_tenant_id=bk_tenant_id)
     if not bkdata_kafka_data:
         logger.error("bkdata kafka info not found, bk_tenant_id: %s", bk_tenant_id)
         raise ValueError("bkdata kafka info not found")
 
+    # 提取API返回的主机列表
     bkdata_kafka_host_list = bkdata_kafka_data[0].get("ip_list", "").split(",")
 
-    # NOTE: 获取 metadata 和接口返回的交集，然后任取其中一个; 如果不存在，则直接报错
-    existed_host_list = list(set(bkdata_kafka_host_list) & set(kafka_domain_cluster_id.keys()))
+    # 查找已注册的可用主机
+    # 获取metadata和API返回的主机交集
+    existed_host_list = list(
+        set(bkdata_kafka_host_list) & set(kafka_domain_cluster_id.keys())
+    )
+
+    # 无可用主机时抛出异常
     if not existed_host_list:
-        logger.error("bkdata kafka host not registered ClusterInfo, bkdata resp: %s", json.dumps(bkdata_kafka_data))
+        logger.error(
+            "bkdata kafka host not registered ClusterInfo, bkdata resp: %s",
+            json.dumps(bkdata_kafka_data)
+        )
         raise ValueError("bkdata kafka host not registered ClusterInfo")
 
-    # 返回数据
+    # 随机选择一个可用主机并返回结果
     host = random.choice(existed_host_list)
     cluster_id = kafka_domain_cluster_id[host]
     logger.info("refine exist kafka, cluster_id: %s, host: %s", cluster_id, host)
@@ -80,23 +105,33 @@ def refine_bkdata_kafka_info(bk_tenant_id: str):
 def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int):
     """根据类型接入计算平台
 
-    1. 仅针对接入 influxdb 类型
+    该函数实现将指定数据源接入计算平台的核心流程，主要处理VictoriaMetrics类型数据源的接入。
+    包含空间信息处理、数据源校验、平台接入、记录创建及BCS集群特殊处理等步骤。
 
-    当出现异常时，记录日志，然后通过告警进行通知
+    1. 仅针对接入influxdb类型数据源
+    2. 异常处理通过日志记录并触发告警通知
+
+    :param bk_tenant_id: 蓝鲸租户ID（字符串格式）
+    :param bk_biz_id: 业务ID（整数类型）
+    :param table_id: 结果表标识符（字符串格式）
+    :param data_id: 数据源唯一标识（整数类型）
+    :return: None（通过return提前退出表示流程终止）
     """
     logger.info("bk_biz_id: %s, table_id: %s, data_id: %s start access vm", bk_biz_id, table_id, data_id)
 
     from metadata.models import AccessVMRecord, KafkaStorage, Space, SpaceVMInfo
 
-    # NOTE: 0 业务没有空间信息，不需要查询或者创建空间及空间关联的 vm
+    # 获取业务空间信息
+    # NOTE: 0业务没有空间信息，无需处理
     space_data = {}
     try:
-        # NOTE: 这里 bk_biz_id 为整型
+        # 通过业务ID获取空间信息（强制转换bk_biz_id为整数）
         space_data = Space.objects.get_space_info_by_biz_id(int(bk_biz_id))
     except Exception as e:
         logger.error("get space error by biz_id: %s, error: %s", bk_biz_id, e)
 
-    # 如果不在空间接入 vm 的记录中，则创建记录
+    # 空间VM记录创建
+    # 检查并创建业务对应的空间VM信息记录
     if (
         space_data
         and not SpaceVMInfo.objects.filter(
@@ -105,27 +140,33 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
     ):
         SpaceVMInfo.objects.create_record(space_type=space_data["space_type"], space_id=space_data["space_id"])
 
-    # 检查是否已经写入 kafka storage，如果已经存在，认为已经接入 vm，则直接返回
+    # 接入状态检查
+    # 若已存在接入记录则直接返回
     if AccessVMRecord.objects.filter(result_table_id=table_id).exists():
         logger.info("table_id: %s has already been created", table_id)
         return
 
-    # 获取数据源类型、集群等信息
+    # 配置参数准备
+    # 获取数据源类型和集群信息
     data_type_cluster = get_data_type_cluster(data_id)
     data_type = data_type_cluster.get("data_type")
 
-    # 获取 vm 集群名称
+    # 获取VM集群配置
     vm_cluster = get_vm_cluster_id_name(bk_tenant_id, space_data.get("space_type", ""), space_data.get("space_id", ""))
     vm_cluster_name = vm_cluster.get("cluster_name")
-    # 调用接口接入数据平台
+
+    # 数据平台接入执行
+    # 包含BCS集群标识、数据名称、时间戳精度等参数准备
     bcs_cluster_id = data_type_cluster.get("bcs_cluster_id")
     data_name_and_topic = get_bkbase_data_name_and_topic(table_id)
     timestamp_len = get_timestamp_len(data_id)
+
     try:
+        # 执行VM平台接入操作
         vm_data = access_vm_by_kafka(
             bk_tenant_id, table_id, data_name_and_topic["data_name"], vm_cluster_name, timestamp_len
         )
-        # 上报指标（接入成功）
+        # 上报成功指标
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V3_VERSION_NAME,
             data_id=data_id,
@@ -134,8 +175,8 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
             strategy=DataLink.BK_STANDARD_V2_TIME_SERIES,
         )
     except Exception as e:
+        # 异常处理及失败指标上报
         logger.error("access vm error, %s", e)
-        # 上报指标（接入失败）
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V3_VERSION_NAME,
             data_id=data_id,
@@ -145,13 +186,16 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
         )
         return
 
-    # 如果接入返回为空，则直接返回
+    # 接入结果校验
+    # 检查返回值中的错误信息
     if vm_data.get("err_msg"):
         logger.error("access vm error")
         return
 
-    # 创建 KafkaStorage 和 AccessVMRecord 记录
+    # 数据记录创建
+    # 包含Kafka存储和VM接入记录的创建
     try:
+        # Kafka存储创建（若不存在）
         if not vm_data.get("kafka_storage_exist"):
             KafkaStorage.create_table(
                 bk_tenant_id=bk_tenant_id,
@@ -165,6 +209,7 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
         logger.error("create KafkaStorage error for access vm: %s", e)
 
     try:
+        # 创建VM接入记录
         AccessVMRecord.objects.create(
             bk_tenant_id=bk_tenant_id,
             data_type=data_type,
@@ -181,10 +226,8 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
 
     logger.info("bk_biz_id: %s, table_id: %s, data_id: %s access vm successfully", bk_biz_id, table_id, data_id)
 
-    # NOTE: 针对 bcs 添加合流流程
-    # 1. 当前环境允许合流操作
-    # 2. 合流的目的rt存在
-    # 3. 当出现异常时，记录对应日志
+    # BCS集群合流处理
+    # 需满足：1.启用合流 2.存在目标RT 3.具有BCS集群ID
     if (
         settings.BCS_DATA_CONVERGENCE_CONFIG.get("is_enabled")
         and settings.BCS_DATA_CONVERGENCE_CONFIG.get("k8s_metric_rt")
@@ -192,22 +235,25 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
         and bcs_cluster_id
     ):
         try:
+            # 获取合流参数
             data_name_and_dp_id = get_bcs_convergence_data_name_and_dp_id(table_id)
+            # 构建清洗参数
             clean_data = BkDataAccessor(
                 bk_tenant_id=bk_tenant_id,
                 bk_table_id=data_name_and_dp_id["data_name"],
                 data_hub_name=data_name_and_dp_id["data_name"],
                 timestamp_len=timestamp_len,
             ).clean
+            # 设置目标结果表
             clean_data["result_table_id"] = (
                 settings.BCS_DATA_CONVERGENCE_CONFIG["k8s_metric_rt"]
                 if data_type == AccessVMRecord.BCS_CLUSTER_K8S
                 else settings.BCS_DATA_CONVERGENCE_CONFIG["custom_metric_rt"]
             )
             clean_data["processing_id"] = data_name_and_dp_id["dp_id"]
-            # 创建清洗
+            # 创建清洗任务
             api.bkdata.databus_cleans(**clean_data)
-            # 启动
+            # 启动清洗任务
             api.bkdata.start_databus_cleans(
                 result_table_id=clean_data["result_table_id"],
                 storages=["kafka"],
@@ -225,26 +271,42 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
 def access_vm_by_kafka(
     bk_tenant_id: str, table_id: str, raw_data_name: str, vm_cluster_name: str, timestamp_len: int
 ) -> dict:
-    """通过 kafka 配置接入 vm"""
+    """通过 kafka 配置接入 vm
+
+    该函数实现将指定结果表通过 Kafka 接入 VictoriaMetrics 存储的核心流程。
+    主要处理 Kafka 存储配置检查、数据清洗规则创建、VM 存储接入等操作。
+
+    :param bk_tenant_id: 蓝鲸租户ID（字符串格式）
+    :param table_id: 结果表ID（格式为"结果表名.模块名"）
+    :param raw_data_name: 原始数据名称（清洗后的数据标识）
+    :param vm_cluster_name: VM集群名称（目标存储集群标识）
+    :param timestamp_len: 时间戳长度（13位毫秒/16位纳秒）
+    :return: 包含接入结果的字典，成功时包含 clean_rt_id、bk_data_id、cluster_id 等信息，
+             失败时包含 err_msg 错误信息
+    """
     from metadata.models import BkDataStorage, KafkaStorage, ResultTable
 
+    # 初始化 Kafka 存储状态和集群ID
     kafka_storage_exist, storage_cluster_id = True, 0
     try:
+        # 查询现有 Kafka 存储配置
         kafka_storage = KafkaStorage.objects.get(bk_tenant_id=bk_tenant_id, table_id=table_id)
         storage_cluster_id = kafka_storage.storage_cluster_id
     except Exception as e:
         logger.info("query kafka storage error %s", e)
         kafka_storage_exist = False
 
-    # 如果不存在，则直接创建
+    # Kafka 存储配置不存在时的处理流程
     if not kafka_storage_exist:
         try:
+            # 获取 Kafka 集群配置信息
             kafka_data = refine_bkdata_kafka_info(bk_tenant_id=bk_tenant_id)
         except Exception as e:
             logger.error("get bkdata kafka host error, table_id: %s, error: %s", table_id, e)
             return {"err_msg": f"request vm api error, {e}"}
         storage_cluster_id = kafka_data["cluster_id"]
         try:
+            # 调用 VM 接入接口创建基础配置
             vm_data = access_vm(
                 bk_tenant_id=bk_tenant_id,
                 raw_data_name=raw_data_name,
@@ -256,16 +318,18 @@ def access_vm_by_kafka(
         except Exception as e:
             logger.error("request vm api error, table_id: %s, error: %s", table_id, e)
             return {"err_msg": f"request vm api error, {e}"}
-    # 创建清洗和入库 vm
+
+    # 数据清洗规则创建
     bk_base_data = BkDataStorage.objects.filter(bk_tenant_id=bk_tenant_id, table_id=table_id).first()
     if not bk_base_data:
         bk_base_data = BkDataStorage.objects.create(table_id=table_id)
     if bk_base_data.raw_data_id == -1:
         result_table = ResultTable.objects.get(bk_tenant_id=bk_tenant_id, table_id=table_id)
         bk_base_data.create_databus_clean(result_table)
-    # 重新读取一遍数据
+    # 重新加载数据以获取最新状态
     bk_base_data.refresh_from_db()
 
+    # 构建清洗参数
     data_biz_id = get_tenant_datalink_biz_id(bk_tenant_id).data_biz_id
     raw_data_name = get_bkbase_data_name_and_topic(table_id)["data_name"]
     clean_data = BkDataAccessor(
@@ -285,16 +349,19 @@ def access_vm_by_kafka(
         }
     )
     clean_data["json_config"] = json.dumps(clean_data["json_config"])
+
     try:
+        # 创建并启动数据清洗任务
         bkbase_result_table_id = api.bkdata.databus_cleans(**clean_data)["result_table_id"]
-        # 启动
         api.bkdata.start_databus_cleans(result_table_id=bkbase_result_table_id, storages=["kafka"])
     except Exception as e:
         logger.error(
-            "create or start data clean error, table_id: %s, params: %s, error: %s", table_id, json.dumps(clean_data), e
+            "create or start data clean error, table_id: %s, params: %s, error: %s",
+            table_id, json.dumps(clean_data), e
         )
         return {"err_msg": f"request clean api error, {e}"}
-    # 接入 vm
+
+    # VM 存储接入处理
     try:
         storage_params = BkDataStorageWithDataID(bk_base_data.raw_data_id, raw_data_name, vm_cluster_name).value
         api.bkdata.create_data_storages(**storage_params)

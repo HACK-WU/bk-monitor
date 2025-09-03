@@ -64,6 +64,8 @@ class TimeSeriesGroup(CustomGroupBase):
     DEFAULT_STORAGE = ClusterInfo.TYPE_INFLUXDB
 
     # 默认INFLUXDB存储配置
+    # RP 是 Retention Policy（保留策略）的缩写，这是 InfluxDB 数据库中的一个核心概念。
+    # 使用INFLUXDB默认的保留策略，即系统统一设置的数据保留时间（通常在配置文件中设置，如30天）
     DEFAULT_STORAGE_CONFIG = {"use_default_rp": True}
 
     # Event字段配置
