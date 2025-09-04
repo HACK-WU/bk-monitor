@@ -340,15 +340,15 @@ class DataSource(models.Model):
 
             real_table_id_list = list(real_table_ids.keys())
 
-            # 批量获取结果表配置
-            # 1. 获取结果表级别选项
-            # 2. 获取字段信息
-            # 3. 构建结果表信息列表
-            table_id_option_dict = ResultTableOption.batch_result_table_option(real_table_id_list)
-            table_field_dict = ResultTableField.batch_get_fields(real_table_id_list, is_consul_config)
-
-            # 生成结果表配置列表
-            # 包含基础信息、存储配置、字段列表和选项参数
+            # 批量获取结果表级别选项
+            table_id_option_dict = ResultTableOption.batch_result_table_option(
+                real_table_id_list, bk_tenant_id=self.bk_tenant_id
+            )
+            # 获取字段信息
+            table_field_dict = ResultTableField.batch_get_fields(
+                real_table_id_list, is_consul_config, bk_tenant_id=self.bk_tenant_id
+            )
+            # 判断需要未删除，而且在启用状态的结果表
             for rt, rt_info in real_table_ids.items():
                 result_table_info_list.append(
                     {
