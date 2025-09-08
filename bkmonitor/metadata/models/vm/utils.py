@@ -554,42 +554,55 @@ def get_data_source(data_id):
 def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int):
     """
     接入计算平台V4链路
-    @param bk_biz_id: 业务ID
-    @param table_id: 结果表ID
-    @param data_id: 数据源ID
+    
+    该函数负责将数据源接入到VM(VictoriaMetrics)存储集群，并创建相应的数据链路。
+    主要包括空间信息确认、VM集群信息获取、数据链路创建和联邦集群配置等步骤。
+    
+    @param bk_tenant_id: 租户ID，用于标识租户身份
+    @param bk_biz_id: 业务ID，用于标识具体的业务
+    @param table_id: 结果表ID，数据存储的表标识
+    @param data_id: 数据源ID，数据来源的唯一标识
     """
     logger.info("bk_biz_id: %s, table_id: %s, data_id: %s start access v2 vm", bk_biz_id, table_id, data_id)
 
     from metadata.models import AccessVMRecord, DataSource, Space, SpaceVMInfo
 
-    # 0. 确认空间信息
-    # NOTE: 0 业务没有空间信息，不需要查询或者创建空间及空间关联的 vm
+    # 步骤0: 确认空间信息
+    # NOTE: 业务ID为0的情况下没有空间信息，不需要查询或创建空间及空间关联的VM
+    # 空间信息用于确定数据存储的逻辑隔离边界
     space_data = {}
     try:
-        # NOTE: 这里 bk_biz_id 为整型
+        # NOTE: 这里确保 bk_biz_id 为整型，获取业务对应的空间信息
+        # 空间信息包含space_type和space_id，用于后续VM集群的选择和配置
         space_data = Space.objects.get_space_info_by_biz_id(int(bk_biz_id))
     except Exception as e:  # pylint: disable=broad-except
         logger.error("get space error by biz_id: %s, error: %s", bk_biz_id, e)
 
-    # 1，获取VM集群信息
+    # 步骤1: 获取VM集群信息
+    # 根据租户ID、空间类型和空间ID来确定应该使用的VM存储集群
+    # VM集群是实际存储时序数据的VictoriaMetrics集群
     vm_cluster = get_vm_cluster_id_name(
         bk_tenant_id=bk_biz_id_to_bk_tenant_id(bk_biz_id),
         space_type=space_data.get("space_type", ""),
         space_id=space_data.get("space_id", ""),
     )
-    # 1.1 校验是否存在SpaceVMInfo记录，如果不存在，则进行创建记录
+    # 步骤1.1: 校验并创建空间与VM集群的关联记录
+    # SpaceVMInfo用于记录空间与VM集群的映射关系，确保数据路由的正确性
     if (
         space_data
         and not SpaceVMInfo.objects.filter(
             space_type=space_data["space_type"], space_id=space_data["space_id"]
         ).exists()
     ):
+        # 创建空间与VM集群的关联记录，建立数据存储的映射关系
         SpaceVMInfo.objects.create_record(
             space_type=space_data["space_type"], space_id=space_data["space_id"], vm_cluster_id=vm_cluster["cluster_id"]
         )
 
     try:
-        # 1.2 NOTE: 这里可能因为事务+异步的原因，导致查询时DB中的DataSource未就绪，添加重试机制
+        # 步骤1.2: 获取数据源信息
+        # NOTE: 由于事务和异步操作的原因，DataSource记录可能还未完全写入DB
+        # 因此使用重试机制确保能够正确获取到数据源信息
         ds = get_data_source(data_id)
     except RetryError as e:
         logger.error("create vm data link error, get data_id: %s, error: %s", data_id, e.__cause__)
@@ -598,15 +611,20 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
         logger.error("create vm data link error, data_id: %s not found", data_id)
         return
 
-    # 2. 获取 vm 集群名称
+    # 步骤2: 获取VM集群名称
+    # 集群名称用于后续创建数据链路时指定目标存储集群
     vm_cluster_name = vm_cluster.get("cluster_name")
 
-    # 3. 获取数据源对应的集群 ID
+    # 步骤3: 获取数据源对应的BCS集群信息
+    # 用于获取数据来源的Kubernetes集群ID，支持容器化环境的数据采集
     data_type_cluster = get_data_type_cluster(data_id=data_id)
-    # 4. 检查是否已经接入过VM，若已经接入过VM，尝试进行联邦集群检查和创建联邦汇聚链路操作
+    # 步骤4: 检查是否已经接入过VM
+    # 如果该结果表已经创建过VM接入记录，则只需要创建联邦集群的数据链路
+    # 联邦集群用于跨集群的数据汇聚和查询
     if AccessVMRecord.objects.filter(result_table_id=table_id).exists():
         logger.info("table_id: %s has already been created,now try to create fed vm data link", table_id)
 
+        # 创建联邦集群的数据链路，实现跨集群数据汇聚
         create_fed_bkbase_data_link(
             bk_biz_id=bk_biz_id,
             monitor_table_id=table_id,
@@ -616,14 +634,17 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
         )
         return
 
-    # 5. 接入 vm 链路
+    # 步骤5: 创建VM数据链路
+    # 这是主要的数据链路创建逻辑，将数据源接入到VM存储集群
     try:
         logger.info("access_v2_bkdata_vm: enable_v2_access_bkbase_method is True, now try to create bkbase data link")
+        # 获取BCS集群ID，用于容器化环境的数据采集配置
         bcs_cluster_id = None
         bcs_record = BCSClusterInfo.objects.filter(K8sMetricDataID=ds.bk_data_id)
         if bcs_record:
             bcs_cluster_id = bcs_record.first().cluster_id
 
+        # 创建基础的数据链路，建立从数据源到VM存储的完整链路
         create_bkbase_data_link(
             bk_biz_id=bk_biz_id,
             data_source=ds,
@@ -632,6 +653,7 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
             bcs_cluster_id=bcs_cluster_id,
         )
 
+        # 上报数据链路创建成功的指标，用于监控数据链路的创建状态
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V4_VERSION_NAME,
             data_id=data_id,
@@ -640,7 +662,9 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
             strategy=DataLink.BK_STANDARD_V2_TIME_SERIES,
         )
     except RetryError as e:
+        # 处理重试失败的情况，通常是由于外部依赖服务不可用
         logger.error("create vm data link error, table_id: %s, data_id: %s, error: %s", table_id, data_id, e.__cause__)
+        # 上报数据链路创建失败的指标
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V4_VERSION_NAME,
             data_id=data_id,
@@ -650,7 +674,9 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
         )
         return
     except Exception as e:  # pylint: disable=broad-except
+        # 处理其他所有异常情况，确保不会中断整个流程
         logger.error("create vm data link error, table_id: %s, data_id: %s, error: %s", table_id, data_id, e)
+        # 上报数据链路创建失败的指标
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V4_VERSION_NAME,
             data_id=data_id,
@@ -661,7 +687,9 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
         return
 
     try:
-        # 创建联邦
+        # 步骤6: 创建联邦集群数据链路
+        # 联邦集群用于实现跨集群的数据汇聚和统一查询能力
+        # 特别是在多集群BCS环境中，需要将各个集群的数据汇聚到统一的查询入口
         create_fed_bkbase_data_link(
             bk_biz_id=bk_biz_id,
             monitor_table_id=table_id,
@@ -669,6 +697,7 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
             storage_cluster_name=vm_cluster_name,
             bcs_cluster_id=data_type_cluster["bcs_cluster_id"],
         )
+        # 上报联邦集群数据链路创建成功的指标
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V4_VERSION_NAME,
             data_id=data_id,
@@ -677,7 +706,9 @@ def access_v2_bkdata_vm(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_i
             strategy=DataLink.BCS_FEDERAL_SUBSET_TIME_SERIES,
         )
     except Exception as e:  # pylint: disable=broad-except
+        # 联邦集群创建失败不影响基础数据链路的正常使用
         logger.error("create fed vm data link error, table_id: %s, data_id: %s, error: %s", table_id, data_id, e)
+        # 上报联邦集群数据链路创建失败的指标
         report_metadata_data_link_access_metric(
             version=DATA_LINK_V4_VERSION_NAME,
             data_id=data_id,

@@ -9,6 +9,7 @@ from django.utils.functional import cached_property
 from django.utils.translation import gettext as _
 from kubernetes import client as k8s_client
 
+from bkmonitor.metadata.models.custom_report.base import CustomGroupBase
 from bkmonitor.utils.db import JsonField
 from metadata import config
 from metadata.models import common
@@ -300,7 +301,7 @@ class BCSClusterInfo(models.Model):
             )
 
             # 创建自定义指标/事件组
-            report_class = register_info["report_class"]
+            report_class: CustomGroupBase = register_info["report_class"]
             if register_info["usage"] == "metric":
                 # 指标类型配置
                 default_storage_config = {"proxy_cluster_name": settings.INFLUXDB_DEFAULT_PROXY_CLUSTER_NAME_FOR_K8S}
