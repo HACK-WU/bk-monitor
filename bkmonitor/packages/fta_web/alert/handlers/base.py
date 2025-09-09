@@ -495,7 +495,8 @@ class BaseQueryHandler:
         # 遍历所有条件进行组合
         for condition in conditions:
             q = self.parse_condition_item(condition)
-            # 处理不等于的特殊逻辑
+            if q is None:
+                continue
             if condition["method"] == "neq":
                 q = ~q
 
