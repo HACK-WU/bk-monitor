@@ -152,7 +152,7 @@ def access_bkdata(bk_tenant_id: str, bk_biz_id: int, table_id: str, data_id: int
     data_type = data_type_cluster.get("data_type")
 
     # 获取VM集群配置
-    vm_cluster = get_vm_cluster_id_name(bk_tenant_id, space_data.get("space_type", ""), space_data.get("space_id", ""))
+    vm_cluster = get_vm_cluster_id_name(bk_tenant_id, space_data.get("space_type", ""), space_id=space_data.get("space_id", ""))
     vm_cluster_name = vm_cluster.get("cluster_name")
 
     # 数据平台接入执行
@@ -286,52 +286,76 @@ def access_vm_by_kafka(
     """
     from metadata.models import BkDataStorage, KafkaStorage, ResultTable
 
-    # 初始化 Kafka 存储状态和集群ID
+    # 初始化 Kafka 存储状态标志和集群ID
+    # kafka_storage_exist: 标识该结果表是否已存在Kafka存储配置
+    # storage_cluster_id: 用于存储Kafka集群的唯一标识符
     kafka_storage_exist, storage_cluster_id = True, 0
+    
     try:
-        # 查询现有 Kafka 存储配置
+        # 根据租户ID和结果表ID查询现有的Kafka存储配置
+        # 如果存在则获取对应的存储集群ID，用于后续VM存储创建
         kafka_storage = KafkaStorage.objects.get(bk_tenant_id=bk_tenant_id, table_id=table_id)
         storage_cluster_id = kafka_storage.storage_cluster_id
     except Exception as e:
+        # 查询失败表示该结果表尚未配置Kafka存储，记录日志并标记状态
         logger.info("query kafka storage error %s", e)
         kafka_storage_exist = False
 
-    # Kafka 存储配置不存在时的处理流程
+    # Kafka 存储配置不存在时的初始化处理流程
     if not kafka_storage_exist:
         try:
-            # 获取 Kafka 集群配置信息
+            # 调用工具函数获取租户可用的Kafka集群配置信息
+            # 包含集群ID和主机地址等关键信息
             kafka_data = refine_bkdata_kafka_info(bk_tenant_id=bk_tenant_id)
         except Exception as e:
+            # Kafka集群信息获取失败，记录错误并返回失败信息
             logger.error("get bkdata kafka host error, table_id: %s, error: %s", table_id, e)
             return {"err_msg": f"request vm api error, {e}"}
+        
+        # 提取Kafka集群ID用于后续存储配置
         storage_cluster_id = kafka_data["cluster_id"]
+        
         try:
-            # 调用 VM 接入接口创建基础配置
+            # 直接调用VM接入接口创建基础配置（无需数据清洗流程）
+            # 这是简化的接入方式，适用于新建Kafka存储的场景
             vm_data = access_vm(
                 bk_tenant_id=bk_tenant_id,
                 raw_data_name=raw_data_name,
                 vm_cluster=vm_cluster_name,
                 timestamp_len=timestamp_len,
             )
+            # 将集群ID添加到返回结果中，用于调用方后续处理
             vm_data["cluster_id"] = storage_cluster_id
             return vm_data
         except Exception as e:
+            # VM接入失败，记录错误并返回失败信息
             logger.error("request vm api error, table_id: %s, error: %s", table_id, e)
             return {"err_msg": f"request vm api error, {e}"}
 
-    # 数据清洗规则创建
+    # 已存在Kafka存储时的数据清洗规则创建流程
+    # 首先查询或创建BkDataStorage记录，该记录用于管理数据清洗配置
     bk_base_data = BkDataStorage.objects.filter(bk_tenant_id=bk_tenant_id, table_id=table_id).first()
     if not bk_base_data:
+        # 不存在则创建新的BkDataStorage记录
         bk_base_data = BkDataStorage.objects.create(table_id=table_id)
+    
+    # 检查原始数据ID是否已分配，-1表示尚未创建数据清洗任务
     if bk_base_data.raw_data_id == -1:
+        # 获取结果表对象并创建数据清洗配置
         result_table = ResultTable.objects.get(bk_tenant_id=bk_tenant_id, table_id=table_id)
         bk_base_data.create_databus_clean(result_table)
-    # 重新加载数据以获取最新状态
+    
+    # 重新从数据库加载数据以获取最新的raw_data_id等信息
     bk_base_data.refresh_from_db()
 
-    # 构建清洗参数
+    # 构建数据清洗任务的参数配置
+    # 获取数据链路业务ID，用于在计算平台中标识业务归属
     data_biz_id = get_tenant_datalink_biz_id(bk_tenant_id).data_biz_id
+    # 重新获取数据名称，确保使用最新的命名规则
     raw_data_name = get_bkbase_data_name_and_topic(table_id)["data_name"]
+    
+    # 使用BkDataAccessor构建清洗配置参数
+    # 该类封装了清洗任务的标准配置模板
     clean_data = BkDataAccessor(
         bk_tenant_id=bk_tenant_id,
         bk_biz_id=data_biz_id,
@@ -340,21 +364,27 @@ def access_vm_by_kafka(
         vm_cluster=vm_cluster_name,
         timestamp_len=timestamp_len,
     ).clean
+    
+    # 补充清洗配置的额外参数
     clean_data.update(
         {
-            "bk_biz_id": data_biz_id,
-            "raw_data_id": bk_base_data.raw_data_id,
-            "clean_config_name": raw_data_name,
-            "kafka_storage_exist": kafka_storage_exist,
+            "bk_biz_id": data_biz_id,                    # 业务ID
+            "raw_data_id": bk_base_data.raw_data_id,     # 原始数据ID
+            "clean_config_name": raw_data_name,          # 清洗配置名称
+            "kafka_storage_exist": kafka_storage_exist,  # Kafka存储状态标志
         }
     )
+    # 将JSON配置转换为字符串格式，满足API调用要求
     clean_data["json_config"] = json.dumps(clean_data["json_config"])
 
     try:
-        # 创建并启动数据清洗任务
+        # 调用计算平台API创建数据清洗任务
+        # 返回的result_table_id用于后续启动清洗任务
         bkbase_result_table_id = api.bkdata.databus_cleans(**clean_data)["result_table_id"]
+        # 启动数据清洗任务，指定输出到Kafka存储
         api.bkdata.start_databus_cleans(result_table_id=bkbase_result_table_id, storages=["kafka"])
     except Exception as e:
+        # 清洗任务创建或启动失败，记录详细错误信息
         logger.error(
             "create or start data clean error, table_id: %s, params: %s, error: %s",
             table_id, json.dumps(clean_data), e
@@ -363,15 +393,20 @@ def access_vm_by_kafka(
 
     # VM 存储接入处理
     try:
+        # 构建VM存储的创建参数，包含数据ID、数据名称和集群名称
         storage_params = BkDataStorageWithDataID(bk_base_data.raw_data_id, raw_data_name, vm_cluster_name).value
+        # 调用计算平台API创建VM存储配置
         api.bkdata.create_data_storages(**storage_params)
+        
+        # 返回成功结果，包含关键信息供调用方使用
         return {
-            "clean_rt_id": f"{data_biz_id}_{raw_data_name}",
-            "bk_data_id": bk_base_data.raw_data_id,
-            "cluster_id": storage_cluster_id,
-            "kafka_storage_exist": kafka_storage_exist,
+            "clean_rt_id": f"{data_biz_id}_{raw_data_name}",  # 清洗后的结果表ID
+            "bk_data_id": bk_base_data.raw_data_id,           # 原始数据ID
+            "cluster_id": storage_cluster_id,                 # Kafka集群ID
+            "kafka_storage_exist": kafka_storage_exist,       # Kafka存储存在标志
         }
     except Exception as e:
+        # VM存储创建失败，记录错误信息
         logger.error("create vm storage error, %s", e)
         return {"err_msg": f"request vm storage api error, {e}"}
 
@@ -442,15 +477,56 @@ def report_metadata_data_link_status_info(data_link_name: str, biz_id: str, kind
 def get_vm_cluster_id_name(
     bk_tenant_id: str, space_type: str | None = "", space_id: str | None = "", vm_cluster_name: str | None = ""
 ) -> dict:
-    """获取 vm 集群 ID 和名称
-
-    1. 如果 vm 集群名称存在，则需要查询到对应的ID，如果查询不到，则需要抛出异常
-    2. 如果 vm 集群名称不存在，则需要查询空间是否已经接入过，如果已经接入过，则可以直接获取
-    3. 如果没有接入过，则需要使用默认值
+    """获取 VM 集群的 ID 和名称信息
+    
+    该函数用于获取指定租户下 VM 集群的标识信息，支持多种查询方式：
+    1. 通过集群名称精确查询
+    2. 通过空间类型和空间ID查询已关联的集群
+    3. 获取默认集群信息
+    
+    主要处理流程：
+    - 优先级1：如果提供了集群名称，则精确匹配查询集群信息
+    - 优先级2：如果提供了空间信息，则查询该空间关联的VM集群
+    - 优先级3：如果以上都不满足，则返回默认VM集群信息
+    
+    Args:
+        bk_tenant_id (str): 蓝鲸租户ID，用于多租户隔离
+        space_type (str, optional): 空间类型，如BKCC、BCS、BKCI、BKSAAS等。默认为空字符串
+        space_id (str, optional): 空间ID，与space_type配合使用进行空间标识。默认为空字符串
+        vm_cluster_name (str, optional): VM集群名称，用于精确匹配集群。默认为空字符串
+    
+    Returns:
+        dict: 包含集群信息的字典，格式为：
+            {
+                "cluster_id": int,      # VM集群的唯一标识ID
+                "cluster_name": str     # VM集群的名称
+            }
+    
+    Raises:
+        ValueError: 当满足以下条件时抛出：
+            - 指定的vm_cluster_name在ClusterInfo中不存在
+            - 指定的space关联的集群在ClusterInfo中不存在  
+            - 系统中不存在默认VM集群
+    
+    Note:
+        - 该函数会根据bk_tenant_id进行租户级别的数据隔离
+        - Space与VM集群的关联关系通过SpaceVMInfo模型维护
+        - 当空间未关联VM集群时，会记录警告日志但不抛出异常
+        - 默认集群通过is_default_cluster=True标识
+        
+    Example:
+        # 通过集群名称查询
+        result = get_vm_cluster_id_name("tenant_001", vm_cluster_name="vm-cluster-prod")
+        
+        # 通过空间信息查询
+        result = get_vm_cluster_id_name("tenant_001", space_type="BKCC", space_id="100")
+        
+        # 获取默认集群
+        result = get_vm_cluster_id_name("tenant_001")
     """
     from metadata.models import ClusterInfo, SpaceVMInfo
 
-    # vm 集群名称存在
+    # 步骤1：优先通过VM集群名称进行精确查询
     if vm_cluster_name:
         cluster = ClusterInfo.objects.filter(
             bk_tenant_id=bk_tenant_id, cluster_type=ClusterInfo.TYPE_VM, cluster_name=vm_cluster_name
@@ -461,12 +537,16 @@ def get_vm_cluster_id_name(
             )
             raise ValueError(f"vm_cluster_name: {vm_cluster_name} not found")
         return {"cluster_id": cluster.cluster_id, "cluster_name": cluster.cluster_name}
+    # 步骤2：通过空间类型和空间ID查询关联的VM集群
     elif space_type and space_id:
+        # 查询空间与VM集群的关联关系
         space_vm_info = SpaceVMInfo.objects.filter(space_type=space_type, space_id=space_id).first()
         if not space_vm_info:
+            # 空间未关联VM集群时记录警告，但继续使用默认集群
             logger.warning("space_type: %s, space_id: %s not access vm", space_type, space_id)
         else:
             try:
+                # 根据关联关系获取集群详细信息
                 cluster = ClusterInfo.objects.get(bk_tenant_id=bk_tenant_id, cluster_id=space_vm_info.vm_cluster_id)
             except Exception:
                 logger.error(
@@ -478,7 +558,7 @@ def get_vm_cluster_id_name(
                 raise ValueError(f"space_type: {space_type}, space_id: {space_id} not found vm cluster")
             return {"cluster_id": cluster.cluster_id, "cluster_name": cluster.cluster_name}
 
-    # 获取默认 VM 集群
+    # 步骤3：获取默认VM集群作为兜底方案
     cluster = ClusterInfo.objects.filter(
         bk_tenant_id=bk_tenant_id, cluster_type=ClusterInfo.TYPE_VM, is_default_cluster=True
     ).first()
@@ -489,20 +569,83 @@ def get_vm_cluster_id_name(
 
 
 def get_bkbase_data_name_and_topic(table_id: str) -> dict:
-    """获取 bkbase 的结果表名称"""
-    # 如果以 '__default__'结尾，则取前半部分
+    """获取 bkbase 的结果表名称和 Kafka 主题名称
+    
+    该函数用于根据监控平台的结果表ID生成符合蓝鲸数据平台(bkbase)规范的数据名称和Kafka主题名称。
+    主要处理表名规范化、长度限制、重复检查等逻辑，确保生成的名称符合数据平台的命名要求。
+    
+    处理流程说明：
+    1. 表名预处理：移除特殊后缀 '__default__'，获取实际的表标识符
+    2. 字符规范化：将横线和点号统一转换为下划线，避免命名冲突
+    3. 长度控制：截取后40个字符，防止名称过长导致的存储问题
+    4. VM前缀添加：添加 'vm_' 前缀标识这是VM相关的数据表
+    5. 重复性检查：检查是否存在重名，如存在则添加 '_add' 后缀避免冲突
+    6. 主题名生成：基于数据名称和默认业务ID生成Kafka主题名称
+    
+    在 bk-monitor 系统中，该函数主要用于VM接入流程，将监控数据通过Kafka消息队列
+    传输到VictoriaMetrics存储集群。生成的名称需要同时满足Kafka主题命名规范和
+    数据平台的表命名规范。
+    
+    Args:
+        table_id (str): 监控平台的结果表标识符，格式通常为 "数据库名.表名" 或包含特殊后缀。
+            例如："system.cpu"、"custom_metrics.__default__" 等。
+            该参数作为生成数据平台表名和Kafka主题的基础标识符。
+    
+    Returns:
+        dict: 包含数据名称和主题名称的字典，格式为：
+            {
+                "data_name": str,    # 符合数据平台规范的表名称，用于创建数据清洗和存储
+                "topic_name": str    # Kafka主题名称，用于消息队列的数据传输
+            }
+    
+    Note:
+        - 清洗结果表名称中不能出现连续的双下划线('__')，会被替换为单下划线
+        - 表名长度限制为40个字符，超出部分会被截断
+        - VM相关的表名统一添加 'vm_' 前缀进行标识
+        - Kafka主题名称通过数据名称拼接默认业务ID生成
+        - 当检测到重名时会自动添加 '_add' 后缀，并确保总长度不超过50个字符
+        - 该函数生成的名称将用于后续的数据清洗、存储和查询流程
+        
+    Example:
+        # 处理普通结果表
+        result = get_bkbase_data_name_and_topic("system.cpu")
+        # 返回: {"data_name": "vm_system_cpu", "topic_name": "vm_system_cpu591"}
+        
+        # 处理带默认后缀的表
+        result = get_bkbase_data_name_and_topic("custom_metrics.__default__") 
+        # 返回: {"data_name": "vm_custom_metrics", "topic_name": "vm_custom_metrics591"}
+        
+        # 处理长名称的表
+        result = get_bkbase_data_name_and_topic("very.long.table.name.with.many.segments.that.exceeds.limit")
+        # 返回: {"data_name": "vm_name_with_many_segments_that_exceeds_limit", "topic_name": "..."}
+    """
+    # 步骤1：预处理表标识符，移除特殊后缀
+    # '__default__' 后缀通常用于标识默认配置的结果表，在生成数据平台名称时需要移除
     if table_id.endswith("__default__"):
         table_id = table_id.split(".__default__")[0]
+    
+    # 步骤2：字符规范化和长度控制
+    # 将横线、点号、双下划线统一转换为单下划线，确保符合命名规范
+    # 截取后40个字符，避免名称过长导致的存储和查询问题
     name = f"{table_id.replace('-', '_').replace('.', '_').replace('__', '_')[-40:]}"
-    # NOTE: 清洗结果表不能出现双下划线
+    
+    # 步骤3：添加VM前缀标识并规范化双下划线
+    # 'vm_' 前缀用于标识这是VM存储相关的数据表
+    # 清洗结果表中不允许出现双下划线，需要统一替换为单下划线
     vm_name = f"vm_{name}".replace("__", "_")
-    # 兼容部分场景中划线和下划线允许同时存在的情况
+    
+    # 步骤4：重复性检查和冲突避免
+    # 检查生成的名称是否与现有VM结果表重复，如重复则添加后缀
     is_exist = AccessVMRecord.objects.filter(vm_result_table_id__contains=vm_name).exists()
     if is_exist:
+        # 确保添加后缀后的总长度不超过50个字符
         if len(vm_name) > 45:
             vm_name = vm_name[:45]
         vm_name = vm_name + "_add"
 
+    # 步骤5：生成返回结果
+    # data_name: 用于数据平台的表标识符
+    # topic_name: 用于Kafka消息队列的主题名称，拼接默认业务ID
     return {"data_name": vm_name, "topic_name": f"{vm_name}{settings.DEFAULT_BKDATA_BIZ_ID}"}
 
 

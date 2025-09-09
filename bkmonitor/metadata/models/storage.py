@@ -4670,73 +4670,124 @@ class BkDataStorage(models.Model, StorageResultTable):
             tasks.access_to_bk_data_task.apply_async(args=(self.table_id,), countdown=60)
 
     def create_databus_clean(self, result_table):
+        """创建数据总线清洗任务
+        
+        该方法实现将指定结果表的数据通过Kafka接入计算平台(BkData)的核心流程。
+        主要处理Kafka存储配置检查、接入参数构建、计算平台API调用等操作。
+        
+        处理流程：
+        1. 验证结果表是否已配置Kafka存储
+        2. 提取Kafka集群连接信息和认证配置
+        3. 构建计算平台接入参数（包含数据源和访问配置）
+        4. 调用计算平台API创建接入部署计划
+        5. 更新本地raw_data_id记录
+        
+        Args:
+            result_table: 结果表对象，包含表ID、表名等基础信息
+            
+        Raises:
+            ValueError: 当结果表数据未写入消息队列时抛出
+            Exception: 当调用计算平台API失败时抛出原始异常
+            
+        Note:
+            - raw_data_name长度限制为50个字符（计算平台要求）
+            - 使用结果表ID生成唯一的Kafka消费组名称
+            - 支持SASL认证的Kafka集群连接
+        """
+        # 验证Kafka存储配置是否存在
+        # 查询指定结果表的Kafka存储配置，确保数据已正确写入消息队列
         kafka_storage = KafkaStorage.objects.filter(
             table_id=result_table.table_id, bk_tenant_id=self.bk_tenant_id
         ).first()
         if not kafka_storage:
+            # 结果表未配置Kafka存储时抛出异常，提示用户检查配置
             raise ValueError(_(f"结果表[{result_table.table_id}]数据未写入消息队列，请确认后重试"))
 
-        # 增加接入部署计划
-        topic = kafka_storage.topic
-        partition = kafka_storage.partition
-        consul_config = kafka_storage.storage_cluster.consul_config
+        # 提取Kafka集群连接信息
+        # 从Kafka存储配置中获取Topic、分区和集群配置信息
+        topic = kafka_storage.topic                                    # Kafka主题名称
+        partition = kafka_storage.partition                            # 分区数量
+        consul_config = kafka_storage.storage_cluster.consul_config    # Consul配置信息
 
+        # 构建Kafka broker连接地址
+        # 优先使用集群配置中的域名和端口，回退到全局配置
         domain = consul_config.get("cluster_config", {}).get("domain_name")
         port = consul_config.get("cluster_config", {}).get("port")
         # NOTE: kafka broker_url 以实际配置为准，如果没有配置，再使用默认的 broker url
         broker_url = settings.BK_DATA_KAFKA_BROKER_URL
         if domain and port:
+            # 使用集群特定的连接地址
             broker_url = f"{domain}:{port}"
-        is_sasl = consul_config.get("cluster_config", {}).get("is_ssl_verify")
-        user = consul_config.get("auth_info", {}).get("username")
-        passwd = consul_config.get("auth_info", {}).get("password")
-        # 采用结果表区分消费组
+        
+        # 提取Kafka安全认证配置
+        # 获取SSL验证、用户名和密码等认证信息
+        is_sasl = consul_config.get("cluster_config", {}).get("is_ssl_verify")    # SSL验证标志
+        user = consul_config.get("auth_info", {}).get("username")                 # 认证用户名
+        passwd = consul_config.get("auth_info", {}).get("password")               # 认证密码
+        
+        # 生成Kafka消费组名称
+        # 采用结果表ID生成唯一的消费组标识，确保不同结果表使用独立的消费组
         KAFKA_CONSUMER_GROUP_NAME = gen_bk_data_rt_id_without_biz_id(result_table.table_id)
 
-        # 计算平台要求，raw_data_name不能超过50个字符
+        # 构建原始数据名称
+        # 计算平台要求raw_data_name不能超过50个字符，使用前缀+表ID的格式
         raw_data_name = "{}_{}".format(settings.BK_DATA_RT_ID_PREFIX, result_table.table_id.replace(".", "__"))[-50:]
+        
+        # 构建计算平台接入参数
+        # 按照计算平台API规范组装完整的接入配置参数
         params = {
-            "data_scenario": "queue",
-            "bk_biz_id": settings.BK_DATA_BK_BIZ_ID,
-            "description": "",
+            "data_scenario": "queue",                           # 数据场景：队列模式
+            "bk_biz_id": settings.BK_DATA_BK_BIZ_ID,           # 计算平台业务ID
+            "description": "",                                  # 接入描述信息
+            # 原始数据接入配置
             "access_raw_data": {
-                "raw_data_name": raw_data_name,
-                "maintainer": settings.BK_DATA_PROJECT_MAINTAINER,
-                "raw_data_alias": result_table.table_name_zh,
-                "data_source": "kafka",
-                "data_encoding": "UTF-8",
-                "sensitivity": "private",
-                "description": _("接入配置 ({})").format(result_table.table_name_zh),
-                "tags": [],
-                "data_source_tags": ["src_kafka"],
+                "raw_data_name": raw_data_name,                             # 原始数据名称（唯一标识）
+                "maintainer": settings.BK_DATA_PROJECT_MAINTAINER,         # 数据维护人员
+                "raw_data_alias": result_table.table_name_zh,               # 数据别名（中文名称）
+                "data_source": "kafka",                                     # 数据源类型
+                "data_encoding": "UTF-8",                                   # 数据编码格式
+                "sensitivity": "private",                                   # 数据敏感级别
+                "description": _("接入配置 ({})").format(result_table.table_name_zh),  # 配置描述
+                "tags": [],                                                 # 数据标签
+                "data_source_tags": ["src_kafka"],                         # 数据源标签
             },
+            # 接入连接配置
             "access_conf_info": {
+                # 采集模式配置：增量采集，无周期限制
                 "collection_model": {"collection_type": "incr", "start_at": 1, "period": "-1"},
+                # Kafka资源配置
                 "resource": {
-                    "type": "kafka",
+                    "type": "kafka",                                # 资源类型
                     "scope": [
                         {
-                            "master": broker_url,
-                            "group": KAFKA_CONSUMER_GROUP_NAME,
-                            "topic": topic,
-                            "tasks": partition,
-                            "use_sasl": is_sasl,
-                            "security_protocol": "SASL_PLAINTEXT",
-                            "sasl_mechanism": "SCRAM-SHA-512",
-                            "user": user,
-                            "password": passwd,
+                            "master": broker_url,                           # Kafka broker地址
+                            "group": KAFKA_CONSUMER_GROUP_NAME,             # 消费组名称
+                            "topic": topic,                                 # 主题名称
+                            "tasks": partition,                             # 任务分区数
+                            "use_sasl": is_sasl,                           # 是否使用SASL认证
+                            "security_protocol": "SASL_PLAINTEXT",         # 安全协议
+                            "sasl_mechanism": "SCRAM-SHA-512",             # SASL认证机制
+                            "user": user,                                   # 认证用户名
+                            "password": passwd,                             # 认证密码
                         }
                     ],
                 },
             },
         }
+        
         try:
+            # 调用计算平台API创建接入部署计划
+            # 返回的raw_data_id用于标识该数据源在计算平台中的唯一ID
             result = api.bkdata.access_deploy_plan(**params)
             logger.info("access to bkdata, result:%s", result)
 
+            # 更新本地记录的原始数据ID
+            # 将计算平台返回的raw_data_id保存到本地数据库，用于后续数据处理
             self.raw_data_id = result["raw_data_id"]
             self.save()
         except Exception:  # noqa
+            # API调用失败处理
+            # 记录详细的错误日志并重新抛出异常，便于上层调用者处理
             logger.exception("access to bkdata failed, params:%s", params)
             raise  # 这里继续往外抛出去
 
