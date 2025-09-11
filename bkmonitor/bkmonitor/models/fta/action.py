@@ -1,6 +1,6 @@
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
-Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
+Copyright (C) 2017-2025 Tencent. All rights reserved.
 Licensed under the MIT License (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at http://opensource.org/licenses/MIT
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
@@ -17,7 +17,7 @@ from importlib import import_module
 
 import jmespath
 from django.conf import settings
-from django.db import connections, models
+from django.db import models
 from django.utils.translation import gettext as _
 
 from bkmonitor.documents import AlertLog
@@ -755,44 +755,6 @@ class ConvergeInstance(AbstractRecordModel):
         ordering = ("-id",)
 
 
-class BulkCreateIgnoreManager(ModelManager):
-    def bulk_insert_ignore(self, create_fields, values):
-        """
-        Bulk insert/ignore
-        @param create_fields : list, required, fields for the insert field declaration
-        @param values : list of tuples. each tuple must have same len() as create_fields
-        Notes on usage :
-            create_fields = ['f1', 'f2', 'f3']
-            values = [
-                (1, 2, 3),
-                (4, 5, 6),
-                (5, 3, 8)
-            ]
-        Example usage :
-            modelName.objects.bulk_insert_ignore(
-                create_fields,
-                values
-            )
-        Remember to add to model declarations:
-            objects = BulkInsertManager() # custom manager
-        @return False on fail
-        """
-
-        cursor = connections[settings.BACKEND_DATABASE_NAME].cursor()
-        values_sql = "({})".format(",".join([" %s " for i in range(len(create_fields))]))  # correct format
-
-        sql = "INSERT IGNORE INTO {} ({}) VALUES {}".format(
-            self.model._meta.db_table, ",".join(create_fields), values_sql
-        )
-        result = False
-        try:
-            cursor.executemany(sql, values)
-            result = True
-        except BaseException as error:
-            logger.exception("insert error : %s， format_sql %s, values %s", str(error), sql, values)
-        return result
-
-
 class ConvergeRelation(models.Model):
     """
     Converge 的 many_to_many 关联
@@ -815,7 +777,7 @@ class ConvergeRelation(models.Model):
     )
     alerts = JsonField("防御的告警列表", default=[])
 
-    objects = BulkCreateIgnoreManager()
+    objects = ModelManager()
 
     class Meta:
         unique_together = ("converge_id", "related_id", "related_type")

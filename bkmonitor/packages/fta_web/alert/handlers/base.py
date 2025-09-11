@@ -1,6 +1,6 @@
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
-Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
+Copyright (C) 2017-2025 Tencent. All rights reserved.
 Licensed under the MIT License (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at http://opensource.org/licenses/MIT
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
@@ -495,7 +495,8 @@ class BaseQueryHandler:
         # 遍历所有条件进行组合
         for condition in conditions:
             q = self.parse_condition_item(condition)
-            # 处理不等于的特殊逻辑
+            if q is None:
+                continue
             if condition["method"] == "neq":
                 q = ~q
 
@@ -520,9 +521,9 @@ class BaseQueryHandler:
         参数:
             condition: 包含查询条件的字典对象，格式要求:
                 {
-                    "method": "include/exclude/terms",
+                    "method": "include/exclude/terms/gte/gt/lte/lt",
                     "key": 字段名称,
-                    "value": 匹配值(字符串或列表)
+                    "value": 匹配值(字符串、列表或范围对象)
                 }
 
         返回值:
@@ -535,7 +536,9 @@ class BaseQueryHandler:
         2. 排除查询(exclude):
             - 单值转换为取反的通配符查询
             - 多值生成多个通配符查询后整体取反
-        3. 默认terms查询:
+        3. 范围查询(gte/gt/lte/lt):
+            - 支持大于等于、大于、小于等于、小于的范围比较
+        4. 默认terms查询:
             - 直接转换为terms精确匹配查询
         """
         if condition["method"] == "include":
@@ -555,6 +558,14 @@ class BaseQueryHandler:
                 return ~(queries[0] if len(queries) == 1 else Q("bool", should=queries))
             # 生成单个取反wildcard查询
             return ~Q("wildcard", **{condition["key"]: f"*{condition['value']}*"})
+
+        elif condition["method"] in ["gte", "gt", "lte", "lt"]:
+            # 范围查询：支持大于、大于等于、小于、小于等于操作
+            # 构建range查询条件，用于数值或日期字段的范围比较
+            value = condition["value"]
+            if isinstance(value, list) and value:
+                value = value[0]
+            return Q("range", **{condition["key"]: {condition["method"]: value}})
 
         # 默认执行terms精确匹配查询
         return Q("terms", **{condition["key"]: condition["value"]})

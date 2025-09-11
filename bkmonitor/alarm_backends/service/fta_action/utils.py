@@ -1,6 +1,6 @@
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
-Copyright (C) 2017-2021 THL A29 Limited, a Tencent company. All rights reserved.
+Copyright (C) 2017-2025 Tencent. All rights reserved.
 Licensed under the MIT License (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at http://opensource.org/licenses/MIT
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
@@ -172,12 +172,15 @@ class PushActionProcessor:
             converge_info = DimensionCalculator(
                 action_instance, converge_config=converge_config, alerts=alerts
             ).calc_dimension()
-            task_id = run_converge.delay(
-                converge_config,
-                action_instance.id,
-                ConvergeType.ACTION,
-                converge_info["converge_context"],
-                alerts=[alert.to_dict() for alert in alerts],
+            task_id = run_converge.apply_async(
+                args=(
+                    converge_config,
+                    action_instance.id,
+                    ConvergeType.ACTION,
+                    converge_info["converge_context"],
+                    [alert.to_dict() for alert in alerts],
+                ),
+                countdown=3,
             )
             logger.info(
                 "[push_actions_to_converge_queue] push action(%s) to converge queue, converge_config %s,  task id %s",

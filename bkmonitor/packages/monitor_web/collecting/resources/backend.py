@@ -1,6 +1,6 @@
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
-Copyright (C) 2017-2024 THL A29 Limited, a Tencent company. All rights reserved.
+Copyright (C) 2017-2025 Tencent. All rights reserved.
 Licensed under the MIT License (the "License"); you may not use this file except in compliance with the License.
 You may obtain a copy of the License at http://opensource.org/licenses/MIT
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
@@ -153,7 +153,7 @@ class CollectConfigListResource(Resource):
         # 处理K8S插件采集配置的特殊状态逻辑
         # 仅处理处于准备或部署中的K8S插件配置
         for collect_config in config_data_list:
-            # todo 可以优化，批量查询
+            # 跳过非k8s插件
             if plugin_id_type_map.get(collect_config.plugin_id) != PluginType.K8S:
                 continue
 
@@ -182,7 +182,7 @@ class CollectConfigListResource(Resource):
             else:
                 operation_result = OperationResult.WARNING
 
-            # 构建缓存数据并记录需要更新的K8S配置
+            # 更新缓存
             cache_data = {
                 "error_instance_count": error_count,
                 "total_instance_count": total_count,
@@ -435,7 +435,8 @@ class CollectConfigListResource(Resource):
             try:
                 self.get_realtime_data(config_data_list, bk_tenant_id)
             except Exception:
-                pass  # 失败时保留缓存数据
+                # 尝试实时获取，获取失败就用缓存数据
+                pass
 
         plugin_ids = set(config.plugin_id for config in config_data_list)
         plugins = CollectorPluginMeta.objects.filter(bk_tenant_id=bk_tenant_id, plugin_id__in=plugin_ids)
@@ -513,7 +514,7 @@ class CollectConfigListResource(Resource):
         if update_configs:
             CollectConfigMeta.objects.bulk_update(update_configs, ["cache_data"])
 
-        # 处理自定义排序逻辑
+        # 排序
         if order:
             reverse = False
             if order.startswith("-"):
@@ -523,7 +524,7 @@ class CollectConfigListResource(Resource):
             try:
                 search_list.sort(key=lambda x: x[order], reverse=reverse)
             except KeyError:
-                pass  # 忽略无效排序字段
+                pass
 
         # 补充采集类型元数据
         type_list = [{"id": item[0], "name": item[1]} for item in COLLECT_TYPE_CHOICES]
@@ -591,75 +592,78 @@ class CollectConfigDetailResource(Resource):
         except CollectConfigMeta.DoesNotExist:
             raise CollectConfigNotExist({"msg": config_id})
 
-        # 根据目标节点类型选择不同的采集目标获取方式
-        if (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.INSTANCE
-        ):
-            # 主机直连实例场景：通过IP列表获取主机实例
-            target_result = resource.commons.get_host_instance_by_ip(
-                {
-                    "bk_biz_id": collect_config_meta.bk_biz_id,
-                    "bk_biz_ids": [collect_config_meta.bk_biz_id],
-                    "ip_list": collect_config_meta.deployment_config.target_nodes,
-                }
-            )
-        elif (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.TOPO
-        ):
-            # 拓扑节点场景：标准化节点信息后获取主机实例
-            node_list = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                node_list.append(item)
-            target_result = resource.commons.get_host_instance_by_node(
-                {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
-            )
-        elif collect_config_meta.target_object_type in [
-            TargetObjectType.HOST,
-            TargetObjectType.SERVICE,
-        ] and collect_config_meta.deployment_config.target_node_type in [
-            TargetNodeType.SERVICE_TEMPLATE,
-            TargetNodeType.SET_TEMPLATE,
-        ]:
-            # 模板场景：获取模板实例名称并构建目标结果
+        if not collect_config_meta.deployment_config.target_nodes:
+            # 如果没有目标节点，直接返回空列表
             target_result = []
-            templates = {
-                template["bk_inst_id"]: template["bk_inst_name"]
-                for template in resource.commons.get_template(
-                    dict(
-                        bk_biz_id=collect_config_meta.bk_biz_id,
-                        bk_obj_id=collect_config_meta.deployment_config.target_node_type,
-                        bk_inst_type=collect_config_meta.target_object_type,
-                    )
-                ).get("children", [])
-            }
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                item.update({"bk_inst_name": templates.get(item["bk_inst_id"])})
-                target_result.append(item)
-        elif (
-            collect_config_meta.target_object_type == TargetObjectType.HOST
-            and collect_config_meta.deployment_config.target_node_type == TargetNodeType.DYNAMIC_GROUP
-        ):
-            # 动态分组场景：调用CMDB接口查询动态分组主机
-            bk_inst_ids = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                bk_inst_ids.append(item["bk_inst_id"])
-            target_result = api.cmdb.search_dynamic_group(
-                bk_biz_id=collect_config_meta.bk_biz_id,
-                bk_obj_id="host",
-                dynamic_group_ids=bk_inst_ids,
-                with_count=True,
-            )
-
         else:
-            # 服务实例场景：标准化节点信息后获取服务实例
-            node_list = []
-            for item in collect_config_meta.deployment_config.target_nodes:
-                item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
-                node_list.append(item)
+            # 根据目标节点类型选择不同的采集目标获取方式
+            if (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.INSTANCE
+            ):
+                # 主机直连实例场景：通过IP列表获取主机实例
+                target_result = resource.commons.get_host_instance_by_ip(
+                    {
+                        "bk_biz_id": collect_config_meta.bk_biz_id,
+                        "bk_biz_ids": [collect_config_meta.bk_biz_id],
+                        "ip_list": collect_config_meta.deployment_config.target_nodes,
+                    }
+                )
+            elif (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.TOPO
+            ):
+                # 拓扑节点场景：标准化节点信息后获取主机实例
+                node_list = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    node_list.append(item)
+                target_result = resource.commons.get_host_instance_by_node(
+                    {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
+                )
+            elif collect_config_meta.target_object_type in [
+                TargetObjectType.HOST,
+                TargetObjectType.SERVICE,
+            ] and collect_config_meta.deployment_config.target_node_type in [
+                TargetNodeType.SERVICE_TEMPLATE,
+                TargetNodeType.SET_TEMPLATE,
+            ]:
+                # 模板场景：获取模板实例名称并构建目标结果
+                target_result = []
+                templates = {
+                    template["bk_inst_id"]: template["bk_inst_name"]
+                    for template in resource.commons.get_template(
+                        dict(
+                            bk_biz_id=collect_config_meta.bk_biz_id,
+                            bk_obj_id=collect_config_meta.deployment_config.target_node_type,
+                            bk_inst_type=collect_config_meta.target_object_type,
+                        )
+                    ).get("children", [])
+                }
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    item.update({"bk_inst_name": templates.get(item["bk_inst_id"])})
+                    target_result.append(item)
+            elif (
+                collect_config_meta.target_object_type == TargetObjectType.HOST
+                and collect_config_meta.deployment_config.target_node_type == TargetNodeType.DYNAMIC_GROUP
+            ):
+                bk_inst_ids = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    bk_inst_ids.append(item["bk_inst_id"])
+                target_result = api.cmdb.search_dynamic_group(
+                    bk_biz_id=collect_config_meta.bk_biz_id,
+                    bk_obj_id="host",
+                    dynamic_group_ids=bk_inst_ids,
+                    with_count=True,
+                )
+
+            else:
+                # 服务实例场景：标准化节点信息后获取服务实例
+                node_list = []
+                for item in collect_config_meta.deployment_config.target_nodes:
+                    item.update({"bk_biz_id": collect_config_meta.bk_biz_id})
+                    node_list.append(item)
             target_result = resource.commons.get_service_instance_by_node(
                 {"bk_biz_id": collect_config_meta.bk_biz_id, "node_list": node_list}
             )
@@ -670,8 +674,6 @@ class CollectConfigDetailResource(Resource):
 
         # 敏感信息处理：密码字段脱敏转换
         self.password_convert(collect_config_meta)
-
-        # 构建最终响应数据
         result = {
             "id": collect_config_meta.id,
             "deployment_id": collect_config_meta.deployment_config_id,
@@ -1161,12 +1163,10 @@ class SaveCollectConfigResource(Resource):
             Exception: 部署安装过程中的任意异常
         """
         try:
-            # 获取采集插件元信息（失败时抛出插件不存在异常）
             collector_plugin = self.get_collector_plugin(data)
         except CollectorPluginMeta.DoesNotExist:
             raise PluginIDNotExist
 
-        # 预处理请求参数：补充节点类型、对象类型，转移指标重标记配置到采集参数中
         data["params"]["target_node_type"] = data["target_node_type"]
         data["params"]["target_object_type"] = data["target_object_type"]
         data["params"]["collector"]["metric_relabel_configs"] = data.pop("metric_relabel_configs")
@@ -1182,7 +1182,6 @@ class SaveCollectConfigResource(Resource):
             self.update_password_inplace(data, collect_config)
             collect_config.name = data["name"]
         else:
-            # 新建配置：构造配置元数据对象，标记创建操作
             collect_config = CollectConfigMeta(
                 bk_tenant_id=get_request_tenant_id(),
                 bk_biz_id=data["bk_biz_id"],
@@ -1196,7 +1195,7 @@ class SaveCollectConfigResource(Resource):
             )
             data["operation"] = OperationType.CREATE
 
-        # 执行部署安装（失败时进行新建配置的回滚）
+        # 部署
         installer = get_collect_installer(collect_config)
         try:
             result = installer.install(data, data["operation"])
@@ -1323,17 +1322,16 @@ class SaveCollectConfigResource(Resource):
         elif data["collect_type"] == CollectConfigMeta.CollectType.K8S:
             qcloud_exporter_plugin_id = f"{settings.TENCENT_CLOUD_METRIC_PLUGIN_ID}_{data['bk_biz_id']}"
 
-            # 校验插件ID合法性（仅支持腾讯云指标采集）
+            # 仅支持腾讯云指标采集
             if plugin_id not in [settings.TENCENT_CLOUD_METRIC_PLUGIN_ID, qcloud_exporter_plugin_id]:
                 raise ValueError(f"Only support {settings.TENCENT_CLOUD_METRIC_PLUGIN_ID} k8s collector")
 
             plugin_id = qcloud_exporter_plugin_id
 
-            # 检查腾讯云指标插件配置是否就绪
+            # 检查是否配置了腾讯云指标插件配置
             if not settings.TENCENT_CLOUD_METRIC_PLUGIN_CONFIG:
                 raise ValueError("TENCENT_CLOUD_METRIC_PLUGIN_CONFIG is not set, please contact administrator")
 
-            # 构建插件参数配置
             plugin_config: dict[str, Any] = settings.TENCENT_CLOUD_METRIC_PLUGIN_CONFIG
             plugin_params = {
                 "plugin_id": plugin_id,
@@ -1424,7 +1422,6 @@ class UpgradeCollectPluginResource(Resource):
             )
 
         try:
-            # 从数据库获取采集配置并更新密码字段
             collect_config = CollectConfigMeta.objects.select_related("deployment_config").get(
                 pk=data["id"], bk_biz_id=data["bk_biz_id"]
             )

@@ -1,6 +1,5 @@
 import copy
 import logging
-from typing import Any
 
 from django.conf import settings
 from django.db import models
@@ -48,6 +47,7 @@ class BCSClusterInfo(models.Model):
     """
     CLUSTER_STATUS_RUNNING = "running"
     CLUSTER_STATUS_DELETED = "deleted"
+    CLUSTER_STATUS_INIT_FAILED = "init_failed"
     CLUSTER_RAW_STATUS_RUNNING = "RUNNING"
     CLUSTER_RAW_STATUS_DELETED = "DELETED"
 
