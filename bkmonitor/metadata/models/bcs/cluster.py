@@ -8,7 +8,7 @@ from django.utils.functional import cached_property
 from django.utils.translation import gettext as _
 from kubernetes import client as k8s_client
 
-from bkmonitor.metadata.models.custom_report.base import CustomGroupBase
+from metadata.models.custom_report.base import CustomGroupBase
 from bkmonitor.utils.db import JsonField
 from metadata import config
 from metadata.models import common
