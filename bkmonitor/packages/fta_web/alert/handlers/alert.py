@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 import logging
 import operator
 import time
+import re
 from datetime import datetime, timezone
 from collections import defaultdict
 from functools import reduce
@@ -30,6 +31,7 @@ from bkmonitor.strategy.new_strategy import get_metric_id
 from bkmonitor.utils.ip import exploded_ip
 from bkmonitor.utils.request import get_request_tenant_id
 from bkmonitor.utils.time_tools import hms_string
+from fta_web.alert.utils import is_include_promql
 from constants.action import ConvergeStatus
 from constants.alert import (
     EVENT_SEVERITY,
@@ -553,18 +555,10 @@ class AlertQueryTransformer(BaseQueryTransformer):
         if node.name not in ["指标ID", "metric", "event.metric"]:
             return None, None
 
-        # 导入必要的工具函数
-        from fta_web.alert.utils import is_include_promql
-
-        value = str(node.expr)
-        # 如果包含PromQL语句，则跳过处理（后续在convert_metric_id方法中处理）
-        if is_include_promql(value):
-            return None, None
-
         # 处理指标值：移除外层引号并添加通配符
-        value = value.strip("\"'*")
-
-        # 构建event.metric字段查询
+        value = str(node.expr).strip("\"'*")
+        if value.endswith("..."):
+            value = value[:-3]
         node = SearchField("event.metric", Word(f"*{value}*"))
 
         context.update({"ignore_search_field": True})
@@ -1658,7 +1652,28 @@ class AlertQueryHandler(BaseBizQueryHandler):
             "category": CategoryTranslator(),
             "plugin_id": PluginTranslator(),
         }
-        return super().top_n(fields, size, translators, char_add_quotes)
+
+        result = super().top_n(fields, size, translators, char_add_quotes)
+
+        # 对metric字段进行特殊处理
+        # metric对应的id可能是promql语句，需要进行转义
+        if "metric" not in fields:
+            return result
+
+        regex = r'([+\-=&|><!(){}[\]^"~*?\\:\/ ])'
+        special_chars = re.compile(regex)
+        for field in result["fields"]:
+            if not field["field"] == "metric":
+                continue
+
+            for bucket in field["buckets"]:
+                bucket_id = bucket["id"]
+                if not is_include_promql(bucket_id):
+                    continue
+                bucket_id = bucket_id.strip("'\"")
+                bucket["id"] = special_chars.sub(r"\\\1", bucket_id)
+
+        return result
 
     def list_tags(self):
         """

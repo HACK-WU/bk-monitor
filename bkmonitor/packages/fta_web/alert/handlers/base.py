@@ -29,8 +29,6 @@ from constants.alert import EventTargetType
 from core.drf_resource import resource
 from core.errors.alert import QueryStringParseError
 from fta_web.alert.handlers.translator import AbstractTranslator
-from fta_web.alert.utils import is_include_promql, strip_outer_quotes
-import re
 
 
 class QueryField:
@@ -204,15 +202,6 @@ class BaseQueryTransformer(BaseTreeTransformer):
             return ""
 
         transform_obj = cls()
-
-        # 处理PromQL特殊语法
-        # 包含promql语句时需要特殊转换处理，可能触发语法错误
-        if is_include_promql(query_string):
-            # todo 调整，将判断是否为promql语句，调整到top_n查询中，如果为promql语句，返回转义后的语句。然后再使用转义后的语句进行查询
-            query_string = cls.convert_metric_id(query_string)
-
-        # 解析生成查询语法树
-        # 使用自定义语法解析器进行节点转换
         query_tree = parse_query_string_node(transform_obj, query_string, context)
 
         # 嵌套字段特殊处理逻辑
@@ -228,77 +217,6 @@ class BaseQueryTransformer(BaseTreeTransformer):
         query_tree = auto_head_tail(query_tree)
 
         return str(query_tree)
-
-    @classmethod
-    def convert_metric_id(cls, query_string: str) -> str:
-        """
-        当指定了指标ID时，且指标ID值是一个promql，比如"sum(sum_over_time({__name__="custom::bk_apm_count"}[1m])) or vector(0)"
-        此时需要对指标ID进行转义，并在前后加上“*”，用于支持模糊查询
-
-        '+ - = && || > < ! ( ) { } [ ] ^ " ~ * ? : \ /' 字符串在query string中具有特殊含义，需要转义
-        参考文档： https://www.elastic.co/docs/reference/query-languages/query-dsl/query-dsl-query-string-query
-        """
-
-        def convert_metric(match):
-            value = match.group(0)
-            value = strip_outer_quotes(value.split(":", 1)[1])
-
-            value = re.sub(r'([+\-=&|><!(){}[\]^"~*?\\:\/ ])', lambda match: "\\" + match.group(0), value.strip())
-
-            # 给value前后加上“*”，用于支持模糊匹配
-            if not value.startswith("*"):
-                value = "*" + value
-            if not value.endswith("*"):
-                value = value + "*"
-            return f"{target_type} : {value}"
-
-        def add_quote(match):
-            value = match.group("value")
-            value = f'"{value}"' if value else value
-            return f"{target_type} : {value}"
-
-        target_type = "指标ID"
-
-        # 如果匹配上，则指标ID是被截断过的
-        if re.match(r'(指标ID|event.metric)\s*:.*\.{3}"', query_string, flags=re.IGNORECASE):
-            query_string = re.sub(
-                r'(指标ID|event.metric)\s*:.*\.{3}"', convert_metric, query_string, flags=re.IGNORECASE
-            )
-            return query_string
-
-        # 指标ID: "sum(sum_over_time({__name__=\"custom::bk_apm_count\"}[1m])) or vector(0)"
-        # 匹配需要被转义的promql语句，是根据`指标ID:"{promql}"`的格式进行匹配
-        #  - 如果promql本身就已经具有引号，会导致匹配失败，需要到promql中的引号提前处理，这里是将其转为“#”号。
-        #  - 如果指标格式为`指标ID:{promql}`，也会匹配失败，需要转变为`指标ID:"{promql}"`
-        query_string = cls.process_label_filter(query_string)
-        query_string = re.sub(
-            r'(指标ID|event.metric)\s*:\s*(?P<value>[^\s+\'"]*)', add_quote, query_string, re.IGNORECASE
-        )
-        query_string = re.sub(
-            r'(指标ID|event.metric)\s*:\s*("[^"]*"*|\'[^\']*\'*)', convert_metric, query_string, re.IGNORECASE
-        )
-
-        # 还原process_label_filter函数中处理的双引号，并做转义
-        query_string = query_string.replace("###", r"\~\"")
-        query_string = query_string.replace("##", r"\=\"")
-        query_string = query_string.replace("#", r"\"")
-
-        return query_string
-
-    @classmethod
-    def process_label_filter(cls, query_string: str) -> str:
-        """处理promql语句中的过滤条件，对双引号进行提前处理，否则会导致转义失败"""
-
-        def replace(match):
-            value = match.group(0)
-            # 将{__name__="custom::bk_apm_count"}[1m]) 替换为 {__name__##custom::bk_apm_count#}
-            value = value.replace('~"', "###").replace('="', "##").replace('"', "#")
-            return value
-
-        # 匹配promql中的过滤条件,比如：{__name__="custom::bk_apm_count"}
-        pattern = r"\{.*(=|~).*\}"
-        query_string = re.sub(pattern, replace, query_string)
-        return query_string
 
     @classmethod
     def get_field_info(cls, field: str) -> QueryField | None:
@@ -716,7 +634,9 @@ class BaseQueryHandler:
             agg_field = self.query_transformer.transform_field_to_es_field(actual_field, for_agg=True)
             search_object.bucket(f"{field}{bucket_count_suffix}", "cardinality", field=agg_field)
 
-    def top_n(self, fields: list, size=10, translators: dict[str, AbstractTranslator] = None, char_add_quotes=True):
+    def top_n(
+        self, fields: list, size=10, translators: dict[str, AbstractTranslator] = None, char_add_quotes=True
+    ) -> dict:
         """
         字段值 TOP N 统计
         通过Elasticsearch聚合查询获取指定字段的TOP N分布情况，支持字段排序方式配置、字符字段处理和结果翻译
