@@ -29,7 +29,7 @@ from constants.alert import EventTargetType
 from core.drf_resource import resource
 from core.errors.alert import QueryStringParseError
 from fta_web.alert.handlers.translator import AbstractTranslator
-from fta_web.alert.utils import process_metric_string, process_stage_string, is_include_promql, strip_outer_quotes
+from fta_web.alert.utils import is_include_promql, strip_outer_quotes
 import re
 
 
@@ -163,7 +163,11 @@ class BaseQueryTransformer(BaseTreeTransformer):
 
             context.update({"search_field_name": node.name, "search_field_origin_name": origin_node_name})
 
-            yield from self.generic_visit(node, context)
+            # 忽略igmore_generic_visit时，直接返回node,context
+            if context.get("ignore_generic_visit",False):
+                yield node, context
+            else:  
+                yield from self.generic_visit(node, context)
 
     @classmethod
     def transform_query_string(cls, query_string: str, context=None):
@@ -451,9 +455,6 @@ class BaseQueryHandler:
         4. 查询构建：根据DSL类型选择query_string或filter查询方式
         """
         query_string = self.query_string if query_string is None else query_string
-        # todo 移动到 Transformer 中进行处理
-        query_string = process_stage_string(query_string)
-        query_string = process_metric_string(query_string)
 
         if query_string.strip():
             query_dsl = self.query_transformer.transform_query_string(query_string, context)
