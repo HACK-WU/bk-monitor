@@ -163,10 +163,11 @@ class BaseQueryTransformer(BaseTreeTransformer):
 
             context.update({"search_field_name": node.name, "search_field_origin_name": origin_node_name})
 
-            # 忽略igmore_generic_visit时，直接返回node,context
-            if context.get("ignore_generic_visit",False):
+            # 忽略ignore_generic_visit时，直接返回node,context
+            # 这样做是为了方便子类可以调用当前类的visit_search_field方法，并获取到node,context
+            if context.get("ignore_generic_visit", False):
                 yield node, context
-            else:  
+            else:
                 yield from self.generic_visit(node, context)
 
     @classmethod

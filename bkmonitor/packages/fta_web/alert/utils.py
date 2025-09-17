@@ -197,7 +197,6 @@ def process_metric_string(query_string):
     """
     将query_string中的指标ID信息替换为event.metric，并给value加上*
     """
-    # todo 整到 visit_word 方法中实现
 
     def replacer(match):
         value = strip_outer_quotes(match.group("value"))
