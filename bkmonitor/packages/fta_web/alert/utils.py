@@ -295,9 +295,9 @@ def is_include_promql(query_string: str) -> bool:
     filter_condition_pattern = r"\{.*(=|~).*\}"
 
     if (
-        re.search(function_pattern, query_string)
-        or re.search(time_window_pattern, query_string)
-        or re.search(filter_condition_pattern, query_string)
+        re.search(function_pattern, query_string, flags=re.IGNORECASE)
+        or re.search(time_window_pattern, query_string, flags=re.IGNORECASE)
+        or re.search(filter_condition_pattern, query_string, flags=re.IGNORECASE)
     ):
         return True
     return False
