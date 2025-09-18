@@ -121,7 +121,7 @@ class AlertDocument(BaseDocument):
         display_key = field.Keyword()
         display_value = field.Keyword()
 
-        def to_dict(self):
+        def to_dict(self) -> dict:
             """序列化时保留空字段"""
             return super().to_dict(skip_empty=False)
 

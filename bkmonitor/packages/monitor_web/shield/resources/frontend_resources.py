@@ -148,7 +148,7 @@ class FrontendShieldListResource(Resource):
 
         return [shield for shield in shields if match(shield)]
 
-    def enrich_shields(self, bk_biz_id: int | None, shields: list, strategy_ids: list[int]) -> list:
+    def enrich_shields(self, bk_biz_id: int | None, shields: list[dict], strategy_ids: list[int]) -> list:
         """补充屏蔽记录的数据便于展示。"""
         if not shields:
             return []
@@ -244,7 +244,7 @@ class FrontendShieldDetailResource(Resource):
         notice_config["notice_receiver"] = notice_receivers
         return notice_config
 
-    def handle_dimension_config(self, shield):
+    def handle_dimension_config(self, shield: dict):
         """
         重新创建新的维度配置。
         如果基于策略的屏蔽，则新的dimension_config，包含这些信息：scope_type,target,level,dimension_conditions,strategies.
@@ -321,7 +321,7 @@ class FrontendShieldDetailResource(Resource):
         return dimension_config
 
     def perform_request(self, data):
-        result = resource.shield.shield_detail(**data)
+        result: dict = resource.shield.shield_detail(**data)
         self.bk_biz_id = data["bk_biz_id"]
         dimension_config = self.handle_dimension_config(result)
         notice_config = self.handle_notice_config(result["notice_config"]) if result["notice_config"] else {}
