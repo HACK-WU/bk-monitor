@@ -532,7 +532,6 @@ class AlertQueryTransformer(BaseQueryTransformer):
             return None, None
 
         mapped_field = stage_mapping[value]
-
         # 对于"已通知"状态，需要额外过滤已屏蔽的告警
         if mapped_field == "is_handled":
             from luqum.tree import AndOperation
@@ -1663,7 +1662,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
         regex = r'([+\-=&|><!(){}[\]^"~*?\\:\/ ])'
         special_chars = re.compile(regex)
         for field in result["fields"]:
-            if not field["field"] == "metric":
+            if field["field"] != "metric":
                 continue
 
             for bucket in field["buckets"]:
