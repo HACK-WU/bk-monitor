@@ -1030,12 +1030,42 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
 
     def translate_dimensions(self, params: dict, data: list):
         """
-        维度翻译
+        执行维度字段的名称翻译，将原始ID值转换为可读性更高的业务名称
+
+        该方法通过调用CMDB接口和数据库查询，将数据中的各类业务实体ID（如主机ID、服务实例ID等）
+        转换为对应的显示名称，并将结果存储在dimensions_translation字段中。主要处理以下维度：
+        - 主机维度（bk_host_id）
+        - 服务实例维度（bk_service_instance_id/bk_target_service_instance_id）
+        - 业务拓扑维度（bk_obj_id/bk_inst_id）
+        - BCS集群维度（bcs_cluster_id）
+
+        Args:
+            params (dict): 查询参数字典，必须包含以下关键字段：
+                - bk_biz_id (int): 业务ID，用于限定查询范围
+            data (list): 待处理的数据列表，每个元素需包含dimensions字段，结构示例：
+                {
+                    "dimensions": {
+                        "bk_host_id": "100",
+                        "bk_service_instance_id": "200",
+                        ...
+                    }
+                }
+
+        Returns:
+            list: 处理后的数据列表，每个元素新增dimensions_translation字段，结构示例：
+                {
+                    "dimensions": {...},
+                    "dimensions_translation": {
+                        "bk_host_id": "主机A",
+                        "service_instance_id": "服务实例B",
+                        ...
+                    }
+                }
         """
         if not data:
             return data
 
-        # 主机ID
+        # 收集所有唯一主机ID并批量查询CMDB获取主机名称映射
         host_id_list = {row["dimensions"]["bk_host_id"] for row in data if row["dimensions"].get("bk_host_id")}
         if host_id_list:
             try:
@@ -1046,8 +1076,9 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
             hosts = []
         host_id_to_name = {str(host.bk_host_id): host.display_name for host in hosts}
 
-        service_instance_id_list = set()  # 服务实例
-        bcs_cluster_id_list = set()  # BCS集群
+        # 收集服务实例ID和BCS集群ID用于批量查询
+        service_instance_id_list = set()
+        bcs_cluster_id_list = set()
         for row in data:
             if row["dimensions"].get("bk_service_instance_id"):
                 service_instance_id_list.add(row["dimensions"]["bk_service_instance_id"])
@@ -1055,6 +1086,8 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
                 service_instance_id_list.add(row["dimensions"]["bk_target_service_instance_id"])
             if row["dimensions"].get("bcs_cluster_id"):
                 bcs_cluster_id_list.add(row["dimensions"]["bcs_cluster_id"])
+
+        # 查询服务实例名称映射
         if service_instance_id_list:
             try:
                 service_instances = api.cmdb.get_service_instance_by_id(
@@ -1068,7 +1101,7 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
             str(service_instance.service_instance_id): service_instance.name for service_instance in service_instances
         }
 
-        # 节点类型、节点名称
+        # 构建业务拓扑节点名称映射（仅当存在拓扑维度时查询）
         bk_obj_id_to_name = {}
         bk_inst_id_to_name = {}
         topo_tree = None
@@ -1086,7 +1119,7 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
                     bk_obj_id_to_name[bk_obj_id] = node.bk_obj_name
                     bk_inst_id_to_name[bk_inst_id] = node.bk_inst_name
 
-        # BCS集群
+        # 查询BCS集群名称映射
         if bcs_cluster_id_list:
             bcs_clusters = BCSCluster.objects.filter(
                 bk_biz_id=params["bk_biz_id"], bcs_cluster_id__in=bcs_cluster_id_list
@@ -1095,7 +1128,7 @@ class GraphUnifyQueryResource(UnifyQueryRawResource):
         else:
             bcs_cluster_to_name = {}
 
-        # 字段映射
+        # 构建统一维度映射字典并应用翻译结果
         field_mapper = {
             "bk_host_id": host_id_to_name,
             "service_instance_id": service_instance_id_to_name,
