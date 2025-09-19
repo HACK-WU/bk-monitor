@@ -520,11 +520,22 @@ class DataLink(models.Model):
     ) -> list[dict[str, Any]]:
         """
         生成联邦子集群时序数据链路配置
-        @param data_source: 数据源
-        @param table_id: 监控平台结果表ID
-        @param bcs_cluster_id: 联邦子集群ID
-        @param storage_cluster_name: 存储集群名称
-        @return: config_list 配置列表
+
+        参数:
+            bk_biz_id: 业务ID，用于标识数据所属的业务范围
+            data_source: 数据源对象，包含数据的基本信息和配置
+            table_id: 监控平台结果表ID，用于标识数据存储的目标表
+            bcs_cluster_id: 联邦子集群ID，标识数据来源的子集群
+            storage_cluster_name: 存储集群名称，指定数据存储的目标集群
+
+        返回值:
+            list[dict[str, Any]]: 返回联邦子集群时序数据链路配置列表，每个配置项为字典格式
+
+        该函数实现联邦子集群时序数据链路配置的完整生成流程，包含：
+        1. 联邦集群信息查询与校验
+        2. BKBase相关名称的构造
+        3. 联邦代理集群RT名和匹配条件的组装
+        4. 条件sink配置和数据总线配置的生成
         """
         logger.info(
             "compose_federal_sub_configs: data_link_name->[%s],bk_biz_id->[%s],bk_data_id->[%s],table_id->[%s],vm_cluster_name->[%s]"
@@ -552,6 +563,7 @@ class DataLink(models.Model):
             bkbase_vmrt_name,
         )
 
+        # 查询指定子集群的联邦集群记录
         federal_records = BcsFederalClusterInfo.objects.filter(sub_cluster_id=bcs_cluster_id, is_deleted=False)
         if not federal_records:
             logger.warning(
@@ -564,6 +576,7 @@ class DataLink(models.Model):
             return []
 
         config_list, conditions = [], []
+        # 遍历所有联邦集群记录，组装条件配置
         for record in federal_records:
             # 联邦代理集群的RT名
             proxy_k8s_metric_vmrt_name = utils.compose_bkdata_table_id(record.fed_builtin_metric_table_id)
@@ -601,6 +614,7 @@ class DataLink(models.Model):
             conditions,
         )
 
+        # 创建或获取条件sink配置和数据总线配置对象
         with transaction.atomic():
             vm_conditional_ins, _ = ConditionalSinkConfig.objects.get_or_create(
                 name=bkbase_vmrt_name,
@@ -618,6 +632,7 @@ class DataLink(models.Model):
                 bk_tenant_id=self.bk_tenant_id,
             )
 
+        # 组装条件sink配置和数据总线配置
         vm_conditional_sink_config = vm_conditional_ins.compose_conditional_sink_config(conditions=conditions)
         conditional_sink = [
             {
@@ -761,6 +776,18 @@ class DataLink(models.Model):
         """
         组装配置并下发数据链路
         声明BkBaseResultTable -> 组装链路资源配置 -> 调用API申请
+
+        参数:
+            *args: 可变位置参数，传递给compose_configs方法用于生成链路配置
+            **kwargs: 可变关键字参数，包含链路配置所需的各种参数信息
+
+        返回值:
+            无返回值。成功时完成数据链路的申请和配置，失败时抛出异常
+
+        该函数实现完整的数据链路申请流程，包含：
+        1. 创建或获取BkBase结果表对象
+        2. 组装链路资源配置信息
+        3. 调用API接口申请数据链路配置
         """
         from metadata.models.bkdata.result_table import BkBaseResultTable
 
@@ -784,6 +811,7 @@ class DataLink(models.Model):
             )
             raise e
 
+        # 组装链路配置信息
         try:
             configs: list[dict[str, Any]] = self.compose_configs(*args, **kwargs)
         except Exception as e:  # pylint: disable=broad-except
@@ -795,6 +823,7 @@ class DataLink(models.Model):
             self.data_link_strategy,
             configs,
         )
+        # 重试机制申请数据链路配置
         try:
             response = self.apply_data_link_with_retry(configs)
         except RetryError as e:
@@ -865,7 +894,7 @@ class DataLink(models.Model):
                 )
         except Exception as e:  # pylint: disable=broad-except
             logger.error(
-                "sync_metadata: data_link_name->[%s],sync_metadata failed,error->{%s],rollback!", self.data_link_name, e
+                "sync_metadata: data_link_name->[%s],sync_metadata failed,error->{%s},rollback!", self.data_link_name, e
             )
 
     def sync_basereport_metadata(self, bk_biz_id, storage_cluster_name, source, datasource):

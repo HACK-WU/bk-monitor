@@ -1003,6 +1003,24 @@ def create_fed_bkbase_data_link(
 ):
     """
     创建联邦集群汇聚链路（子集群->代理集群）
+
+    参数:
+        bk_biz_id: 业务ID，用于标识数据所属的业务范围
+        monitor_table_id: 监控表ID，用于标识监控数据的目标存储表
+        data_source: 数据源对象，包含数据的基本信息和配置
+        storage_cluster_name: 存储集群名称，指定数据存储的目标集群
+        bcs_cluster_id: BCS集群ID，标识数据来源的子集群
+        namespace: 命名空间，默认使用settings中的默认VM数据链路命名空间，默认值是bkmonitor
+
+    返回值:
+        无返回值。成功时完成联邦数据链路的创建和同步，失败时抛出异常
+
+    该函数实现完整的联邦集群数据链路创建流程，包含：
+    1. 联邦集群信息查询与校验
+    2. K8S内建指标数据类型判断
+    3. 数据链路对象获取或创建
+    4. 数据链路在BKBase平台的应用
+    5. 元数据信息的同步更新
     """
     from metadata.models import BcsFederalClusterInfo
     from metadata.models.data_link.utils import is_k8s_metric_data_id
@@ -1012,6 +1030,7 @@ def create_fed_bkbase_data_link(
         bcs_cluster_id,
         data_source.bk_data_id,
     )
+    # 查询指定子集群的联邦集群记录
     federal_records = BcsFederalClusterInfo.objects.filter(sub_cluster_id=bcs_cluster_id, is_deleted=False)
 
     # 若不存在对应联邦集群记录 / 非K8S内建指标数据，直接返回
@@ -1024,11 +1043,15 @@ def create_fed_bkbase_data_link(
         )
         return
 
+    # 构造BKBase数据链路名称
     bkbase_data_name = compose_bkdata_data_id_name(
         data_name=data_source.data_name, strategy=DataLink.BCS_FEDERAL_SUBSET_TIME_SERIES
     )
     # bkbase_rt_name = compose_bkdata_table_id(table_id=monitor_table_id)
 
+    # log 信息示例
+    # create_fed_bkbase_data_link: bcs_cluster_id->[BCS-K8S-0000000001],data_id->[k8s_container_cpu_usage_total],
+    # data_link_name->[fed_k8s_container_cpu_usage_total] try to create fed_bkbase_data_link
     logger.info(
         "create_fed_bkbase_data_link: bcs_cluster_id->[%s],data_id->[%s],data_link_name->[%s] try to create "
         "fed_bkbase_data_link",
@@ -1036,6 +1059,7 @@ def create_fed_bkbase_data_link(
         data_source.bk_data_id,
         bkbase_data_name,
     )
+    # 获取或创建数据链路对象
     data_link_ins, _ = DataLink.objects.get_or_create(
         bk_tenant_id=data_source.bk_tenant_id,
         data_link_name=bkbase_data_name,
@@ -1052,6 +1076,7 @@ def create_fed_bkbase_data_link(
             monitor_table_id,
             bkbase_data_name,
         )
+        # 在BKBase平台应用数据链路配置
         data_link_ins.apply_data_link(
             bk_biz_id=bk_biz_id,
             data_source=data_source,
@@ -1072,6 +1097,7 @@ def create_fed_bkbase_data_link(
         )
         raise e
 
+    # 同步数据链路元数据信息
     data_link_ins.sync_metadata(
         data_source=data_source,
         table_id=monitor_table_id,
@@ -1085,3 +1111,4 @@ def create_fed_bkbase_data_link(
         bcs_cluster_id,
         storage_cluster_name,
     )
+
