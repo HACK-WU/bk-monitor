@@ -775,7 +775,7 @@ class DataLink(models.Model):
     def apply_data_link(self, *args, **kwargs):
         """
         组装配置并下发数据链路
-        声明BkBaseResultTable -> 组装链路资源配置 -> 调用API申请
+         声明BkBaseResultTable -> 组装链路资源配置 -> 调用API申请
 
         参数:
             *args: 可变位置参数，传递给compose_configs方法用于生成链路配置
@@ -793,6 +793,7 @@ class DataLink(models.Model):
 
         try:
             # NOTE:新链路下，data_link_name和bkbase_data_name一致
+            # 创建或获取BkBase结果表记录，用于跟踪数据链路的状态
             BkBaseResultTable.objects.get_or_create(
                 data_link_name=self.data_link_name,
                 monitor_table_id=kwargs.get("table_id")
@@ -813,6 +814,7 @@ class DataLink(models.Model):
 
         # 组装链路配置信息
         try:
+            # 组装链路资源配置，为后续申请链路准备配置参数
             configs: list[dict[str, Any]] = self.compose_configs(*args, **kwargs)
         except Exception as e:  # pylint: disable=broad-except
             logger.error("apply_data_link: data_link_name->[%s] compose config error->[%s]", self.data_link_name, e)
@@ -825,6 +827,7 @@ class DataLink(models.Model):
         )
         # 重试机制申请数据链路配置
         try:
+            # 调用带重试机制的方法申请数据链路
             response = self.apply_data_link_with_retry(configs)
         except RetryError as e:
             logger.error("apply_data_link: data_link_name->[%s] retry error->[%s]", self.data_link_name, e.__cause__)

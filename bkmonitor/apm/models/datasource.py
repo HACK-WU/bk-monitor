@@ -1209,7 +1209,7 @@ class DataLink(models.Model):
     bk_biz_id = models.IntegerField("业务id")
     trace_transfer_cluster_id = models.CharField("Trace Es Transfer集群id", max_length=128, null=True)
     metric_transfer_cluster_id = models.CharField("Metric Transfer集群id", max_length=128, null=True)
-    kafka_cluster_id = models.IntegerField("kafka集群id", null=True)
+    kafka_cluster_id = models.IntegerField(verbose_name="kafka集群id", null=True)
     influxdb_cluster_name = models.CharField("时序数据存储的influxdb集群名称", max_length=128, null=True)
     elasticsearch_cluster_id = models.IntegerField(
         "默认ES集群ID(在快速创建应用、创建默认预计算集群时会用到)", null=True

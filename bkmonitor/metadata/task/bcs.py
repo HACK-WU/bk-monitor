@@ -534,9 +534,15 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
 def sync_federation_clusters(fed_clusters):
     """
     同步联邦集群信息，创建或更新对应数据记录
-    :param fed_clusters: BCS API返回的联邦集群拓扑结构信息
-    """
 
+    该函数用于同步联邦集群的拓扑结构信息，包括创建或更新联邦集群与子集群的关联关系，
+    处理命名空间归属信息，删除不再存在的联邦集群记录，以及为需要的子集群创建联邦汇聚链路。
+    整个过程使用事务保证数据一致性，并通过异步方式创建联邦链路。
+
+    :param fed_clusters: BCS API返回的联邦集群拓扑结构信息
+                         格式为字典，key为联邦集群ID，value为包含host_cluster_id和sub_clusters的字典
+                         其中sub_clusters为子集群ID到命名空间列表的映射
+    """
     logger.info("sync_federation_clusters:sync_federation_clusters started.")
     need_process_clusters = []  # 记录需要创建联邦汇聚链路的集群列表，统一进行异步操作
     try:
@@ -562,6 +568,7 @@ def sync_federation_clusters(fed_clusters):
             sub_clusters = fed_cluster_data["sub_clusters"]
 
             # 获取代理集群的对应 RT 信息
+            # 查询联邦集群对应的指标和事件数据ID及表ID，用于后续创建联邦记录
             cluster = models.BCSClusterInfo.objects.get(cluster_id=fed_cluster_id)
             fed_builtin_k8s_metric_data_id = cluster.K8sMetricDataID
             fed_builtin_k8s_event_data_id = cluster.K8sEventDataID
@@ -614,6 +621,7 @@ def sync_federation_clusters(fed_clusters):
                     fed_cluster_id,
                 )
 
+                # 更新或创建联邦集群信息记录，包含联邦集群ID、主机集群ID、子集群ID和命名空间信息
                 models.BcsFederalClusterInfo.objects.update_or_create(
                     fed_cluster_id=fed_cluster_id,
                     host_cluster_id=host_cluster_id,
@@ -625,7 +633,7 @@ def sync_federation_clusters(fed_clusters):
                     },
                 )
 
-                # 记录
+                # 记录需要处理的子集群，后续统一异步创建联邦链路
                 need_process_clusters.append(sub_cluster_id)
                 logger.info(
                     "sync_federation_clusters:Updated federation cluster info for sub-cluster->[%s] in fed->[%s] "
