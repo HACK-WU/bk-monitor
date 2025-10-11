@@ -214,7 +214,18 @@ class DataSource(models.Model):
         return self.etl_config in ["bk_standard_v2_time_series"]
 
     def get_transfer_storage_conf(self, table_id: str) -> list:
-        """获取transfer向后端写入的存储的配置"""
+        """
+        获取transfer向后端写入的存储的配置
+
+        参数:
+            table_id (str): 表ID，用于查询对应的存储配置
+
+        返回值:
+            list: 包含所有符合条件的存储配置字典的列表
+
+        该方法通过遍历TRANSFER_STORAGE_LIST中定义的存储类型，获取指定table_id对应的存储配置，
+        并根据特定规则过滤掉不需要的配置项，最终返回有效的存储配置列表。
+        """
         conf_list = []
         for real_storage in self.TRANSFER_STORAGE_LIST:
             try:
@@ -223,6 +234,7 @@ class DataSource(models.Model):
                 # # NOTE: 现阶段 transfer 识别不了 `victoria_metrics`，针对 `victoria_metrics` 类型的存储，跳过写入 consul
                 if not consul_config:
                     continue
+                # 根据集群类型和表ID列表过滤存储配置
                 if (consul_config.get("cluster_type") in IGNORED_STORAGE_CLUSTER_TYPES) or (
                     consul_config.get("cluster_type") == ClusterInfo.TYPE_INFLUXDB
                     and table_id in settings.SKIP_INFLUXDB_TABLE_ID_LIST
