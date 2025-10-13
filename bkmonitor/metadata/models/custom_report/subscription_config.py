@@ -84,6 +84,26 @@ class CustomReportSubscription(models.Model):
         bk_host_ids: list[int],
         op_type: str = "add",
     ):
+        """
+        创建或更新自定义上报订阅任务，用于下发 bk-collector 插件配置到目标主机
+
+        参数:
+            bk_tenant_id (str): 蓝鲸租户 ID
+            bk_biz_id (int): 业务 ID
+            data_id_configs (list[tuple[dict[str, Any], str]]): 数据源配置列表，每个元素为 (配置项字典, 协议类型) 的元组
+            bk_host_ids (list[int]): 目标主机 ID 列表
+            op_type (str): 操作类型，默认为 "add"，可选 "add" 或 "remove"
+
+        返回值:
+            None
+
+        执行步骤:
+        1. 根据操作类型和主机状态判断是否需要跳过下发
+        2. 构造订阅参数，包括目标主机和插件配置
+        3. 遍历数据源配置，逐个创建或更新订阅任务
+        """
+
+        # 如果不是删除操作且没有可用主机，则跳过下发
         available_host_ids = bk_host_ids
 
         if op_type != "remove" and not available_host_ids:
@@ -93,6 +113,7 @@ class CustomReportSubscription(models.Model):
             logger.info("[custom_report] skipped because no available nodes: bk_biz_id(%s)", bk_biz_id)
             return
 
+        # 删除操作时，使用所有主机进行配置卸载
         if op_type == "remove":
             # 使用 Proxy 插件卸除配置时，针对 Proxy 状态为手动停止的机器进行卸载
             bk_host_ids = available_host_ids
@@ -102,6 +123,8 @@ class CustomReportSubscription(models.Model):
             bk_biz_id,
             bk_host_ids,
         )
+
+        # 遍历所有数据源配置，为每项配置创建或更新订阅任务
         for item, protocol in data_id_configs:
             subscription_params = {
                 "scope": {
@@ -153,6 +176,22 @@ class CustomReportSubscription(models.Model):
     ) -> dict[int, list[tuple[dict[str, Any], str]]]:
         """
         获取业务下自定义上报配置
+
+        参数:
+            query_set: 查询集对象，用于获取EventGroup或TimeSeriesGroup模型数据
+            group_table_name: 分组表名，用于关联查询条件
+            data_source_table_name: 数据源表名，用于获取token等字段信息
+            datatype: 数据类型标识，可选值为"event"或"time_series"，默认为"event"
+
+        返回值:
+            dict[int, list[tuple[dict[str, Any], str]]]: 以bk_biz_id为键，值为包含配置项和协议类型的元组列表。
+            每个配置项是一个字典，包含token、data_id、限流配置等信息；协议类型表示该配置使用的传输协议（如json或prometheus）
+
+        该方法主要完成以下工作：
+        1. 通过数据库查询获取自定义上报配置信息
+        2. 处理无效的Prometheus分组ID过滤逻辑
+        3. 根据协议类型（json/prometheus）生成不同的配置结构
+        4. 对异常情况做日志记录和缓存标记处理
         """
         # 1. 从数据库查询到bk_biz_id到自定义上报配置的数据
         result = (
@@ -329,6 +368,21 @@ class CustomReportSubscription(models.Model):
     ):
         """
         刷新指定业务ID的collector自定义上报配置
+
+        参数:
+            bk_tenant_id (str): 蓝鲸租户ID
+            bk_biz_id (int): 业务ID，用于确定下发配置的目标业务
+            op_type (str): 操作类型，标识本次操作的性质（如新增、更新、删除等）
+            data_id_configs (list[tuple[dict[str, Any], str]]): 自定义上报配置列表，
+                每个元素为一个元组，包含配置字典和对应的配置标识
+
+        返回值:
+            None: 该方法不返回任何值，仅执行配置下发逻辑
+
+        该方法实现以下功能：
+        1. 根据业务ID获取对应的Proxy主机列表
+        2. 若无可用Proxy主机则记录警告日志并终止流程
+        3. 调用订阅创建接口将配置下发至目标Proxy主机
         """
         # 1. 获取业务下所有proxy
         proxy_host_ids: list[int] = []
@@ -371,20 +425,33 @@ class CustomReportSubscription(models.Model):
     @classmethod
     def refresh_collector_custom_conf(cls, bk_tenant_id: str, bk_biz_id: int | None = None, op_type: str = "add"):
         """
-        指定业务ID更新，或者更新全量业务
+        刷新采集器自定义配置到对应的业务代理节点（Proxy）上
 
-        Steps:
-            - Metadata
-                0. 从EventGroup, TimeSeriesGroup表查询到bk_biz_id到bk_data_id的对应关系
-                1. 从DataSource上查询到bk_data_id到的token
-                3. 根据上面的查询结果生成bk_biz_id的相关自定义上报dataid的对应关系配置列表
+        本方法用于根据指定的业务ID或全量业务，更新 bk-collector 的自定义上报配置。主要流程包括：
+        1. 查询并合并指定业务下的自定义事件与指标配置；
+        2. 获取各业务所使用的 Proxy 节点信息；
+        3. 将配置通过节点管理和 Kubernetes 分别下发至主机和集群环境。
 
-            - Nodeman
-                0. 从api.node_man.get_proxies_by_biz接口获取到业务下所有使用到的proxyip
-                1. 根据上面的查询结果生成业务ID到目标Proxy的对应关系
+        参数:
+            bk_tenant_id (str): 蓝鲸租户 ID，标识当前操作所属的租户空间
+            bk_biz_id (int | None, optional): 目标业务 ID，默认为 None 表示刷新所有业务
+            op_type (str, optional): 操作类型，如 "add"、"update" 等，默认为 "add"
 
-            按业务ID将上面的任务下发到机器上，通过节点管理的订阅接口，其中0业务为直连云区域，下发所有data_id配置
-            bk-collector: 单个data_id对应创建单个订阅
+        返回值:
+            None: 此函数无返回值，仅执行配置刷新逻辑，并记录异常日志
+
+        执行步骤概览:
+            - Metadata 阶段：
+              0. 查询 EventGroup 和 TimeSeriesGroup 获取 bk_biz_id 到 bk_data_id 映射
+              1. 查询 DataSource 获取 bk_data_id 对应 token
+              2. 构建 bk_biz_id 到 data_id 配置列表的映射关系
+
+            - NodeMan 阶段：
+              0. 调用 get_proxies_by_biz 接口获取业务下所有 Proxy IP 地址
+              1. 构造业务 ID 到目标 Proxy 的映射关系
+
+            - 下发阶段：
+              使用订阅机制按业务下发配置到主机及 K8s 集群中
         """
         logger.info("refresh custom report config to proxy on bk_biz_id(%s)", bk_biz_id)
 
@@ -408,7 +475,7 @@ class CustomReportSubscription(models.Model):
         else:
             bk_biz_ids = {bk_biz_id}
 
-        # 增加默认业务
+        # 增加默认业务（直连云区域）
         bk_biz_ids.add(0)
 
         for bk_biz_id in bk_biz_ids:
@@ -441,22 +508,39 @@ class CustomReportSubscription(models.Model):
 
     @classmethod
     def create_or_update_config(cls, bk_tenant_id: str, bk_biz_id: int, subscription_params, bk_data_id=0):
-        # 若订阅存在则判定是否更新，若不存在则创建
-        # 使用proxy下发bk_data_id为默认值0，一个业务下的多个data_id对应一个订阅
+        """
+        创建或更新自定义上报订阅配置
+
+        参数:
+            bk_tenant_id (str): 蓝鲸租户ID
+            bk_biz_id (int): 业务ID
+            subscription_params (dict): 订阅参数配置
+            bk_data_id (int, optional): 数据源ID，默认为0。用于区分同一业务下不同数据源的订阅
+
+        返回值:
+            int: 订阅ID
+
+        执行逻辑：
+        1. 根据业务ID和数据源ID查询是否存在已有订阅记录
+        2. 若存在则进行配置对比并决定是否更新订阅
+        3. 若不存在则创建新的订阅，并初始化相关配置及运行任务
+        """
+
+        # 查询当前业务与数据源对应的订阅配置
         qs = CustomReportSubscription.objects.filter(bk_biz_id=bk_biz_id, bk_data_id=bk_data_id)
         sub_config_obj = qs.first()
 
-        # 如果订阅存在，则更新订阅
+        # 如果订阅已存在，则尝试更新订阅配置
         if sub_config_obj:
             logger.info("subscription task already exists.")
-            # 更新订阅巡检开启
+            # 启用现有订阅的巡检功能
             api.node_man.switch_subscription(
                 bk_tenant_id=bk_tenant_id, subscription_id=sub_config_obj.subscription_id, action="enable"
             )
             subscription_params["subscription_id"] = sub_config_obj.subscription_id
             subscription_params["run_immediately"] = True
 
-            # bkmonitorproxy原订阅scope配置为空则不再管理该订阅
+            # 对比新旧配置差异，如发生变化则执行更新操作
             old_subscription_params_md5 = count_md5(sub_config_obj.config)
             new_subscription_params_md5 = count_md5(subscription_params)
             if old_subscription_params_md5 != new_subscription_params_md5:
@@ -470,12 +554,12 @@ class CustomReportSubscription(models.Model):
                 qs.update(config=subscription_params)
             return sub_config_obj.subscription_id
 
-        # 创建订阅
+        # 当前无对应订阅时，新建一个订阅实例
         logger.info("subscription task not exists, create it.")
         result = api.node_man.create_subscription(bk_tenant_id=bk_tenant_id, **subscription_params)
         logger.info(f"create subscription successful, result:{result}")
 
-        # 创建订阅成功后，优先存储下来，不然因为其他报错会导致订阅ID丢失
+        # 存储新建订阅的基本信息以防止后续异常导致ID丢失
         subscription_id = result["subscription_id"]
         CustomReportSubscription.objects.create(
             bk_biz_id=bk_biz_id,
@@ -483,7 +567,7 @@ class CustomReportSubscription(models.Model):
             subscription_id=subscription_id,
             bk_data_id=bk_data_id,
         )
-        # 创建的订阅默认开启巡检
+        # 新建完成后立即启用巡检并触发采集插件安装动作
         api.node_man.switch_subscription(bk_tenant_id=bk_tenant_id, subscription_id=subscription_id, action="enable")
         result = api.node_man.run_subscription(
             bk_tenant_id=bk_tenant_id, subscription_id=subscription_id, actions={"bk-collector": "INSTALL"}
