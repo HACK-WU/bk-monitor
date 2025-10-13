@@ -28,6 +28,9 @@ class BaseParse:
     def __init__(self, file_path, file_content={}, plugin_configs: dict[Path, bytes] = None):
         self.file_path = file_path
         self.file_content = file_content
+
+        # todo plugin_path 和 plugin_configs 两个参数移动到CollectConfigParse类中
+        # todo plugin_configs key 值改为str类型
         self.plugin_path = None
         self.plugin_configs = plugin_configs
 
@@ -67,10 +70,34 @@ class CollectConfigParse(BaseParse):
             }
 
     def check_msg(self):
+        """
+        检查采集配置文件内容的有效性，并根据条件返回相应的校验结果
+
+        执行步骤：
+        1. 校验文件中是否包含必要字段 'name'
+        2. 对基础字段进行初步校验（only_check_fields）
+        3. 若采集类型为日志或进程，或字段校验失败，则直接返回字段校验结果
+        4. 校验插件是否存在，若不存在则返回错误信息
+        5. 解析插件信息并构建完整的插件配置数据结构
+        6. 若解析成功且存在临时版本信息，则组装插件配置并返回成功状态
+        7. 否则返回插件解析的结果（可能是失败信息）
+
+        返回值:
+            dict: 包含以下关键字段的字典
+                - file_status: 文件校验状态（SUCCESS/FAILED）
+                - name: 配置名称（仅在失败时提供）
+                - collect_config: 原始采集配置内容
+                - error_msg: 错误描述（仅在失败时提供）
+                - plugin_config: 插件详细配置信息（仅在成功时提供）
+        """
+        # 校验文件名是否存在
         if self.file_content.get("name") is None:
             return None
 
+        # 进行基础字段校验
         fields_check_result = self.only_check_fields()
+
+        # 如果是日志/进程类型采集 或 字段校验已失败，则直接返回字段校验结果
         if (
             self.file_content.get("collect_type", "")
             in [CollectConfigMeta.CollectType.LOG, CollectConfigMeta.CollectType.PROCESS]
@@ -78,6 +105,7 @@ class CollectConfigParse(BaseParse):
         ):
             return fields_check_result
 
+        # 获取插件ID并判断插件路径是否存在
         plugin_id = self.file_content.get("plugin_id")
         if not self.get_plugin_path(plugin_id):
             return {
@@ -86,12 +114,20 @@ class CollectConfigParse(BaseParse):
                 "collect_config": self.file_content,
                 "error_msg": _("缺少依赖的插件"),
             }
+
+        # 解析插件信息
         parse_plugin_config = self.parse_plugin_msg(plugin_id)
+
+        # 如果解析出临时版本信息，则构造完整插件配置并返回成功状态
         if parse_plugin_config.get("tmp_version"):
             tmp_version = parse_plugin_config["tmp_version"]
             plugin_config = {}
+
+            # 更新配置与信息部分到插件配置中
             plugin_config.update(tmp_version.config.config2dict())
             plugin_config.update(tmp_version.info.info2dict())
+
+            # 补充其他元信息
             plugin_config.update(
                 {
                     "plugin_id": tmp_version.plugin_id,
@@ -106,18 +142,35 @@ class CollectConfigParse(BaseParse):
                     "is_safety": tmp_version.is_safety,
                 }
             )
+
             return {
                 "file_status": ImportDetailStatus.SUCCESS,
                 "collect_config": self.file_content,
                 "plugin_config": plugin_config,
             }
         else:
+            # 否则返回插件解析原始结果
             return parse_plugin_config
 
-    def get_meta_path(self, plugin_id):
-        """获取 meta.yaml 的路径"""
+    def get_meta_path(self, plugin_id: str):
+        """
+        获取指定插件ID对应的meta.yaml文件路径
+
+        参数:
+            plugin_id (str): 插件唯一标识符
+
+        返回值:
+            pathlib.Path 或 str: 匹配到的meta.yaml文件路径，未找到则返回空字符串
+
+        该方法遍历已加载的插件配置文件路径，查找符合以下条件的文件：
+        1. 路径第一级目录名等于plugin_id
+        2. 父目录名为"info"
+        3. 文件名为"meta.yaml"
+        """
         meta_path = ""
+        # 遍历所有已知的插件配置文件路径
         for file_path in self.plugin_configs.keys():
+            # 检查路径是否匹配目标插件的meta.yaml文件
             if (
                 str(file_path).split("/")[0] == plugin_id
                 and file_path.parent.name == "info"
@@ -127,7 +180,7 @@ class CollectConfigParse(BaseParse):
                 break
         return meta_path
 
-    def parse_plugin_msg(self, plugin_id):
+    def parse_plugin_msg(self, plugin_id: str):
         meta_path = self.get_meta_path(plugin_id)
 
         if not meta_path:
@@ -135,7 +188,7 @@ class CollectConfigParse(BaseParse):
                 "file_status": ImportDetailStatus.FAILED,
                 "name": self.file_content.get("name"),
                 "config": self.file_content,
-                "error_msg": _("关联插件信息不完整"),
+                "error_msg": _("关联插件信息解析失败，缺少meta.yaml文件"),
             }
         try:
             meta_content = self.plugin_configs[meta_path]
@@ -155,6 +208,8 @@ class CollectConfigParse(BaseParse):
             )
             import_manager.filename_list = self.get_filename_list(plugin_id)
             import_manager.plugin_configs = self.plugin_configs
+
+            # todo info_path 更名为file_info
             info_path = {
                 file_path.name: self.plugin_configs[file_path]
                 for file_path in import_manager.filename_list
@@ -163,12 +218,12 @@ class CollectConfigParse(BaseParse):
 
             tmp_version = import_manager.get_tmp_version(info_path=info_path)
             return {"tmp_version": tmp_version}
-        except Exception:
+        except Exception as e:
             return {
                 "file_status": ImportDetailStatus.FAILED,
                 "name": self.file_content.get("name"),
                 "config": self.file_content,
-                "error_msg": _("关联插件信息解析失败"),
+                "error_msg": _("关联插件信息解析失败,{}".format(e)),
             }
 
     def get_filename_list(self, plugin_id: str) -> list[Path]:

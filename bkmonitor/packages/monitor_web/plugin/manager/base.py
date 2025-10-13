@@ -862,6 +862,7 @@ class PluginManager(BasePluginManager):
         self.version.info_version = info_version
 
     def _get_info_msg(self, plugin_params: dict[str, bytes]):
+        # todo 修改 _get_info_msg 为 _get_metric_json
         # load metric_json
         try:
             metric_json = json.loads(plugin_params["metrics.json"])
@@ -947,6 +948,21 @@ class PluginManager(BasePluginManager):
     def get_tmp_version(self, config_version=None, info_version=None, info_path: dict[str, bytes] = None):
         """
         通过已上传的包创建一个临时版本
+
+        参数:
+            config_version: 配置版本号，可选参数，默认为None
+            info_version: 信息版本号，可选参数，默认为None
+            info_path: 包含插件信息文件路径与内容的字典，键为路径字符串，值为文件二进制内容，默认为None
+
+        返回值:
+            PluginVersionHistory对象，表示新创建的临时版本记录
+
+        执行步骤:
+        1. 初始化CollectorPluginConfig和CollectorPluginInfo实例
+        2. 创建PluginVersionHistory对象并关联当前插件
+        3. 解析info_path中的插件信息文件内容
+        4. 更新版本差异字段
+        5. 设置指定的配置版本号和信息版本号（如提供）
         """
         config = CollectorPluginConfig()
         info = CollectorPluginInfo()
