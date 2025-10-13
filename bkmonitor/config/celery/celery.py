@@ -30,9 +30,9 @@ app.config_from_object("config.celery.config:Config")
 app.autodiscover_tasks(lambda: settings.INSTALLED_APPS)
 
 # 是否同步执行celery 任务
-if getattr(settings, "CELERY_ALWAYS_SYNC", False):
-    app.conf.task_always_eager = True
-    app.conf.task_eager_propagates = True
+# if getattr(settings, "CELERY_ALWAYS_SYNC", False):
+# app.conf.task_always_eager = True
+# app.conf.task_eager_propagates = True
 
 
 @app.task(bind=True)
