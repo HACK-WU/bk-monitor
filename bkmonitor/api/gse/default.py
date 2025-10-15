@@ -9,6 +9,7 @@ specific language governing permissions and limitations under the License.
 """
 
 import abc
+from typing import Any
 
 import six
 from django.conf import settings
@@ -514,3 +515,18 @@ class ListAgentState(GseAPIBaseResource):
 
     class RequestSerializer(serializers.Serializer):
         agent_id_list = serializers.ListField(child=serializers.CharField())
+
+
+class DispatchMessage(GseAPIBaseResource):
+    action = "cluster/dispatch_message"
+    method = "POST"
+
+    class RequestSerializer(serializers.Serializer):
+        message_id = serializers.CharField(label="消息ID", max_length=64)
+        agent_id_list = serializers.ListField(label="Agent ID列表", child=serializers.CharField(), min_length=1)
+        content = serializers.CharField(label="请求内容")
+
+    def perform_request(self, validated_request_data: dict[str, Any]):
+        validated_request_data["slot_id"] = settings.GSE_SLOT_ID
+        validated_request_data["token"] = settings.GSE_SLOT_TOKEN
+        return super().perform_request(validated_request_data)
