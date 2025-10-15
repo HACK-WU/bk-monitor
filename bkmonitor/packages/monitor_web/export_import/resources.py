@@ -691,31 +691,13 @@ class UploadPackageResource(Resource):
         file_data = serializers.FileField(required=True, label="文件内容")
 
     def parse_collect_config(self, collect_configs: dict[Path, dict], plugin_configs: dict[Path, bytes]):
-        """
-        解析采集配置文件并存储解析结果到数据库
-
-        参数:
-            collect_configs: 采集配置文件路径与内容的映射字典，键为Path对象表示文件路径，值为dict表示文件内容
-            plugin_configs: 插件配置文件路径与内容的映射字典，键为Path对象表示文件路径，值为bytes表示文件内容
-
-        返回值:
-            无返回值
-
-        该方法实现采集配置文件的解析和持久化流程，包含：
-        1. 遍历采集配置文件进行解析验证
-        2. 成功解析的配置写入数据库
-        3. 关联插件配置信息的处理与存储
-        4. 解析失败情况的错误信息记录
-        """
         for file_path, file_content in collect_configs.items():
-            # 创建采集配置解析管理器实例并执行校验
             parse_manager = CollectConfigParse(
                 file_path=file_path, file_content=file_content, plugin_configs=plugin_configs
             )
             parse_result = parse_manager.check_msg()
 
             if parse_result["file_status"] == ImportDetailStatus.SUCCESS:
-                # 解析成功时，创建采集配置记录
                 ImportParse.objects.create(
                     name=parse_result["collect_config"]["name"],
                     label=parse_result["collect_config"].get("label", ""),
@@ -726,7 +708,6 @@ class UploadPackageResource(Resource):
                     file_id=self.file_id,
                 )
                 try:
-                    # 尝试更新或创建关联的插件配置记录
                     ImportParse.objects.update_or_create(
                         file_id=self.file_id,
                         type=ConfigType.PLUGIN,
@@ -745,7 +726,6 @@ class UploadPackageResource(Resource):
                     # 日志关键字类导入不存储插件信息，在创建时需要新建（它是虚拟插件）
                     pass
             else:
-                # 解析失败时，记录失败状态和错误信息
                 ImportParse.objects.create(
                     name=parse_result["name"],
                     label=parse_result["collect_config"].get("label", ""),
@@ -756,7 +736,6 @@ class UploadPackageResource(Resource):
                     error_msg=parse_result.get("error_msg", ""),
                     file_id=self.file_id,
                 )
-                # todo 返回错误信息给前端
 
     def parse_strategy_config(self, strategy_configs: dict):
         for file_path, file_content in strategy_configs.items():
@@ -802,30 +781,16 @@ class UploadPackageResource(Resource):
                 file_id=self.file_id,
             )
 
-    def parse_package(self, file_list: dict[str, bytes]):
-        """
-        解析上传的配置包，按类型分类并处理各类配置文件
-
-        参数:
-            file_list: 字典，键为文件路径字符串（相对于包根目录），值为文件内容的字节序列
-
-        返回值:
-            无返回值。解析结果将存储在实例变量中供后续使用
-
-        该方法完成以下主要工作：
-        1. 将输入文件列表按照顶层目录名进行分类（collect/strategy/view/plugin）
-        2. 对每类配置文件执行相应的解析操作
-        3. 忽略隐藏文件（以点开头的文件）
-        4. 根据文件扩展名决定是否进行JSON反序列化
-        """
-        # 区分成四个配置目录，并且去掉最外层配置类型的文件夹
+    def parse_package(self, file_path_content_map: dict[str, bytes]):
+        # 区分成四个配置目录
+        # 并且去掉最外层配置类型的文件夹
         collect_configs: dict[Path, dict] = {}
         plugin_configs: dict[Path, bytes] = {}
         strategy_configs: dict[Path, dict] = {}
         view_configs: dict[Path, dict] = {}
-        for file_name, content in file_list.items():
-            config_directory_name, file_path = file_name.split("/", 1)
-            file_path = Path(file_path)
+        for file_path, content in file_path_content_map.items():
+            config_directory_name = Path(file_path).parts[0]
+            file_path = Path(Path(file_path).relative_to(config_directory_name))
 
             # 过滤 dotfiles
             if file_path.name.startswith("."):
@@ -843,9 +808,6 @@ class UploadPackageResource(Resource):
                 case ConfigDirectoryName.plugin:
                     # 因为插件文件含更多不同类型的文件，
                     # 所以不做特定类型解析
-
-                    # file_path的第一级目录为插件ID
-                    # codev_runinfo_report/xxx/xxx,中的codev_runinfo_report为插件ID
                     plugin_configs[file_path] = content
                 case _:
                     pass
@@ -854,34 +816,19 @@ class UploadPackageResource(Resource):
         self.parse_strategy_config(strategy_configs)
         self.parse_view_config(view_configs)
 
-    def parse_package_without_decompress(self, file: FieldFile) -> dict:
+    @classmethod
+    def parse_package_without_decompress(cls, file: FieldFile) -> dict[str, bytes]:
         """
-        解析上传的压缩包文件（zip 或 tar 格式），在不解压到磁盘的情况下，
-        将其内部文件读取到内存中，并校验根目录是否符合预定义结构要求。
-
-        参数:
-            file (FieldFile): 包含上传文件信息的 Django FieldFile 对象，支持 .zip 和 .tar 系列格式
-
-        返回值:
-            dict[str, bytes]: 以文件路径为键、文件内容为值的字典，表示压缩包中的所有文件内容
-
-        异常:
-            UploadPackageError: 当压缩包的顶层目录名称不在预设的合法目录列表(DIRECTORY_LIST)中时抛出
-
-        执行步骤:
-        1. 判断文件类型并使用相应库读取压缩包内容至内存
-        2. 过滤非普通文件成员（针对 tar 包）
-        3. 提取各文件内容存入字典
-        4. 校验压缩包顶层目录名是否符合规范
+        针对zip 和tar相关的压缩包进行处理
         """
 
         # 解压到内存中，获取文件的路径已经对应的内容
-        file_list: dict[str, bytes] = {}
+        file_path_content_map: dict[str, bytes] = {}
         if file.name.endswith(".zip"):
             with zipfile.ZipFile(file.file, "r") as package_file:
                 for file_info in package_file.infolist():
                     with package_file.open(file_info) as f:
-                        file_list[file_info.filename] = f.read()
+                        file_path_content_map[file_info.filename] = f.read()
         else:
             with tarfile.open(fileobj=file.file) as package_file:
                 for member in package_file.getmembers():
@@ -889,15 +836,20 @@ class UploadPackageResource(Resource):
                     if not member.isreg():
                         continue
                     with package_file.extractfile(member) as f:
-                        file_list[member.name] = f.read()
+                        file_path_content_map[member.name] = f.read()
 
         # 校验包目录结构
         if not any(
-            list([x in list(set(filepath.split("/")[0] for filepath in file_list.keys())) for x in DIRECTORY_LIST])
+            list(
+                [
+                    x in list(set(filepath.split("/")[0] for filepath in file_path_content_map.keys()))
+                    for x in DIRECTORY_LIST
+                ]
+            )
         ):
             raise UploadPackageError({"msg": _("导入包目录结构不对")})
 
-        return file_list
+        return file_path_content_map
 
     def handle_return_data(self, model_obj):
         if model_obj.type == ConfigType.VIEW:
@@ -940,8 +892,8 @@ class UploadPackageResource(Resource):
 
             if self.file_id not in upload_file_ids:
                 file = self.file_manager.file_obj.file_data
-                file_list: dict[str, str] = self.parse_package_without_decompress(file)
-                self.parse_package(file_list)
+                file_path_content_map: dict[str, bytes] = self.parse_package_without_decompress(file)
+                self.parse_package(file_path_content_map)
 
             config_list = list(map(self.handle_return_data, ImportParse.objects.filter(file_id=self.file_id)))
             return {
@@ -991,17 +943,6 @@ class ImportConfigResource(Resource):
         )
 
     def perform_request(self, validated_request_data):
-        """
-        执行配置导入请求的核心处理函数
-
-        Returns:
-            dict: 包含生成的导入历史记录ID的字典，格式为 {"import_history_id": int}
-
-        Raises:
-            ImportConfigError: 当没有找到解析文件或未选择任何配置时抛出
-            ImportHistoryNotExistError: 当指定导入历史记录不存在时抛出
-        """
-        # 获取基础请求参数
         username = get_request().user.username
         self.uuid_list = validated_request_data["uuid_list"]
         import_history_id = validated_request_data.get("import_history_id", "")
@@ -1012,7 +953,6 @@ class ImportConfigResource(Resource):
         if not parse_instances:
             raise ImportConfigError({"msg": _("没有找到对应的解析文件内容")})
 
-        # 处理导入历史记录（存在则校验，不存在则新建）
         parse_ids = [parse_obj.id for parse_obj in parse_instances]
         if import_history_id:
             # 校验已有导入历史记录
@@ -1049,16 +989,13 @@ class ImportConfigResource(Resource):
                 history_id=self.import_history_instance.id, parse_id__in=parse_ids
             )
 
-        # 按配置类型分类
         collect_config_list = all_config_list.filter(type=ConfigType.COLLECT)
         strategy_config_list = all_config_list.filter(type=ConfigType.STRATEGY)
         view_config_list = all_config_list.filter(type=ConfigType.VIEW)
 
-        # 有效性校验
         if not any([collect_config_list, strategy_config_list, view_config_list]):
             raise ImportConfigError({"msg": _("未选择任何配置")})
 
-        # 触发异步导入任务
         if any([collect_config_list, strategy_config_list, view_config_list]):
             import_config.delay(
                 username,
@@ -1071,11 +1008,9 @@ class ImportConfigResource(Resource):
                 is_overwrite_mode=validated_request_data["is_overwrite_mode"],
             )
 
-            # 更新导入状态
+            # 执行导入的配置和导入历史状态置为importing
             self.import_history_instance.status = ImportDetailStatus.IMPORTING
             self.import_history_instance.save()
-
-            # 更新相关插件配置状态
             collect_parse_instances = ImportParse.objects.filter(
                 id__in=[config.parse_id for config in collect_config_list]
             )
@@ -1083,13 +1018,11 @@ class ImportConfigResource(Resource):
             ImportDetail.objects.filter(
                 name__in=plugin_id_list, type=ConfigType.PLUGIN, history_id=self.import_history_instance.id
             ).exclude(import_status=ImportDetailStatus.SUCCESS).update(import_status=ImportDetailStatus.IMPORTING)
-
-            # 批量更新各类型配置状态
             collect_config_list.update(import_status=ImportDetailStatus.IMPORTING)
             strategy_config_list.update(import_status=ImportDetailStatus.IMPORTING)
             view_config_list.update(import_status=ImportDetailStatus.IMPORTING)
 
-        # 审计事件上报
+        # 发送审计上报
         try:
             event_content = f"导入{len(collect_config_list)}条采集配置, {len(strategy_config_list)}个策略配置, {len(view_config_list)}个仪表盘"
             send_frontend_report_event(self, bk_biz_id, username, event_content)
