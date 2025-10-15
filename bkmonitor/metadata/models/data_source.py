@@ -29,6 +29,7 @@ from constants.data_source import DATA_LINK_V3_VERSION_NAME, DATA_LINK_V4_VERSIO
 from core.drf_resource import api
 from core.errors.api import BKAPIError
 from metadata import config
+from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_LOG, BKBASE_NAMESPACE_BK_MONITOR
 from metadata.models.space.constants import (
     LOG_EVENT_ETL_CONFIGS,
     SPACE_UID_HYPHEN,
@@ -496,9 +497,14 @@ class DataSource(models.Model):
         from metadata.models.data_link.constants import DataLinkResourceStatus
         from metadata.models.data_link.service import apply_data_id_v2, get_data_id_v2
 
+        # 根据数据类型确定命名空间
+        namespace = BKBASE_NAMESPACE_BK_LOG if event_type == "log" else BKBASE_NAMESPACE_BK_MONITOR
+
         try:
             # 提交data_id申请
-            apply_data_id_v2(data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type)
+            apply_data_id_v2(
+                data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type, namespace=namespace
+            )
             # 写入记录
         except BKAPIError as e:
             logger.error("apply data id from bkdata error: %s", e)
@@ -510,7 +516,7 @@ class DataSource(models.Model):
             time.sleep(3)
             try:
                 # 查询data_id申请状态
-                data = get_data_id_v2(data_name=data_name, is_base=is_base, bk_biz_id=bk_biz_id)
+                data = get_data_id_v2(data_name=data_name, is_base=is_base, bk_biz_id=bk_biz_id, namespace=namespace)
             except BKAPIError as e:
                 logger.error("get data id from bkdata error: %s", e)
                 continue
