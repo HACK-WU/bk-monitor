@@ -35,7 +35,7 @@ DEFAULT_PAGE_SIZE = 1000
 # ===== 空间类型枚举 =====
 class SpaceTypes(Enum):
     """空间类型枚举
-    
+
     定义了蓝鲸监控平台支持的所有空间类型，每种类型对应不同的业务场景：
     - BKCC: 蓝鲸配置管理数据库空间，用于传统CMDB业务
     - BCS: 蓝鲸容器服务空间，用于Kubernetes集群监控
@@ -45,12 +45,12 @@ class SpaceTypes(Enum):
     - ALL: 所有空间类型，用于权限控制等场景
     """
 
-    BKCC = "bkcc"      # 蓝鲸配置管理数据库空间
-    BCS = "bcs"        # 蓝鲸容器服务空间
-    BKCI = "bkci"      # 蓝鲸持续集成空间
+    BKCC = "bkcc"  # 蓝鲸配置管理数据库空间
+    BCS = "bcs"  # 蓝鲸容器服务空间
+    BKCI = "bkci"  # 蓝鲸持续集成空间
     BKSAAS = "bksaas"  # 蓝鲸SaaS应用空间
     DEFAULT = "default"  # 默认空间类型
-    ALL = "all"        # 所有空间类型
+    ALL = "all"  # 所有空间类型
 
     _choices_labels = (
         (BKCC, "bkcc"),
@@ -64,19 +64,19 @@ class SpaceTypes(Enum):
 
 class SpaceStatus(Enum):
     """空间状态枚举
-    
+
     定义空间的运行状态：
     - NORMAL: 正常状态，空间可以正常使用
     - DISABLED: 禁用状态，空间被暂停使用
     """
 
-    NORMAL = "normal"      # 正常状态
+    NORMAL = "normal"  # 正常状态
     DISABLED = "disabled"  # 禁用状态
 
 
 class MeasurementType(Enum):
     """数据表类型枚举
-    
+
     定义监控数据存储的表类型：
     - BK_TRADITIONAL: 传统单表模式，所有指标存储在一张表中
     - BK_SPLIT: 分表模式，按指标分别存储
@@ -84,9 +84,9 @@ class MeasurementType(Enum):
     - BK_STANDARD_V2_TIME_SERIES: 标准时序数据表，V2版本格式
     """
 
-    BK_TRADITIONAL = "bk_traditional_measurement"           # 传统单表模式
-    BK_SPLIT = "bk_split_measurement"                       # 分表模式
-    BK_EXPORTER = "bk_exporter"                            # Exporter模式
+    BK_TRADITIONAL = "bk_traditional_measurement"  # 传统单表模式
+    BK_SPLIT = "bk_split_measurement"  # 分表模式
+    BK_EXPORTER = "bk_exporter"  # Exporter模式
     BK_STANDARD_V2_TIME_SERIES = "bk_standard_v2_time_series"  # 标准时序数据表V2
 
 
@@ -148,45 +148,48 @@ RESULT_TABLE_DETAIL_CHANNEL = os.environ.get(
 # ===== ETL清洗配置枚举 =====
 class EtlConfigs(Enum):
     """ETL数据清洗配置枚举
-    
+
     定义了不同类型数据的ETL清洗配置，用于数据接入时的格式化处理：
-    
+
     系统监控类：
     - 主机基础监控数据（CPU、内存、磁盘等）
     - 进程监控数据
     - 端口监控数据
     - 拨测监控数据
-    
+
     多租户类：
     - 支持多租户模式的数据采集配置
     - 隔离不同租户的数据
-    
+
     自定义类：
     - 用户自定义指标数据
     - Prometheus exporter数据
     """
-    
+
     # === 系统监控类 ETL 配置（多指标单表模式） ===
-    BK_SYSTEM_BASEREPORT = "bk_system_basereport"                # 主机基础监控数据（CPU、内存、磁盘等）
-    BK_UPTIMECHECK_HEARTBEAT = "bk_uptimecheck_heartbeat"        # 拨测心跳监控
-    BK_UPTIMECHECK_HTTP = "bk_uptimecheck_http"                  # HTTP拨测监控
-    BK_UPTIMECHECK_TCP = "bk_uptimecheck_tcp"                    # TCP拨测监控
-    BK_UPTIMECHECK_UDP = "bk_uptimecheck_udp"                    # UDP拨测监控
-    BK_SYSTEM_PROC_PORT = "bk_system_proc_port"                  # 系统进程端口监控
-    BK_SYSTEM_PROC = "bk_system_proc"                            # 系统进程监控
-    
+    BK_SYSTEM_BASEREPORT = "bk_system_basereport"  # 主机基础监控数据（CPU、内存、磁盘等）
+    BK_UPTIMECHECK_HEARTBEAT = "bk_uptimecheck_heartbeat"  # 拨测心跳监控
+    BK_UPTIMECHECK_HTTP = "bk_uptimecheck_http"  # HTTP拨测监控
+    BK_UPTIMECHECK_TCP = "bk_uptimecheck_tcp"  # TCP拨测监控
+    BK_UPTIMECHECK_UDP = "bk_uptimecheck_udp"  # UDP拨测监控
+    BK_SYSTEM_PROC_PORT = "bk_system_proc_port"  # 系统进程端口监控
+    BK_SYSTEM_PROC = "bk_system_proc"  # 系统进程监控
+
     # === 自定义监控类 ETL 配置 ===
-    BK_STANDARD_V2_TIME_SERIES = "bk_standard_v2_time_series"    # 标准时序数据V2格式
+    BK_STANDARD_V2_TIME_SERIES = "bk_standard_v2_time_series"  # 标准时序数据V2格式
 
     # === 多租户监控类 ETL 配置 ===
-    BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG = "bk_multi_tenancy_basereport"          # 多租户主机基础数据
-    BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG = "bk_multi_tenancy_agent_event"        # 多租户Agent事件数据
+    BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG = "bk_multi_tenancy_basereport"  # 多租户主机基础数据
+    BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG = "bk_multi_tenancy_agent_event"  # 多租户Agent事件数据
     BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG = "bk_multi_tenancy_system_proc_perf"  # 多租户进程性能数据
     BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG = "bk_multi_tenancy_system_proc_port"  # 多租户进程端口数据
 
     # === Prometheus/Exporter 类 ETL 配置（固定指标单表模式） ===
-    BK_EXPORTER = "bk_exporter"        # Prometheus exporter数据
-    BK_STANDARD = "bk_standard"        # 标准指标数据
+    BK_EXPORTER = "bk_exporter"  # Prometheus exporter数据
+    BK_STANDARD = "bk_standard"  # 标准指标数据
+
+    # 日志清洗类型
+    BK_FLAT_BATCH = "bk_flat_batch"
 
     _choices_labels = (
         (BK_SYSTEM_BASEREPORT, "bk_system_basereport"),
@@ -199,6 +202,7 @@ class EtlConfigs(Enum):
         (BK_STANDARD_V2_TIME_SERIES, "bk_standard_v2_time_series"),
         (BK_EXPORTER, "bk_exporter"),
         (BK_STANDARD, "bk_standard"),
+        (BK_FLAT_BATCH, "bk_flat_batch"),
         (BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG, "bk_multi_tenancy_agent_event"),
         (BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG, "bk_multi_tenancy_basereport"),
         (BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG, "bk_multi_tenancy_system_proc_perf"),
@@ -214,39 +218,36 @@ SPACE_DATASOURCE_ETL_LIST = [item[0] for item in EtlConfigs._choices_labels.valu
 # 启用V4数据链路的ETL配置类型列表
 # V4数据链路提供更好的性能和稳定性，这些配置类型优先使用V4方式申请DataID
 ENABLE_V4_DATALINK_ETL_CONFIGS = [
-    EtlConfigs.BK_STANDARD_V2_TIME_SERIES.value,                      # 标准时序数据
-    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,         # 多租户Agent事件
-    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,          # 多租户基础监控
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,    # 多租户进程性能
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,    # 多租户进程端口
+    EtlConfigs.BK_STANDARD_V2_TIME_SERIES.value,  # 标准时序数据
+    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,  # 多租户Agent事件
+    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,  # 多租户基础监控
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,  # 多租户进程性能
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,  # 多租户进程端口
 ]
 
-# 根据配置动态添加插件相关的V4数据链路支持
-# 当启用插件接入V4数据链路时，将 Prometheus exporter 和标准指标也使用V4链路
+# 若启用插件接入V4数据链路，则将BK_EXPORTER和BK_STANDARD也加入到V4数据链路
 if settings.ENABLE_PLUGIN_ACCESS_V4_DATA_LINK:
-    ENABLE_V4_DATALINK_ETL_CONFIGS.append(EtlConfigs.BK_EXPORTER.value)  # Prometheus exporter数据
-    ENABLE_V4_DATALINK_ETL_CONFIGS.append(EtlConfigs.BK_STANDARD.value)  # 标准指标数据
-
+    ENABLE_V4_DATALINK_ETL_CONFIGS.extend([EtlConfigs.BK_EXPORTER.value, EtlConfigs.BK_STANDARD.value])
 
 # 系统内置基础数据的ETL配置类型列表
 # 这些配置用于系统自带的基础监控功能，包括主机监控、进程监控等
 SYSTEM_BASE_DATA_ETL_CONFIGS = [
-    EtlConfigs.BK_SYSTEM_BASEREPORT.value,                            # 传统主机基础监控
-    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,          # 多租户主机基础监控
-    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,         # 多租户Agent事件监控
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,    # 多租户进程性能监控
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,    # 多租户进程端口监控
+    EtlConfigs.BK_SYSTEM_BASEREPORT.value,  # 传统主机基础监控
+    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,  # 多租户主机基础监控
+    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,  # 多租户Agent事件监控
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,  # 多租户进程性能监控
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,  # 多租户进程端口监控
 ]
 
 # 日志和事件类数据的ETL配置类型列表
 # 用于处理系统日志、应用事件等非指标类数据
-LOG_EVENT_ETL_CONFIGS = [EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value]
+LOG_EVENT_ETL_CONFIGS = [EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value, EtlConfigs.BK_FLAT_BATCH.value]
 
 # ===== 特殊空间配置 =====
 # BKCC类型中的特殊空间配置
 # BKCC存在一个特殊的"全业务"空间，空间ID为"0"，在某些场景下需要特殊处理
 EXCLUDED_SPACE_TYPE_ID = SpaceTypes.BKCC.value  # 需要特殊处理的空间类型
-EXCLUDED_SPACE_ID = "0"                         # 需要特殊处理的空间ID
+EXCLUDED_SPACE_ID = "0"  # 需要特殊处理的空间ID
 
 # 在BKCC空间枚举中需要跳过的数据源ID列表
 # 这些数据源虽然属于"0"业务，但不属于BKCC类型，需要在处理时跳过
@@ -256,7 +257,7 @@ SKIP_DATA_ID_LIST_FOR_BKCC = [1110000]
 # ===== BCS集群配置 =====
 class BCSClusterTypes(Enum):
     """BCS集群类型枚举
-    
+
     定义蓝鲸容器服务（BCS）支持的集群类型：
     - SINGLE: 独占集群，仅供单个空间使用
     - SHARED: 共享集群，可供多个空间共同使用
@@ -272,14 +273,14 @@ class BCSClusterTypes(Enum):
 BKCI_AUTHORIZED_DATA_ID_LIST = [1001]
 
 # BKCI在数据源1001下允许访问的结果表前缀配置
-BKCI_1001_TABLE_ID_PREFIX = "devx_system."      # 开发体验相关的系统数据表前缀
-P4_1001_TABLE_ID_PREFIX = "perforce_system."    # Perforce版本控制系统相关的主机数据表前缀
+BKCI_1001_TABLE_ID_PREFIX = "devx_system."  # 开发体验相关的系统数据表前缀
+P4_1001_TABLE_ID_PREFIX = "perforce_system."  # Perforce版本控制系统相关的主机数据表前缀
 
 # 允许所有空间类型访问的结果表列表
 # 这些表包含公共数据，不受空间类型限制
 ALL_SPACE_TYPE_TABLE_ID_LIST = [
     "custom_report_aggate.base",  # 自定义上报聚合基础数据表
-    "bkm_statistics.base"         # 监控平台统计基础数据表
+    "bkm_statistics.base",  # 监控平台统计基础数据表
 ]
 
 # 数据源1001下仅允许DBM（数据库管理）访问的结果表前缀
