@@ -155,38 +155,67 @@ class BatchCreateActionResource(Resource):
 
 class GetActionParamsByConfigResource(Resource):
     """
-    创建任务接口
+    根据配置获取动作参数的资源类
+
+    用于根据传入的配置ID列表、动作配置及告警信息，
+    渲染并返回可用于执行的具体动作配置参数。
     """
 
     RequestSerializer = GetCreateParamsSerializer
 
     def jinja_render(self, template_value, alert_context):
         """
-        jinja渲染
-        :param alert_context:
-        :param template_value:
-        :return:
+        使用Jinja2模板引擎递归渲染模板内容
+
+        参数:
+            template_value (Union[str, dict, list]): 待渲染的模板内容，可以是字符串、字典或列表
+            alert_context (dict): 告警上下文字典，提供给模板使用的变量环境
+
+        返回值:
+            Union[str, dict, list]: 渲染后的结果，类型与输入一致
         """
+        # 如果是字符串，则直接进行Jinja2渲染
         if isinstance(template_value, str):
             return Jinja2Renderer.render(template_value, alert_context) or template_value
+        # 如果是字典，则递归渲染每个键值对
         if isinstance(template_value, dict):
             render_value = {}
             for key, value in template_value.items():
                 render_value[key] = self.jinja_render(value, alert_context)
             return render_value
+        # 如果是列表，则递归渲染每个元素
         if isinstance(template_value, list):
             return [self.jinja_render(value, alert_context) for value in template_value]
+        # 其他情况原样返回
         return template_value
 
     def perform_request(self, validated_request_data):
+        """
+        执行主业务逻辑，处理请求数据并生成最终的动作配置参数
+
+        参数:
+            validated_request_data (dict): 经过验证的请求数据，包括：
+                - config_ids: 配置项ID列表
+                - action_configs: 动作配置列表（可选）
+                - action_id: 动作实例ID（可选）
+                - alert_ids: 告警ID列表
+
+        返回值:
+            dict: 包含处理结果和渲染后动作配置的响应数据
+        """
+        # 获取请求中的关键参数
         config_ids = validated_request_data.get("config_ids")
         action_configs = validated_request_data.get("action_configs", [])
         action_id = validated_request_data.get("action_id")
 
+        # 若提供了config_ids，则从数据库中查询对应的详细配置
         if config_ids:
             action_configs = ActionConfigDetailSlz(ActionConfig.objects.filter(id__in=config_ids), many=True).data
 
+        # 查询关联的告警文档
         alerts = AlertDocument.mget(validated_request_data["alert_ids"])
+
+        # 尝试获取指定的动作实例
         action = None
         if action_id:
             try:
@@ -194,20 +223,29 @@ class GetActionParamsByConfigResource(Resource):
             except ActionInstance.DoesNotExist:
                 logger.info("action(%s) not exist", action_id)
 
+        # 对每一条动作配置进行上下文构建和模板渲染
         for action_config in action_configs:
             context_inputs = action_config["execute_config"].get("context_inputs", {})
             alert_context = ActionContext(
                 action=action, alerts=alerts, use_alert_snap=True, dynamic_kwargs=context_inputs
             ).get_dictionary()
+
+            # 初始化自定义模板渲染器（此处content为空仅初始化）
             CustomTemplateRenderer.render(content="", context=alert_context)
+
+            # 保存原始模板详情，并渲染新的模板详情
             action_config["execute_config"]["origin_template_detail"] = copy.deepcopy(
                 action_config["execute_config"]["template_detail"]
             )
             action_config["execute_config"]["template_detail"] = self.jinja_render(
                 action_config["execute_config"]["template_detail"], alert_context
             )
+
+            # 添加告警ID和过滤后的字符串类型的告警上下文到配置中
             action_config["alert_ids"] = validated_request_data["alert_ids"]
             action_config["alert_context"] = {
                 key: value for key, value in alert_context.items() if isinstance(value, str)
             }
+
+        # 返回成功标志和处理后的动作配置列表
         return {"result": True, "action_configs": action_configs}

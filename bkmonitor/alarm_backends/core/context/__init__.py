@@ -9,6 +9,7 @@ specific language governing permissions and limitations under the License.
 """
 
 import logging
+from typing import Any
 
 from django.utils.functional import cached_property
 from django.utils.translation import gettext as _
@@ -110,7 +111,7 @@ class ActionContext:
     ):
         """
         初始化告警处理上下文对象
-        
+
         参数:
             action: 主动作实例对象，包含基础通知配置
             related_actions: 相关动作实例列表，用于收敛处理
@@ -118,7 +119,7 @@ class ActionContext:
             use_alert_snap: 是否强制使用缓存快照标志位
             notice_way: 通知渠道覆盖参数，默认使用动作配置
             dynamic_kwargs: 动态上下文参数字典
-            
+
         该方法完成以下核心初始化流程：
         1. 基础属性初始化与动作上下文加载
         2. 通知渠道自动协商与配置
@@ -130,35 +131,35 @@ class ActionContext:
         self.limit = False
         self.converge_type = ConvergeType.ACTION
         self.mention_users = {}
-        
+
         # 加载动作上下文属性并特殊处理通知相关字段
         if self.action:
             for attr, value in self.action.get_context().items():
                 if attr in ["notice_way", "notice_receiver"]:
                     value = value[0] if isinstance(value, list) else value
                 setattr(self, attr, value)
-        
+
         # 设置默认通知方式并协商通知渠道
         if not hasattr(self, "notice_way"):
             setattr(self, "notice_way", notice_way or NoticeWay.WEIXIN)
         self.notice_channel, self.notice_way = self.get_notice_channel()
-        
+
         # 注入动态参数上下文
         dynamic_kwargs = dynamic_kwargs if dynamic_kwargs else {}
         for attr, value in dynamic_kwargs.items():
             setattr(self, attr, value)
-            
+
         # 处理关联动作与收敛类型判定
         self.all_related_actions = related_actions
         self.converge_type = ConvergeType.ACTION if len(self.related_action_ids) == 1 else self.converge_type
-        
+
         # 标准化警报文档格式
         self.related_alerts = (
             [alert if isinstance(alert, AlertDocument) else AlertDocument(**alert) for alert in alerts]
             if alerts
             else []
         )
-        
+
         # 是否强制使用缓存快照标志位
         self.use_alert_snap = use_alert_snap
 
@@ -459,9 +460,34 @@ class ActionContext:
         return ActionConfigCacheManager.get_action_config_by_id(notice["config_id"])
 
     @cached_property
-    def content_template(self):
+    def content_template(self) -> str:
         """
-        自定义告警模板内容
+        根据不同条件获取自定义告警模板内容
+
+        返回值:
+            str: 返回格式化后的告警消息模板内容
+
+        该方法根据以下逻辑确定最终使用的告警模板内容：
+        1. 若实例存在message_tmpl属性，则优先使用该属性作为模板
+        2. 若action为None，则使用默认模板DEFAULT_TEMPLATE
+        3. 否则尝试从example_action中提取对应信号的模板配置
+        4. 对于不支持标题的通知方式，若标题被自定义过，则将标题加入到内容前
+
+         返回示例:
+            "{{content.level_name}}-{{content.biz_name}}-{{alarm.name}}\n"
+            "{{alarm.target_string}}\n"
+            "{{alarm.dimensions}}\n"
+            "{{alarm.collect_count}}\n"
+            "{{alarm.description}}\n"
+            "{{content.begin_time}}\n"
+            "{{content.end_time}}\n"
+            "{{content.duration}}\n"
+            "{{content.detail_link}}\n"
+            "{{content.current_value}}\n"
+            "{{alarm.biz_id}}\n"
+
+            或者当标题被自定义时:
+            "{{title_template}}\n{{content.level_name}}-{{content.biz_name}}-{{alarm.name}}\n..."
         """
         if getattr(self, "message_tmpl", None):
             template = self.message_tmpl
@@ -470,6 +496,7 @@ class ActionContext:
             template = self.DEFAULT_TEMPLATE
         else:
             try:
+                # 从执行配置中提取各信号对应的模板配置
                 notify_config = {
                     tpl["signal"]: tpl["message_tmpl"]
                     for tpl in self.example_action.action_config.get("execute_config", {})
@@ -477,6 +504,7 @@ class ActionContext:
                     .get("template", [])
                 }
             except BaseException:
+                # 配置解析失败时使用空配置
                 notify_config = {}
 
             signal = self.example_action.signal
@@ -485,6 +513,7 @@ class ActionContext:
                 # 无数据告警与异常告警共用模板
                 signal = ActionSignal.ABNORMAL
 
+            # 获取对应信号的模板，未找到则使用默认模板
             template = notify_config.get(signal)
             if not template:
                 template = self.DEFAULT_TEMPLATE
@@ -552,7 +581,22 @@ class ActionContext:
     def default_title_template(self):
         return self.DEFAULT_TITLE_TEMPLATE
 
-    def get_dictionary(self):
+    def get_dictionary(self) -> dict[str, Any]:
+        """
+        获取字段字典，将对象中指定字段的值构造成字典返回
+
+        参数:
+            无显式参数，依赖实例属性 self.Fields 和与字段同名的属性
+
+        返回值:
+            dict: 包含字段名作为键、字段值作为值的字典。若字段获取失败，则对应值为 None
+
+        执行步骤:
+        1. 初始化空字典用于存储结果
+        2. 遍历实例的 Fields 列表中的每个字段名
+        3. 尝试通过 getattr 获取字段值，若失败则记录调试日志并设值为 None
+        4. 返回构造完成的字典
+        """
         result = {}
         # action_id = self.action.id if self.action else "None"
         # logger.info("get context dictionary started for action(%s)", action_id)
@@ -560,6 +604,8 @@ class ActionContext:
             try:
                 result[field] = getattr(self, field)
             except Exception as e:
+                if field == "strategy":
+                    raise e
                 result[field] = None
                 action_id = self.action.id if self.action else "NULL"
                 alert_id = self.alert.id if self.alert else "NULL"

@@ -13,6 +13,7 @@ import logging
 import re
 from collections import defaultdict
 from os import path
+from typing import Any
 
 import arrow
 from django.conf import settings
@@ -107,12 +108,33 @@ class CustomTemplateRenderer:
     """
 
     @staticmethod
-    def render(content, context):
+    def render(content, context: dict[str, Any]):
+        """
+        渲染通知内容和标题模板，处理模板渲染异常及长度限制
+
+        参数:
+            content: 原始内容字符串，用于邮件方式时会去除换行符
+            context: 上下文字典，包含渲染所需的各种数据，如action、content_template、title_template等
+
+        返回值:
+            content: 经过处理后的内容字符串（未做实质性修改，仅作为原始输入返回）
+
+        执行流程:
+        1. 获取动作ID用于日志记录
+        2. 尝试渲染内容模板，失败则使用默认模板并追加错误提示
+        3. 根据通知方式调整内容格式（如邮件去换行）
+        4. 控制内容长度不超过设定上限
+        5. 渲染标题模板，失败则使用默认标题模板
+        """
+
+        # 提取动作ID供后续日志记录使用
         action_id = context.get("action").id if context.get("action") else None
+
         try:
+            # 渲染用户自定义的内容模板
             content_template = Jinja2Renderer.render(context.get("content_template") or "", context)
         except Exception as error:
-            # 默认所有的异常错误都用系统默认模板渲染
+            # 内容模板渲染失败处理：记录日志并使用默认模板+错误提示
             logger.error(
                 "$%s render content failed :%s, content_template %s",
                 action_id,
@@ -126,28 +148,46 @@ class CustomTemplateRenderer:
             content_template += "\n" + NoticeRowRenderer().format(
                 context.get("notice_way"), title=_("备注"), content=error_info
             )
+
+        # 使用NoticeRowRenderer进一步处理告警内容
         alarm_content = NoticeRowRenderer.render(content_template, context)
 
+        # 邮件通知需要移除内容中的换行符
         notice_way = context.get("notice_way")
         if notice_way == NoticeWay.MAIL:
             content = content.replace("\n", "")
+
+        # 设置用户内容到上下文
         context["user_content"] = alarm_content
+
+        # 判断是否需要截断超长内容
         encoding = context.get("encoding", None)
         content_length = get_content_length(alarm_content, encoding=encoding)
         if context.get("user_content_length") and content_length > context["user_content_length"]:
             alarm_content = cut_str_by_max_bytes(alarm_content, context["user_content_length"], encoding=encoding)
             context["user_content"] = f"{alarm_content[: len(alarm_content) - 3]}..."
+
+        # 初始化标题为空字符串
         title_content = ""
+
         try:
+            # 尝试渲染用户自定义的标题模板
             title_content = Jinja2Renderer.render(context.get("title_template") or "", context)
         except Exception as error:
+            # 标题模板渲染失败记录日志
             logger.error(
                 "$%s render title failed :%s, title_template %s", action_id, str(error), context.get("title_template")
             )
+
+        # 若无有效标题内容，则使用默认标题模板
         if not title_content:
             # 没有自定义通知标题，用默认模板
             title_content = Jinja2Renderer.render(context.get("default_title_template") or "", context)
+
+        # 设置最终使用的标题到上下文中
         context["user_title"] = title_content
+
+        # 返回原始传入的内容（未被修改）
         return content
 
 
@@ -170,7 +210,7 @@ class Jinja2Renderer:
     """
 
     @staticmethod
-    def render(content, context):
+    def render(content: str, context: dict[str, Any]) -> str:
         """
         支持json和re函数
         """
