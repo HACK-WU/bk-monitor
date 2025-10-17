@@ -239,6 +239,10 @@ def filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]):
     return _filter_dict_to_conditions(filter_dict, conditions)
 
 
+def q_to_conditions(q: Q) -> list[dict]:
+    return _filter_dict_to_conditions(q_to_dict(q), [])
+
+
 def _list_to_q(key, value):
     """
     将列表结构转换为Django Q查询对象的递归处理函数
