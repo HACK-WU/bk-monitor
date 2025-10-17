@@ -1,0 +1,467 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "desc": {
+        "field": "CMDB中定义的字段名",
+        "format": "{{target.对象.字段名}}",
+        "object": [
+          {
+            "desc": "业务",
+            "name": "business"
+          },
+          {
+            "desc": "主机",
+            "name": "host"
+          }
+        ]
+      },
+      "group": "CMDB_VAR",
+      "items": [
+        {
+          "desc": "业务ID",
+          "example": "2",
+          "name": "target.business.bk_biz_id"
+        },
+        {
+          "desc": "业务名称",
+          "example": "蓝鲸",
+          "name": "target.business.bk_biz_name"
+        }
+      ],
+      "name": "CMDB变量",
+      "prefix": "target"
+    },
+    {
+      "desc": {
+        "field": null,
+        "format": "{{a.b}}",
+        "object": null
+      },
+      "group": "CONTENT_VAR",
+      "items": [
+        {
+          "desc": "告警级别",
+          "example": "",
+          "name": "content.level"
+        },
+        {
+          "desc": "最近异常时间",
+          "example": "",
+          "name": "content.time"
+        },
+        {
+          "desc": "告警持续时间",
+          "example": "",
+          "name": "content.duration"
+        },
+        {
+          "desc": "告警目标类型",
+          "example": "",
+          "name": "content.target_type"
+        },
+        {
+          "desc": "告警数据来源",
+          "example": "",
+          "name": "content.data_source"
+        },
+        {
+          "desc": "告警内容",
+          "example": "",
+          "name": "content.content"
+        },
+        {
+          "desc": "告警业务",
+          "example": "",
+          "name": "content.biz"
+        },
+        {
+          "desc": "告警目标",
+          "example": "",
+          "name": "content.target"
+        },
+        {
+          "desc": "告警维度",
+          "example": "",
+          "name": "content.dimension"
+        },
+        {
+          "desc": "告警详情",
+          "example": "",
+          "name": "content.detail"
+        },
+        {
+          "desc": "关联信息",
+          "example": "",
+          "name": "content.related_info"
+        },
+        {
+          "desc": "首次异常时间",
+          "example": "",
+          "name": "content.begin_time"
+        },
+        {
+          "desc": "关联信息(短信强制发送)",
+          "example": "",
+          "name": "content.sms_forced_related_info"
+        },
+        {
+          "desc": "维度下钻",
+          "example": "",
+          "name": "content.anomaly_dimensions"
+        },
+        {
+          "desc": "关联指标",
+          "example": "",
+          "name": "content.recommended_metrics"
+        },
+        {
+          "desc": "负责人",
+          "example": "admin,leader",
+          "name": "content.appointees"
+        },
+        {
+          "desc": "分派原因",
+          "example": "system problem",
+          "name": "content.assign_reason"
+        },
+        {
+          "desc": "分派详情",
+          "example": "http://www.bk.com/?bizId=2#/alarm-dispatch?group_id=1",
+          "name": "content.assign_detail"
+        },
+        {
+          "desc": "确认人",
+          "example": "admin",
+          "name": "content.ack_operators"
+        },
+        {
+          "desc": "确认原因",
+          "example": "Process Later",
+          "name": "content.ack_reason"
+        },
+        {
+          "desc": "通知人",
+          "example": "lisa,yunweixiaoge",
+          "name": "content.receivers"
+        },
+        {
+          "desc": "备注",
+          "example": "known",
+          "name": "content.remarks"
+        }
+      ],
+      "name": "内容变量",
+      "prefix": "content"
+    },
+    {
+      "desc": {
+        "field": null,
+        "format": "{{a.b}}",
+        "object": null
+      },
+      "group": "ALARM_VAR",
+      "items": [
+        {
+          "desc": "告警ID",
+          "example": "163800442000001",
+          "name": "alarm.id"
+        },
+        {
+          "desc": "告警名称",
+          "example": "CPU总使用率告警",
+          "name": "alarm.name"
+        },
+        {
+          "desc": "维度名",
+          "example": "目标IP",
+          "name": "alarm.dimensions['dimension_name'].display_name"
+        },
+        {
+          "desc": "维度值",
+          "example": "127.0.0.1",
+          "name": "alarm.dimensions['dimension_name'].display_value"
+        },
+        {
+          "desc": "告警级别",
+          "example": "1",
+          "name": "alarm.level"
+        },
+        {
+          "desc": "告警级别名称",
+          "example": "致命",
+          "name": "alarm.level_name"
+        },
+        {
+          "desc": "告警开始时间",
+          "example": "1970-01-01 00:00:00",
+          "name": "alarm.begin_time"
+        },
+        {
+          "desc": "告警开始时间戳",
+          "example": "1970-01-01 00:00:00",
+          "name": "alarm.begin_timestamp"
+        },
+        {
+          "desc": "告警持续时间(秒)",
+          "example": "130",
+          "name": "alarm.duration"
+        },
+        {
+          "desc": "告警持续时间字符串",
+          "example": "2m 10s",
+          "name": "alarm.duration_string"
+        },
+        {
+          "desc": "告警内容",
+          "example": "AVG(CPU使用率) >= 95.0%, 当前值96.317582%",
+          "name": "alarm.description"
+        },
+        {
+          "desc": "告警目标",
+          "example": "127.0.1.10,127.0.1.11",
+          "name": "alarm.target_string"
+        },
+        {
+          "desc": "告警维度(除目标)",
+          "example": "磁盘=C,主机名=xxx",
+          "name": "alarm.dimension_string"
+        },
+        {
+          "desc": "汇总事件数量",
+          "example": "10",
+          "name": "alarm.collect_count"
+        },
+        {
+          "desc": "消息来源",
+          "example": "蓝鲸监控",
+          "name": "alarm.notice_from"
+        },
+        {
+          "desc": "企业标识",
+          "example": "蓝鲸",
+          "name": "alarm.company"
+        },
+        {
+          "desc": "数据来源名称",
+          "example": "计算平台",
+          "name": "alarm.data_source_name"
+        },
+        {
+          "desc": "数据来源",
+          "example": "BKMONITOR",
+          "name": "alarm.data_source"
+        },
+        {
+          "desc": "当前值",
+          "example": "1.1",
+          "name": "alarm.current_value"
+        },
+        {
+          "desc": "目标类型",
+          "example": "IP/INSTANCE/TOPO",
+          "name": "alarm.target_type"
+        },
+        {
+          "desc": "目标类型名称",
+          "example": "IP/实例/节点",
+          "name": "alarm.target_type_name"
+        },
+        {
+          "desc": "告警详情链接",
+          "example": "http://paas.blueking.com/o/bk_monitorv3/?bizId=1&actionId=2#event-center",
+          "name": "alarm.detail_url"
+        },
+        {
+          "desc": "关联信息",
+          "example": "集群(公共组件) 模块(consul)",
+          "name": "alarm.related_info"
+        },
+        {
+          "desc": "回调数据",
+          "example": "{\"alarm\":\"json\\u6587\\u672c\\u683c\\u5f0f\"}",
+          "name": "alarm.callback_message"
+        },
+        {
+          "desc": "日志关联信息",
+          "example": "ERROR 25854 metadata space_table_id_redis.py[330] space_type: bkci, space_id:_evanxu not found table_id and data_id...",
+          "name": "alarm.log_related_info"
+        },
+        {
+          "desc": "TOPO关联信息",
+          "example": "集群(公共组件) 模块(consul)",
+          "name": "alarm.topo_related_info"
+        },
+        {
+          "desc": "回调数据【new】",
+          "example": "{\"alarm\":\"the new version content of webhook\"}",
+          "name": "alarm.alert_info"
+        },
+        {
+          "desc": "智能异常检测额外信息",
+          "example": "{\"anomaly_alert\":1,\"anomaly_score\":0.7,\"anomaly_uncertainty\":1.43e-5,\"alert_msg\":\"\\u4e0a\\u5347\\u5f02\\u5e38\"}",
+          "name": "alarm.bkm_info"
+        },
+        {
+          "desc": "维度下钻",
+          "example": "异常维度 2，异常维度值 2",
+          "name": "alarm.anomaly_dimensions"
+        },
+        {
+          "desc": "关联指标",
+          "example": "0 个指标,0 个维度",
+          "name": "alarm.recommended_metrics"
+        },
+        {
+          "desc": "通知人",
+          "example": [
+            "lisa",
+            "yunweixiaoge"
+          ],
+          "name": "alarm.receivers"
+        },
+        {
+          "desc": "负责人",
+          "example": [
+            "admin",
+            "leader"
+          ],
+          "name": "alarm.appointees"
+        }
+      ],
+      "name": "告警变量",
+      "prefix": "alarm"
+    },
+    {
+      "desc": {
+        "field": null,
+        "format": "{{a.b}}",
+        "object": null
+      },
+      "group": "STRATEGY_VAR",
+      "items": [
+        {
+          "desc": "策略ID",
+          "example": "1",
+          "name": "strategy.strategy_id"
+        },
+        {
+          "desc": "策略名称",
+          "example": "CPU总使用率",
+          "name": "strategy.name"
+        },
+        {
+          "desc": "场景",
+          "example": "os",
+          "name": "strategy.scenario"
+        },
+        {
+          "desc": "数据来源",
+          "example": "BKMONITOR",
+          "name": "strategy.source_type"
+        },
+        {
+          "desc": "业务ID",
+          "example": "2",
+          "name": "strategy.bk_biz_id"
+        },
+        {
+          "desc": "结果表名称",
+          "example": "system.cpu_detail",
+          "name": "strategy.item.result_table_id"
+        },
+        {
+          "desc": "指标名称",
+          "example": "空闲率",
+          "name": "strategy.item.name"
+        },
+        {
+          "desc": "指标字段",
+          "example": "idle",
+          "name": "strategy.item.metric_field"
+        },
+        {
+          "desc": "单位",
+          "example": "%",
+          "name": "strategy.item.unit"
+        },
+        {
+          "desc": "周期",
+          "example": "60",
+          "name": "strategy.item.agg_interval"
+        },
+        {
+          "desc": "聚合方法",
+          "example": "AVG",
+          "name": "strategy.item.agg_method"
+        }
+      ],
+      "name": "策略变量",
+      "prefix": "strategy"
+    },
+    {
+      "desc": {
+        "field": null,
+        "format": "{{a.b}}",
+        "object": null
+      },
+      "group": "SOLUTION_VAR",
+      "items": [
+        {
+          "desc": "套餐名称",
+          "example": "机器重启",
+          "name": "action_instance.name"
+        },
+        {
+          "desc": "套餐类型",
+          "example": "作业平台",
+          "name": "action_instance.plugin_type_name"
+        },
+        {
+          "desc": "负责人",
+          "example": "admin,yunweixiaoge",
+          "name": "action_instance.assignees"
+        },
+        {
+          "desc": "执行对象",
+          "example": "127.0.0.1",
+          "name": "action_instance.operate_target_string"
+        },
+        {
+          "desc": "业务ID",
+          "example": "2",
+          "name": "action_instance.bk_biz_id"
+        },
+        {
+          "desc": "开始时间",
+          "example": "1970-08-01 10:00:00+08:00",
+          "name": "action_instance.start_time"
+        },
+        {
+          "desc": "执行耗时(秒)",
+          "example": "130",
+          "name": "action_instance.duration"
+        },
+        {
+          "desc": "执行耗时字符串",
+          "example": "2m 10s",
+          "name": "action_instance.duration_string"
+        },
+        {
+          "desc": "执行状态",
+          "example": "执行中",
+          "name": "action_instance.status_display"
+        },
+        {
+          "desc": "具体内容",
+          "example": "已经创建作业平台任务，点击查看详情http://www.job.com/",
+          "name": "action_instance.opt_content"
+        }
+      ],
+      "name": "套餐变量",
+      "prefix": "action_instance"
+    }
+  ],
+  "message": "OK",
+  "result": true
+}
