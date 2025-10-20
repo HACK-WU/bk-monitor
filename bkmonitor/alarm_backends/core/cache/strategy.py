@@ -208,7 +208,25 @@ class StrategyCacheManager(CacheManager):
     @classmethod
     def check_related_strategy(cls, result_map, invalid_strategy_dict):
         """
-        检测关联策略是否失效
+        检测关联策略是否失效，并更新策略失效状态至数据库
+
+        参数:
+            result_map (dict): 策略ID到策略配置信息的映射表，用于标记策略是否失效
+            invalid_strategy_dict (dict): 包含各类失效策略ID集合及关联关系的字典，结构如下：
+                {
+                    StrategyModel.InvalidType枚举值: set(),  # 各类失效策略ID集合
+                    "related_ids_map": dict()  # 关联策略ID映射关系，格式为 {被关联策略ID: [关联策略ID列表]}
+                }
+
+        返回值:
+            dict: 更新后的result_map，其中失效策略的配置信息中新增"is_invalid": True字段
+
+        执行步骤:
+        1. 收集所有已知类型的失效策略ID集合
+        2. 根据关联关系找出因关联策略失效而连带失效的策略
+        3. 将新发现的失效策略合并入总失效集合
+        4. 对每种失效类型批量更新数据库中的策略状态
+        5. 清除已恢复有效的策略的状态标识
         """
         # 关联策略失效，该策略判定为失效策略
         invalid_ids_set = invalid_strategy_dict[StrategyModel.InvalidType.INVALID_METRIC].union(
@@ -355,7 +373,21 @@ class StrategyCacheManager(CacheManager):
     @classmethod
     def get_strategies_map(cls, filter_dict: dict | None = None) -> dict:
         """
-        获取全部策略配置, 返回字典格式
+        获取全部策略配置，经过有效性校验和处理后返回字典格式的结果
+
+        参数:
+            filter_dict (dict | None): 用于筛选策略的过滤条件字典，默认为None表示不过滤
+
+        返回值:
+            dict: 经过处理的有效策略映射，键为策略ID，值为策略配置信息
+
+        该方法主要完成以下工作：
+        1. 初始化策略失效检测缓存信息
+        2. 根据过滤条件从数据库加载所有启用的策略模型并转换为字典
+        3. 对每个策略进行合法性检查（如是否存在监控项、查询配置等）
+        4. 特殊处理AIOPS算法类型的策略参数
+        5. 调用handle_strategy方法进一步处理策略有效性
+        6. 最终检查关联策略是否失效，并返回有效策略集合
         """
         filter_dict: dict = filter_dict or {}
         # 初始化策略失效检测信息
@@ -1087,6 +1119,25 @@ class StrategyCacheManager(CacheManager):
     def refresh(cls):
         """
         全量更新策略缓存
+
+        该方法用于定期刷新系统中所有策略相关的缓存数据，包括策略详情、业务ID列表、实时策略等。
+        包含完整的异常处理与性能监控上报逻辑。
+
+        执行流程如下：
+        1. 获取最新的策略映射表并进行初步缓存
+        2. 查询近期变更的策略历史记录，并据此调整当前策略集合
+        3. 对策略数据依次执行多个处理器函数以完成各类缓存刷新操作
+        4. 清理在处理过程中被标记为删除的策略缓存项
+        5. 上报本次任务耗时及执行结果状态到监控指标系统
+
+        注意事项：
+        - 若获取策略失败则立即返回并记录错误日志和监控打点
+        - 支持增量更新机制，仅针对发生变动的业务范围重新拉取策略
+        - 每个处理步骤独立捕获异常避免中断整个刷新过程
+        - 最后统一清理处理时间段内新增的删除记录对应的缓存键
+
+        返回值:
+            无返回值。最终通过metrics模块上报执行时间和是否出错的信息。
         """
         start_time = time.time()
         exc = None
@@ -1164,11 +1215,23 @@ class StrategyCacheManager(CacheManager):
     @classmethod
     def handle_history_strategies(cls, histories: list[StrategyHistoryModel], with_group_key=True) -> tuple[set, set]:
         """
-        处理策略历史，确定受影响的业务和待删除的策略。
+        处理策略历史记录，识别出受影响的业务ID集合以及需要删除的策略ID集合。
 
-        :param histories: List[StrategyHistoryModel]，策略历史记录列表。
-        :param with_group_key: bool，是否要求获取group key(在smart_refresh中，需要获取group key)
-        :returns: Tuple[Set, Set]，包含受影响的业务ID集合和待删除的策略ID集合的元组。
+        参数:
+            histories (List[StrategyHistoryModel]): 策略变更历史记录列表，每条记录包含操作类型、策略内容等信息。
+            with_group_key (bool): 是否需要获取group key。用于区分调用场景（如smart_refresh中需要）。
+
+        返回值:
+            Tuple[Set, Set]:
+                - 第一个元素是受影响的业务ID集合(set)；
+                - 第二个元素是待删除的策略ID与对应查询MD5组成的元组集合(set of tuples)。
+
+        执行步骤：
+        1. 遍历所有策略历史记录；
+        2. 对于非删除操作，提取业务ID并判断策略是否启用；
+        3. 对于已禁用或被删除的策略，尝试从缓存获取详细信息；
+        4. 若策略存在且满足特定条件，则计算其查询MD5；
+        5. 将需删除的策略ID及其查询MD5加入结果集。
         """
         target_biz_set = set()
         # 初始化待删除的策略ID集合
@@ -1211,7 +1274,24 @@ class StrategyCacheManager(CacheManager):
     @classmethod
     def smart_refresh(cls):
         """
-        增量更新，默认300s内变更的业务将被更新。 更新后将设置最后更新时间。
+        增量更新策略缓存，默认300秒内变更的业务将被更新。更新后将设置最后更新时间。
+
+        该方法实现完整的策略缓存增量更新流程，包含：
+        1. 根据上次更新时间计算本次更新的时间范围
+        2. 查询指定时间范围内变更的策略历史记录
+        3. 处理变更的策略（包括待删除的策略）
+        4. 获取目标业务的策略并进行多维度缓存刷新
+        5. 更新无数据检测和AIOPS SDK相关策略缓存
+        6. 同步AIOPS策略变更至历史数据维护服务
+
+        返回值:
+            None表示更新完成
+
+        该方法通过以下步骤确保策略缓存的一致性和实时性：
+        - 使用时间窗口机制避免重复处理
+        - 支持策略的增删改操作同步更新
+        - 维护多种策略分类缓存（按ID、按业务、按特性）
+        - 集成监控指标上报和异常处理
         """
         start_time = time.time()
         exc = None
@@ -1235,7 +1315,7 @@ class StrategyCacheManager(CacheManager):
         logger.info(f"[smart_strategy_cache]: active strategy found in the past {timeshift} seconds")
 
         # 处理变更的策略
-        target_biz_set, to_be_deleted_strategy_ids = cls.handle_history_strategies(histories)
+        target_biz_set, to_be_deleted_strategy_ids = cls.handle_history_strategies()
 
         # 如果有策略待删除，则记录日志
         if to_be_deleted_strategy_ids:
@@ -1265,6 +1345,7 @@ class StrategyCacheManager(CacheManager):
             )
 
         def refresh_aiops_sdk_strategy_ids(_strategies):
+            # 分离使用AIOPS SDK和未使用的策略ID
             aiops_sdk_ids, none_aiops_sdk_ids = set(), set()
             for strategy in strategies:
                 for item in strategy["items"]:
@@ -1281,7 +1362,7 @@ class StrategyCacheManager(CacheManager):
             cls.cache.set(cls.AIOPS_SDK_CACHE_KEY, json.dumps(list(old_aiops_sdk_ids)), cls.CACHE_TIMEOUT)
 
         def refresh_nodata_strategy_ids(_strategies):
-            #
+            # 分离启用和未启用无数据检测的策略ID
             nodata_strategy_ids, without_nodata_strategy_ids = set(), set()
             for s in strategies:
                 for i in s["items"]:
@@ -1292,7 +1373,7 @@ class StrategyCacheManager(CacheManager):
                 else:
                     without_nodata_strategy_ids.add(s["id"])
 
-            # 增量更新
+            # 增量更新无数据策略缓存
             old_nodata_strategy_ids = set(cls.get_nodata_strategy_ids())
             old_nodata_strategy_ids.update(nodata_strategy_ids)
             old_nodata_strategy_ids -= without_nodata_strategy_ids

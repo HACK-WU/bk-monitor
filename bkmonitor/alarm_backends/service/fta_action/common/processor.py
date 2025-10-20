@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -39,7 +38,7 @@ class ActionProcessor(BaseActionProcessor):
     """
 
     def __init__(self, action_id, alerts=None):
-        super(ActionProcessor, self).__init__(action_id, alerts=alerts)
+        super().__init__(action_id, alerts=alerts)
         self.execute_config = self.action_config["execute_config"]
         self.backend_config = self.action.action_plugin.get("backend_config", {})
         self.function_config = {item["function"]: item for item in self.backend_config}
@@ -48,7 +47,25 @@ class ActionProcessor(BaseActionProcessor):
     @cached_property
     def inputs(self):
         """
-        输入数据
+        准备并返回执行任务所需的输入参数
+
+        该方法主要完成以下工作：
+        1. 渲染模板配置参数（支持Jinja2语法）
+        2. 格式化模板参数为列表和字典两种形式
+        3. 构造完整的执行参数字典，包含业务信息、操作人、平台地址等
+
+        返回值:
+            dict: 包含所有执行所需参数的字典，结构如下：
+                - operator: 操作人，优先使用通知接收人，否则使用任务负责人
+                - execute_config: 执行配置，包含格式化后的模板详情
+                - bk_biz_id: 业务ID
+                - action_name: 任务名称（带前缀）
+                - bk_paas_inner_host: 内网PAAS地址
+                - bk_paas_host: 外网PAAS地址
+                - 其他公共参数（来自ActionPlugin.PUBLIC_PARAMS）
+
+        异常处理:
+            如果模板渲染失败，记录错误日志并设置任务状态为失败，然后抛出异常终止执行
         """
         template_detail = self.execute_config["template_detail"]
         try:
@@ -59,10 +76,13 @@ class ActionProcessor(BaseActionProcessor):
             # 直接设置为结束，抛出异常，终止整个执行
             raise
 
+        # 将模板详情转换为列表格式，便于前端展示和处理
         template_detail_list = [{"key": key, "value": value} for key, value in template_detail.items()]
         execute_config = deepcopy(self.execute_config)
         execute_config["template_detail"] = template_detail_list
         execute_config["template_detail_dict"] = template_detail
+
+        # 构造最终的参数字典
         params = {
             "operator": self.notice_receivers[0] if self.notice_receivers else self.action.assignee,
             "execute_config": execute_config,
@@ -98,14 +118,25 @@ class ActionProcessor(BaseActionProcessor):
 
     def jinja_render(self, template_value):
         """
-        做jinja渲染
-        :param template_value:
-        :return:
+        对传入的模板值进行Jinja2渲染处理，支持字符串、字典和列表类型的递归渲染
+
+        参数:
+            template_value: 待渲染的模板内容，可以是字符串、字典或列表类型
+
+        返回值:
+            渲染后的内容，类型与输入保持一致
+
+        该方法实现以下功能：
+        1. 使用Jinja2引擎对模板内容进行渲染
+        2. 支持嵌套数据结构（字典、列表）的递归渲染
+        3. 处理默认内容模板并将其渲染结果存储到上下文环境中
         """
+        # 渲染默认内容模板，并通过NoticeRowRenderer进一步处理得到告警内容
         user_content = Jinja2Renderer.render(self.context.get("default_content_template", ""), self.context)
         alarm_content = NoticeRowRenderer.render(user_content, self.context)
         self.context["user_content"] = alarm_content
 
+        # 根据template_value的不同类型进行相应的渲染处理
         if isinstance(template_value, str):
             return Jinja2Renderer.render(template_value, self.context)
         if isinstance(template_value, dict):
@@ -183,7 +214,9 @@ class ActionProcessor(BaseActionProcessor):
             else:
                 self.set_finished(
                     ActionStatus.FAILURE,
-                    message=_("{}阶段出错，第三方任务返回执行失败: {}").format(current_step_name, outputs.get("message")),
+                    message=_("{}阶段出错，第三方任务返回执行失败: {}").format(
+                        current_step_name, outputs.get("message")
+                    ),
                     retry_func=config.get("function", "execute"),
                     kwargs=kwargs,
                 )

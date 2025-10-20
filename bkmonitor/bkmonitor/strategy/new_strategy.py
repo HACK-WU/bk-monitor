@@ -2328,21 +2328,34 @@ class Strategy(AbstractConfig):
     @classmethod
     def convert_v1_to_v2(cls, strategy_config: dict) -> dict:
         """
-        旧版策略配置转新版策略
+        将旧版(v1)策略配置转换为新版(v2)策略配置格式
+
+        参数:
+            strategy_config: 旧版策略配置字典，可能包含version字段标识版本
+
+        返回值:
+            转换后的新版策略配置字典，若输入为空或已是v2版本则直接返回原配置
+
+        该方法实现完整的策略配置版本升级流程，包含：
+        1. query_md5字段的迁移处理
+        2. 策略对象结构转换（from_dict_v1 -> to_dict）
+        3. 旧版通知组数据结构适配
+        4. query_md5字段回填到新结构中
         """
         if not strategy_config or strategy_config.get("version") == "v2":
             return strategy_config
 
-        # query_md5转换
+        # 提取旧配置中的query_md5信息，用于后续迁移
         item_query_md5 = {}
         for item in strategy_config["item_list"]:
             if "query_md5" in item:
                 item_query_md5[item["id"]] = item["query_md5"]
 
+        # 执行策略对象的版本转换
         strategy_obj = Strategy.from_dict_v1(strategy_config)
         new_strategy_config = strategy_obj.to_dict()
 
-        # 旧版通知组转换
+        # 旧版通知组转换处理
         if strategy_config.get("action_list"):
             old_action = strategy_config["action_list"][0]
             if old_action["notice_group_list"] and isinstance(old_action["notice_group_list"][0], dict):
@@ -2351,7 +2364,7 @@ class Strategy(AbstractConfig):
                 ]
                 new_strategy_config["notice"]["user_group_list"] = user_group_list
 
-        # query_md5适配
+        # 将提取的query_md5信息回填至新配置结构中
         for item in new_strategy_config["items"]:
             if item["id"] in item_query_md5:
                 item["query_md5"] = item_query_md5[item["id"]]
@@ -2908,18 +2921,13 @@ class Strategy(AbstractConfig):
             related_query = RelationModel.objects.all()
         else:
             # 构建策略相关配置的条件查询集
-            # 监控配置项
-            item_query = ItemModel.objects.filter(strategy_id__in=strategy_ids)
-            # 检测配置模型
-            detect_query = DetectModel.objects.filter(strategy_id__in=strategy_ids)
-            # 检测算法模型
-            algorithm_query = AlgorithmModel.objects.filter(strategy_id__in=strategy_ids)
-            # 查询配置模型
-            query_config_query = QueryConfigModel.objects.filter(strategy_id__in=strategy_ids)
-            # 全局策略标签
-            label_query = StrategyLabel.objects.filter(strategy_id__in=strategy_ids)
-            # 策略响应动作配置关联表
-            related_query = RelationModel.objects.filter(strategy_id__in=strategy_ids)
+
+            item_query = ItemModel.objects.filter(strategy_id__in=strategy_ids)  # 监控配置项
+            detect_query = DetectModel.objects.filter(strategy_id__in=strategy_ids)  # 检测配置模型
+            algorithm_query = AlgorithmModel.objects.filter(strategy_id__in=strategy_ids)  # 检测算法模型
+            query_config_query = QueryConfigModel.objects.filter(strategy_id__in=strategy_ids)  # 查询配置模型
+            label_query = StrategyLabel.objects.filter(strategy_id__in=strategy_ids)  # 全局策略标签
+            related_query = RelationModel.objects.filter(strategy_id__in=strategy_ids)  # 策略响应动作配置关联表
 
         # 将查询结果整理为字典结构：
         # 1. 按策略ID建立关联映射
