@@ -4687,7 +4687,13 @@ class BkDataStorage(models.Model, StorageResultTable):
         else:
             from metadata.task import tasks
 
-            tasks.access_to_bk_data_task.apply_async(args=(self.table_id,), countdown=60)
+            tasks.access_to_bk_data_task.apply_async(
+                args=(
+                    self.bk_tenant_id,
+                    self.table_id,
+                ),
+                countdown=60,
+            )
 
     def create_databus_clean(self, result_table):
         """创建数据总线清洗任务
