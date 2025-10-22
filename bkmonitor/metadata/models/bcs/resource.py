@@ -395,7 +395,16 @@ class BCSResource(models.Model):
     def refresh_all_to_consul(cls):
         """
         刷新资源与k8s集群对应的所有时序data_id到consul
-        :return:
+
+        该方法用于将系统中所有与 Kubernetes 集群相关的监控指标 data_id 汇总，
+        并写入 Consul 中指定路径下，供其他服务发现和使用。
+
+        主要流程包括：
+        1. 获取所有 BCS 集群信息，并初始化每个集群对应的默认 K8sMetricDataID；
+        2. 获取所有 PodMonitorInfo 和 ServiceMonitorInfo 资源的 bk_data_id；
+        3. 将上述 data_id 整合后写入 Consul 对应路径。
+
+        :return: None
         """
         # 所有的时序dataid = k8scluster的默认K8sMetricDataID + resource(PodMonitorInfo,ServiceMonitorInfo) 的data_id_list
         path_template = config.CONSUL_PATH + "/project_id/{}/cluster_id/{}"

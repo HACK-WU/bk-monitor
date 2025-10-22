@@ -40,6 +40,30 @@ CMDB_IP_SEARCH_MAX_SIZE = 100
 def refresh_bcs_monitor_info():
     """
     刷新BCS集群监控信息
+
+    该函数用于定时刷新BCS集群的监控资源配置，包括：
+    1. 获取联邦集群信息并进行异常处理
+    2. 查询运行中的BCS集群并按优先级排序
+    3. 遍历集群刷新内置和自定义监控资源
+    4. 同步联邦集群记录
+    5. 上报任务状态和耗时指标
+
+    参数:
+        无
+
+    返回值:
+        无
+
+    执行流程：
+    1. 初始化指标统计并记录任务开始时间
+    2. 获取所有租户下的联邦集群信息
+    3. 查询运行中的BCS集群并按是否为联邦集群排序
+    4. 遍历集群执行以下操作：
+       - 刷新集群内置公共dataid资源
+       - 刷新ServiceMonitor和PodMonitor资源
+       - 刷新自定义dataid资源配置
+       - 若为联邦集群则同步集群记录
+    5. 记录任务耗时并上报指标
     """
     # 统计&上报 任务状态指标
     metrics.METADATA_CRON_TASK_STATUS_TOTAL.labels(
@@ -533,15 +557,29 @@ def update_bcs_cluster_cloud_id_config(bk_biz_id=None, cluster_id=None):
 
 def sync_federation_clusters(fed_clusters):
     """
-    同步联邦集群信息，创建或更新对应数据记录
+    同步联邦集群信息，创建或更新对应数据记录，并清理不再使用的旧记录
 
-    该函数用于同步联邦集群的拓扑结构信息，包括创建或更新联邦集群与子集群的关联关系，
-    处理命名空间归属信息，删除不再存在的联邦集群记录，以及为需要的子集群创建联邦汇聚链路。
-    整个过程使用事务保证数据一致性，并通过异步方式创建联邦链路。
+    参数:
+        fed_clusters (dict): 联邦集群配置信息字典，格式为：
+            {
+                "fed_cluster_id": {
+                    "host_cluster_id": str,
+                    "sub_clusters": {
+                        "sub_cluster_id": [namespace1, namespace2, ...]
+                    }
+                }
+            }
 
-    :param fed_clusters: BCS API返回的联邦集群拓扑结构信息
-                         格式为字典，key为联邦集群ID，value为包含host_cluster_id和sub_clusters的字典
-                         其中sub_clusters为子集群ID到命名空间列表的映射
+    返回值:
+        None: 此函数无返回值，仅执行同步操作并触发异步任务
+
+    执行流程包括：
+    1. 比较传入与现有联邦集群ID集合，删除不再存在的联邦集群记录
+    2. 遍历最新联邦集群关系，同步其子集群及命名空间归属信息
+    3. 对比数据库中已有记录，判断是否需要更新命名空间列表
+    4. 若存在变更则更新或创建BcsFederalClusterInfo记录
+    5. 清理不属于任何联邦集群的孤立子集群记录
+    6. 触发异步任务批量创建联邦数据链路
     """
     logger.info("sync_federation_clusters:sync_federation_clusters started.")
     need_process_clusters = []  # 记录需要创建联邦汇聚链路的集群列表，统一进行异步操作

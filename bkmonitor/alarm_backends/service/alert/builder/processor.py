@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 import time
-from typing import List
 
 from django.utils.translation import gettext as _
 from elasticsearch.helpers import BulkIndexError
@@ -33,10 +32,10 @@ from core.prometheus import metrics
 
 class AlertBuilder(BaseAlertProcessor):
     def __init__(self):
-        super(AlertBuilder, self).__init__()
+        super().__init__()
         self.logger = logging.getLogger("alert.builder")
 
-    def get_unexpired_events(self, events: List[Event]):
+    def get_unexpired_events(self, events: list[Event]):
         """
         先判断关联事件是否已经过期
         """
@@ -60,7 +59,7 @@ class AlertBuilder(BaseAlertProcessor):
 
         return unexpired_events
 
-    def get_current_alerts(self, events: List[Event]):
+    def get_current_alerts(self, events: list[Event]):
         """
         获取关联事件对应的告警缓存内容
         """
@@ -71,12 +70,31 @@ class AlertBuilder(BaseAlertProcessor):
         cached_alerts = self.list_alerts_content_from_cache(events)
         return {alert.dedupe_md5: alert for alert in cached_alerts}
 
-    def dedupe_events_to_alerts(self, events: List[Event]):
+    def dedupe_events_to_alerts(self, events: list[Event]):
         """
-        将事件进行去重，生成告警并保存
+        将事件列表进行去重处理，构建对应的告警对象，并完成告警的缓存更新、快照存储及信号发送等操作。
+
+        参数:
+            events (List[Event]): 待处理的原始事件列表，每个事件包含触发告警所需的信息
+
+        返回值:
+            List[Alert]: 构建并保存成功的告警对象列表
+
+        执行流程包括：
+        1. 过滤未过期事件
+        2. 使用分布式锁控制并发写入冲突
+        3. 对获取到锁的事件构建告警并持久化
+        4. 对未能获取锁的事件重新投递至任务队列延后处理
+        5. 更新相关监控指标与日志记录
         """
 
         def _report_latency(report_events):
+            """
+            上报事件从触发到当前阶段的延迟数据用于性能分析
+
+            参数:
+                report_events (List[Event]): 需要上报延迟的事件列表
+            """
             latency_logged = False
             for event in report_events:
                 latency = event.get_process_latency()
@@ -104,14 +122,19 @@ class AlertBuilder(BaseAlertProcessor):
                         strategy_id=metrics.TOTAL_TAG,
                     ).observe(latency["access_latency"])
 
+        # 获取尚未过期的有效事件
         events = self.get_unexpired_events(events)
         if not events:
             return []
+
+        # 为所有事件准备分布式锁键
         lock_keys = [ALERT_UPDATE_LOCK.get_key(dedupe_md5=event.dedupe_md5) for event in events]
 
+        # 使用多服务锁机制防止并发修改同一告警
         with multi_service_lock(ALERT_UPDATE_LOCK, lock_keys) as lock:
             success_locked_events = []
             fail_locked_events = []
+
             # 区分出哪些告警加锁成功，哪些失败
             for event in events:
                 if lock.is_locked(ALERT_UPDATE_LOCK.get_key(dedupe_md5=event.dedupe_md5)):
@@ -119,6 +142,7 @@ class AlertBuilder(BaseAlertProcessor):
                 else:
                     fail_locked_events.append(event)
 
+            # 上报成功锁定事件的延迟统计信息
             _report_latency(success_locked_events)
 
             # 对加锁成功的告警才能进行操作
@@ -150,15 +174,20 @@ class AlertBuilder(BaseAlertProcessor):
                     ",".join([event.dedupe_md5 for event in fail_locked_events]),
                 )
 
+            # 强制插入或更新告警数据到数据库
             alerts = self.save_alerts(alerts, action=BulkActionType.UPSERT, force_save=True)
 
         # TODO: 这里需要清理保存失败的告警的 Redis 缓存，否则会导致DB和 Redis 不一致
+
+        # 记录告警相关的日志并发起周期性检测任务
         self.save_alert_logs(alerts)
         self.send_periodic_check_task(alerts)
 
+        # 发送满足条件的告警信号通知
         alerts_to_send_signal = [alert for alert in alerts if alert.should_send_signal()]
         self.send_signal(alerts_to_send_signal)
 
+        # 统计推送数据量并打上标签
         for alert in alerts:
             metrics.ALERT_PROCESS_PUSH_DATA_COUNT.labels(
                 bk_data_id=alert.data_id,
@@ -169,7 +198,7 @@ class AlertBuilder(BaseAlertProcessor):
 
         return alerts
 
-    def handle(self, events: List[Event]):
+    def handle(self, events: list[Event]):
         """
         事件处理逻辑
         1. 保存事件数据到 ES
@@ -180,7 +209,7 @@ class AlertBuilder(BaseAlertProcessor):
         alerts = self.dedupe_events_to_alerts(events)
         return alerts
 
-    def send_periodic_check_task(self, alerts: List[Alert]):
+    def send_periodic_check_task(self, alerts: list[Alert]):
         """
         对于新产生告警，立马触发一次状态检查。因为周期检测任务是1分钟跑一次，对于监控周期小于1分钟告警来说可能不够及时
         """
@@ -196,7 +225,7 @@ class AlertBuilder(BaseAlertProcessor):
         send_check_task(alerts=alerts_params, run_immediately=False)
         self.logger.info("[alert.builder -> alert.manager] alerts: %s", ", ".join([str(alert.id) for alert in alerts]))
 
-    def enrich_alerts(self, alerts: List[Alert]):
+    def enrich_alerts(self, alerts: list[Alert]):
         """
         告警丰富
         注意：只需要对新产生的告警进行丰富
@@ -212,7 +241,7 @@ class AlertBuilder(BaseAlertProcessor):
         )
         return alerts
 
-    def enrich_events(self, events: List[Event]):
+    def enrich_events(self, events: list[Event]):
         """
         事件丰富
         """
@@ -237,7 +266,7 @@ class AlertBuilder(BaseAlertProcessor):
 
         return events
 
-    def save_events(self, events: List[Event]) -> List[Event]:
+    def save_events(self, events: list[Event]) -> list[Event]:
         if not events:
             return []
         dedupe_events = []
@@ -278,8 +307,7 @@ class AlertBuilder(BaseAlertProcessor):
         created_events_count = len(event_documents) - len(error_uids)
 
         self.logger.info(
-            "[alert.builder save event to ES] finished: "
-            "total(%d), created(%d), duplicate(%d), failed(%d), cost: %.3f",
+            "[alert.builder save event to ES] finished: total(%d), created(%d), duplicate(%d), failed(%d), cost: %.3f",
             len(events),
             created_events_count,
             conflict_error_events_count,
@@ -309,7 +337,7 @@ class AlertBuilder(BaseAlertProcessor):
             )
             return alert
 
-    def build_alerts(self, events: List[Event]) -> List[Alert]:
+    def build_alerts(self, events: list[Event]) -> list[Alert]:
         """
         根据事件生成告警
         """
@@ -386,7 +414,7 @@ class AlertBuilder(BaseAlertProcessor):
 
         return alerts
 
-    def process(self, events: List[Event] = None):
+    def process(self, events: list[Event] = None):
         """
         事件处理主入口
         """

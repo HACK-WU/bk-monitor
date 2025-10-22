@@ -26,15 +26,18 @@ def change_cluster_router(cluster, new_bk_biz_id, old_bk_biz_id, is_fed_cluster)
     """
     当集群发生迁移时，需要同步更新对应路由元信息
 
-    该函数用于在BCS集群发生业务迁移时，同步更新相关的路由元信息。
-    主要包括更新结果表的业务ID、更新数据源的空间UID、更新数据源空间关系、
-    处理K8S事件数据以及重新初始化集群资源等操作。
-
     :param cluster: 集群实例 BCSClusterInfo，表示需要迁移的BCS集群对象
     :param new_bk_biz_id: 新的bk_biz_id，集群将要迁移到的目标业务ID
     :param old_bk_biz_id: 旧的bk_biz_id，集群当前所在的业务ID
     :param is_fed_cluster: 是否属于联邦集群，用于决定集群资源初始化方式
     :return: 无返回值
+
+    该函数在集群迁移过程中负责以下核心操作：
+    1. 批量更新结果表(ResultTable)所属业务ID
+    2. 更新数据源(DataSource)空间标识(space_uid)
+    3. 同步维护空间与数据源关系(SpaceDataSource)
+    4. 特殊处理K8S事件组(EventGroup)业务归属
+    5. 重新初始化集群资源配置以确保变更生效
     """
     from metadata.models import EventGroup
 
