@@ -111,6 +111,7 @@ class Command(BaseCommand):
                 return check_result
 
             cluster_info: BCSClusterInfo = db_check["cluster_model"]
+            self.cluster_info: BCSClusterInfo = cluster_info
             self.bk_biz_id = cluster_info.bk_biz_id
             self.bk_tenant_id = cluster_info.bk_tenant_id
 
@@ -140,9 +141,11 @@ class Command(BaseCommand):
             storage_check = self.check_storage_clusters(cluster_info)
             check_result["details"]["storage"] = storage_check
 
+            # todo 数据存储的路由配置没有检查
+
             # 7. Consul配置检查
-            self.stdout.write("正在检查Consul配置...")
-            consul_check = self.check_consul_configuration(cluster_info)
+            self.stdout.write("正在检查datasource的Consul配置...")
+            consul_check = self.check_consul_configuration_to_datasource(cluster_info)
             check_result["details"]["consul"] = consul_check
 
             # 8. 数据采集配置检查
@@ -346,24 +349,13 @@ class Command(BaseCommand):
         result = {"status": "UNKNOWN", "details": {}, "issues": []}
 
         try:
-            data_ids = [
-                cluster_info.K8sMetricDataID,
-                cluster_info.CustomMetricDataID,
-                cluster_info.K8sEventDataID,
-            ]
-
-            # 过滤掉为0的data_id
             # todo 应该检查是否全部具备三个数据源ID
             # todo 检查DataSourceOption 模型
-            valid_data_ids = [data_id for data_id in data_ids if data_id != 0]
-
             datasource_status = {}
-
-            for data_id in valid_data_ids:
+            for data_id, datasource in self.data_sources.items():
                 try:
                     # 检查数据源记录
                     # todo 增加对绑定的mq集群的检查,包括配置
-                    datasource = DataSource.objects.get(bk_data_id=data_id)
                     datasource_status[data_id] = {
                         "exists": True,
                         "data_name": datasource.data_name,
@@ -380,7 +372,7 @@ class Command(BaseCommand):
                     result["issues"].append(f"数据源{data_id}不存在")
 
             result["details"] = {
-                "configured_data_ids": valid_data_ids,
+                "configured_data_ids": list(self.data_sources.keys()),
                 "datasource_status": datasource_status,
             }
 
@@ -438,12 +430,8 @@ class Command(BaseCommand):
 
         try:
             # 获取数据源相关的结果表
-            data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID, cluster_info.K8sEventDataID]
             storage_status = {}
-            for data_id in data_ids:
-                if data_id == 0:
-                    continue
-
+            for data_id in self.data_sources:
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
                         bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
@@ -524,21 +512,33 @@ class Command(BaseCommand):
         except Exception as e:
             return {"status": "ERROR", "details": {}, "error": str(e)}
 
-    def check_consul_configuration(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查Consul配置状态"""
+    @property
+    def data_sources(self) -> dict[str, DataSource]:
+        """获取数据源"""
+        if self._data_sources:
+            return self._data_sources
+
+        data_ids = [
+            self.cluster_info.K8sMetricDataID,
+            self.cluster_info.CustomMetricDataID,
+            self.cluster_info.K8sEventDataID,
+        ]
+
+        data_ids = [id for id in data_ids if id != 0]
+        data_sources = {d.bk_data_id: d for d in DataSource.objects.filter(bk_data_id__in=data_ids)}
+        self._data_sources = data_sources
+        return data_sources
+
+    def check_consul_configuration_to_datasource(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查datasource的Consul配置状态"""
         result = {"status": "UNKNOWN", "details": {}, "issues": []}
 
         try:
             consul_client = consul.BKConsul()
-            data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID, cluster_info.K8sEventDataID]
             consul_status = {}
 
-            for data_id in data_ids:
-                if data_id == 0:
-                    continue
-
+            for data_id, datasource in self.data_sources.items():
                 try:
-                    datasource = DataSource.objects.get(bk_data_id=data_id)
                     consul_path = datasource.consul_config_path
                     consul_data = consul_client.kv.get(consul_path)
 
@@ -582,12 +582,15 @@ class Command(BaseCommand):
             replace_config_count = replace_configs.count()
 
             # 检查时序数据组配置
+            # TimeSeriesGroup 通过 bk_data_id 关联租户，DataSource 已包含 bk_tenant_id
+            # 因此间接实现了租户隔离，无需显式添加 bk_tenant_id 过滤
             metric_groups = TimeSeriesGroup.objects.filter(
                 bk_data_id__in=[cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID]
             )
 
             metric_group_details = []
             for group in metric_groups:
+                # TimeSeriesMetric 通过 group_id 关联 TimeSeriesGroup，间接实现租户隔离
                 metrics_count = TimeSeriesMetric.objects.filter(group_id=group.time_series_group_id).count()
                 metric_group_details.append(
                     {
@@ -684,7 +687,7 @@ class Command(BaseCommand):
                     continue
 
                 try:
-                    datasource = DataSource.objects.get(bk_data_id=data_id)
+                    datasource = DataSource.objects.get(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id)
                     routing_status[data_id] = {
                         "transfer_cluster_id": datasource.transfer_cluster_id,
                         "data_name": datasource.data_name,
@@ -829,6 +832,7 @@ class Command(BaseCommand):
             # 1. 检查EventGroup创建状态
             if cluster_info.K8sEventDataID != 0:
                 try:
+                    # EventGroup 通过 bk_data_id 关联 DataSource，间接实现租户隔离
                     event_group = models.EventGroup.objects.get(bk_data_id=cluster_info.K8sEventDataID)
                     result["details"]["event_group"] = {
                         "exists": True,
@@ -851,6 +855,7 @@ class Command(BaseCommand):
                     continue
 
                 try:
+                    # TimeSeriesGroup 通过 bk_data_id 关联 DataSource，间接实现租户隔离
                     ts_groups = models.TimeSeriesGroup.objects.filter(bk_data_id=data_id, is_delete=False)
                     for ts_group in ts_groups:
                         metrics_count = models.TimeSeriesMetric.objects.filter(
@@ -884,7 +889,9 @@ class Command(BaseCommand):
                     continue
 
                 try:
-                    space_ds = models.SpaceDataSource.objects.filter(bk_data_id=data_id, space_uid=space_uid).first()
+                    space_ds = models.SpaceDataSource.objects.filter(
+                        bk_data_id=data_id, space_uid=space_uid, bk_tenant_id=self.bk_tenant_id
+                    ).first()
 
                     if space_ds:
                         space_datasources.append(
@@ -1127,7 +1134,7 @@ class Command(BaseCommand):
 
                 try:
                     space_ds = models.SpaceDataSource.objects.filter(
-                        bk_data_id=data_id, space_uid=expected_space_uid
+                        bk_data_id=data_id, space_uid=expected_space_uid, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if space_ds:
@@ -1156,7 +1163,7 @@ class Command(BaseCommand):
                     continue
 
                 try:
-                    datasource = DataSource.objects.get(bk_data_id=data_id)
+                    datasource = DataSource.objects.get(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id)
 
                     if datasource.space_uid == expected_space_uid:
                         datasource_space_status.append(
@@ -1189,9 +1196,11 @@ class Command(BaseCommand):
                     continue
 
                 try:
-                    ds_rt = DataSourceResultTable.objects.filter(bk_data_id=data_id).first()
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
                     if ds_rt:
-                        result_table = ResultTable.objects.get(table_id=ds_rt.table_id)
+                        result_table = ResultTable.objects.get(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
 
                         if result_table.bk_biz_id == cluster_info.bk_biz_id:
                             result_table_status.append(
@@ -1226,6 +1235,7 @@ class Command(BaseCommand):
             # 4. 检查EventGroup的bk_biz_id配置
             if cluster_info.K8sEventDataID != 0:
                 try:
+                    # EventGroup 通过 bk_data_id 关联 DataSource，间接实现租户隔离
                     event_group = models.EventGroup.objects.get(bk_data_id=cluster_info.K8sEventDataID)
 
                     if event_group.bk_biz_id == cluster_info.bk_biz_id:

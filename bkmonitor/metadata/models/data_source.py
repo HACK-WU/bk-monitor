@@ -289,6 +289,70 @@ class DataSource(models.Model):
         2. 获取并处理空间/业务关联信息
         3. 条件性地处理结果表配置信息
         4. 生成完整的配置字典供后续使用
+
+        示例返回值:
+            {
+                "bk_data_id": 12345,
+                "data_id": 12345,
+                "bk_tenant_id": "system",
+                "mq_config": {
+                    "storage_config": {
+                        "topic": "test_topic",
+                        "partition": 1
+                    },
+                    "batch_size": 100,
+                    "flush_interval": 10,
+                    "consume_rate": 1000,
+                    "cluster_config": {
+                        "cluster_id": 1,
+                        "cluster_name": "kafka_cluster",
+                        "domain_name": "kafka.example.com",
+                        "port": 9092
+                    }
+                },
+                "etl_config": "bk_standard",
+                "option": {
+                    "allow_metrics_missing": True
+                },
+                "type_label": "time_series",
+                "source_label": "bk_monitor",
+                "token": "abcdef123456",
+                "transfer_cluster_id": "default",
+                "data_name": "test_data_source",
+                "is_platform_data_id": False,
+                "space_type_id": "all",
+                "space_uid": "all__test_space",
+                "bk_biz_id": 2,
+                "result_table_list": [
+                    {
+                        "bk_biz_id": 2,
+                        "bk_tenant_id": "system",
+                        "result_table": "system.cpu_detail", # 结果表ID
+                        "shipper_list": [
+                            {
+                                "cluster_config": {
+                                    "cluster_id": 2,
+                                    "cluster_name": "es_cluster"
+                                },
+                                "storage_config": {
+                                    "table_name": "test_table",
+                                    "level": "level1"
+                                }
+                            }
+                        ],
+                        "field_list": [
+                            {
+                                "field_name": "usage",
+                                "field_type": "float",
+                                "tag": "metric"
+                            }
+                        ],
+                        "schema_type": "fixed",
+                        "option": {}
+                    }
+                ]
+            }
+
         """
         # 构建消息队列配置
         # 从对象属性中提取核心MQ配置参数
