@@ -459,7 +459,7 @@ VARIABLES = [
             {"name": "strategy.strategy_id", "desc": _lazy("策略ID"), "example": "1"},
             {"name": "strategy.name", "desc": _lazy("策略名称"), "example": _lazy("CPU总使用率")},
             {"name": "strategy.scenario", "desc": _lazy("场景"), "example": "os"},
-            {"name": "strategy.source_type", "desc": _lazy("数据来源"), "example": "BKMONITOR"},
+            # {"name": "strategy.source_type", "desc": _lazy("数据来源"), "example": "BKMONITOR"},
             {"name": "strategy.bk_biz_id", "desc": _lazy("业务ID"), "example": "2"},
             {"name": "strategy.item.result_table_id", "desc": _lazy("结果表名称"), "example": "system.cpu_detail"},
             {"name": "strategy.item.name", "desc": _lazy("指标名称"), "example": _lazy("空闲率")},
@@ -467,6 +467,7 @@ VARIABLES = [
             {"name": "strategy.item.unit", "desc": _lazy("单位"), "example": "%"},
             {"name": "strategy.item.agg_interval", "desc": _lazy("周期"), "example": "60"},
             {"name": "strategy.item.agg_method", "desc": _lazy("聚合方法"), "example": "AVG"},
+            {"name": "strategy.labels", "desc": _lazy("策略标签"), "example": "bkmonitor,test"},
         ],
     },
     {
