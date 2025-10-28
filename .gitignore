@@ -214,3 +214,5 @@ test1.py
 test3.py
 my_scripts/data.json
 my_scripts/simplified_data.json
+my_scripts/summary_daily/config.json
+my_scripts/summary_daily/daily_summary_output.txt
