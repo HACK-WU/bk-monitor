@@ -313,6 +313,7 @@ class UnifyQuery:
         end_time: int = None,
         time_alignment: bool = True,
         order_by: list[str] | None = None,
+        not_time_align: bool = False,
     ):
         """
         生成统一查询参数字典，用于构造时序数据查询请求
@@ -373,6 +374,7 @@ class UnifyQuery:
             "step": f"{step}s",
             "space_uid": self.space_uid,
             "bk_tenant_id": self.bk_tenant_id,
+            "not_time_align": not_time_align,
         }
 
         # 时间范围处理
@@ -399,12 +401,13 @@ class UnifyQuery:
         down_sample_range: int | None = "",
         time_alignment: bool = True,
         instant: bool = None,
+        not_time_align: bool = False,
     ) -> tuple[list[dict], bool]:
         """
         使用统一查询模块进行查询
         """
         is_partial = False
-        params = self.get_unify_query_params(start_time, end_time, time_alignment)
+        params = self.get_unify_query_params(start_time, end_time, time_alignment, not_time_align=not_time_align)
         if not params["query_list"]:
             return [], is_partial
 
@@ -554,6 +557,7 @@ class UnifyQuery:
         slimit: int | None = settings.SQL_MAX_LIMIT,
         offset: int | None = None,
         down_sample_range: str | None = "",
+        not_time_align: bool = False,
         *args,
         **kwargs,
     ) -> list[dict]:
@@ -607,6 +611,7 @@ class UnifyQuery:
                         down_sample_range=down_sample_range,
                         time_alignment=kwargs.get("time_alignment", True),
                         instant=kwargs.get("instant"),
+                        not_time_align=not_time_align,
                     )
                     self.is_partial = is_partial
             except Exception as e:
