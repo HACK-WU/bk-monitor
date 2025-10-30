@@ -33,22 +33,21 @@ Job平台的API调用流程包括任务启动、状态轮询和日志获取三�
 
 ```mermaid
 sequenceDiagram
-participant bk_monitor as bk-monitor
-participant job_api as Job API
-participant job_platform as Job平台
-bk_monitor->>job_api : 调用ExecuteJobPlanResource
-job_api-->>bk_monitor : 返回job_instance_id
-bk_monitor->>job_api : 调用GetJobInstanceStatusResource
-job_api-->>bk_monitor : 返回任务状态
-loop 状态轮询
-bk_monitor->>job_api : 轮询任务状态
-job_api-->>bk_monitor : 返回状态信息
-alt 任务完成
-bk_monitor->>job_api : 调用GetJobInstanceIpLogResource
-job_api-->>bk_monitor : 返回执行日志
-break 任务成功
-end
-end
+    participant bk_monitor as "bk-monitor"
+    participant job_api as "Job API"
+    participant job_platform as "Job平台"
+    bk_monitor->>job_api: "调用ExecuteJobPlanResource"
+    job_api-->>bk_monitor: "返回job_instance_id"
+    bk_monitor->>job_api: "调用GetJobInstanceStatusResource"
+    job_api-->>bk_monitor: "返回任务状态"
+    loop "状态轮询"
+        bk_monitor->>job_api: "轮询任务状态"
+        job_api-->>bk_monitor: "返回状态信息"
+        alt "任务完成"
+            bk_monitor->>job_api: "调用GetJobInstanceIpLogResource"
+            job_api-->>bk_monitor: "返回执行日志"
+        end
+    end
 ```
 
 **图示来源**
