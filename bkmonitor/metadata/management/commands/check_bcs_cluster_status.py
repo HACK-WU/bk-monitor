@@ -165,11 +165,13 @@ class Command(BaseCommand):
             check_result["details"]["routing"] = routing_check
 
             # 11. 集群资源使用情况检查
+            # todo 待定
             self.stdout.write("正在检查集群资源使用情况...")
             resource_usage_check = self.check_cluster_resource_usage(cluster_info)
             check_result["details"]["resource_usage"] = resource_usage_check
 
             # 12. 集群初始化资源检查
+            # todo 待定
             self.stdout.write("正在检查集群初始化资源...")
             init_resource_check = self.check_cluster_init_resources(cluster_info)
             check_result["details"]["init_resources"] = init_resource_check
@@ -582,6 +584,7 @@ class Command(BaseCommand):
             replace_config_count = replace_configs.count()
 
             # 检查时序数据组配置
+            # 在bkmonitor/metadata/management/commands/refresh_ts_metric.py 中会刷新 TimeSeriesGroup
             # TimeSeriesGroup 通过 bk_data_id 关联租户，DataSource 已包含 bk_tenant_id
             # 因此间接实现了租户隔离，无需显式添加 bk_tenant_id 过滤
             metric_groups = TimeSeriesGroup.objects.filter(
@@ -679,15 +682,13 @@ class Command(BaseCommand):
         result = {"status": "UNKNOWN", "details": {}, "issues": []}
 
         try:
-            data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID, cluster_info.K8sEventDataID]
             routing_status = {}
 
-            for data_id in data_ids:
+            for data_id, datasource in self.data_sources:
                 if data_id == 0:
                     continue
 
                 try:
-                    datasource = DataSource.objects.get(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id)
                     routing_status[data_id] = {
                         "transfer_cluster_id": datasource.transfer_cluster_id,
                         "data_name": datasource.data_name,

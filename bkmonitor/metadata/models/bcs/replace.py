@@ -112,6 +112,19 @@ class ReplaceConfig(models.Model):
         2. 遍历items中的每个元素：
            - 根据元素的replace_type属性分类存储到对应字典
         3. 返回包含完整替换配置的字典结构
+
+         返回示例:
+            {
+                "metric": {
+                    "container_cpu_usage": "container_cpu_usage_seconds",
+                    "container_memory_rss": "container_memory_rss_bytes"
+                },
+                "dimension": {
+                    "pod_name": "pod",
+                    "namespace_name": "namespace"
+                }
+            }
+
         """
         metric_replace = {}
         dimension_replace = {}

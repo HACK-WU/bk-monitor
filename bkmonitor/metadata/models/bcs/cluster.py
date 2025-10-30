@@ -448,6 +448,33 @@ class BCSClusterInfo(models.Model):
             - metadata: 资源元数据（名称、标签）
             - spec: 资源规格定义（dataID、标签、替换规则等）
 
+            {
+                "apiVersion": "bk-bcs.io/v1alpha1",
+                "kind": "DataIDResource",
+                "metadata": {
+                    "name": "k8smetricdataid-cluster-1",
+                    "labels": {
+                        "usage": "metric",
+                        "isCommon": "true",
+                        "isSystem": "true",
+                        "bk_env": "prod"
+                    }
+                },
+                "spec": {
+                    "dataID": 1001,
+                    "labels": {
+                        "bcs_cluster_id": "cluster-1",
+                        "bk_biz_id": "2"
+                    },
+                    "metricReplace": {
+                        "container_cpu_usage": "container_cpu_usage_seconds"
+                    },
+                    "dimensionReplace": {
+                        "pod_name": "pod"
+                    }
+                }
+            }
+
         该方法实现以下核心逻辑：
         1. 合并全局与集群级替换配置
         2. 构建资源标签体系（usage/isCommon/isSystem）
