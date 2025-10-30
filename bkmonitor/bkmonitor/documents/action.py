@@ -57,6 +57,7 @@ class ActionInstanceDocument(BaseDocument):
         # 执行动作
         ACTION = "ACTION"
 
+    bk_tenant_id = field.Keyword()
     # 多值字段定义（支持存储多个字符串值）
     alert_id = field.Keyword(multi=True)
 
@@ -193,7 +194,7 @@ class ActionInstanceDocument(BaseDocument):
         return cls(**hits[0].to_dict())
 
     @classmethod
-    def mget(cls, ids, fields=None, *args, **kwargs) -> list["ActionInstanceDocument"]:
+    def mget(cls, ids, fields=None) -> list["ActionInstanceDocument"]:
         """
         获取多条处理记录
         """

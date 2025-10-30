@@ -46,6 +46,7 @@ class AlertDocument(BaseDocument):
     REINDEX_ENABLED = True
     REINDEX_QUERY = Search().filter("term", status=EventStatus.ABNORMAL).to_dict()
 
+    bk_tenant_id = field.Keyword()
     id = field.Keyword(required=True)  # 告警唯一标识符（含时间戳+序列号）
     seq_id = field.Long()  # 序列化ID（用于排序）
 
