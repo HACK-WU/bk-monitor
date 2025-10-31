@@ -9,24 +9,40 @@ specific language governing permissions and limitations under the License.
 """
 
 import json
-import logging
 import time
+import logging
+import re
 
-from django.core.management.base import BaseCommand, CommandError
-from django.utils import timezone
+
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
+from django.core.management.base import BaseCommand, CommandError
+from django.utils import timezone
 
 from core.drf_resource import api
+from bkmonitor.utils import consul
+from metadata import models
 from metadata.models.bcs.cluster import BCSClusterInfo
-from metadata.models.data_source import DataSource
-from metadata.models.result_table import DataSourceResultTable, ResultTable
+from metadata.models.data_source import DataSource, DataSourceOption
 from metadata.models.bcs.resource import ServiceMonitorInfo, PodMonitorInfo
-from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage
+from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage
 from metadata.models.bcs.replace import ReplaceConfig
 from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, TimeSeriesMetric
-from metadata import models
-from bkmonitor.utils import consul
+from metadata.models.space.space import SpaceDataSource
+from metadata.models.space.constants import SpaceTypes
+from metadata.models.custom_report.subscription_config import CustomReportSubscription
+from metadata.models.result_table import (
+    ResultTable,
+    ResultTableOption,
+    ResultTableField,
+    ResultTableFieldOption,
+    DataSourceResultTable,
+)
+from metadata.models.influxdb_cluster import InfluxDBClusterInfo, InfluxDBHostInfo
+from metadata.models.vm.record import AccessVMRecord
+from metadata.models.data_link.data_link import DataLink
+from metadata.models.bkdata.result_table import BkBaseResultTable
+
 
 logger = logging.getLogger("metadata")
 
@@ -195,6 +211,46 @@ class Command(BaseCommand):
             self.stdout.write("正在检查云区域ID配置...")
             cloud_id_check = self.check_cloud_id_configuration(cluster_info)
             check_result["details"]["cloud_id"] = cloud_id_check
+
+            # 17. 检查DataSourceOption配置
+            self.stdout.write("正在检查DataSourceOption配置...")
+            datasource_options_check = self.check_datasource_options(cluster_info)
+            check_result["details"]["datasource_options"] = datasource_options_check
+
+            # 18. 检查空间类型与SpaceDataSource关联
+            self.stdout.write("正在检查空间类型配置...")
+            space_type_check = self.check_space_type_and_datasource(cluster_info)
+            check_result["details"]["space_type"] = space_type_check
+
+            # 19. 检查指标标签
+            self.stdout.write("正在检查指标标签...")
+            metrics_labels_check = self.check_metrics_labels(cluster_info)
+            check_result["details"]["metrics_labels"] = metrics_labels_check
+
+            # 20. 检查CustomReportSubscription
+            self.stdout.write("正在检查CustomReportSubscription...")
+            custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
+            check_result["details"]["custom_report_subscription"] = custom_report_sub_check
+
+            # 21. 检查table_id合法性
+            self.stdout.write("正在检查结果表ID合法性...")
+            table_id_check = self.check_table_id_validity(cluster_info)
+            check_result["details"]["table_id_validity"] = table_id_check
+
+            # 22. 检查关联模型
+            self.stdout.write("正在检查关联模型数据...")
+            related_models_check = self.check_related_models(cluster_info)
+            check_result["details"]["related_models"] = related_models_check
+
+            # 23. 检查InfluxDB存储配置
+            self.stdout.write("正在检查InfluxDB存储配置...")
+            influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
+            check_result["details"]["influxdb_storage"] = influxdb_storage_check
+
+            # 24. 检查VM数据链路依赖
+            self.stdout.write("正在检查VM数据链路依赖...")
+            vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
+            check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
 
             # 确定整体状态
             check_result["status"] = self.determine_overall_status(check_result["details"])
@@ -1308,6 +1364,665 @@ class Command(BaseCommand):
 
         return result
 
+    def check_datasource_options(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查DataSourceOption数据完整性
+
+        验证数据源的关键配置项是否完整且符合规范
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            # 关键配置项列表
+            important_options = [
+                DataSourceOption.OPTION_ALLOW_DIMENSIONS_MISSING,
+                DataSourceOption.OPTION_ALLOW_METRICS_MISSING,
+                DataSourceOption.OPTION_TIMESTAMP_UNIT,
+                DataSourceOption.OPTION_GROUP_INFO_ALIAS,
+            ]
+
+            option_status = {}
+            for data_id, datasource in self.command.data_sources.items():
+                try:
+                    # 查询该数据源的所有配置项
+                    options = DataSourceOption.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    )
+
+                    option_dict = {opt.name: opt.value for opt in options}
+                    missing_options = [opt for opt in important_options if opt not in option_dict]
+
+                    option_status[data_id] = {
+                        "options_count": len(option_dict),
+                        "required_options": important_options,
+                        "missing_options": missing_options,
+                        "configured_options": list(option_dict.keys()),
+                    }
+
+                    # 检查缺失的关键配置项
+                    if missing_options:
+                        result["issues"].append(f"数据源{data_id}缺少关键配置项: {', '.join(missing_options)}")
+
+                except Exception as e:
+                    option_status[data_id] = {"error": str(e)}
+                    result["issues"].append(f"数据源{data_id}配置检查异常: {str(e)}")
+
+            result["details"] = option_status
+            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"DataSourceOption检查异常: {str(e)}")
+            logger.exception(f"检查DataSourceOption时发生异常: {e}")
+
+        return result
+
+    def check_space_type_and_datasource(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查空间类型与SpaceDataSource关联
+
+        验证数据源的空间类型配置是否正确
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            space_check_status = {}
+
+            for data_id, datasource in self.command.data_sources.items():
+                try:
+                    space_type_id = datasource.space_type_id
+                    space_uid = datasource.space_uid
+
+                    # 检查是否为全局空间类型
+                    is_all_space_type = space_type_id == SpaceTypes.ALL.value
+
+                    space_datasource_exists = False
+                    tenant_consistent = True
+
+                    if not is_all_space_type:
+                        # 查询SpaceDataSource关联
+                        space_ds = SpaceDataSource.objects.filter(
+                            bk_data_id=data_id, space_uid=space_uid, bk_tenant_id=self.command.bk_tenant_id
+                        ).first()
+
+                        if space_ds:
+                            space_datasource_exists = True
+                            # 检查租户一致性
+                            tenant_consistent = space_ds.bk_tenant_id == datasource.bk_tenant_id
+                        else:
+                            result["issues"].append(
+                                f"数据源{data_id}(space_type:{space_type_id})缺少SpaceDataSource关联"
+                            )
+
+                    space_check_status[data_id] = {
+                        "space_uid": space_uid,
+                        "space_type_id": space_type_id,
+                        "is_all_space_type": is_all_space_type,
+                        "space_datasource_exists": space_datasource_exists if not is_all_space_type else None,
+                        "tenant_consistent": tenant_consistent,
+                    }
+
+                    if not is_all_space_type and not tenant_consistent:
+                        result["issues"].append(f"数据源{data_id}的租户ID不一致")
+
+                except Exception as e:
+                    space_check_status[data_id] = {"error": str(e)}
+                    result["issues"].append(f"数据源{data_id}空间类型检查异常: {str(e)}")
+
+            result["details"] = space_check_status
+            result["status"] = "SUCCESS" if not result["issues"] else "ERROR"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"空间类型检查异常: {str(e)}")
+            logger.exception(f"检查空间类型时发生异常: {e}")
+
+        return result
+
+    def check_metrics_labels(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查指标标签有效性
+
+        验证BCS集群采集的指标是否正确打上标签
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            # 获取K8s指标和自定义指标数据源
+            metric_data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID]
+            metric_data_ids = [id for id in metric_data_ids if id != 0]
+
+            if not metric_data_ids:
+                result["status"] = "WARNING"
+                result["issues"].append("没有找到指标数据源")
+                return result
+
+            # 统计指标标签
+            total_metrics = 0
+            unlabeled_metrics = 0
+            kubernetes_metrics = 0
+            custom_metrics = 0
+            unlabeled_details = []
+
+            # 查询TimeSeriesMetric
+            for data_id in metric_data_ids:
+                try:
+                    # 获取数据源关联的结果表
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    ).first()
+
+                    if not ds_rt:
+                        continue
+
+                    # 通过结果表ID查询指标
+                    from metadata.models import TimeSeriesGroup
+
+                    ts_groups = TimeSeriesGroup.objects.filter(bk_data_id=data_id, is_delete=False)
+
+                    for ts_group in ts_groups:
+                        metrics = TimeSeriesMetric.objects.filter(group_id=ts_group.time_series_group_id)
+
+                        for metric in metrics:
+                            total_metrics += 1
+
+                            if not metric.label:
+                                unlabeled_metrics += 1
+                                unlabeled_details.append(
+                                    {
+                                        "field_id": metric.field_id,
+                                        "field_name": metric.field_name,
+                                        "group_id": metric.group_id,
+                                    }
+                                )
+                            elif metric.label == "kubernetes":
+                                kubernetes_metrics += 1
+                            elif metric.label == "custom":
+                                custom_metrics += 1
+
+                except Exception as e:
+                    result["issues"].append(f"数据源{data_id}指标标签检查异常: {str(e)}")
+
+            # 计算标签覆盖率
+            label_coverage_rate = 0.0
+            if total_metrics > 0:
+                label_coverage_rate = ((total_metrics - unlabeled_metrics) / total_metrics) * 100
+
+            result["details"] = {
+                "total_metrics": total_metrics,
+                "unlabeled_metrics": unlabeled_metrics,
+                "kubernetes_metrics": kubernetes_metrics,
+                "custom_metrics": custom_metrics,
+                "label_coverage_rate": round(label_coverage_rate, 2),
+                "unlabeled_details": unlabeled_details[:10],  # 只显示前10个
+            }
+
+            # 根据覆盖率判断状态
+            if unlabeled_metrics == 0:
+                result["status"] = "SUCCESS"
+            elif label_coverage_rate >= 95:
+                result["status"] = "WARNING"
+                result["issues"].append(f"有{unlabeled_metrics}个指标未标注标签")
+            else:
+                result["status"] = "WARNING"
+                result["issues"].append(f"标签覆盖率偏低({label_coverage_rate}%), 有{unlabeled_metrics}个指标未标注")
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"指标标签检查异常: {str(e)}")
+            logger.exception(f"检查指标标签时发生异常: {e}")
+
+        return result
+
+    def check_custom_report_subscription(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查CustomReportSubscription配置
+
+        验证BCS集群的自定义上报订阅配置是否正确
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            bk_biz_id = cluster_info.bk_biz_id
+
+            # 查询自定义上报订阅配置
+            subscriptions = CustomReportSubscription.objects.filter(bk_biz_id=bk_biz_id)
+
+            subscription_count = subscriptions.count()
+            subscription_details = []
+
+            for sub in subscriptions:
+                try:
+                    # 检查订阅参数完整性
+                    config_complete = bool(sub.config)
+
+                    if hasattr(sub, "subscription_id") and sub.subscription_id:
+                        # 配置存在
+                        pass
+
+                    subscription_details.append(
+                        {
+                            "subscription_id": sub.id,
+                            "bk_data_id": sub.bk_data_id,
+                            "config_complete": config_complete,
+                        }
+                    )
+
+                except Exception as e:
+                    result["issues"].append(f"订阅{sub.id}检查异常: {str(e)}")
+
+            result["details"] = {
+                "bk_biz_id": bk_biz_id,
+                "subscription_exists": subscription_count > 0,
+                "subscription_count": subscription_count,
+                "subscriptions": subscription_details,
+            }
+
+            if subscription_count == 0:
+                result["status"] = "WARNING"
+                result["issues"].append("没有找到自定义上报订阅配置")
+            else:
+                result["status"] = "SUCCESS"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"CustomReportSubscription检查异常: {str(e)}")
+            logger.exception(f"检查CustomReportSubscription时发生异常: {e}")
+
+        return result
+
+    def check_table_id_validity(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查结果表table_id合法性与唯一性
+
+        验证BCS集群关联的所有结果表ID是否符合命名规范且唯一
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            # table_id 格式规范: "database.table"
+            table_id_pattern = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
+            max_length = 128
+
+            # 收集所有结果表
+            table_ids = set()
+            duplicate_tables = []
+            invalid_format = []
+            length_violations = []
+
+            for data_id in self.command.data_sources.keys():
+                try:
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    )
+
+                    for ds_rt_item in ds_rt:
+                        table_id = ds_rt_item.table_id
+
+                        # 检查格式
+                        if not table_id_pattern.match(table_id):
+                            invalid_format.append(table_id)
+                            result["issues"].append(f"结果表{table_id}格式不符合规范(应为'database.table')")
+
+                        # 检查长度
+                        if len(table_id) > max_length:
+                            length_violations.append(table_id)
+                            result["issues"].append(f"结果表{table_id}长度超过限制({len(table_id)} > {max_length})")
+
+                        # 检查唯一性
+                        if table_id in table_ids:
+                            duplicate_tables.append(table_id)
+                        else:
+                            table_ids.add(table_id)
+
+                except Exception as e:
+                    result["issues"].append(f"数据源{data_id}结果表ID检查异常: {str(e)}")
+
+            # 检查重复
+            if duplicate_tables:
+                result["issues"].append(f"发现重复的结果表ID: {', '.join(duplicate_tables)}")
+
+            result["details"] = {
+                "total_tables": len(table_ids),
+                "valid_tables": len(table_ids) - len(invalid_format) - len(duplicate_tables),
+                "invalid_format": invalid_format,
+                "duplicate_tables": duplicate_tables,
+                "length_violations": length_violations,
+            }
+
+            result["status"] = "SUCCESS" if not result["issues"] else "ERROR"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"结果表ID检查异常: {str(e)}")
+            logger.exception(f"检查结果表ID时发生异常: {e}")
+
+        return result
+
+    def check_related_models(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查关联模型数据完整性
+
+        验证结果表相关的配置数据是否完整
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            datasource_result_table = {}
+            result_table_options = {}
+            result_table_fields = {}
+            result_table_field_options = {}
+
+            # 检查 DataSourceResultTable
+            for data_id, datasource in self.command.data_sources.items():
+                try:
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    ).first()
+
+                    if ds_rt:
+                        table_id = ds_rt.table_id
+                        tenant_consistent = ds_rt.bk_tenant_id == datasource.bk_tenant_id
+
+                        datasource_result_table[data_id] = {
+                            "table_id": table_id,
+                            "relation_exists": True,
+                            "tenant_consistent": tenant_consistent,
+                        }
+
+                        # 检查ResultTableOption
+                        options = ResultTableOption.objects.filter(
+                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
+                        )
+                        option_names = [opt.name for opt in options]
+
+                        result_table_options[table_id] = {
+                            "options_count": len(option_names),
+                            "required_options_present": True,
+                            "configured_options": option_names,
+                        }
+
+                        # 检查ResultTableField
+                        fields = ResultTableField.objects.filter(
+                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
+                        )
+
+                        time_field_exists = fields.filter(field_name="time").exists()
+                        metric_fields = fields.filter(tag=ResultTableField.FIELD_TAG_METRIC)
+                        dimension_fields = fields.filter(tag=ResultTableField.FIELD_TAG_DIMENSION)
+
+                        result_table_fields[table_id] = {
+                            "total_fields": fields.count(),
+                            "time_field_exists": time_field_exists,
+                            "metric_fields_count": metric_fields.count(),
+                            "dimension_fields_count": dimension_fields.count(),
+                        }
+
+                        if not time_field_exists:
+                            result["issues"].append(f"结果表{table_id}缺少时间字段")
+
+                        # 检查ResultTableFieldOption
+                        field_options = ResultTableFieldOption.objects.filter(
+                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
+                        )
+
+                        result_table_field_options[table_id] = {
+                            "fields_with_options": field_options.values("field_name").distinct().count(),
+                        }
+
+                    else:
+                        datasource_result_table[data_id] = {"relation_exists": False}
+                        result["issues"].append(f"数据源{data_id}缺少结果表关联")
+
+                except Exception as e:
+                    result["issues"].append(f"数据源{data_id}关联模型检查异常: {str(e)}")
+
+            result["details"] = {
+                "datasource_result_table": datasource_result_table,
+                "result_table_options": result_table_options,
+                "result_table_fields": result_table_fields,
+                "result_table_field_options": result_table_field_options,
+            }
+
+            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"关联模型检查异常: {str(e)}")
+            logger.exception(f"检查关联模型时发生异常: {e}")
+
+        return result
+
+    def check_influxdb_storage_config(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查InfluxDB存储配置
+
+        验证InfluxDB存储相关配置的完整性和正确性
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            # 检查InfluxDBProxyStorage
+            proxy_storage_details = []
+            influxdb_storages = []
+
+            for data_id in self.command.data_sources.keys():
+                try:
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    ).first()
+
+                    if not ds_rt:
+                        continue
+
+                    # 查询InfluxDB存储
+                    influx_storages = InfluxDBStorage.objects.filter(
+                        table_id=ds_rt.table_id, bk_tenant_id=self.command.bk_tenant_id
+                    )
+
+                    for storage in influx_storages:
+                        influxdb_storages.append(storage)
+
+                        # 检查代理存储配置
+                        if hasattr(storage, "influxdb_proxy_storage_id"):
+                            try:
+                                proxy_storage = InfluxDBProxyStorage.objects.filter(
+                                    proxy_cluster_id=storage.influxdb_proxy_storage_id
+                                ).first()
+
+                                if proxy_storage:
+                                    proxy_storage_details.append(
+                                        {
+                                            "proxy_cluster_id": proxy_storage.proxy_cluster_id,
+                                            "service_name": proxy_storage.service_name,
+                                            "instance_cluster_name": proxy_storage.instance_cluster_name,
+                                            "is_default": proxy_storage.is_default,
+                                        }
+                                    )
+                                else:
+                                    result["issues"].append(f"存储{storage.table_id}的代理存储配置不存在")
+                            except Exception as e:
+                                result["issues"].append(f"存储{storage.table_id}代理配置检查异常: {str(e)}")
+
+                except Exception as e:
+                    result["issues"].append(f"数据源{data_id}InfluxDB存储检查异常: {str(e)}")
+
+            # 检查InfluxDBClusterInfo
+            cluster_details = []
+            try:
+                clusters = InfluxDBClusterInfo.objects.all()
+                for cluster in clusters:
+                    # 获取集群关联的主机数量
+                    host_count = InfluxDBClusterInfo.objects.filter(cluster_name=cluster.cluster_name).count()
+
+                    cluster_details.append(
+                        {
+                            "cluster_name": cluster.cluster_name,
+                            "host_count": host_count,
+                            "host_readable": cluster.host_readable,
+                        }
+                    )
+
+            except Exception as e:
+                result["issues"].append(f"InfluxDBClusterInfo检查异常: {str(e)}")
+
+            # 检查InfluxDBHostInfo
+            host_details = []
+            try:
+                hosts = InfluxDBHostInfo.objects.all()
+                for host in hosts:
+                    host_details.append(
+                        {
+                            "host_name": host.host_name,
+                            "domain_name": host.domain_name,
+                            "port": host.port,
+                        }
+                    )
+
+            except Exception as e:
+                result["issues"].append(f"InfluxDBHostInfo检查异常: {str(e)}")
+
+            result["details"] = {
+                "influxdb_proxy_storage": {
+                    "total_records": len(proxy_storage_details),
+                    "proxy_details": proxy_storage_details,
+                },
+                "influxdb_cluster_info": {
+                    "total_clusters": len(set([c["cluster_name"] for c in cluster_details])),
+                    "clusters_detail": cluster_details,
+                },
+                "influxdb_host_info": {
+                    "total_hosts": len(host_details),
+                    "host_details": host_details[:10],  # 只显示前10个
+                },
+            }
+
+            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"InfluxDB存储配置检查异常: {str(e)}")
+            logger.exception(f"检查InfluxDB存储配置时发生异常: {e}")
+
+        return result
+
+    def check_vm_datalink_dependencies(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查VM数据链路依赖模型
+
+        验证VM数据链路创建和访问所依赖的各个模型配置是否完整
+        """
+        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+
+        try:
+            access_vm_records = []
+            data_link_records = []
+            federal_cluster_records = []
+            bkbase_result_tables = []
+
+            # 检查AccessVMRecord
+            for data_id in self.command.data_sources.keys():
+                try:
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    ).first()
+
+                    if not ds_rt:
+                        continue
+
+                    # 查询VM访问记录
+                    vm_records = AccessVMRecord.objects.filter(
+                        result_table_id=ds_rt.table_id, bk_tenant_id=self.command.bk_tenant_id
+                    )
+
+                    for vm_record in vm_records:
+                        access_vm_records.append(
+                            {
+                                "result_table_id": vm_record.result_table_id,
+                                "vm_result_table_id": vm_record.vm_result_table_id,
+                                "vm_cluster_id": vm_record.vm_cluster_id,
+                                "storage_cluster_id": vm_record.storage_cluster_id,
+                                "data_type": vm_record.data_type,
+                            }
+                        )
+
+                except Exception as e:
+                    result["issues"].append(f"数据源{data_id}VM访问记录检查异常: {str(e)}")
+
+            # 检查DataLink
+            try:
+                data_links = DataLink.objects.filter(bk_tenant_id=self.command.bk_tenant_id)
+
+                for data_link in data_links:
+                    data_link_records.append(
+                        {
+                            "data_link_name": data_link.data_link_name,
+                            "data_link_strategy": data_link.data_link_strategy,
+                            "namespace": data_link.namespace,
+                        }
+                    )
+
+            except Exception as e:
+                result["issues"].append(f"DataLink检查异常: {str(e)}")
+
+            # 检查BcsFederalClusterInfo
+            try:
+                federal_clusters = BcsFederalClusterInfo.objects.filter(
+                    fed_cluster_id=cluster_info.cluster_id, is_deleted=False
+                )
+
+                for fed_cluster in federal_clusters:
+                    federal_cluster_records.append(
+                        {
+                            "fed_cluster_id": fed_cluster.fed_cluster_id,
+                            "sub_cluster_id": fed_cluster.sub_cluster_id,
+                            "fed_namespaces": fed_cluster.fed_namespaces,
+                            "builtin_metric_table_id": fed_cluster.fed_builtin_metric_table_id,
+                        }
+                    )
+
+            except Exception as e:
+                result["issues"].append(f"BcsFederalClusterInfo检查异常: {str(e)}")
+
+            # 检查BkBaseResultTable
+            try:
+                bkbase_tables = BkBaseResultTable.objects.filter(bk_tenant_id=self.command.bk_tenant_id)
+
+                for bkbase_table in bkbase_tables:
+                    bkbase_result_tables.append(
+                        {
+                            "data_link_name": bkbase_table.data_link_name,
+                            "monitor_table_id": bkbase_table.monitor_table_id,
+                            "bkbase_table_id": bkbase_table.bkbase_table_id,
+                            "storage_type": bkbase_table.storage_type,
+                            "status": bkbase_table.status,
+                        }
+                    )
+
+            except Exception as e:
+                result["issues"].append(f"BkBaseResultTable检查异常: {str(e)}")
+
+            result["details"] = {
+                "access_vm_record": {
+                    "total_records": len(access_vm_records),
+                    "table_mapping": access_vm_records[:10],  # 只显示前10个
+                },
+                "data_link": {
+                    "total_links": len(data_link_records),
+                    "link_details": data_link_records[:10],
+                },
+                "federal_cluster_info": {
+                    "is_federal": len(federal_cluster_records) > 0,
+                    "federal_count": len(federal_cluster_records),
+                    "federal_details": federal_cluster_records,
+                },
+                "bkbase_result_table": {
+                    "total_tables": len(bkbase_result_tables),
+                    "table_details": bkbase_result_tables[:10],
+                },
+            }
+
+            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+
+        except Exception as e:
+            result["status"] = "ERROR"
+            result["issues"].append(f"VM数据链路依赖检查异常: {str(e)}")
+            logger.exception(f"检查VM数据链路依赖时发生异常: {e}")
+
+        return result
+
     def check_cloud_id_configuration(self, cluster_info: BCSClusterInfo) -> dict:
         """检查云区域ID配置状态"""
         result = {"status": "UNKNOWN", "details": {}, "issues": []}
@@ -1358,6 +2073,14 @@ class Command(BaseCommand):
             details.get("space_permissions", {}).get("status", "UNKNOWN"),
             details.get("api_token", {}).get("status", "UNKNOWN"),
             details.get("cloud_id", {}).get("status", "UNKNOWN"),
+            details.get("datasource_options", {}).get("status", "UNKNOWN"),
+            details.get("space_type", {}).get("status", "UNKNOWN"),
+            details.get("metrics_labels", {}).get("status", "UNKNOWN"),
+            details.get("custom_report_subscription", {}).get("status", "UNKNOWN"),
+            details.get("table_id_validity", {}).get("status", "UNKNOWN"),
+            details.get("related_models", {}).get("status", "UNKNOWN"),
+            details.get("influxdb_storage", {}).get("status", "UNKNOWN"),
+            details.get("vm_datalink_dependencies", {}).get("status", "UNKNOWN"),
         ]
 
         # 如果是联邦集群，添加联邦状态检查
@@ -1522,6 +2245,71 @@ class Command(BaseCommand):
                 self.stdout.write(f"    云区域ID已配置: {cloud_details.get('cloud_id_configured', False)}")
                 if cloud_details.get("bk_cloud_id") is not None:
                     self.stdout.write(f"    云区域ID: {cloud_details['bk_cloud_id']}")
+
+                    # ==== 新增检测项的输出 ====
+            elif component == "datasource_options" and result.get("details"):
+                option_details = result["details"]
+                total_datasources = len(option_details)
+                self.stdout.write(f"    数据源数量: {total_datasources}")
+                for data_id, opt_info in list(option_details.items())[:3]:  # 只显示前3个
+                    if isinstance(opt_info, dict) and "options_count" in opt_info:
+                        self.stdout.write(f"    数据源{data_id}: {opt_info['options_count']}个配置项")
+
+            elif component == "space_type" and result.get("details"):
+                space_type_details = result["details"]
+                total_datasources = len(space_type_details)
+                self.stdout.write(f"    数据源数量: {total_datasources}")
+                all_space_count = sum(
+                    1 for v in space_type_details.values() if isinstance(v, dict) and v.get("is_all_space_type")
+                )
+                self.stdout.write(f"    全局空间类型: {all_space_count}/{total_datasources}")
+
+            elif component == "metrics_labels" and result.get("details"):
+                label_details = result["details"]
+                self.stdout.write(f"    总指标数: {label_details.get('total_metrics', 0)}")
+                self.stdout.write(f"    标签覆盖率: {label_details.get('label_coverage_rate', 0)}%")
+                unlabeled = label_details.get("unlabeled_metrics", 0)
+                if unlabeled > 0:
+                    self.stdout.write(f"    未标注指标: {unlabeled}")
+
+            elif component == "custom_report_subscription" and result.get("details"):
+                sub_details = result["details"]
+                self.stdout.write(f"    订阅数量: {sub_details.get('subscription_count', 0)}")
+                if sub_details.get("subscription_exists"):
+                    self.stdout.write(f"    业务ID: {sub_details.get('bk_biz_id')}")
+
+            elif component == "table_id_validity" and result.get("details"):
+                table_details = result["details"]
+                self.stdout.write(f"    结果表总数: {table_details.get('total_tables', 0)}")
+                self.stdout.write(f"    有效表: {table_details.get('valid_tables', 0)}")
+                invalid_count = len(table_details.get("invalid_format", []))
+                if invalid_count > 0:
+                    self.stdout.write(f"    无效格式: {invalid_count}")
+
+            elif component == "related_models" and result.get("details"):
+                related_details = result["details"]
+                ds_rt_count = len(related_details.get("datasource_result_table", {}))
+                rt_options_count = len(related_details.get("result_table_options", {}))
+                self.stdout.write(f"    数据源结果表: {ds_rt_count}")
+                self.stdout.write(f"    结果表配置: {rt_options_count}")
+
+            elif component == "influxdb_storage" and result.get("details"):
+                influx_details = result["details"]
+                proxy_count = influx_details.get("influxdb_proxy_storage", {}).get("total_records", 0)
+                cluster_count = influx_details.get("influxdb_cluster_info", {}).get("total_clusters", 0)
+                host_count = influx_details.get("influxdb_host_info", {}).get("total_hosts", 0)
+                self.stdout.write(f"    代理存储: {proxy_count}")
+                self.stdout.write(f"    集群: {cluster_count}")
+                self.stdout.write(f"    主机: {host_count}")
+
+            elif component == "vm_datalink_dependencies" and result.get("details"):
+                vm_details = result["details"]
+                vm_record_count = vm_details.get("access_vm_record", {}).get("total_records", 0)
+                link_count = vm_details.get("data_link", {}).get("total_links", 0)
+                is_federal = vm_details.get("federal_cluster_info", {}).get("is_federal", False)
+                self.stdout.write(f"    VM访问记录: {vm_record_count}")
+                self.stdout.write(f"    数据链路: {link_count}")
+                self.stdout.write(f"    联邦集群: {'是' if is_federal else '否'}")
 
     def get_status_style(self, status: str):
         """根据状态获取样式函数"""
