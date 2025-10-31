@@ -11,7 +11,6 @@ specific language governing permissions and limitations under the License.
 import json
 import time
 import logging
-import re
 
 
 from kubernetes import client as k8s_client
@@ -197,12 +196,13 @@ class Command(BaseCommand):
             collector_config_check = self.check_bk_collector_config(cluster_info)
             check_result["details"]["bk_collector"] = collector_config_check
 
-            # 14. 集群业务权限检查
-            self.stdout.write("正在检查集群业务权限...")
+            # 14. 检查集群所属空间
+            self.stdout.write("检查集群所属空间...")
             space_permission_check = self.check_space_permissions(cluster_info)
             check_result["details"]["space_permissions"] = space_permission_check
 
             # 15. 检查BCS API Token配置
+            # todo 待定
             self.stdout.write("正在检查BCS API Token配置...")
             api_token_check = self.check_bcs_api_token(cluster_info)
             check_result["details"]["api_token"] = api_token_check
@@ -223,9 +223,9 @@ class Command(BaseCommand):
             check_result["details"]["space_type"] = space_type_check
 
             # 19. 检查指标标签
-            self.stdout.write("正在检查指标标签...")
-            metrics_labels_check = self.check_metrics_labels(cluster_info)
-            check_result["details"]["metrics_labels"] = metrics_labels_check
+            # self.stdout.write("正在检查指标标签...")
+            # metrics_labels_check = self.check_metrics_labels(cluster_info)
+            # check_result["details"]["metrics_labels"] = metrics_labels_check
 
             # 20. 检查CustomReportSubscription
             self.stdout.write("正在检查CustomReportSubscription...")
@@ -233,9 +233,9 @@ class Command(BaseCommand):
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
 
             # 21. 检查table_id合法性
-            self.stdout.write("正在检查结果表ID合法性...")
-            table_id_check = self.check_table_id_validity(cluster_info)
-            check_result["details"]["table_id_validity"] = table_id_check
+            # self.stdout.write("正在检查结果表ID合法性...")
+            # table_id_check = self.check_table_id_validity(cluster_info)
+            # check_result["details"]["table_id_validity"] = table_id_check
 
             # 22. 检查关联模型
             self.stdout.write("正在检查关联模型数据...")
@@ -1169,7 +1169,7 @@ class Command(BaseCommand):
         return result
 
     def check_space_permissions(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查集群业务权限状态
+        """检查集群所属空间状态
 
         检查项目包括：
         1. SpaceDataSource 数据源授权关系
@@ -1374,26 +1374,34 @@ class Command(BaseCommand):
         try:
             # 关键配置项列表
             important_options = [
-                DataSourceOption.OPTION_ALLOW_DIMENSIONS_MISSING,
-                DataSourceOption.OPTION_ALLOW_METRICS_MISSING,
                 DataSourceOption.OPTION_TIMESTAMP_UNIT,
-                DataSourceOption.OPTION_GROUP_INFO_ALIAS,
+                # DataSourceOption.OPTION_ALIGN_TIME_UNIT,
+                DataSourceOption.OPTION_DROP_METRICS_ETL_CONFIGS,
             ]
 
             option_status = {}
-            for data_id, datasource in self.command.data_sources.items():
+            for data_id, datasource in self.data_sources.items():
                 try:
                     # 查询该数据源的所有配置项
-                    options = DataSourceOption.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                    options = DataSourceOption.objects.filter(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id).only(
+                        "name", "value"
                     )
 
                     option_dict = {opt.name: opt.value for opt in options}
-                    missing_options = [opt for opt in important_options if opt not in option_dict]
+
+                    missing_options = []
+                    for option in important_options:
+                        if option not in option_dict:
+                            missing_options.append(option)
+
+                    if (
+                        datasource.etl_config != "bk_standard_v2_event"
+                        and DataSourceOption.OPTION_ALIGN_TIME_UNIT not in option_dict
+                    ):
+                        missing_options.append(DataSourceOption.OPTION_ALIGN_TIME_UNIT)
 
                     option_status[data_id] = {
                         "options_count": len(option_dict),
-                        "required_options": important_options,
                         "missing_options": missing_options,
                         "configured_options": list(option_dict.keys()),
                     }
@@ -1426,7 +1434,7 @@ class Command(BaseCommand):
         try:
             space_check_status = {}
 
-            for data_id, datasource in self.command.data_sources.items():
+            for data_id, datasource in self.data_sources.items():
                 try:
                     space_type_id = datasource.space_type_id
                     space_uid = datasource.space_uid
@@ -1440,7 +1448,7 @@ class Command(BaseCommand):
                     if not is_all_space_type:
                         # 查询SpaceDataSource关联
                         space_ds = SpaceDataSource.objects.filter(
-                            bk_data_id=data_id, space_uid=space_uid, bk_tenant_id=self.command.bk_tenant_id
+                            bk_data_id=data_id, space_uid=space_uid, bk_tenant_id=self.bk_tenant_id
                         ).first()
 
                         if space_ds:
@@ -1474,100 +1482,6 @@ class Command(BaseCommand):
             result["status"] = "ERROR"
             result["issues"].append(f"空间类型检查异常: {str(e)}")
             logger.exception(f"检查空间类型时发生异常: {e}")
-
-        return result
-
-    def check_metrics_labels(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查指标标签有效性
-
-        验证BCS集群采集的指标是否正确打上标签
-        """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
-
-        try:
-            # 获取K8s指标和自定义指标数据源
-            metric_data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID]
-            metric_data_ids = [id for id in metric_data_ids if id != 0]
-
-            if not metric_data_ids:
-                result["status"] = "WARNING"
-                result["issues"].append("没有找到指标数据源")
-                return result
-
-            # 统计指标标签
-            total_metrics = 0
-            unlabeled_metrics = 0
-            kubernetes_metrics = 0
-            custom_metrics = 0
-            unlabeled_details = []
-
-            # 查询TimeSeriesMetric
-            for data_id in metric_data_ids:
-                try:
-                    # 获取数据源关联的结果表
-                    ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
-                    ).first()
-
-                    if not ds_rt:
-                        continue
-
-                    # 通过结果表ID查询指标
-                    from metadata.models import TimeSeriesGroup
-
-                    ts_groups = TimeSeriesGroup.objects.filter(bk_data_id=data_id, is_delete=False)
-
-                    for ts_group in ts_groups:
-                        metrics = TimeSeriesMetric.objects.filter(group_id=ts_group.time_series_group_id)
-
-                        for metric in metrics:
-                            total_metrics += 1
-
-                            if not metric.label:
-                                unlabeled_metrics += 1
-                                unlabeled_details.append(
-                                    {
-                                        "field_id": metric.field_id,
-                                        "field_name": metric.field_name,
-                                        "group_id": metric.group_id,
-                                    }
-                                )
-                            elif metric.label == "kubernetes":
-                                kubernetes_metrics += 1
-                            elif metric.label == "custom":
-                                custom_metrics += 1
-
-                except Exception as e:
-                    result["issues"].append(f"数据源{data_id}指标标签检查异常: {str(e)}")
-
-            # 计算标签覆盖率
-            label_coverage_rate = 0.0
-            if total_metrics > 0:
-                label_coverage_rate = ((total_metrics - unlabeled_metrics) / total_metrics) * 100
-
-            result["details"] = {
-                "total_metrics": total_metrics,
-                "unlabeled_metrics": unlabeled_metrics,
-                "kubernetes_metrics": kubernetes_metrics,
-                "custom_metrics": custom_metrics,
-                "label_coverage_rate": round(label_coverage_rate, 2),
-                "unlabeled_details": unlabeled_details[:10],  # 只显示前10个
-            }
-
-            # 根据覆盖率判断状态
-            if unlabeled_metrics == 0:
-                result["status"] = "SUCCESS"
-            elif label_coverage_rate >= 95:
-                result["status"] = "WARNING"
-                result["issues"].append(f"有{unlabeled_metrics}个指标未标注标签")
-            else:
-                result["status"] = "WARNING"
-                result["issues"].append(f"标签覆盖率偏低({label_coverage_rate}%), 有{unlabeled_metrics}个指标未标注")
-
-        except Exception as e:
-            result["status"] = "ERROR"
-            result["issues"].append(f"指标标签检查异常: {str(e)}")
-            logger.exception(f"检查指标标签时发生异常: {e}")
 
         return result
 
@@ -1627,73 +1541,6 @@ class Command(BaseCommand):
 
         return result
 
-    def check_table_id_validity(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查结果表table_id合法性与唯一性
-
-        验证BCS集群关联的所有结果表ID是否符合命名规范且唯一
-        """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
-
-        try:
-            # table_id 格式规范: "database.table"
-            table_id_pattern = re.compile(r"^[a-zA-Z0-9_]+\.[a-zA-Z0-9_]+$")
-            max_length = 128
-
-            # 收集所有结果表
-            table_ids = set()
-            duplicate_tables = []
-            invalid_format = []
-            length_violations = []
-
-            for data_id in self.command.data_sources.keys():
-                try:
-                    ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
-                    )
-
-                    for ds_rt_item in ds_rt:
-                        table_id = ds_rt_item.table_id
-
-                        # 检查格式
-                        if not table_id_pattern.match(table_id):
-                            invalid_format.append(table_id)
-                            result["issues"].append(f"结果表{table_id}格式不符合规范(应为'database.table')")
-
-                        # 检查长度
-                        if len(table_id) > max_length:
-                            length_violations.append(table_id)
-                            result["issues"].append(f"结果表{table_id}长度超过限制({len(table_id)} > {max_length})")
-
-                        # 检查唯一性
-                        if table_id in table_ids:
-                            duplicate_tables.append(table_id)
-                        else:
-                            table_ids.add(table_id)
-
-                except Exception as e:
-                    result["issues"].append(f"数据源{data_id}结果表ID检查异常: {str(e)}")
-
-            # 检查重复
-            if duplicate_tables:
-                result["issues"].append(f"发现重复的结果表ID: {', '.join(duplicate_tables)}")
-
-            result["details"] = {
-                "total_tables": len(table_ids),
-                "valid_tables": len(table_ids) - len(invalid_format) - len(duplicate_tables),
-                "invalid_format": invalid_format,
-                "duplicate_tables": duplicate_tables,
-                "length_violations": length_violations,
-            }
-
-            result["status"] = "SUCCESS" if not result["issues"] else "ERROR"
-
-        except Exception as e:
-            result["status"] = "ERROR"
-            result["issues"].append(f"结果表ID检查异常: {str(e)}")
-            logger.exception(f"检查结果表ID时发生异常: {e}")
-
-        return result
-
     def check_related_models(self, cluster_info: BCSClusterInfo) -> dict:
         """检查关联模型数据完整性
 
@@ -1708,10 +1555,10 @@ class Command(BaseCommand):
             result_table_field_options = {}
 
             # 检查 DataSourceResultTable
-            for data_id, datasource in self.command.data_sources.items():
+            for data_id, datasource in self.data_sources.items():
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if ds_rt:
@@ -1725,9 +1572,7 @@ class Command(BaseCommand):
                         }
 
                         # 检查ResultTableOption
-                        options = ResultTableOption.objects.filter(
-                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
-                        )
+                        options = ResultTableOption.objects.filter(table_id=table_id, bk_tenant_id=self.bk_tenant_id)
                         option_names = [opt.name for opt in options]
 
                         result_table_options[table_id] = {
@@ -1737,9 +1582,7 @@ class Command(BaseCommand):
                         }
 
                         # 检查ResultTableField
-                        fields = ResultTableField.objects.filter(
-                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
-                        )
+                        fields = ResultTableField.objects.filter(table_id=table_id, bk_tenant_id=self.bk_tenant_id)
 
                         time_field_exists = fields.filter(field_name="time").exists()
                         metric_fields = fields.filter(tag=ResultTableField.FIELD_TAG_METRIC)
@@ -1757,7 +1600,7 @@ class Command(BaseCommand):
 
                         # 检查ResultTableFieldOption
                         field_options = ResultTableFieldOption.objects.filter(
-                            table_id=table_id, bk_tenant_id=self.command.bk_tenant_id
+                            table_id=table_id, bk_tenant_id=self.bk_tenant_id
                         )
 
                         result_table_field_options[table_id] = {
@@ -1799,10 +1642,10 @@ class Command(BaseCommand):
             proxy_storage_details = []
             influxdb_storages = []
 
-            for data_id in self.command.data_sources.keys():
+            for data_id in self.data_sources.keys():
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if not ds_rt:
@@ -1810,7 +1653,7 @@ class Command(BaseCommand):
 
                     # 查询InfluxDB存储
                     influx_storages = InfluxDBStorage.objects.filter(
-                        table_id=ds_rt.table_id, bk_tenant_id=self.command.bk_tenant_id
+                        table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
                     )
 
                     for storage in influx_storages:
@@ -1913,10 +1756,10 @@ class Command(BaseCommand):
             bkbase_result_tables = []
 
             # 检查AccessVMRecord
-            for data_id in self.command.data_sources.keys():
+            for data_id in self.data_sources.keys():
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.command.bk_tenant_id
+                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if not ds_rt:
@@ -1924,7 +1767,7 @@ class Command(BaseCommand):
 
                     # 查询VM访问记录
                     vm_records = AccessVMRecord.objects.filter(
-                        result_table_id=ds_rt.table_id, bk_tenant_id=self.command.bk_tenant_id
+                        result_table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
                     )
 
                     for vm_record in vm_records:
@@ -1943,7 +1786,7 @@ class Command(BaseCommand):
 
             # 检查DataLink
             try:
-                data_links = DataLink.objects.filter(bk_tenant_id=self.command.bk_tenant_id)
+                data_links = DataLink.objects.filter(bk_tenant_id=self.bk_tenant_id)
 
                 for data_link in data_links:
                     data_link_records.append(
@@ -1978,7 +1821,7 @@ class Command(BaseCommand):
 
             # 检查BkBaseResultTable
             try:
-                bkbase_tables = BkBaseResultTable.objects.filter(bk_tenant_id=self.command.bk_tenant_id)
+                bkbase_tables = BkBaseResultTable.objects.filter(bk_tenant_id=self.bk_tenant_id)
 
                 for bkbase_table in bkbase_tables:
                     bkbase_result_tables.append(
