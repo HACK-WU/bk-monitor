@@ -706,8 +706,69 @@ class DataLink(models.Model):
     ) -> list[dict[str, Any]]:
         """
         生成联邦代理集群（父集群）时序数据链路配置
-        """
 
+        该方法用于生成BCS联邦集群中代理集群（父集群）的时序数据链路配置。配置包括结果表定义和
+        存储绑定两个核心组件，为联邦代理集群提供完整的数据链路资源配置。
+
+        参数:
+            bk_biz_id (int): 业务ID，用于标识数据所属的业务范围
+            data_source (DataSource): 数据源对象，包含数据的基本信息和配置
+            table_id (str): 监控平台结果表ID（Metadata中的），标识数据存储的目标表
+            storage_cluster_name (str): VM集群名称，指定数据存储的目标集群
+
+        返回值:
+            list[dict[str, Any]]: 返回联邦代理集群时序数据链路配置列表，每个配置项为字典格式
+
+        返回示例:
+            [
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "ResultTable",
+                    "metadata": {
+                        "name": "bk_monitor_bcs_federal_proxy_time_series_1003",
+                        "namespace": "bkdata",
+                        "labels": {
+                            "data_link_name": "federal_proxy_time_series_link"
+                        }
+                    },
+                    "spec": {
+                        "bk_biz_id": 2,
+                        "bk_tenant_id": "system",
+                        "fields": [
+                            {
+                                "field_name": "time",
+                                "field_type": "timestamp",
+                                "tag": "timestamp"
+                            },
+                            {
+                                "field_name": "container_cpu_usage",
+                                "field_type": "float",
+                                "tag": "metric"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "VmStorageBinding",
+                    "metadata": {
+                        "name": "bk_monitor_bcs_federal_proxy_time_series_1003",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "vm_cluster_name": "vm-cluster-03",
+                        "retention_period": "7d"
+                    }
+                }
+            ]
+
+        执行流程:
+        1. 记录操作日志，包括链路名称、业务ID、数据源ID、结果表ID和存储集群名称
+        2. 构造BKBase相关名称（数据源名和结果表名）
+        3. 在数据库事务中创建或获取资源配置对象（ResultTable、VMStorageBinding）
+        4. 组装各资源配置的详细参数
+        5. 返回完整的配置列表供后续链路申请使用
+        """
         logger.info(
             "compose_federal_proxy_configs: data_link_name->[%s],bk_biz_id->[%s],bk_data_id->[%s],table_id->[%s],vm_cluster_name->[%s]"
             "start to compose configs",
@@ -760,21 +821,80 @@ class DataLink(models.Model):
         """
         生成联邦子集群时序数据链路配置
 
+        该方法用于生成BCS联邦集群中子集群的时序数据链路配置。配置包括条件sink和数据总线配置，
+        用于处理联邦集群中的多层级数据路由和存储。
+
         参数:
-            bk_biz_id: 业务ID，用于标识数据所属的业务范围
-            data_source: 数据源对象，包含数据的基本信息和配置
-            table_id: 监控平台结果表ID，用于标识数据存储的目标表
-            bcs_cluster_id: 联邦子集群ID，标识数据来源的子集群
-            storage_cluster_name: 存储集群名称，指定数据存储的目标集群
+            bk_biz_id (int): 业务ID，用于标识数据所属的业务范围
+            data_source (DataSource): 数据源对象，包含数据的基本信息和配置
+            table_id (str): 监控平台结果表ID（Metadata中的），标识数据存储的目标表
+            bcs_cluster_id (str): 联邦子集群ID，标识数据来源的子集群
+            storage_cluster_name (str): 存储集群名称，指定数据存储的目标集群
 
         返回值:
             list[dict[str, Any]]: 返回联邦子集群时序数据链路配置列表，每个配置项为字典格式
 
-        该函数实现联邦子集群时序数据链路配置的完整生成流程，包含：
-        1. 联邦集群信息查询与校验
-        2. BKBase相关名称的构造
-        3. 联邦代理集群RT名和匹配条件的组装
-        4. 条件sink配置和数据总线配置的生成
+        返回示例:
+            [
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "ConditionalSink",
+                    "metadata": {
+                        "name": "bk_monitor_bcs_federal_subset_time_series_1004",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "conditions": [
+                            {
+                                "match_labels": [
+                                    {
+                                        "name": "namespace",
+                                        "any": ["default", "monitoring"]
+                                    }
+                                ],
+                                "relabels": [
+                                    {
+                                        "name": "bcs_cluster_id",
+                                        "value": "fed-cluster-01"
+                                    }
+                                ],
+                                "sinks": [
+                                    {
+                                        "kind": "VmStorageBinding",
+                                        "name": "proxy_k8s_metric_table",
+                                        "namespace": "bkdata"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "DataBus",
+                    "metadata": {
+                        "name": "bk_monitor_bcs_federal_subset_time_series_1004",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "data_id_name": "fed_bk_monitor_bcs_federal_subset_time_series_1004",
+                        "sinks": [
+                            {
+                                "kind": "ConditionalSink",
+                                "name": "bk_monitor_bcs_federal_subset_time_series_1004",
+                                "namespace": "bkdata"
+                            }
+                        ]
+                    }
+                }
+            ]
+
+        执行流程:
+        1. 查询指定子集群的联邦集群记录
+        2. 遍历所有联邦集群记录，组装条件配置
+        3. 创建或获取条件sink配置和数据总线配置对象
+        4. 组装条件sink配置和数据总线配置
+        5. 返回完整的配置列表供后续链路申请使用
         """
         logger.info(
             "compose_federal_sub_configs: data_link_name->[%s],bk_biz_id->[%s],bk_data_id->[%s],table_id->[%s],vm_cluster_name->[%s]"
@@ -892,9 +1012,85 @@ class DataLink(models.Model):
     ) -> list[dict[str, Any]]:
         """
         生成标准单指标单表时序数据链路配置
-        @param data_source: 数据源
-        @param table_id: 监控平台结果表ID（Metadata中的）
-        @param storage_cluster_name: VM集群名称
+
+        该方法用于生成符合标准格式的时序数据链路配置，适用于单指标单表的场景。配置包括结果表定义、
+        存储绑定和数据总线配置三个核心组件，为后续的数据链路申请提供完整的资源配置信息。
+
+        参数:
+            bk_biz_id (int): 业务ID，用于标识数据所属的业务范围
+            data_source (DataSource): 数据源对象，包含数据的基本信息和配置
+            table_id (str): 监控平台结果表ID（Metadata中的），标识数据存储的目标表
+            storage_cluster_name (str): VM集群名称，指定数据存储的目标集群
+
+        返回值:
+            list[dict[str, Any]]: 返回标准时序数据链路配置列表，每个配置项为字典格式
+
+        返回示例:
+            [
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "ResultTable",
+                    "metadata": {
+                        "name": "bk_monitor_bk_standard_time_series_1001",
+                        "namespace": "bkdata",
+                        "labels": {
+                            "data_link_name": "standard_time_series_link"
+                        }
+                    },
+                    "spec": {
+                        "bk_biz_id": 2,
+                        "bk_tenant_id": "system",
+                        "fields": [
+                            {
+                                "field_name": "time",
+                                "field_type": "timestamp",
+                                "tag": "timestamp"
+                            },
+                            {
+                                "field_name": "value",
+                                "field_type": "float",
+                                "tag": "metric"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "VmStorageBinding",
+                    "metadata": {
+                        "name": "bk_monitor_bk_standard_time_series_1001",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "vm_cluster_name": "vm-cluster-01",
+                        "retention_period": "7d"
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "DataBus",
+                    "metadata": {
+                        "name": "bk_monitor_bk_standard_time_series_1001",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "data_id_name": "bk_monitor_bk_standard_time_series_1001",
+                        "sinks": [
+                            {
+                                "kind": "VmStorageBinding",
+                                "name": "bk_monitor_bk_standard_time_series_1001",
+                                "namespace": "bkdata"
+                            }
+                        ]
+                    }
+                }
+            ]
+
+        执行流程:
+        1. 构造BKBase相关名称（数据源名和结果表名）
+        2. 在数据库事务中创建或获取资源配置对象（ResultTable、VMStorageBinding、DataBus）
+        3. 组装各资源配置的详细参数
+        4. 返回完整的配置列表供后续链路申请使用
         """
         logger.info(
             "compose_configs: data_link_name->[%s] ,bk_data_id->[%s],table_id->[%s],vm_cluster_name->[%s] "
@@ -961,6 +1157,87 @@ class DataLink(models.Model):
     ) -> list[dict[str, Any]]:
         """
         生成采集插件时序数据链路配置 -- bk_standard & bk_exporter
+
+        该方法用于生成适用于BK标准插件和Exporter插件的时序数据链路配置。配置包括结果表定义、
+        存储绑定和数据总线配置三个核心组件，特别针对插件类型的数据源进行适配。
+
+        参数:
+            bk_biz_id (int): 业务ID，用于标识数据所属的业务范围
+            data_source (DataSource): 数据源对象，包含数据的基本信息和配置
+            table_id (str): 监控平台结果表ID（Metadata中的），标识数据存储的目标表
+            storage_cluster_name (str): VM集群名称，指定数据存储的目标集群
+
+        返回值:
+            list[dict[str, Any]]: 返回采集插件时序数据链路配置列表，每个配置项为字典格式
+
+        返回示例:
+            [
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "ResultTable",
+                    "metadata": {
+                        "name": "bk_monitor_bk_exporter_time_series_1002",
+                        "namespace": "bkdata",
+                        "labels": {
+                            "data_link_name": "exporter_time_series_link"
+                        }
+                    },
+                    "spec": {
+                        "bk_biz_id": 2,
+                        "bk_tenant_id": "system",
+                        "fields": [
+                            {
+                                "field_name": "time",
+                                "field_type": "timestamp",
+                                "tag": "timestamp"
+                            },
+                            {
+                                "field_name": "cpu_usage",
+                                "field_type": "float",
+                                "tag": "metric"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "VmStorageBinding",
+                    "metadata": {
+                        "name": "bk_monitor_bk_exporter_time_series_1002",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "vm_cluster_name": "vm-cluster-02",
+                        "retention_period": "7d"
+                    }
+                },
+                {
+                    "apiVersion": "bk-data.io/v1alpha1",
+                    "kind": "DataBus",
+                    "metadata": {
+                        "name": "bk_monitor_bk_exporter_time_series_1002",
+                        "namespace": "bkdata"
+                    },
+                    "spec": {
+                        "data_id_name": "bk_monitor_bk_exporter_time_series_1002",
+                        "sinks": [
+                            {
+                                "kind": "VmStorageBinding",
+                                "name": "bk_monitor_bk_exporter_time_series_1002",
+                                "namespace": "bkdata"
+                            }
+                        ],
+                        "transform_format": "bk_exporter"
+                    }
+                }
+            ]
+
+        执行流程:
+        1. 构造BKBase相关名称（数据源名和结果表名）
+        2. 在数据库事务中创建或获取资源配置对象（ResultTable、VMStorageBinding、DataBus）
+        3. 根据链路策略获取相应的数据转换格式
+        4. 组装各资源配置的详细参数
+        5. 返回完整的配置列表供后续链路申请使用
         """
         bkbase_data_name = utils.compose_bkdata_data_id_name(data_source.data_name, self.data_link_strategy)
         bkbase_vmrt_name = utils.compose_bkdata_table_id(table_id, self.data_link_strategy)

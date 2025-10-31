@@ -435,18 +435,32 @@ class Event(models.Model):
     @atomic(config.DATABASE_CONNECTION_NAME)
     def modify_event_list(cls, event_group_id, event_info_list):
         """
-        批量的修改/创建某个事件分组下的事件
-        event_group_id 类似于uuid,因此过滤时无需添加租户属性
-        :param event_group_id: 事件分组ID
-        :param event_info_list: 具体事件内容信息，[{
-            "event_name": "core_file",
-            "dimension_list": ["module", "set", "path"]
-        }, {
-            "event_name": "disk_full",
-            "dimension_list": ["module", "set", "partition"]
-        }]
-        :return: True or raise
+        批量修改或创建某个事件分组下的事件
+
+        参数:
+            event_group_id (str): 事件分组ID，类似于UUID格式，因此在查询时无需额外添加租户属性进行过滤
+            event_info_list (list): 包含多个事件信息的列表，每个元素是一个字典，结构如下：
+                [{
+                    "event_name": "core_file",           # 事件名称
+                    "dimension_list": ["module", "set", "path"]  # 维度列表
+                }, {
+                    "event_name": "disk_full",
+                    "dimension_list": ["module", "set", "partition"]
+                }]
+
+        返回值:
+            bool: 操作成功返回True；若失败则抛出异常
+
+        异常:
+            ValueError: 当event_group_id不存在或event_info_list中字段缺失时抛出
+
+        该方法的主要功能包括：
+        1. 校验事件分组是否存在
+        2. 遍历事件列表并逐个处理
+        3. 若事件已存在则更新其维度配置（合并新旧维度），否则新建事件
+        4. 确保所有事件都包含TARGET维度
         """
+
         # 0. 判断是否真的存在某个group_id
         if not EventGroup.objects.filter(event_group_id=event_group_id).exists():
             logger.info(f"event_group_id->[{event_group_id}] not exists, nothing will do.")

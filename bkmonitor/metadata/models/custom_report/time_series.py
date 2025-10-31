@@ -415,6 +415,20 @@ class TimeSeriesGroup(CustomGroupBase):
 
     @atomic(config.DATABASE_CONNECTION_NAME)
     def update_metrics(self, metric_info):
+        """
+        更新时间序列组的指标信息
+
+        参数:
+            metric_info: dict类型，包含指标更新所需的信息，如指标名称、维度等
+
+        返回值:
+            bool类型，表示是否成功更新了指标信息
+
+        该方法实现以下功能：
+        1. 验证指定的时间序列组是否存在
+        2. 刷新时间序列中的指标和维度信息
+        3. 更新结果表中的字段定义
+        """
         # 判断是否真的存在某个group_id
         group_id = self.time_series_group_id
         try:

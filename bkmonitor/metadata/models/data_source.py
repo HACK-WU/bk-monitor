@@ -225,6 +225,32 @@ class DataSource(models.Model):
         返回值:
             list: 包含所有符合条件的存储配置字典的列表
 
+        返回示例:
+            [
+                {
+                    "cluster_type": "elasticsearch",
+                    "cluster_id": 1,
+                    "cluster_name": "es_cluster_1",
+                    "domain_name": "es.example.com",
+                    "port": 9200,
+                    "storage_config": {
+                        "table_name": "system_cpu_detail",
+                        "level": "level1"
+                    }
+                },
+                {
+                    "cluster_type": "influxdb",
+                    "cluster_id": 2,
+                    "cluster_name": "influxdb_cluster_1",
+                    "domain_name": "influxdb.example.com",
+                    "port": 8086,
+                    "storage_config": {
+                        "database": "monitor_metrics",
+                        "retention_policy": "autogen"
+                    }
+                }
+            ]
+
         该方法通过遍历TRANSFER_STORAGE_LIST中定义的存储类型，获取指定table_id对应的存储配置，
         并根据特定规则过滤掉不需要的配置项，最终返回有效的存储配置列表。
         """

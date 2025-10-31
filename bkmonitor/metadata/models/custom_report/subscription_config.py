@@ -187,6 +187,51 @@ class CustomReportSubscription(models.Model):
             dict[int, list[tuple[dict[str, Any], str]]]: 以bk_biz_id为键，值为包含配置项和协议类型的元组列表。
             每个配置项是一个字典，包含token、data_id、限流配置等信息；协议类型表示该配置使用的传输协议（如json或prometheus）
 
+        返回示例:
+            {
+                2: [
+                    (
+                        {
+                            "bk_data_token": "abcdef123456",
+                            "bk_data_id": 1001,
+                            "token_config": {
+                                "name": "token_checker/proxy",
+                                "proxy_dataid": 1001,
+                                "proxy_token": "abcdef123456"
+                            },
+                            "qps_config": {
+                                "name": "rate_limiter/token_bucket",
+                                "type": "token_bucket",
+                                "qps": 1000
+                            },
+                            "validator_config": {
+                                "name": "proxy_validator/common",
+                                "type": "event",
+                                "version": "v2",
+                                "max_future_time_offset": 3600
+                            }
+                        },
+                        "json"
+                    )
+                ],
+                3: [
+                    (
+                        {
+                            "bk_data_token": "xyz7890",
+                            "bk_biz_id": 3,
+                            "bk_data_id": 1002,
+                            "bk_app_name": "prometheus_report",
+                            "qps_config": {
+                                "name": "rate_limiter/token_bucket",
+                                "type": "token_bucket",
+                                "qps": 500
+                            }
+                        },
+                        "prometheus"
+                    )
+                ]
+            }
+
         该方法主要完成以下工作：
         1. 通过数据库查询获取自定义上报配置信息
         2. 处理无效的Prometheus分组ID过滤逻辑

@@ -982,6 +982,7 @@ class ResultTable(models.Model):
 
         # 4. 更新ETL配置
         if is_etl_refresh:
+            # 结果表、及其关联字段发生变更，需要更新ETL配置
             self.refresh_etl_config()
             logger.info(
                 "result_table->[%s]  of bk_tenant_id->[%s] now is finish add field->[%s] and refresh consul config "
@@ -2206,7 +2207,55 @@ class ResultTableField(models.Model):
     def _compose_data(
         self, table_id: str, field_data: list[dict[str, Any]], bk_tenant_id: str | None = DEFAULT_TENANT_ID
     ) -> tuple[list, list, list]:
-        """组装数据"""
+        """
+        组装字段创建所需的数据结构
+
+        参数:
+            table_id (str): 结果表ID，用于关联字段
+            field_data (list[dict[str, Any]]): 字段配置信息列表，每个元素包含字段的完整定义
+            bk_tenant_id (str | None): 租户ID，默认为DEFAULT_TENANT_ID
+
+        返回值:
+            tuple[list, list, list]: 包含三个元素的元组：
+                - fields: 处理后的字段信息列表，每个元素是可直接用于创建字段的字典
+                - field_names: 字段名称列表，用于后续处理
+                - option_data: 字段选项配置列表，每个元素包含选项的完整信息
+
+        返回示例:
+            (
+                [  # fields
+                    {
+                        "table_id": "system.cpu_detail",
+                        "bk_tenant_id": "default",
+                        "field_name": "usage",
+                        "field_type": "float",
+                        "unit": "%",
+                        "tag": "metric",
+                        "is_config_by_user": True,
+                        "default_value": None,
+                        "creator": "admin",
+                        "description": "CPU使用率",
+                        "alias_name": ""
+                    }
+                ],
+                ["usage"],  # field_names
+                [  # option_data
+                    {
+                        "table_id": "system.cpu_detail",
+                        "field_name": "usage",
+                        "name": "es_type",
+                        "value": "keyword",
+                        "creator": "admin"
+                    }
+                ]
+            )
+
+        该方法实现以下功能：
+        1. 处理字段基础信息，移除不需要的参数(is_reserved_check)
+        2. 补充结果表ID、租户ID和创建者等必要字段
+        3. 提取字段名称列表用于后续校验
+        4. 解析并组装字段选项配置数据
+        """
         logger.info(
             "compose data for table->[%s],field_data->[%s],bk_tenant_id->[%s", table_id, field_data, bk_tenant_id
         )
