@@ -324,38 +324,56 @@ class K8sResourceMeta:
         # 如果是升序排序，则lines.sort(key=lambda x:x[0], reverse=False)
         # 如果是降序排序，则lines.sort(key=lambda x:x[0], reverse=True)
         lines = []
-
-        latest_time_point = 0
-
-        # step1: 遍历所有的数据点，找到最近的时间点
+        max_data_point = None
+        # 找到所有有值数据点中的最大时间戳
         for line in series:
             if line["datapoints"]:
-                # 获取最新的时间点，不直接选取最后一个数据点，因为可能存在空值
-                latest_time_point = max(
-                    latest_time_point, max(line["datapoints"], key=lambda x: x[1] if x[0] else -1)[1]
-                )
-                # 旧的写法：
-                # for point in reversed(line["datapoints"]):
-                #     if point[0]:
-                #         max_data_point = max(max_data_point, point[1])
+                for point in reversed(line["datapoints"]):
+                    if point[0] is not None:
+                        if max_data_point is None:
+                            max_data_point = point[1]
+                        else:
+                            max_data_point = max(max_data_point, point[1])
 
-        # step2: 遍历所有的line,判断是否包含最新时间点(latest_time_point)的数据
-        #   - 如果包含，则选取最新时间点的指标值，及其所在时间序列，并将其添加到lines列表中
-        #   - 如果不包含，则最新时间点的指标值设置为0，将其所在时间序列添加到lines列表中
+        # 如果没有找到任何有值的数据点，max_data_point 仍为 None，后续处理需要考虑这种情况
+        if max_data_point is None:
+            # 如果所有数据点都是 None，使用最后一个数据点的时间戳作为 max_data_point
+            for line in series:
+                if line["datapoints"]:
+                    max_data_point = line["datapoints"][-1][1]
+                    break
+
         for line in series:
-            # 实际值
             last_data_points_value: float | int | None = line["datapoints"][-1][0]
             # 时间戳
             last_data_points = line["datapoints"][-1][1]
-            if last_data_points == latest_time_point:
-                # 同理，当样本值为None的时候，我们将其值设置为0
+            if last_data_points == max_data_point:
+                # 如果 len(series) <= page_size，则保留实际值为None的情况
+                # 反之如果大于则对为 None 的情况进行排除
                 if len(series) <= page_size:
-                    lines.append([last_data_points_value or 0, line])
+                    # 如果数量较少，保留 None 值的情况，但使用特殊标记值进行排序区分
+                    # 使用负无穷或极小值来区分 None 和真实 0 值，保证排序时 None 排在最后
+                    sort_value = last_data_points_value if last_data_points_value is not None else float("-inf")
+                    lines.append([sort_value, line])
                 elif last_data_points_value is not None:
                     lines.append([last_data_points_value, line])
             else:
-                lines.append([0, line])
+                # 时间戳不等于最新时间点：查找该 series 在最新时间点的值
+                value_at_max_time = None
+                if max_data_point is not None:
+                    for point in reversed(line["datapoints"]):
+                        if point[1] == max_data_point:
+                            value_at_max_time = point[0]
+                            break
 
+                # 如果找到了最新时间点的值，使用该值；否则使用负无穷标记非最新且无值的情况
+                if value_at_max_time is not None:
+                    lines.append([value_at_max_time, line])
+                else:
+                    # 非最新时间点且没有值的情况，使用负无穷确保排序时排在最后
+                    if len(series) <= page_size:
+                        lines.append([float("-inf"), line])
+                    # 如果数量超过 page_size，则直接跳过无值的情况（原有逻辑）
         if order_by:
             reverse = order_by.startswith("-")
             lines.sort(key=lambda x: x[0], reverse=reverse)
