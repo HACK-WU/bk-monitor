@@ -45,15 +45,41 @@ logger = logging.getLogger("monitor_web")
 
 
 def import_plugin(bk_biz_id, plugin_config):
+    """
+    导入插件配置的核心逻辑函数
+
+    参数:
+        bk_biz_id (int): 业务ID，用于标识当前操作所属的业务范围
+        plugin_config (object): 插件配置对象，包含待导入插件的相关信息及状态控制字段
+
+    返回值:
+        plugin_config (object): 更新后的插件配置对象，反映导入结果（成功/失败）及相关错误信息
+
+    执行流程：
+    1. 根据parse_id获取解析实例并提取基础配置信息
+    2. 查询目标租户下是否已存在相同plugin_id的插件
+    3. 若存在同名插件，则比较新旧版本配置与信息内容一致性
+       - 忽略文件名等非关键差异后计算MD5进行比对
+       - 若完全一致且已是发布状态则复用，否则标记导入失败
+    4. 若不存在同名插件，则尝试创建新的插件版本
+       - 使用对应类型的序列化器校验配置合法性
+       - 在事务中保存插件并生成初始版本
+       - 调用资源接口完成注册并发布该版本
+    5. 捕获异常统一处理，并更新导入状态和错误信息
+    """
+
+    # 获取解析模板实例及其配置
     parse_instance = ImportParse.objects.get(id=plugin_config.parse_id)
     config = parse_instance.config
     plugin_id = config["plugin_id"]
     plugin_type = config["plugin_type"]
     config["bk_biz_id"] = bk_biz_id
     bk_tenant_id = bk_biz_id_to_bk_tenant_id(bk_biz_id)
+
+    # 判断是否存在同名插件
     exist_plugin = CollectorPluginMeta.objects.filter(bk_tenant_id=bk_tenant_id, plugin_id=plugin_id).first()
     if exist_plugin:
-        # 避免导入包和原插件内容一致，文件名不同
+        # 定义辅助函数：清理collector_json中的文件相关字段以避免误判
         def handle_collector_json(config_value):
             for config_msg in list(config_value.get("collector_json", {}).values()):
                 if isinstance(config_msg, dict):
@@ -61,15 +87,20 @@ def import_plugin(bk_biz_id, plugin_config):
                     config_msg.pop("file_id", None)
             return config_value
 
+        # 提取已有插件当前版本的信息与配置
         exist_version = exist_plugin.current_version
         now_config_data = copy.deepcopy(exist_version.config.config2dict())
         tmp_config_data = copy.deepcopy(exist_version.config.config2dict(config))
         now_config_data, tmp_config_data = list(map(handle_collector_json, [now_config_data, tmp_config_data]))
         now_info_data = exist_version.info.info2dict()
         tmp_info_data = exist_version.info.info2dict(config)
+
+        # 计算各部分数据的MD5摘要用于一致性判断
         old_config_md5, new_config_md5, old_info_md5, new_info_md5 = list(
             map(count_md5, [now_config_data, tmp_config_data, now_info_data, tmp_info_data])
         )
+
+        # 判断配置、信息是否一致并且已经是发布状态
         if all([old_config_md5 == new_config_md5, old_info_md5 == new_info_md5, exist_version.is_release]):
             plugin_config.config_id = exist_version.plugin.plugin_id
             plugin_config.import_status = ImportDetailStatus.SUCCESS
@@ -81,14 +112,19 @@ def import_plugin(bk_biz_id, plugin_config):
             plugin_config.save()
     else:
         try:
+            # 实例化对应类型插件的序列化器并校验数据
             serializers_obj = CreatePluginResource.SERIALIZERS[config.get("plugin_type")](data=config)
             serializers_obj.is_valid(raise_exception=True)
+
+            # 原子性地创建插件版本并执行初始化流程
             with transaction.atomic():
                 serializers_obj.save()
                 plugin_manager = PluginManagerFactory.get_manager(
                     bk_tenant_id=bk_tenant_id, plugin=plugin_id, plugin_type=plugin_type, operator=local.username
                 )
                 version, need_debug = plugin_manager.create_version(config)
+
+            # 注册插件并发布版本
             result = resource.plugin.plugin_register(
                 plugin_id=version.plugin.plugin_id,
                 config_version=version.config_version,
@@ -97,11 +133,14 @@ def import_plugin(bk_biz_id, plugin_config):
             plugin_manager.release(
                 config_version=version.config_version, info_version=version.info_version, token=result["token"]
             )
+
+            # 成功导入后更新状态
             plugin_config.config_id = version.plugin.plugin_id
             plugin_config.import_status = ImportDetailStatus.SUCCESS
             plugin_config.error_msg = ""
             plugin_config.save()
         except Exception as e:
+            # 异常捕获并记录错误原因
             plugin_config.import_status = ImportDetailStatus.FAILED
             plugin_config.error_msg = str(e)
             plugin_config.save()
@@ -136,7 +175,37 @@ import_handler = {
 
 
 def import_collect(bk_biz_id, import_history_instance, collect_config_list):
+    """
+    导入采集配置
+
+    参数:
+        bk_biz_id (int): 业务ID
+        import_history_instance (ImportHistory): 导入历史记录实例
+        collect_config_list (list): 采集配置列表
+
+    返回值:
+        None: 无返回值，导入结果保存在ImportDetail模型中
+
+    该方法实现采集配置导入功能，包括：
+    1. 处理无需插件的采集类型（进程、日志）
+    2. 处理需要插件的采集配置导入
+    3. 创建采集配置及部署配置
+    4. 异常处理和状态更新
+    """
+
     def handle_collect_without_plugin(import_collect_obj, config_dict, target_bk_biz_id, handle_func):
+        """
+        处理无需插件的采集配置导入
+
+        参数:
+            import_collect_obj (ImportDetail): 导入详情对象
+            config_dict (dict): 配置字典
+            target_bk_biz_id (int): 目标业务ID
+            handle_func (function): 处理函数
+
+        返回值:
+            None: 结果直接保存到import_collect_obj中
+        """
         try:
             handle_result = handle_func(config_dict, target_bk_biz_id)
         except Exception as e:
@@ -154,13 +223,17 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
     for import_collect_config in collect_config_list:
         parse_instance = ImportParse.objects.get(id=import_collect_config.parse_id)
         config = parse_instance.config
+        # 处理进程和日志类型的采集配置（无需插件）
         if config["collect_type"] in [CollectConfigMeta.CollectType.PROCESS, CollectConfigMeta.CollectType.LOG]:
             handler = import_handler[config["collect_type"]]
             handle_collect_without_plugin(import_collect_config, config, bk_biz_id, handler)
             continue
 
+        # 设置基础配置信息
         config["bk_biz_id"] = bk_biz_id
         config["target_nodes"] = []
+
+        # 查找关联插件
         plugin_instance = ImportDetail.objects.filter(
             history_id=import_history_instance.id, type=ConfigType.PLUGIN, name=config["plugin_id"]
         ).first()
@@ -170,6 +243,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             import_collect_config.save()
             continue
 
+        # 导入插件
         plugin_instance = import_plugin(bk_biz_id, plugin_instance)
         if plugin_instance.import_status == ImportDetailStatus.FAILED:
             import_collect_config.import_status = ImportDetailStatus.FAILED
@@ -177,6 +251,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             import_collect_config.save()
             continue
 
+        # 获取插件对象和部署配置参数
         plugin_obj = CollectorPluginMeta.objects.get(bk_tenant_id=bk_tenant_id, plugin_id=plugin_instance.config_id)
         deployment_config_params = {
             "plugin_version": plugin_obj.packaged_release_version,
@@ -186,6 +261,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             "remote_collecting_host": config.get("remote_collecting_host"),
         }
         try:
+            # 创建采集配置元数据
             collect_config = CollectConfigMeta(
                 bk_biz_id=config["bk_biz_id"],
                 name=config["name"],
@@ -196,6 +272,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
                 target_object_type=config["target_object_type"],
                 label=config["label"],
             )
+            # 安装采集器
             installer = get_collect_installer(collect_config)
             installer.install(deployment_config_params, operation=OperationType.STOP)
 
@@ -204,6 +281,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
             import_collect_config.error_msg = ""
             import_collect_config.save()
         except Exception as e:
+            # 异常处理：删除已创建的对象
             collect_config.delete()
             DeploymentConfigVersion.objects.filter(config_meta_id=collect_config.id).delete()
             import_collect_config.import_status = ImportDetailStatus.FAILED
