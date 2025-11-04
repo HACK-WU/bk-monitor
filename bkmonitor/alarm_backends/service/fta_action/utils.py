@@ -215,10 +215,7 @@ class PushActionProcessor:
         3. 异步任务持久化到消息队列
         4. 记录调度日志用于后续追踪
         """
-        from alarm_backends.service.fta_action.tasks import (
-            run_action,
-            run_webhook_action,
-        )
+        from alarm_backends.service.fta_action.tasks import dispatch_action_task
 
         # 构建基础动作信息字典
         action_info = {"id": action_instance.id, "function": callback_func, "alerts": alerts}
@@ -228,23 +225,7 @@ class PushActionProcessor:
 
         # 获取动作插件类型
         plugin_type = action_instance.action_plugin["plugin_type"]
-
-        # 根据插件类型选择执行通道：
-        # 1. webhook和消息队列类型使用专用通道
-        # 2. 其他类型使用通用执行通道
-        if plugin_type in [
-            ActionPluginType.WEBHOOK,
-            ActionPluginType.MESSAGE_QUEUE,
-        ]:
-            task_id = run_webhook_action.apply_async((plugin_type, action_info), countdown=countdown)
-        else:
-            task_id = run_action.apply_async((plugin_type, action_info), countdown=countdown)
-
-        # 记录动作调度日志，包含：
-        # - 动作ID
-        # - 插件类型
-        # - 关联告警
-        # - 任务ID（用于追踪异步任务）
+        task_id = dispatch_action_task(plugin_type, action_info, countdown=countdown)
         logger.info(
             "[create actions]push queue(execute): action(%s) (%s), alerts(%s), task_id(%s)",
             action_instance.id,
