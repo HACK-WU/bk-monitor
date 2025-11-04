@@ -283,11 +283,11 @@ def test_check_bcs_clusters_status(
     from metadata.management.commands.check_bcs_cluster_status import Command
 
     command = Command()
-    result = command.check_cluster_status("BCS-K8S-00000")
+    command.check_cluster_status("BCS-K8S-00000")
     # 修复：只序列化可JSON序列化的部分，避免直接序列化Django模型对象
     # print(json.dumps(result, default=str))
 
-    command.output_text_report(result)
+    # command.output_text_report(result)
 
 
 def test_update_bcs_cluster_cloud_id_config(

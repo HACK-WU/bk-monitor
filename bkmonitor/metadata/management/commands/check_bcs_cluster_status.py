@@ -158,18 +158,54 @@ class Command(BaseCommand):
         timeout = options["timeout"]
 
         try:
-            # 执行集群状态检测
+            # 输出检测开始信息
+            if format_type == "text":
+                self.stdout.write(self.style.SUCCESS("=" * 60))
+                self.stdout.write(self.style.SUCCESS("BCS集群关联状态检测"))
+                self.stdout.write(self.style.SUCCESS("=" * 60))
+                self.stdout.write(f"集群ID: {cluster_id}")
+                self.stdout.write(f"检测时间: {timezone.now().isoformat()}")
+                self.stdout.write("")
+
+            # 执行集群状态检测（检测过程中已经实时输出结果）
             check_result = self.check_cluster_status(cluster_id, timeout)
 
-            # 输出检测结果
+            # 输出汇总信息
             if format_type == "json":
                 self.stdout.write(json.dumps(check_result, indent=2, ensure_ascii=False, default=str))
             else:
-                self.output_text_report(check_result)
+                self.output_summary_report(check_result)
 
         except Exception as e:
             logger.exception(f"检测集群状态时发生异常: {e}")
             raise CommandError(f"集群状态检测失败: {e}")
+
+    def output_check_result(self, component: str, result: dict):
+        """立即输出单个检查项的结果"""
+        if not isinstance(result, dict):
+            return
+
+        status = result.get("status", Status.UNKNOWN)
+        style = self.get_status_style(status)
+
+        self.stdout.write(f"    result: {style(status)}")
+
+        # 输出问题信息
+        if result.get("issues"):
+            for issue in result["issues"]:
+                self.stdout.write(f"    ⚠ {issue}")
+
+        # 调用对应的格式化函数输出关键信息
+        formatter = result.get("formatter")
+        if formatter and callable(formatter):
+            try:
+                lines = formatter(result.get("details", {}))
+                for line in lines:
+                    self.stdout.write(line)
+            except Exception as e:
+                self.stdout.write(self.style.ERROR(f"输出{component}格式化信息失败: {e}"))
+
+        self.stdout.write("")  # 空行分隔
 
     def check_cluster_status(self, cluster_id: str, timeout: int = 30) -> dict:
         """执行完整的集群状态检测"""
@@ -187,9 +223,10 @@ class Command(BaseCommand):
 
         try:
             # 1. 数据库记录检查
-            self.stdout.write(f"正在检查集群 {cluster_id} 的数据库记录...")
+            self.stdout.write(f"\n正在检查集群 {cluster_id} 的数据库记录...")
             db_check = self.check_database_record(cluster_id)
             check_result["details"]["database"] = db_check
+            self.output_check_result("database", db_check)
 
             if not db_check["exists"]:
                 check_result["status"] = Status.NOT_FOUND
@@ -205,123 +242,128 @@ class Command(BaseCommand):
             self.stdout.write("正在测试BCS API连接...")
             bcs_api_check = self.check_bcs_api_connection(cluster_info, timeout)
             check_result["details"]["bcs_api"] = bcs_api_check
+            self.output_check_result("bcs_api", bcs_api_check)
 
             # 3. Kubernetes集群连接测试
-            # todo 待确认
             self.stdout.write("正在测试Kubernetes集群连接...")
             k8s_check = self.check_kubernetes_connection(cluster_info, timeout)
             check_result["details"]["kubernetes"] = k8s_check
+            self.output_check_result("kubernetes", k8s_check)
 
             # 4. 数据源配置验证
             self.stdout.write("正在验证数据源配置...")
             datasource_check = self.check_datasource_configuration(cluster_info)
             check_result["details"]["datasources"] = datasource_check
+            self.output_check_result("datasources", datasource_check)
 
             # 5. 监控资源状态检查
             self.stdout.write("正在检查监控资源状态...")
             monitor_check = self.check_monitor_resources(cluster_info)
             check_result["details"]["monitor_resources"] = monitor_check
+            self.output_check_result("monitor_resources", monitor_check)
 
             # 6. 数据存储链路检查
             self.stdout.write("正在检查数据存储...")
             storage_check = self.check_storage_clusters(cluster_info)
             check_result["details"]["storage"] = storage_check
-
-            # todo 数据存储的路由配置没有检查
+            self.output_check_result("storage", storage_check)
 
             # 7. Consul配置检查
             self.stdout.write("正在检查datasource的Consul配置...")
             consul_check = self.check_consul_configuration_to_datasource(cluster_info)
             check_result["details"]["consul"] = consul_check
+            self.output_check_result("consul", consul_check)
 
             # 8. 数据采集配置检查
             self.stdout.write("正在检查数据采集配置...")
             collector_check = self.check_data_collection_config(cluster_info)
             check_result["details"]["data_collection"] = collector_check
+            self.output_check_result("data_collection", collector_check)
 
             # 9. 联邦集群关系检查（如果是联邦集群）
             if self.is_federation_cluster(cluster_info):
                 self.stdout.write("正在检查联邦集群关系...")
                 federation_check = self.check_federation_cluster(cluster_info)
                 check_result["details"]["federation"] = federation_check
+                self.output_check_result("federation", federation_check)
 
             # 10. 数据路由配置检查
             self.stdout.write("正在检查数据路由配置...")
             routing_check = self.check_data_routing(cluster_info)
             check_result["details"]["routing"] = routing_check
+            self.output_check_result("routing", routing_check)
 
             # 11. 集群资源使用情况检查
-            # todo 待定
             self.stdout.write("正在检查集群资源使用情况...")
             resource_usage_check = self.check_cluster_resource_usage(cluster_info)
             check_result["details"]["resource_usage"] = resource_usage_check
+            self.output_check_result("resource_usage", resource_usage_check)
 
             # 12. 集群初始化资源检查
-            # todo 待定
             self.stdout.write("正在检查集群初始化资源...")
             init_resource_check = self.check_cluster_init_resources(cluster_info)
             check_result["details"]["init_resources"] = init_resource_check
+            self.output_check_result("init_resources", init_resource_check)
 
             # 13. bk-collector配置检查
             self.stdout.write("正在检查bk-collector配置...")
             collector_config_check = self.check_bk_collector_config(cluster_info)
             check_result["details"]["bk_collector"] = collector_config_check
+            self.output_check_result("bk_collector", collector_config_check)
 
             # 14. 检查集群所属空间
-            self.stdout.write("检查集群所属空间...")
+            self.stdout.write("正在检查集群所属空间...")
             space_permission_check = self.check_space_permissions(cluster_info)
             check_result["details"]["space_permissions"] = space_permission_check
+            self.output_check_result("space_permissions", space_permission_check)
 
             # 15. 检查BCS API Token配置
-            # todo 待定
             self.stdout.write("正在检查BCS API Token配置...")
             api_token_check = self.check_bcs_api_token(cluster_info)
             check_result["details"]["api_token"] = api_token_check
+            self.output_check_result("api_token", api_token_check)
 
             # 16. 检查云区域ID配置
             self.stdout.write("正在检查云区域ID配置...")
             cloud_id_check = self.check_cloud_id_configuration(cluster_info)
             check_result["details"]["cloud_id"] = cloud_id_check
+            self.output_check_result("cloud_id", cloud_id_check)
 
             # 17. 检查DataSourceOption配置
             self.stdout.write("正在检查DataSourceOption配置...")
             datasource_options_check = self.check_datasource_options(cluster_info)
             check_result["details"]["datasource_options"] = datasource_options_check
+            self.output_check_result("datasource_options", datasource_options_check)
 
             # 18. 检查空间类型与SpaceDataSource关联
             self.stdout.write("正在检查空间类型配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
             check_result["details"]["space_type"] = space_type_check
-
-            # 19. 检查指标标签
-            # self.stdout.write("正在检查指标标签...")
-            # metrics_labels_check = self.check_metrics_labels(cluster_info)
-            # check_result["details"]["metrics_labels"] = metrics_labels_check
+            self.output_check_result("space_type", space_type_check)
 
             # 20. 检查CustomReportSubscription
             self.stdout.write("正在检查CustomReportSubscription...")
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
-
-            # 21. 检查table_id合法性
-            # self.stdout.write("正在检查结果表ID合法性...")
-            # table_id_check = self.check_table_id_validity(cluster_info)
-            # check_result["details"]["table_id_validity"] = table_id_check
+            self.output_check_result("custom_report_subscription", custom_report_sub_check)
 
             # 22. 检查关联模型
             self.stdout.write("正在检查关联模型数据...")
             related_models_check = self.check_related_models(cluster_info)
             check_result["details"]["related_models"] = related_models_check
+            self.output_check_result("related_models", related_models_check)
 
             # 23. 检查InfluxDB存储配置
             self.stdout.write("正在检查InfluxDB存储配置...")
             influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
             check_result["details"]["influxdb_storage"] = influxdb_storage_check
+            self.output_check_result("influxdb_storage", influxdb_storage_check)
 
             # 24. 检查VM数据链路依赖
             self.stdout.write("正在检查VM数据链路依赖...")
             vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
             check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
+            self.output_check_result("vm_datalink_dependencies", vm_datalink_check)
 
             # 确定整体状态
             check_result["status"] = self.status
@@ -2235,66 +2277,51 @@ class Command(BaseCommand):
         except Exception:
             return False
 
-    def output_text_report(self, check_result: dict):
-        """输出文本格式的检测报告"""
-        cluster_id = check_result["cluster_id"]
+    def output_summary_report(self, check_result: dict):
+        """输出汇总报告（详细结果已在检查过程中输出）"""
         status = check_result["status"]
 
-        # 输出标题
-        self.stdout.write(self.style.SUCCESS("=" * 60))
-        self.stdout.write(self.style.SUCCESS("BCS集群关联状态检测报告"))
-        self.stdout.write(self.style.SUCCESS("=" * 60))
+        # 输出分隔线
+        self.stdout.write("\n" + "=" * 60)
+        self.stdout.write(self.style.SUCCESS("检测完成 - 汇总报告"))
+        self.stdout.write("=" * 60)
 
         # 输出基本信息
-        self.stdout.write(f"集群ID: {cluster_id}")
-        self.stdout.write(f"检测时间: {check_result['check_time']}")
         self.stdout.write(f"执行时间: {check_result['execution_time']}秒")
 
         # 输出整体状态
         status_style = self.get_status_style(status)
-        self.stdout.write(f"整体状态: {status_style(status)}")
+        self.stdout.write(f"\n整体状态: {status_style(status)}")
 
-        # 输出详细信息
-        if check_result.get("details"):
-            self.stdout.write("\n详细检测结果:")
-            self.output_detailed_results(check_result["details"])
-
-        # 输出错误和警告
+        # 输出错误和警告汇总
         if check_result.get("errors"):
-            self.stdout.write(f"\n{self.style.ERROR('错误信息:')}")
+            self.stdout.write(f"\n{self.style.ERROR('错误信息:')}（共{len(check_result['errors'])}条）")
             for error in check_result["errors"]:
                 self.stdout.write(f"  • {self.style.ERROR(error)}")
 
         if check_result.get("warnings"):
-            self.stdout.write(f"\n{self.style.WARNING('警告信息:')}")
+            self.stdout.write(f"\n{self.style.WARNING('警告信息:')}（共{len(check_result['warnings'])}条）")
             for warning in check_result["warnings"]:
                 self.stdout.write(f"  • {self.style.WARNING(warning)}")
 
-    def output_detailed_results(self, details: dict):
-        """输出详细检测结果"""
-        for component, result in details.items():
-            if not isinstance(result, dict):
-                continue
+        if check_result.get("issues"):
+            self.stdout.write(f"\n{self.style.WARNING('问题信息:')}（共{len(check_result['issues'])}条）")
+            for issue in check_result["issues"]:
+                self.stdout.write(f"  • {self.style.WARNING(issue)}")
 
-            status = result.get("status", Status.UNKNOWN)
-            style = self.get_status_style(status)
-
-            self.stdout.write(f"\n  {component.upper()}: {style(status)}")
-
-            # 输出问题信息
-            if result.get("issues"):
-                for issue in result["issues"]:
-                    self.stdout.write(f"    ⚠ {issue}")
-
-            # 调用对应的格式化函数输出关键信息
-            formatter = result.get("formatter")
-            if formatter and callable(formatter):
-                try:
-                    lines = formatter(result.get("details", {}))
-                    for line in lines:
-                        self.stdout.write(line)
-                except Exception as e:
-                    logger.warning(f"输出{component}格式化信息失败: {e}")
+        # 输出结束信息
+        self.stdout.write("\n" + "=" * 60)
+        if status == Status.SUCCESS:
+            self.stdout.write(self.style.SUCCESS("✅ 集群状态检测通过！"))
+        elif status == Status.WARNING:
+            self.stdout.write(self.style.WARNING("⚠️  集群状态检测完成，但存在警告项。"))
+        elif status == Status.ERROR:
+            self.stdout.write(self.style.ERROR("❌ 集群状态检测发现错误！"))
+        elif status == Status.NOT_FOUND:
+            self.stdout.write(self.style.ERROR("❌ 集群未找到！"))
+        else:
+            self.stdout.write(self.style.NOTICE("❓ 集群状态未知。"))
+        self.stdout.write("=" * 60)
 
     def get_status_style(self, status: str):
         """根据状态获取样式函数"""
