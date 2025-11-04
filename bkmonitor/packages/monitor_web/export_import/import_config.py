@@ -44,7 +44,7 @@ from utils import count_md5
 logger = logging.getLogger("monitor_web")
 
 
-def import_plugin(bk_biz_id, plugin_config):
+def import_plugin(bk_biz_id, plugin_config: ImportDetail) -> ImportDetail:
     parse_instance = ImportParse.objects.get(id=plugin_config.parse_id)
     config = parse_instance.config
     plugin_id = config["plugin_id"]
@@ -173,7 +173,7 @@ def import_collect(bk_biz_id, import_history_instance, collect_config_list):
         plugin_instance = import_plugin(bk_biz_id, plugin_instance)
         if plugin_instance.import_status == ImportDetailStatus.FAILED:
             import_collect_config.import_status = ImportDetailStatus.FAILED
-            import_collect_config.error_msg = _("关联插件导入失败")
+            import_collect_config.error_msg = _(f"关联插件导入失败,error: {plugin_instance.error_msg}")
             import_collect_config.save()
             continue
 
