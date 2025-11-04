@@ -264,6 +264,32 @@ def test_discover_bcs_clusters(
     ]
 
 
+def test_check_bcs_clusters_status(
+    mocker,
+    monkeypatch,
+    monkeypatch_cluster_management_fetch_clusters,
+    monkeypatch_k8s_node_list_by_cluster,
+    monkeypatch_cmdb_get_info_by_ip,
+    add_bcs_cluster_info,
+):
+    """测试周期刷新bcs集群列表 ."""
+    monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
+    monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
+    monkeypatch.setattr(FetchK8sClusterListResource, "cache_type", None)
+
+    # 测试状态标记为删除
+    discover_bcs_clusters()
+
+    from metadata.management.commands.check_bcs_cluster_status import Command
+
+    command = Command()
+    result = command.check_cluster_status("BCS-K8S-00000")
+    # 修复：只序列化可JSON序列化的部分，避免直接序列化Django模型对象
+    # print(json.dumps(result, default=str))
+
+    command.output_text_report(result)
+
+
 def test_update_bcs_cluster_cloud_id_config(
     monkeypatch, monkeypatch_k8s_node_list_by_cluster, monkeypatch_cmdb_get_info_by_ip, add_bcs_cluster_info
 ):

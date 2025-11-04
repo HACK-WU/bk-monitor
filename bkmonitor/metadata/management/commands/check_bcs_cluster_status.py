@@ -12,7 +12,6 @@ import json
 import time
 import logging
 
-
 from kubernetes import client as k8s_client
 from kubernetes.client.rest import ApiException
 from django.core.management.base import BaseCommand, CommandError
@@ -46,6 +45,49 @@ from metadata.models.bkdata.result_table import BkBaseResultTable
 logger = logging.getLogger("metadata")
 
 
+def recode_final_result(fun):
+    """记录最终结果的装饰器"""
+    status_priority = {
+        Status.UNKNOWN: 0,
+        Status.SUCCESS: 1,
+        Status.WARNING: 2,
+        Status.ERROR: 3,
+        Status.NOT_FOUND: 4,
+    }
+
+    def inner(self: "Command", *args, **kwargs):
+        result = fun(self, *args, **kwargs)
+        status = result.get("status", Status.UNKNOWN)
+
+        current_priority = status_priority.get(status, 0)
+        self_priority = status_priority.get(self.status, 0)
+
+        if current_priority > self_priority:
+            self.status = status
+
+        if result.get("errors"):
+            self.errors.extend(result["errors"])
+
+        if result.get("issues"):
+            self.issues.extend(result["issues"])
+
+        if result.get("warnings"):
+            self.warnings.extend(result["warnings"])
+
+        return result
+
+    return inner
+
+
+# 定义状态的枚举类型
+class Status:
+    UNKNOWN = "UNKNOWN"
+    SUCCESS = "SUCCESS"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    NOT_FOUND = "NOT_FOUND"
+
+
 class Command(BaseCommand):
     """
     BCS集群关联状态检测命令
@@ -74,11 +116,40 @@ class Command(BaseCommand):
 
     help = "检测BCS集群在监控关联链路中的运行状态"
 
+    def __init__(self, *args, **kwargs):
+        self.cluster_info = None
+        self.bk_biz_id = None
+        self.bk_tenant_id = None
+
+        self.status = Status.UNKNOWN
+        self.errors = []
+        self.issues = []
+        self.warnings = []
+
+        super().__init__(*args, **kwargs)
+
     def add_arguments(self, parser):
         """添加命令行参数配置"""
         parser.add_argument("--cluster-id", type=str, required=True, help="BCS集群ID，例如: BCS-K8S-00001")
         parser.add_argument("--format", choices=["text", "json"], default="text", help="输出格式，支持text和json")
         parser.add_argument("--timeout", type=int, default=30, help="连接测试超时时间（秒），默认30秒")
+
+    @property
+    def data_sources(self) -> dict[str, DataSource]:
+        """获取数据源"""
+        if getattr(self, "_data_sources", None):
+            return self._data_sources
+
+        data_ids = [
+            self.cluster_info.K8sMetricDataID,
+            self.cluster_info.CustomMetricDataID,
+            self.cluster_info.K8sEventDataID,
+        ]
+
+        data_ids = [id for id in data_ids if id != 0]
+        data_sources = {d.bk_data_id: d for d in DataSource.objects.filter(bk_data_id__in=data_ids)}
+        self._data_sources = data_sources
+        return data_sources
 
     def handle(self, *args, **options):
         """主处理函数，执行集群状态检测流程"""
@@ -92,7 +163,7 @@ class Command(BaseCommand):
 
             # 输出检测结果
             if format_type == "json":
-                self.stdout.write(json.dumps(check_result, indent=2, ensure_ascii=False))
+                self.stdout.write(json.dumps(check_result, indent=2, ensure_ascii=False, default=str))
             else:
                 self.output_text_report(check_result)
 
@@ -107,7 +178,7 @@ class Command(BaseCommand):
         check_result = {
             "cluster_id": cluster_id,
             "check_time": timezone.now().isoformat(),
-            "status": "UNKNOWN",
+            "status": Status.UNKNOWN,
             "details": {},
             "errors": [],
             "warnings": [],
@@ -121,7 +192,7 @@ class Command(BaseCommand):
             check_result["details"]["database"] = db_check
 
             if not db_check["exists"]:
-                check_result["status"] = "NOT_FOUND"
+                check_result["status"] = Status.NOT_FOUND
                 check_result["errors"].append("集群在数据库中不存在")
                 return check_result
 
@@ -253,10 +324,13 @@ class Command(BaseCommand):
             check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
 
             # 确定整体状态
-            check_result["status"] = self.determine_overall_status(check_result["details"])
+            check_result["status"] = self.status
+            check_result["errors"] = self.errors
+            check_result["issues"] = self.issues
+            check_result["warnings"] = self.warnings
 
         except Exception as e:
-            check_result["status"] = "ERROR"
+            check_result["status"] = Status.ERROR
             check_result["errors"].append(f"检测过程中发生异常: {str(e)}")
             logger.exception(f"集群状态检测异常: {e}")
 
@@ -265,15 +339,16 @@ class Command(BaseCommand):
 
         return check_result
 
+    @recode_final_result
     def check_database_record(self, cluster_id: str) -> dict:
         """检查集群在数据库中的记录状态"""
-        result = {"exists": False, "cluster_info": None, "status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"exists": False, "cluster_info": None, "status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             cluster_info = BCSClusterInfo.objects.get(cluster_id=cluster_id)
             result["exists"] = True
             result["cluster_model"] = cluster_info
-            result["status"] = "SUCCESS"
+            result["status"] = Status.SUCCESS
 
             # 收集集群基本信息
             result["details"] = {
@@ -307,17 +382,18 @@ class Command(BaseCommand):
                 result["issues"].append(f"缺少数据源ID配置: {', '.join(missing_data_ids)}")
 
         except BCSClusterInfo.DoesNotExist:
-            result["status"] = "NOT_FOUND"
+            result["status"] = Status.NOT_FOUND
             result["issues"].append("集群记录在数据库中不存在")
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"数据库查询异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_bcs_api_connection(self, cluster_info: BCSClusterInfo, timeout: int) -> dict:
         """检查BCS API连接状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 尝试通过BCS API获取集群信息
@@ -331,7 +407,7 @@ class Command(BaseCommand):
                     break
 
             if target_cluster:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
                 result["details"] = {
                     "api_accessible": True,  # API可访问
                     "cluster_found": True,
@@ -345,20 +421,21 @@ class Command(BaseCommand):
                         f"集群状态不一致 - 数据库: {cluster_info.status}, BCS API: {target_cluster.get('status')}"
                     )
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
                 result["details"] = {"api_accessible": True, "cluster_found": False}
                 result["issues"].append("集群在BCS API中未找到，可能已被删除")
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["details"] = {"api_accessible": False, "error": str(e)}
             result["issues"].append(f"BCS API连接失败: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_kubernetes_connection(self, cluster_info: BCSClusterInfo, timeout: int) -> dict:
         """检查Kubernetes集群连接状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 测试Kubernetes API连接
@@ -384,27 +461,28 @@ class Command(BaseCommand):
             namespaces = core_api.list_namespace(timeout_seconds=timeout)
             result["details"]["namespaces_count"] = len(namespaces.items)
 
-            result["status"] = "SUCCESS"
+            result["status"] = Status.SUCCESS
 
             # 检查节点健康状态
             if ready_nodes < node_count:
                 result["issues"].append(f"有{node_count - ready_nodes}个节点未就绪")
 
         except k8s_client.ApiException as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["details"]["api_error"] = {"status": e.status, "reason": e.reason}
             result["issues"].append(f"Kubernetes API调用失败: {e.status} {e.reason}")
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["details"]["error"] = str(e)
             result["issues"].append(f"Kubernetes连接异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_datasource_configuration(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据源配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # todo 应该检查是否全部具备三个数据源ID
@@ -423,11 +501,11 @@ class Command(BaseCommand):
 
                     # 检查数据源是否启用
                     if not datasource.is_enable:
-                        result["issues"].append(f"数据源{data_id}未启用")
+                        result["issues"].append(f"data_id:{data_id}未启用")
 
                 except DataSource.DoesNotExist:
                     datasource_status[data_id] = {"exists": False}
-                    result["issues"].append(f"数据源{data_id}不存在")
+                    result["issues"].append(f"数据源data_id:{data_id}不存在")
 
             result["details"] = {
                 "configured_data_ids": list(self.data_sources.keys()),
@@ -436,23 +514,24 @@ class Command(BaseCommand):
 
             # 确定整体状态
             if not result["issues"]:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
             elif any("不存在" in issue for issue in result["issues"]):
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"数据源配置检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_monitor_resources(self, cluster_info: BCSClusterInfo) -> dict:
         """检查监控资源状态
         ServiceMonitorInfo.refresh_resource  从 K8s 拉取 CRD 列表，新增或删除本地记录，保持一致性
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 检查ServiceMonitor资源
@@ -472,19 +551,20 @@ class Command(BaseCommand):
             }
 
             if 0 in [service_monitor_count, pod_monitor_count]:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
             else:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"监控资源检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_storage_clusters(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据存储集群状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 获取数据源相关的结果表
@@ -496,7 +576,7 @@ class Command(BaseCommand):
                     ).first()
                     if not ds_rt:
                         storage_status[data_id] = {"exists": False, "error": "未找到结果表关联"}
-                        result["issues"].append(f"数据源{data_id}未找到结果表关联")
+                        result["issues"].append(f"数据源data_id:{data_id}未找到结果表关联")
                         continue
 
                     rt = ResultTable.objects.get(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
@@ -515,9 +595,9 @@ class Command(BaseCommand):
                                 "status": cluster_status,
                             }
                         )
-                        if cluster_status["status"] != "SUCCESS":
+                        if cluster_status["status"] != Status.SUCCESS:
                             result["issues"].append(
-                                f"数据源{data_id}InfluxDB集群{storage.storage_cluster.cluster_name}状态异常"
+                                f"数据源data_id:{data_id}InfluxDB集群{storage.storage_cluster.cluster_name}状态异常"
                             )
 
                     # 检查ES存储
@@ -531,24 +611,24 @@ class Command(BaseCommand):
                                 "status": cluster_status,
                             }
                         )
-                        if cluster_status["status"] != "SUCCESS":
+                        if cluster_status["status"] != Status.SUCCESS:
                             result["issues"].append(
-                                f"数据源{data_id}ES集群{storage.storage_cluster.cluster_name}状态异常"
+                                f"数据源data_id:{data_id}ES集群{storage.storage_cluster.cluster_name}状态异常"
                             )
 
                 except Exception as e:
                     storage_status[data_id] = {"exists": False, "error": str(e)}
-                    result["issues"].append(f"数据源{data_id}存储检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}存储检查异常: {str(e)}")
 
             result["details"] = {"storage_status": storage_status}
             result["status"] = (
-                "SUCCESS"
+                Status.SUCCESS
                 if not result["issues"]
-                else ("WARNING" if any("状态异常" in issue for issue in result["issues"]) else "ERROR")
+                else (Status.WARNING if any("状态异常" in issue for issue in result["issues"]) else Status.ERROR)
             )
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"存储集群检查异常: {str(e)}")
 
         return result
@@ -558,7 +638,7 @@ class Command(BaseCommand):
         try:
             if cluster_type in ["influxdb", "elasticsearch"]:
                 return {
-                    "status": "SUCCESS",
+                    "status": Status.SUCCESS,
                     "details": {
                         "domain": cluster.domain_name,
                         "port": cluster.port,
@@ -566,30 +646,14 @@ class Command(BaseCommand):
                     },
                 }
             else:
-                return {"status": "UNKNOWN", "details": {}, "error": f"不支持的集群类型: {cluster_type}"}
+                return {"status": Status.UNKNOWN, "details": {}, "error": f"不支持的集群类型: {cluster_type}"}
         except Exception as e:
-            return {"status": "ERROR", "details": {}, "error": str(e)}
+            return {"status": Status.ERROR, "details": {}, "error": str(e)}
 
-    @property
-    def data_sources(self) -> dict[str, DataSource]:
-        """获取数据源"""
-        if self._data_sources:
-            return self._data_sources
-
-        data_ids = [
-            self.cluster_info.K8sMetricDataID,
-            self.cluster_info.CustomMetricDataID,
-            self.cluster_info.K8sEventDataID,
-        ]
-
-        data_ids = [id for id in data_ids if id != 0]
-        data_sources = {d.bk_data_id: d for d in DataSource.objects.filter(bk_data_id__in=data_ids)}
-        self._data_sources = data_sources
-        return data_sources
-
+    @recode_final_result
     def check_consul_configuration_to_datasource(self, cluster_info: BCSClusterInfo) -> dict:
         """检查datasource的Consul配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             consul_client = consul.BKConsul()
@@ -602,7 +666,7 @@ class Command(BaseCommand):
 
                     if consul_data[1] is None:
                         consul_status[data_id] = {"exists": False, "path": consul_path}
-                        result["issues"].append(f"数据源{data_id}在Consul中的配置不存在")
+                        result["issues"].append(f"数据源data_id:{data_id}在Consul中的配置不存在")
                     else:
                         consul_config = json.loads(consul_data[1]["Value"])
                         consul_status[data_id] = {
@@ -612,31 +676,34 @@ class Command(BaseCommand):
                             "has_result_tables": len(consul_config.get("result_table_list", [])) > 0,
                         }
                         if not consul_config.get("result_table_list"):
-                            result["issues"].append(f"数据源{data_id}在Consul中缺少结果表配置")
+                            result["issues"].append(f"数据源data_id:{data_id}在Consul中缺少结果表配置")
 
                 except DataSource.DoesNotExist:
                     consul_status[data_id] = {"exists": False, "error": "数据源不存在"}
-                    result["issues"].append(f"数据源{data_id}不存在")
+                    result["issues"].append(f"数据源data_id:{data_id}不存在")
                 except Exception as e:
                     consul_status[data_id] = {"exists": False, "error": str(e)}
-                    result["issues"].append(f"数据源{data_id}Consul配置检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}Consul配置检查异常: {str(e)}")
 
             result["details"] = {"consul_status": consul_status}
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"Consul配置检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_data_collection_config(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据采集配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 检查替换配置
-            replace_configs = ReplaceConfig.objects.filter(bcs_cluster_id=cluster_info.cluster_id)
+            replace_configs = ReplaceConfig.objects.filter(
+                cluster_id=cluster_info.cluster_id, is_common=False, custom_level=ReplaceConfig.CUSTOM_LEVELS_CLUSTER
+            )
             replace_config_count = replace_configs.count()
 
             # 检查时序数据组配置
@@ -677,21 +744,22 @@ class Command(BaseCommand):
 
             if len(metric_group_details) == 0:
                 result["issues"].append("没有找到时序数据组配置")
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
             elif not result["issues"]:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"数据采集配置检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_federation_cluster(self, cluster_info: BCSClusterInfo) -> dict:
         """检查联邦集群状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 获取联邦集群信息
@@ -700,7 +768,7 @@ class Command(BaseCommand):
             )
 
             if not fed_clusters.exists():
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
                 result["issues"].append("联邦集群信息不存在")
                 return result
 
@@ -725,17 +793,18 @@ class Command(BaseCommand):
                 if not fed["builtin_metric_table_id"]:
                     result["issues"].append(f"子集群{fed['sub_cluster_id']}缺少内置指标表ID")
 
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"联邦集群检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_data_routing(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据路由配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             routing_status = {}
@@ -754,26 +823,27 @@ class Command(BaseCommand):
 
                     # 检查路由配置合理性
                     if not datasource.transfer_cluster_id:
-                        result["issues"].append(f"数据源{data_id}未配置转移集群")
+                        result["issues"].append(f"数据源data_id:{data_id}未配置转移集群")
                     if not datasource.is_enable:
-                        result["issues"].append(f"数据源{data_id}未启用")
+                        result["issues"].append(f"数据源data_id:{data_id}未启用")
 
                 except DataSource.DoesNotExist:
                     routing_status[data_id] = {"exists": False, "error": "数据源不存在"}
-                    result["issues"].append(f"数据源{data_id}不存在")
+                    result["issues"].append(f"数据源data_id:{data_id}不存在")
 
             result["details"] = {"routing_status": routing_status}
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"数据路由检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_cluster_resource_usage(self, cluster_info: BCSClusterInfo) -> dict:
         """检查集群资源使用情况"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             core_api = cluster_info.core_api
@@ -866,14 +936,15 @@ class Command(BaseCommand):
                 result["issues"].append(f"获取Pod信息失败: {e.reason}")
 
             # 确定整体状态
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"集群资源检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_cluster_init_resources(self, cluster_info: BCSClusterInfo) -> dict:
         """检查集群初始化资源状态
 
@@ -883,7 +954,7 @@ class Command(BaseCommand):
         3. SpaceDataSource 关联状态
         4. ConfigMap 配置状态
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 1. 检查EventGroup创建状态
@@ -899,11 +970,11 @@ class Command(BaseCommand):
                     }
 
                     if not event_group.is_enable:
-                        result["issues"].append(f"K8s事件数据源{cluster_info.K8sEventDataID}的EventGroup未启用")
+                        result["issues"].append(f"K8s事件数据源data_id:{cluster_info.K8sEventDataID}的EventGroup未启用")
 
                 except models.EventGroup.DoesNotExist:
                     result["details"]["event_group"] = {"exists": False}
-                    result["issues"].append(f"K8s事件数据源{cluster_info.K8sEventDataID}的EventGroup不存在")
+                    result["issues"].append(f"K8s事件数据源data_id:{cluster_info.K8sEventDataID}的EventGroup不存在")
 
             # 2. 检查TimeSeriesGroup创建状态
             time_series_groups = []
@@ -930,7 +1001,7 @@ class Command(BaseCommand):
                         )
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}的TimeSeriesGroup检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}的TimeSeriesGroup检查异常: {str(e)}")
 
             result["details"]["time_series_groups"] = time_series_groups
 
@@ -960,10 +1031,10 @@ class Command(BaseCommand):
                             }
                         )
                     else:
-                        result["issues"].append(f"数据源{data_id}未关联到空间{space_uid}")
+                        result["issues"].append(f"数据源data_id:{data_id}未关联到空间{space_uid}")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}的SpaceDataSource检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}的SpaceDataSource检查异常: {str(e)}")
 
             result["details"]["space_datasources"] = space_datasources
 
@@ -999,18 +1070,19 @@ class Command(BaseCommand):
 
             # 确定整体状态
             if not result["issues"]:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
             elif any("不存在" in issue or "异常" in issue for issue in result["issues"]):
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"集群初始化资源检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_bk_collector_config(self, cluster_info: BCSClusterInfo) -> dict:
         """检查bk-collector配置状态
 
@@ -1020,7 +1092,7 @@ class Command(BaseCommand):
         3. bk-collector 配置文件完整性
         4. 数据采集配置有效性
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             core_api = cluster_info.core_api
@@ -1156,18 +1228,19 @@ class Command(BaseCommand):
 
             # 确定整体状态
             if not result["issues"]:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
             elif any("未部署" in issue or "失败" in issue for issue in result["issues"]):
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"bk-collector配置检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_space_permissions(self, cluster_info: BCSClusterInfo) -> dict:
         """检查集群所属空间状态
 
@@ -1177,7 +1250,7 @@ class Command(BaseCommand):
         3. ResultTable 的 bk_biz_id 配置
         4. EventGroup 的 bk_biz_id 配置
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             expected_space_uid = f"bkcc__{cluster_info.bk_biz_id}"
@@ -1206,10 +1279,10 @@ class Command(BaseCommand):
                         )
                     else:
                         space_datasource_status.append({"bk_data_id": data_id, "status": "not_authorized"})
-                        result["issues"].append(f"数据源{data_id}未授权给空间{expected_space_uid}")
+                        result["issues"].append(f"数据源data_id:{data_id}未授权给空间{expected_space_uid}")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}的空间授权检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}的空间授权检查异常: {str(e)}")
 
             result["details"]["space_datasources"] = space_datasource_status
 
@@ -1236,13 +1309,13 @@ class Command(BaseCommand):
                             }
                         )
                         result["issues"].append(
-                            f"数据源{data_id}的space_uid配置错误: {datasource.space_uid}, 期望: {expected_space_uid}"
+                            f"数据源data_id:{data_id}的space_uid配置错误: {datasource.space_uid}, 期望: {expected_space_uid}"
                         )
 
                 except DataSource.DoesNotExist:
-                    result["issues"].append(f"数据源{data_id}不存在")
+                    result["issues"].append(f"数据源data_id:{data_id}不存在")
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}的space_uid检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}的space_uid检查异常: {str(e)}")
 
             result["details"]["datasource_spaces"] = datasource_space_status
 
@@ -1279,13 +1352,13 @@ class Command(BaseCommand):
                                 }
                             )
                             result["issues"].append(
-                                f"数据源{data_id}对应的结果表{result_table.table_id}bk_biz_id配置错误: {result_table.bk_biz_id}, 期望: {cluster_info.bk_biz_id}"
+                                f"数据源data_id:{data_id}对应的结果表{result_table.table_id}bk_biz_id配置错误: {result_table.bk_biz_id}, 期望: {cluster_info.bk_biz_id}"
                             )
                     else:
-                        result["issues"].append(f"数据源{data_id}未找到对应的结果表")
+                        result["issues"].append(f"数据源data_id:{data_id}未找到对应的结果表")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}的结果表检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}的结果表检查异常: {str(e)}")
 
             result["details"]["result_tables"] = result_table_status
 
@@ -1313,33 +1386,34 @@ class Command(BaseCommand):
                         )
 
                 except models.EventGroup.DoesNotExist:
-                    result["issues"].append(f"K8s事件数据源{cluster_info.K8sEventDataID}的EventGroup不存在")
+                    result["issues"].append(f"K8s事件数据源data_id:{cluster_info.K8sEventDataID}的EventGroup不存在")
                 except Exception as e:
                     result["issues"].append(f"EventGroup检查异常: {str(e)}")
 
             # 确定整体状态
             if not result["issues"]:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
             elif any("不存在" in issue or "异常" in issue for issue in result["issues"]):
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
             else:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"空间权限检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_bcs_api_token(self, cluster_info: BCSClusterInfo) -> dict:
         """检查BCS API Token配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 检查API密钥是否配置
             if not cluster_info.api_key_content:
                 result["issues"].append("BCS API Token未配置")
-                result["status"] = "ERROR"
+                result["status"] = Status.ERROR
                 result["details"] = {"api_key_configured": False}
                 return result
 
@@ -1348,9 +1422,9 @@ class Command(BaseCommand):
 
             if cluster_info.api_key_content != settings.BCS_API_GATEWAY_TOKEN:
                 result["issues"].append("BCS API Token与当前配置不一致")
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
             else:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
 
             result["details"] = {
                 "api_key_configured": True,
@@ -1359,17 +1433,18 @@ class Command(BaseCommand):
             }
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"BCS API Token检查异常: {str(e)}")
 
         return result
 
+    @recode_final_result
     def check_datasource_options(self, cluster_info: BCSClusterInfo) -> dict:
         """检查DataSourceOption数据完整性
 
         验证数据源的关键配置项是否完整且符合规范
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 关键配置项列表
@@ -1408,28 +1483,29 @@ class Command(BaseCommand):
 
                     # 检查缺失的关键配置项
                     if missing_options:
-                        result["issues"].append(f"数据源{data_id}缺少关键配置项: {', '.join(missing_options)}")
+                        result["issues"].append(f"数据源data_id:{data_id}缺少关键配置项: {', '.join(missing_options)}")
 
                 except Exception as e:
                     option_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源{data_id}配置检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}配置检查异常: {str(e)}")
 
             result["details"] = option_status
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"DataSourceOption检查异常: {str(e)}")
             logger.exception(f"检查DataSourceOption时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_space_type_and_datasource(self, cluster_info: BCSClusterInfo) -> dict:
         """检查空间类型与SpaceDataSource关联
 
         验证数据源的空间类型配置是否正确
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             space_check_status = {}
@@ -1457,7 +1533,7 @@ class Command(BaseCommand):
                             tenant_consistent = space_ds.bk_tenant_id == datasource.bk_tenant_id
                         else:
                             result["issues"].append(
-                                f"数据源{data_id}(space_type:{space_type_id})缺少SpaceDataSource关联"
+                                f"数据源data_id:{data_id}(space_type:{space_type_id})缺少SpaceDataSource关联"
                             )
 
                     space_check_status[data_id] = {
@@ -1469,28 +1545,29 @@ class Command(BaseCommand):
                     }
 
                     if not is_all_space_type and not tenant_consistent:
-                        result["issues"].append(f"数据源{data_id}的租户ID不一致")
+                        result["issues"].append(f"数据源data_id:{data_id}的租户ID不一致")
 
                 except Exception as e:
                     space_check_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源{data_id}空间类型检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}空间类型检查异常: {str(e)}")
 
             result["details"] = space_check_status
-            result["status"] = "SUCCESS" if not result["issues"] else "ERROR"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.ERROR
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"空间类型检查异常: {str(e)}")
             logger.exception(f"检查空间类型时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_custom_report_subscription(self, cluster_info: BCSClusterInfo) -> dict:
         """检查CustomReportSubscription配置
 
         验证BCS集群的自定义上报订阅配置是否正确
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             bk_biz_id = cluster_info.bk_biz_id
@@ -1529,24 +1606,25 @@ class Command(BaseCommand):
             }
 
             if subscription_count == 0:
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
                 result["issues"].append("没有找到自定义上报订阅配置")
             else:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"CustomReportSubscription检查异常: {str(e)}")
             logger.exception(f"检查CustomReportSubscription时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_related_models(self, cluster_info: BCSClusterInfo) -> dict:
         """检查关联模型数据完整性
 
         验证结果表相关的配置数据是否完整
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             datasource_result_table = {}
@@ -1609,10 +1687,10 @@ class Command(BaseCommand):
 
                     else:
                         datasource_result_table[data_id] = {"relation_exists": False}
-                        result["issues"].append(f"数据源{data_id}缺少结果表关联")
+                        result["issues"].append(f"数据源data_id:{data_id}缺少结果表关联")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}关联模型检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}关联模型检查异常: {str(e)}")
 
             result["details"] = {
                 "datasource_result_table": datasource_result_table,
@@ -1621,21 +1699,22 @@ class Command(BaseCommand):
                 "result_table_field_options": result_table_field_options,
             }
 
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"关联模型检查异常: {str(e)}")
             logger.exception(f"检查关联模型时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_influxdb_storage_config(self, cluster_info: BCSClusterInfo) -> dict:
         """检查InfluxDB存储配置
 
         验证InfluxDB存储相关配置的完整性和正确性
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 检查InfluxDBProxyStorage
@@ -1681,7 +1760,7 @@ class Command(BaseCommand):
                                 result["issues"].append(f"存储{storage.table_id}代理配置检查异常: {str(e)}")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}InfluxDB存储检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}InfluxDB存储检查异常: {str(e)}")
 
             # 检查InfluxDBClusterInfo
             cluster_details = []
@@ -1733,21 +1812,22 @@ class Command(BaseCommand):
                 },
             }
 
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"InfluxDB存储配置检查异常: {str(e)}")
             logger.exception(f"检查InfluxDB存储配置时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_vm_datalink_dependencies(self, cluster_info: BCSClusterInfo) -> dict:
         """检查VM数据链路依赖模型
 
         验证VM数据链路创建和访问所依赖的各个模型配置是否完整
         """
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             access_vm_records = []
@@ -1782,7 +1862,7 @@ class Command(BaseCommand):
                         )
 
                 except Exception as e:
-                    result["issues"].append(f"数据源{data_id}VM访问记录检查异常: {str(e)}")
+                    result["issues"].append(f"数据源data_id:{data_id}VM访问记录检查异常: {str(e)}")
 
             # 检查DataLink
             try:
@@ -1857,26 +1937,27 @@ class Command(BaseCommand):
                 },
             }
 
-            result["status"] = "SUCCESS" if not result["issues"] else "WARNING"
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"VM数据链路依赖检查异常: {str(e)}")
             logger.exception(f"检查VM数据链路依赖时发生异常: {e}")
 
         return result
 
+    @recode_final_result
     def check_cloud_id_configuration(self, cluster_info: BCSClusterInfo) -> dict:
         """检查云区域ID配置状态"""
-        result = {"status": "UNKNOWN", "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         try:
             # 检查云区域ID是否配置
             if cluster_info.bk_cloud_id is None:
                 result["issues"].append("云区域ID未配置")
-                result["status"] = "WARNING"
+                result["status"] = Status.WARNING
             else:
-                result["status"] = "SUCCESS"
+                result["status"] = Status.SUCCESS
 
             result["details"] = {
                 "bk_cloud_id": cluster_info.bk_cloud_id,
@@ -1884,7 +1965,7 @@ class Command(BaseCommand):
             }
 
         except Exception as e:
-            result["status"] = "ERROR"
+            result["status"] = Status.ERROR
             result["issues"].append(f"云区域ID配置检查异常: {str(e)}")
 
         return result
@@ -1897,57 +1978,6 @@ class Command(BaseCommand):
             ).exists()
         except Exception:
             return False
-
-    def determine_overall_status(self, details: dict) -> str:
-        """确定整体状态"""
-        statuses = [
-            details.get("database", {}).get("status", "UNKNOWN"),
-            details.get("bcs_api", {}).get("status", "UNKNOWN"),
-            details.get("kubernetes", {}).get("status", "UNKNOWN"),
-            details.get("datasources", {}).get("status", "UNKNOWN"),
-            details.get("monitor_resources", {}).get("status", "UNKNOWN"),
-            details.get("storage", {}).get("status", "UNKNOWN"),
-            details.get("consul", {}).get("status", "UNKNOWN"),
-            details.get("data_collection", {}).get("status", "UNKNOWN"),
-            details.get("routing", {}).get("status", "UNKNOWN"),
-            details.get("resource_usage", {}).get("status", "UNKNOWN"),
-            details.get("init_resources", {}).get("status", "UNKNOWN"),
-            details.get("bk_collector", {}).get("status", "UNKNOWN"),
-            details.get("space_permissions", {}).get("status", "UNKNOWN"),
-            details.get("api_token", {}).get("status", "UNKNOWN"),
-            details.get("cloud_id", {}).get("status", "UNKNOWN"),
-            details.get("datasource_options", {}).get("status", "UNKNOWN"),
-            details.get("space_type", {}).get("status", "UNKNOWN"),
-            details.get("metrics_labels", {}).get("status", "UNKNOWN"),
-            details.get("custom_report_subscription", {}).get("status", "UNKNOWN"),
-            details.get("table_id_validity", {}).get("status", "UNKNOWN"),
-            details.get("related_models", {}).get("status", "UNKNOWN"),
-            details.get("influxdb_storage", {}).get("status", "UNKNOWN"),
-            details.get("vm_datalink_dependencies", {}).get("status", "UNKNOWN"),
-        ]
-
-        # 如果是联邦集群，添加联邦状态检查
-        if "federation" in details:
-            statuses.append(details.get("federation", {}).get("status", "UNKNOWN"))
-
-        # 如果有任何ERROR状态，整体状态为ERROR
-        if "ERROR" in statuses:
-            return "ERROR"
-
-        # 如果有任何WARNING状态，整体状态为WARNING
-        if "WARNING" in statuses:
-            return "WARNING"
-
-        # 如果有任何NOT_FOUND状态，整体状态为NOT_FOUND
-        if "NOT_FOUND" in statuses:
-            return "NOT_FOUND"
-
-        # 如果所有状态都是SUCCESS，整体状态为SUCCESS
-        if all(status == "SUCCESS" for status in statuses):
-            return "SUCCESS"
-
-        # 其他情况为UNKNOWN
-        return "UNKNOWN"
 
     def output_text_report(self, check_result: dict):
         """输出文本格式的检测报告"""
@@ -1990,7 +2020,7 @@ class Command(BaseCommand):
             if not isinstance(result, dict):
                 continue
 
-            status = result.get("status", "UNKNOWN")
+            status = result.get("status", Status.UNKNOWN)
             style = self.get_status_style(status)
 
             self.stdout.write(f"\n  {component.upper()}: {style(status)}")
@@ -2096,7 +2126,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"    数据源数量: {total_datasources}")
                 for data_id, opt_info in list(option_details.items())[:3]:  # 只显示前3个
                     if isinstance(opt_info, dict) and "options_count" in opt_info:
-                        self.stdout.write(f"    数据源{data_id}: {opt_info['options_count']}个配置项")
+                        self.stdout.write(f"    数据源data_id:{data_id}: {opt_info['options_count']}个配置项")
 
             elif component == "space_type" and result.get("details"):
                 space_type_details = result["details"]
@@ -2157,10 +2187,10 @@ class Command(BaseCommand):
     def get_status_style(self, status: str):
         """根据状态获取样式函数"""
         status_styles = {
-            "SUCCESS": self.style.SUCCESS,
-            "WARNING": self.style.WARNING,
-            "ERROR": self.style.ERROR,
-            "NOT_FOUND": self.style.ERROR,
-            "UNKNOWN": self.style.NOTICE,
+            Status.SUCCESS: self.style.SUCCESS,
+            Status.WARNING: self.style.WARNING,
+            Status.ERROR: self.style.ERROR,
+            Status.NOT_FOUND: self.style.ERROR,
+            Status.UNKNOWN: self.style.NOTICE,
         }
         return status_styles.get(status, self.style.NOTICE)
