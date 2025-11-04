@@ -344,6 +344,16 @@ class Command(BaseCommand):
         """检查集群在数据库中的记录状态"""
         result = {"exists": False, "cluster_info": None, "status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化数据库检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    业务ID: {details.get('bk_biz_id')}")
+                lines.append(f"    集群状态: {details.get('status')}")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             cluster_info = BCSClusterInfo.objects.get(cluster_id=cluster_id)
             result["exists"] = True
@@ -395,6 +405,18 @@ class Command(BaseCommand):
         """检查BCS API连接状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化BCS API连接检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    API可访问: {details.get('api_accessible', False)}")
+                lines.append(f"    集群发现: {details.get('cluster_found', False)}")
+                if details.get("cluster_status"):
+                    lines.append(f"    集群状态: {details['cluster_status']}")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             # 尝试通过BCS API获取集群信息
             bcs_clusters = api.kubernetes.fetch_k8s_cluster_list(bk_tenant_id=cluster_info.bk_tenant_id)
@@ -436,6 +458,16 @@ class Command(BaseCommand):
     def check_kubernetes_connection(self, cluster_info: BCSClusterInfo, timeout: int) -> dict:
         """检查Kubernetes集群连接状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化Kubernetes检查输出"""
+            lines = []
+            if details.get("nodes"):
+                nodes = details["nodes"]
+                lines.append(f"    节点统计: {nodes['ready']}/{nodes['total']} 就绪")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 测试Kubernetes API连接
@@ -483,6 +515,19 @@ class Command(BaseCommand):
     def check_datasource_configuration(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据源配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化数据源配置检查输出"""
+            lines = []
+            if details:
+                data_ids = details.get("configured_data_ids", [])
+                lines.append(f"    已配置数据源: {len(data_ids)}个")
+                datasource_status = details.get("datasource_status", {})
+                enabled_count = sum(1 for ds in datasource_status.values() if ds.get("is_enable", False))
+                lines.append(f"    启用状态: {enabled_count}/{len(datasource_status)}")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # todo 应该检查是否全部具备三个数据源ID
@@ -533,6 +578,16 @@ class Command(BaseCommand):
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化监控资源检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    ServiceMonitor: {details.get('service_monitors', {}).get('count', 0)}个")
+                lines.append(f"    PodMonitor: {details.get('pod_monitors', {}).get('count', 0)}个")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             # 检查ServiceMonitor资源
             service_monitors = ServiceMonitorInfo.objects.filter(bcs_cluster_id=cluster_info.cluster_id)
@@ -565,6 +620,16 @@ class Command(BaseCommand):
     def check_storage_clusters(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据存储集群状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化存储集群检查输出"""
+            lines = []
+            if details:
+                storage_count = len(details.get("storage_status", {}))
+                lines.append(f"    存储配置: {storage_count}个数据源")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 获取数据源相关的结果表
@@ -655,6 +720,16 @@ class Command(BaseCommand):
         """检查datasource的Consul配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化Consul配置检查输出"""
+            lines = []
+            if details:
+                consul_count = len(details.get("consul_status", {}))
+                lines.append(f"    Consul配置: {consul_count}个数据源")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             consul_client = consul.BKConsul()
             consul_status = {}
@@ -698,6 +773,16 @@ class Command(BaseCommand):
     def check_data_collection_config(self, cluster_info: BCSClusterInfo) -> dict:
         """检查数据采集配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化数据采集配置检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    替换配置: {details.get('replace_config_count', 0)}个")
+                lines.append(f"    指标组: {len(details.get('metric_groups', []))}个")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 检查替换配置
@@ -761,6 +846,15 @@ class Command(BaseCommand):
         """检查联邦集群状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化联邦集群检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    联邦关系: {details.get('federation_count', 0)}个")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             # 获取联邦集群信息
             fed_clusters = BcsFederalClusterInfo.objects.filter(
@@ -806,6 +900,16 @@ class Command(BaseCommand):
         """检查数据路由配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化数据路由检查输出"""
+            lines = []
+            if details:
+                routing_count = len(details.get("routing_status", {}))
+                lines.append(f"    路由配置: {routing_count}个数据源")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             routing_status = {}
 
@@ -844,6 +948,19 @@ class Command(BaseCommand):
     def check_cluster_resource_usage(self, cluster_info: BCSClusterInfo) -> dict:
         """检查集群资源使用情况"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化集群资源使用检查输出"""
+            lines = []
+            if details.get("nodes"):
+                nodes = details["nodes"]
+                lines.append(f"    节点统计: {nodes['ready_count']}/{nodes['count']} 就绪")
+            if details.get("pods"):
+                pods = details["pods"]
+                lines.append(f"    Pod统计: {pods['total_count']}个")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             core_api = cluster_info.core_api
@@ -955,6 +1072,17 @@ class Command(BaseCommand):
         4. ConfigMap 配置状态
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化集群初始化资源检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    TimeSeriesGroup: {len(details.get('time_series_groups', []))}个")
+                lines.append(f"    SpaceDataSource: {len(details.get('space_datasources', []))}个")
+                lines.append(f"    ConfigMap配置: {len(details.get('configmap_configs', []))}个")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 1. 检查EventGroup创建状态
@@ -1093,6 +1221,18 @@ class Command(BaseCommand):
         4. 数据采集配置有效性
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化bk-collector配置检查输出"""
+            lines = []
+            if details.get("daemonset") and details["daemonset"].get("name"):
+                ds = details["daemonset"]
+                lines.append(f"    DaemonSet: {ds['ready_pods']}/{ds['desired_pods']} 就绪")
+            lines.append(f"    Pod数量: {len(details.get('pods', []))}个")
+            lines.append(f"    配置文件: {len(details.get('config_files', []))}个")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             core_api = cluster_info.core_api
@@ -1252,6 +1392,24 @@ class Command(BaseCommand):
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化空间权限检查输出"""
+            lines = []
+            if details:
+                authorized_count = len(
+                    [ds for ds in details.get("space_datasources", []) if ds.get("status") == "authorized"]
+                )
+                total_count = len(details.get("space_datasources", []))
+                lines.append(f"    数据源授权: {authorized_count}/{total_count}")
+                correct_space_count = len(
+                    [ds for ds in details.get("datasource_spaces", []) if ds.get("status") == "correct"]
+                )
+                total_space_count = len(details.get("datasource_spaces", []))
+                lines.append(f"    空间配置: {correct_space_count}/{total_space_count} 正确")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             expected_space_uid = f"bkcc__{cluster_info.bk_biz_id}"
             data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID, cluster_info.K8sEventDataID]
@@ -1409,6 +1567,17 @@ class Command(BaseCommand):
         """检查BCS API Token配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化API Token检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    Token已配置: {details.get('api_key_configured', False)}")
+                if "token_length" in details:
+                    lines.append(f"    Token长度: {details['token_length']} 字符")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             # 检查API密钥是否配置
             if not cluster_info.api_key_content:
@@ -1445,6 +1614,19 @@ class Command(BaseCommand):
         验证数据源的关键配置项是否完整且符合规范
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化DataSourceOption检查输出"""
+            lines = []
+            if details:
+                total_datasources = len(details)
+                lines.append(f"    数据源数量: {total_datasources}")
+                for data_id, opt_info in list(details.items())[:3]:  # 只显示前3个
+                    if isinstance(opt_info, dict) and "options_count" in opt_info:
+                        lines.append(f"    数据源data_id:{data_id}: {opt_info['options_count']}个配置项")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 关键配置项列表
@@ -1506,6 +1688,18 @@ class Command(BaseCommand):
         验证数据源的空间类型配置是否正确
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化空间类型检查输出"""
+            lines = []
+            if details:
+                total_datasources = len(details)
+                lines.append(f"    数据源数量: {total_datasources}")
+                all_space_count = sum(1 for v in details.values() if isinstance(v, dict) and v.get("is_all_space_type"))
+                lines.append(f"    全局空间类型: {all_space_count}/{total_datasources}")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             space_check_status = {}
@@ -1569,6 +1763,17 @@ class Command(BaseCommand):
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化CustomReportSubscription检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    订阅数量: {details.get('subscription_count', 0)}")
+                if details.get("subscription_exists"):
+                    lines.append(f"    业务ID: {details.get('bk_biz_id')}")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             bk_biz_id = cluster_info.bk_biz_id
 
@@ -1625,6 +1830,18 @@ class Command(BaseCommand):
         验证结果表相关的配置数据是否完整
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化关联模型检查输出"""
+            lines = []
+            if details:
+                ds_rt_count = len(details.get("datasource_result_table", {}))
+                rt_options_count = len(details.get("result_table_options", {}))
+                lines.append(f"    数据源结果表: {ds_rt_count}")
+                lines.append(f"    结果表配置: {rt_options_count}")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             datasource_result_table = {}
@@ -1715,6 +1932,20 @@ class Command(BaseCommand):
         验证InfluxDB存储相关配置的完整性和正确性
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化InfluxDB存储配置检查输出"""
+            lines = []
+            if details:
+                proxy_count = details.get("influxdb_proxy_storage", {}).get("total_records", 0)
+                cluster_count = details.get("influxdb_cluster_info", {}).get("total_clusters", 0)
+                host_count = details.get("influxdb_host_info", {}).get("total_hosts", 0)
+                lines.append(f"    代理存储: {proxy_count}")
+                lines.append(f"    集群: {cluster_count}")
+                lines.append(f"    主机: {host_count}")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             # 检查InfluxDBProxyStorage
@@ -1828,6 +2059,20 @@ class Command(BaseCommand):
         验证VM数据链路创建和访问所依赖的各个模型配置是否完整
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化VM数据链路依赖检查输出"""
+            lines = []
+            if details:
+                vm_record_count = details.get("access_vm_record", {}).get("total_records", 0)
+                link_count = details.get("data_link", {}).get("total_links", 0)
+                is_federal = details.get("federal_cluster_info", {}).get("is_federal", False)
+                lines.append(f"    VM访问记录: {vm_record_count}")
+                lines.append(f"    数据链路: {link_count}")
+                lines.append(f"    联邦集群: {'是' if is_federal else '否'}")
+            return lines
+
+        result["formatter"] = format_output
 
         try:
             access_vm_records = []
@@ -1951,6 +2196,17 @@ class Command(BaseCommand):
         """检查云区域ID配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
+        def format_output(details: dict) -> list[str]:
+            """格式化云区域ID配置检查输出"""
+            lines = []
+            if details:
+                lines.append(f"    云区域ID已配置: {details.get('cloud_id_configured', False)}")
+                if details.get("bk_cloud_id") is not None:
+                    lines.append(f"    云区域ID: {details['bk_cloud_id']}")
+            return lines
+
+        result["formatter"] = format_output
+
         try:
             # 检查云区域ID是否配置
             if cluster_info.bk_cloud_id is None:
@@ -2030,159 +2286,15 @@ class Command(BaseCommand):
                 for issue in result["issues"]:
                     self.stdout.write(f"    ⚠ {issue}")
 
-            # 输出关键信息
-            if component == "database" and result.get("details"):
-                db_details = result["details"]
-                self.stdout.write(f"    业务ID: {db_details.get('bk_biz_id')}")
-                self.stdout.write(f"    集群状态: {db_details.get('status')}")
-
-            elif component == "kubernetes" and result.get("details", {}).get("nodes"):
-                nodes = result["details"]["nodes"]
-                self.stdout.write(f"    节点统计: {nodes['ready']}/{nodes['total']} 就绪")
-
-            elif component == "monitor_resources" and result.get("details"):
-                monitor_details = result["details"]
-                self.stdout.write(
-                    f"    ServiceMonitor: {monitor_details.get('service_monitors', {}).get('count', 0)}个"
-                )
-                self.stdout.write(f"    PodMonitor: {monitor_details.get('pod_monitors', {}).get('count', 0)}个")
-
-            elif component == "storage" and result.get("details"):
-                storage_details = result["details"]
-                storage_count = len(storage_details.get("storage_status", {}))
-                self.stdout.write(f"    存储配置: {storage_count}个数据源")
-
-            elif component == "consul" and result.get("details"):
-                consul_details = result["details"]
-                consul_count = len(consul_details.get("consul_status", {}))
-                self.stdout.write(f"    Consul配置: {consul_count}个数据源")
-
-            elif component == "data_collection" and result.get("details"):
-                collection_details = result["details"]
-                self.stdout.write(f"    替换配置: {collection_details.get('replace_config_count', 0)}个")
-                self.stdout.write(f"    指标组: {len(collection_details.get('metric_groups', []))}个")
-
-            elif component == "federation" and result.get("details"):
-                federation_details = result["details"]
-                self.stdout.write(f"    联邦关系: {federation_details.get('federation_count', 0)}个")
-
-            elif component == "routing" and result.get("details"):
-                routing_details = result["details"]
-                routing_count = len(routing_details.get("routing_status", {}))
-                self.stdout.write(f"    路由配置: {routing_count}个数据源")
-
-            elif component == "resource_usage" and result.get("details"):
-                resource_details = result["details"]
-                if "nodes" in resource_details:
-                    nodes = resource_details["nodes"]
-                    self.stdout.write(f"    节点统计: {nodes['ready_count']}/{nodes['count']} 就绪")
-                if "pods" in resource_details:
-                    pods = resource_details["pods"]
-                    self.stdout.write(f"    Pod统计: {pods['total_count']}个")
-
-            elif component == "init_resources" and result.get("details"):
-                init_details = result["details"]
-                self.stdout.write(f"    TimeSeriesGroup: {len(init_details.get('time_series_groups', []))}个")
-                self.stdout.write(f"    SpaceDataSource: {len(init_details.get('space_datasources', []))}个")
-                self.stdout.write(f"    ConfigMap配置: {len(init_details.get('configmap_configs', []))}个")
-
-            elif component == "bk_collector" and result.get("details"):
-                collector_details = result["details"]
-                if "daemonset" in collector_details and collector_details["daemonset"].get("name"):
-                    ds = collector_details["daemonset"]
-                    self.stdout.write(f"    DaemonSet: {ds['ready_pods']}/{ds['desired_pods']} 就绪")
-                self.stdout.write(f"    Pod数量: {len(collector_details.get('pods', []))}个")
-                self.stdout.write(f"    配置文件: {len(collector_details.get('config_files', []))}个")
-
-            elif component == "space_permissions" and result.get("details"):
-                space_details = result["details"]
-                authorized_count = len(
-                    [ds for ds in space_details.get("space_datasources", []) if ds.get("status") == "authorized"]
-                )
-                total_count = len(space_details.get("space_datasources", []))
-                self.stdout.write(f"    数据源授权: {authorized_count}/{total_count}")
-                correct_space_count = len(
-                    [ds for ds in space_details.get("datasource_spaces", []) if ds.get("status") == "correct"]
-                )
-                total_space_count = len(space_details.get("datasource_spaces", []))
-                self.stdout.write(f"    空间配置: {correct_space_count}/{total_space_count} 正确")
-
-            elif component == "api_token" and result.get("details"):
-                token_details = result["details"]
-                self.stdout.write(f"    Token已配置: {token_details.get('api_key_configured', False)}")
-                if "token_length" in token_details:
-                    self.stdout.write(f"    Token长度: {token_details['token_length']} 字符")
-
-            elif component == "cloud_id" and result.get("details"):
-                cloud_details = result["details"]
-                self.stdout.write(f"    云区域ID已配置: {cloud_details.get('cloud_id_configured', False)}")
-                if cloud_details.get("bk_cloud_id") is not None:
-                    self.stdout.write(f"    云区域ID: {cloud_details['bk_cloud_id']}")
-
-                    # ==== 新增检测项的输出 ====
-            elif component == "datasource_options" and result.get("details"):
-                option_details = result["details"]
-                total_datasources = len(option_details)
-                self.stdout.write(f"    数据源数量: {total_datasources}")
-                for data_id, opt_info in list(option_details.items())[:3]:  # 只显示前3个
-                    if isinstance(opt_info, dict) and "options_count" in opt_info:
-                        self.stdout.write(f"    数据源data_id:{data_id}: {opt_info['options_count']}个配置项")
-
-            elif component == "space_type" and result.get("details"):
-                space_type_details = result["details"]
-                total_datasources = len(space_type_details)
-                self.stdout.write(f"    数据源数量: {total_datasources}")
-                all_space_count = sum(
-                    1 for v in space_type_details.values() if isinstance(v, dict) and v.get("is_all_space_type")
-                )
-                self.stdout.write(f"    全局空间类型: {all_space_count}/{total_datasources}")
-
-            elif component == "metrics_labels" and result.get("details"):
-                label_details = result["details"]
-                self.stdout.write(f"    总指标数: {label_details.get('total_metrics', 0)}")
-                self.stdout.write(f"    标签覆盖率: {label_details.get('label_coverage_rate', 0)}%")
-                unlabeled = label_details.get("unlabeled_metrics", 0)
-                if unlabeled > 0:
-                    self.stdout.write(f"    未标注指标: {unlabeled}")
-
-            elif component == "custom_report_subscription" and result.get("details"):
-                sub_details = result["details"]
-                self.stdout.write(f"    订阅数量: {sub_details.get('subscription_count', 0)}")
-                if sub_details.get("subscription_exists"):
-                    self.stdout.write(f"    业务ID: {sub_details.get('bk_biz_id')}")
-
-            elif component == "table_id_validity" and result.get("details"):
-                table_details = result["details"]
-                self.stdout.write(f"    结果表总数: {table_details.get('total_tables', 0)}")
-                self.stdout.write(f"    有效表: {table_details.get('valid_tables', 0)}")
-                invalid_count = len(table_details.get("invalid_format", []))
-                if invalid_count > 0:
-                    self.stdout.write(f"    无效格式: {invalid_count}")
-
-            elif component == "related_models" and result.get("details"):
-                related_details = result["details"]
-                ds_rt_count = len(related_details.get("datasource_result_table", {}))
-                rt_options_count = len(related_details.get("result_table_options", {}))
-                self.stdout.write(f"    数据源结果表: {ds_rt_count}")
-                self.stdout.write(f"    结果表配置: {rt_options_count}")
-
-            elif component == "influxdb_storage" and result.get("details"):
-                influx_details = result["details"]
-                proxy_count = influx_details.get("influxdb_proxy_storage", {}).get("total_records", 0)
-                cluster_count = influx_details.get("influxdb_cluster_info", {}).get("total_clusters", 0)
-                host_count = influx_details.get("influxdb_host_info", {}).get("total_hosts", 0)
-                self.stdout.write(f"    代理存储: {proxy_count}")
-                self.stdout.write(f"    集群: {cluster_count}")
-                self.stdout.write(f"    主机: {host_count}")
-
-            elif component == "vm_datalink_dependencies" and result.get("details"):
-                vm_details = result["details"]
-                vm_record_count = vm_details.get("access_vm_record", {}).get("total_records", 0)
-                link_count = vm_details.get("data_link", {}).get("total_links", 0)
-                is_federal = vm_details.get("federal_cluster_info", {}).get("is_federal", False)
-                self.stdout.write(f"    VM访问记录: {vm_record_count}")
-                self.stdout.write(f"    数据链路: {link_count}")
-                self.stdout.write(f"    联邦集群: {'是' if is_federal else '否'}")
+            # 调用对应的格式化函数输出关键信息
+            formatter = result.get("formatter")
+            if formatter and callable(formatter):
+                try:
+                    lines = formatter(result.get("details", {}))
+                    for line in lines:
+                        self.stdout.write(line)
+                except Exception as e:
+                    logger.warning(f"输出{component}格式化信息失败: {e}")
 
     def get_status_style(self, status: str):
         """根据状态获取样式函数"""
