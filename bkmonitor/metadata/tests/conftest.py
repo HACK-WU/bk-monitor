@@ -263,6 +263,479 @@ class HashConsulMocker:
         return ("297766103", {"Key": key, "Value": val} if val else None)
 
 
+class MockHashConsul:
+    """
+    HashConsul的模拟类，用于单元测试中替代真实的Consul客户端
+    避免在测试过程中发起真实的网络请求
+    """
+
+    def __init__(self, host="127.0.0.1", port=8500, scheme="http", verify=None, default_force=False):
+        """
+        初始化模拟的HashConsul
+
+        :param host: consul agent IP地址
+        :param port: consul agent 端口
+        :param scheme: consul agent协议
+        :param verify: SSL 验证
+        :param default_force: 默认是否需要强制更新
+        """
+        # 存储consul agent连接信息，但不会实际使用
+        self.host = host
+        self.port = port
+        self.scheme = scheme
+        self.verify = verify
+
+        # 是否强行写入
+        self.default_force = default_force
+
+        # 模拟存储键值对的数据结构
+        self._kv_store = {}
+
+        # 记录方法调用历史，便于测试验证
+        self._call_history = []
+
+    def delete(self, key, recurse=None):
+        """
+        模拟删除指定kv
+
+        :param key: 要删除的键
+        :param recurse: 是否递归删除
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "delete", "key": key, "recurse": recurse})
+
+        # 执行删除操作
+        if recurse:
+            # 删除所有以key为前缀的键
+            keys_to_delete = [k for k in self._kv_store.keys() if k.startswith(key)]
+            for k in keys_to_delete:
+                del self._kv_store[k]
+        else:
+            # 删除单个键
+            if key in self._kv_store:
+                del self._kv_store[key]
+
+        # 模拟日志记录
+        print(f"key->[{key}] has been deleted")
+
+    def get(self, key):
+        """
+        模拟获取指定kv
+
+        :param key: 要获取的键
+        :return: 模拟的Consul响应格式 (index, value)
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "get", "key": key})
+
+        # 返回模拟的Consul响应格式
+        if key in self._kv_store:
+            return (1, self._kv_store[key])
+        else:
+            return (1, None)
+
+    def list(self, key):
+        """
+        模拟列出指定前缀的所有键值对
+
+        :param key: 键前缀
+        :return: 模拟的Consul响应格式 (index, values)
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "list", "key": key})
+
+        # 查找所有以指定前缀开头的键
+        result = []
+        for k, v in self._kv_store.items():
+            if k.startswith(key):
+                result.append(v)
+
+        return (1, result if result else None)
+
+    def put(self, key, value, is_force_update=False, bk_data_id=None, *args, **kwargs):
+        """
+        模拟更新Consul键值对配置
+
+        :param key: Consul键路径
+        :param value: 配置内容
+        :param is_force_update: 强制更新标志
+        :param bk_data_id: 可选数据源ID
+        :return: True表示更新成功
+        """
+        # 记录调用历史
+        self._call_history.append(
+            {"method": "put", "key": key, "value": value, "is_force_update": is_force_update, "bk_data_id": bk_data_id}
+        )
+
+        # 模拟HashConsul的逻辑
+        import json
+        from metadata.utils import hash_util
+
+        # 强制更新模式处理
+        if self.default_force or is_force_update:
+            print(f"key->[{key}] now is force update, will update consul.")
+            self._kv_store[key] = {"Key": key, "Value": json.dumps(value)}
+            return True
+
+        # 获取当前存储的值
+        old_value = self._kv_store.get(key, None)
+        if old_value is None:
+            print("old_value is missing, will refresh consul.")
+            self._kv_store[key] = {"Key": key, "Value": json.dumps(value)}
+            return True
+
+        # 配置变更检测
+        old_hash = hash_util.object_md5(json.loads(old_value["Value"]))
+        new_hash = hash_util.object_md5(value)
+
+        if old_hash == new_hash:
+            print(f"new value hash->[{new_hash}] is same as the one on consul, nothing will updated.")
+            return True
+
+        # 执行配置更新
+        if bk_data_id is not None:
+            print(
+                "data_id->[%s] need update, new value hash->[%s] is different from the old hash->[%s]",
+                bk_data_id,
+                new_hash,
+                old_hash,
+            )
+        else:
+            print("new value hash->[%s] is different from the old hash->[%s], will updated it", new_hash, old_hash)
+
+        self._kv_store[key] = {"Key": key, "Value": json.dumps(value)}
+        return True
+
+    def get_call_history(self):
+        """
+        获取方法调用历史记录，用于测试验证
+
+        :return: 调用历史列表
+        """
+        return self._call_history.copy()
+
+    def clear_call_history(self):
+        """
+        清空方法调用历史记录
+        """
+        self._call_history.clear()
+
+    def set_kv_store(self, kv_store):
+        """
+        设置模拟的键值存储，用于测试初始化特定状态
+
+        :param kv_store: 键值存储字典
+        """
+        self._kv_store = kv_store
+
+
+class MockRedisTools:
+    """
+    RedisTools的模拟类，用于单元测试中替代真实的Redis客户端
+    避免在测试过程中连接到真实的Redis服务
+    """
+
+    def __init__(self):
+        """
+        初始化模拟的RedisTools
+        """
+        # 模拟存储Redis数据的数据结构
+        self._data_store = {}
+
+        # 记录方法调用历史，便于测试验证
+        self._call_history = []
+
+    def get_client(self):
+        """
+        模拟获取Redis客户端
+        """
+        return self
+
+    def sadd(self, key: str, *values) -> int:
+        """
+        模拟向集合添加元素
+
+        :param key: 集合键名
+        :param values: 要添加的值
+        :return: 添加的元素数量
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "sadd", "key": key, "values": values})
+
+        if key not in self._data_store:
+            self._data_store[key] = {"type": "set", "value": set()}
+
+        if self._data_store[key]["type"] != "set":
+            raise Exception(f"Key {key} is not a set")
+
+        old_len = len(self._data_store[key]["value"])
+        for value in values:
+            self._data_store[key]["value"].add(str(value))
+        new_len = len(self._data_store[key]["value"])
+
+        return new_len - old_len
+
+    def smembers(self, key: str) -> set:
+        """
+        模拟获取集合所有成员
+
+        :param key: 集合键名
+        :return: 集合成员集合
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "smembers", "key": key})
+
+        if key not in self._data_store:
+            return set()
+
+        if self._data_store[key]["type"] != "set":
+            raise Exception(f"Key {key} is not a set")
+
+        return self._data_store[key]["value"].copy()
+
+    def srem(self, key: str, *values) -> int:
+        """
+        模拟从集合删除元素
+
+        :param key: 集合键名
+        :param values: 要删除的值
+        :return: 删除的元素数量
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "srem", "key": key, "values": values})
+
+        if key not in self._data_store:
+            return 0
+
+        if self._data_store[key]["type"] != "set":
+            raise Exception(f"Key {key} is not a set")
+
+        old_len = len(self._data_store[key]["value"])
+        for value in values:
+            self._data_store[key]["value"].discard(str(value))
+        new_len = len(self._data_store[key]["value"])
+
+        return old_len - new_len
+
+    def hset(self, key: str, field: str, value: str) -> int:
+        """
+        模拟设置哈希字段值
+
+        :param key: 哈希键名
+        :param field: 字段名
+        :param value: 字段值
+        :return: 1表示新增字段，0表示更新字段
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hset", "key": key, "field": field, "value": value})
+
+        if key not in self._data_store:
+            self._data_store[key] = {"type": "hash", "value": {}}
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        is_new = field not in self._data_store[key]["value"]
+        self._data_store[key]["value"][field] = value
+
+        return 1 if is_new else 0
+
+    def hmset(self, key: str, field_value: dict) -> bool:
+        """
+        模拟批量设置哈希字段值
+
+        :param key: 哈希键名
+        :param field_value: 字段值字典
+        :return: True表示成功
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hmset", "key": key, "field_value": field_value})
+
+        if key not in self._data_store:
+            self._data_store[key] = {"type": "hash", "value": {}}
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        self._data_store[key]["value"].update(field_value)
+        return True
+
+    def hget(self, key: str, field: str) -> str | None:
+        """
+        模拟获取哈希字段值
+
+        :param key: 哈希键名
+        :param field: 字段名
+        :return: 字段值或None
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hget", "key": key, "field": field})
+
+        if key not in self._data_store:
+            return None
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        return self._data_store[key]["value"].get(field)
+
+    def hmget(self, key: str, *fields) -> list:
+        """
+        模拟批量获取哈希字段值
+
+        :param key: 哈希键名
+        :param fields: 字段名列表
+        :return: 字段值列表
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hmget", "key": key, "fields": fields})
+
+        if key not in self._data_store:
+            return [None] * len(fields)
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        return [self._data_store[key]["value"].get(field) for field in fields]
+
+    def hgetall(self, key: str) -> dict:
+        """
+        模拟获取哈希所有字段值
+
+        :param key: 哈希键名
+        :return: 字段值字典
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hgetall", "key": key})
+
+        if key not in self._data_store:
+            return {}
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        return self._data_store[key]["value"].copy()
+
+    def hdel(self, key: str, *fields) -> int:
+        """
+        模拟删除哈希字段
+
+        :param key: 哈希键名
+        :param fields: 字段名列表
+        :return: 删除的字段数量
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "hdel", "key": key, "fields": fields})
+
+        if key not in self._data_store:
+            return 0
+
+        if self._data_store[key]["type"] != "hash":
+            raise Exception(f"Key {key} is not a hash")
+
+        count = 0
+        for field in fields:
+            if field in self._data_store[key]["value"]:
+                del self._data_store[key]["value"][field]
+                count += 1
+
+        return count
+
+    def set(self, key: str, value: str) -> bool:
+        """
+        模拟设置字符串值
+
+        :param key: 键名
+        :param value: 键值
+        :return: True表示成功
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "set", "key": key, "value": value})
+
+        self._data_store[key] = {"type": "string", "value": value}
+        return True
+
+    def get(self, key: str) -> bytes | None:
+        """
+        模拟获取字符串值
+
+        :param key: 键名
+        :return: 键值的字节形式或None
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "get", "key": key})
+
+        if key not in self._data_store:
+            return None
+
+        if self._data_store[key]["type"] != "string":
+            raise Exception(f"Key {key} is not a string")
+
+        return self._data_store[key]["value"].encode("utf-8")
+
+    def delete(self, *keys) -> int:
+        """
+        模拟删除键
+
+        :param keys: 键名列表
+        :return: 删除的键数量
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "delete", "keys": keys})
+
+        count = 0
+        for key in keys:
+            if key in self._data_store:
+                del self._data_store[key]
+                count += 1
+
+        return count
+
+    def publish(self, channel: str, message: str) -> int:
+        """
+        模拟发布消息
+
+        :param channel: 频道名
+        :param message: 消息内容
+        :return: 接收消息的客户端数量
+        """
+        # 记录调用历史
+        self._call_history.append({"method": "publish", "channel": channel, "message": message})
+
+        # 模拟发布成功，返回1个接收者
+        return 1
+
+    def get_call_history(self):
+        """
+        获取方法调用历史记录，用于测试验证
+
+        :return: 调用历史列表
+        """
+        return self._call_history.copy()
+
+    def clear_call_history(self):
+        """
+        清空方法调用历史记录
+        """
+        self._call_history.clear()
+
+    def set_data_store(self, data_store: dict):
+        """
+        设置模拟的数据存储，用于测试初始化特定状态
+
+        :param data_store: 数据存储字典
+        """
+        self._data_store = data_store
+
+    def get_data_store(self):
+        """
+        获取当前数据存储状态
+
+        :return: 数据存储字典
+        """
+        return self._data_store.copy()
+
+
 @pytest.fixture(
     autouse=True,
 )
