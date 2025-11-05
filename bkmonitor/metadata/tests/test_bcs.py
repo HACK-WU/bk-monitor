@@ -14,6 +14,8 @@ import logging
 import elasticsearch5
 import pytest
 from django.conf import settings
+from kubernetes.client import V1NodeList, V1Node, V1NodeStatus, V1NodeCondition
+from unittest.mock import patch, MagicMock
 
 from api.kubernetes.default import FetchK8sClusterListResource
 from metadata import models
@@ -264,13 +266,64 @@ def test_discover_bcs_clusters(
     ]
 
 
+@pytest.fixture
+def mock_core_api():
+    """创建模拟的节点数据"""
+    # 创建节点条件
+    ready_condition = V1NodeCondition(
+        type="Ready", status="True", reason="KubeletReady", message="kubelet is posting ready status"
+    )
+
+    not_ready_condition = V1NodeCondition(
+        type="Ready", status="False", reason="KubeletNotReady", message="kubelet is not ready"
+    )
+
+    # 创建节点状态
+    node1_status = V1NodeStatus(conditions=[ready_condition], capacity={"cpu": "4", "memory": "8Gi", "pods": "110"})
+
+    node2_status = V1NodeStatus(conditions=[ready_condition], capacity={"cpu": "8", "memory": "16Gi", "pods": "110"})
+
+    node3_status = V1NodeStatus(conditions=[not_ready_condition], capacity={"cpu": "4", "memory": "8Gi", "pods": "110"})
+
+    # 创建节点
+    node1 = V1Node(metadata={"name": "node-1"}, status=node1_status)
+
+    node2 = V1Node(metadata={"name": "node-2"}, status=node2_status)
+
+    node3 = V1Node(metadata={"name": "node-3"}, status=node3_status)
+
+    # 创建节点列表
+    nodes_list = V1NodeList(items=[node1, node2, node3])
+
+    with patch("metadata.models.bcs.cluster.BCSClusterInfo.core_api") as mock_core_api:
+        mock_core_api.list_node.return_value = nodes_list
+        mock_core_api.list_namespace.return_value = MagicMock(items=[])
+        yield mock_core_api
+
+
+@pytest.fixture
+def mock_default_kwargs(monkeypatch):
+    with monkeypatch.context() as m:
+        m.setattr(settings, "BCS_API_GATEWAY_HOST", "domain_name_1")
+        m.setattr(settings, "BCS_API_GATEWAY_PORT", "8000")
+
+        default_kwargs = list(BCSClusterInfo.register_cluster.__wrapped__.__defaults__)
+        default_kwargs[0] = "domain_name_1"
+        default_kwargs[1] = "8000"
+        default_kwargs = tuple(default_kwargs)
+        m.setattr(BCSClusterInfo.register_cluster.__wrapped__, "__defaults__", default_kwargs)
+
+        yield
+
+
 def test_check_bcs_clusters_status(
     mocker,
     monkeypatch,
     monkeypatch_cluster_management_fetch_clusters,
     monkeypatch_k8s_node_list_by_cluster,
     monkeypatch_cmdb_get_info_by_ip,
-    add_bcs_cluster_info,
+    mock_core_api,
+    mock_default_kwargs,
 ):
     """测试周期刷新bcs集群列表 ."""
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
@@ -283,11 +336,11 @@ def test_check_bcs_clusters_status(
     from metadata.management.commands.check_bcs_cluster_status import Command
 
     command = Command()
-    command.check_cluster_status("BCS-K8S-00000")
+    result = command.check_cluster_status("BCS-K8S-00000")
     # 修复：只序列化可JSON序列化的部分，避免直接序列化Django模型对象
     # print(json.dumps(result, default=str))
 
-    # command.output_text_report(result)
+    command.output_summary_report(result)
 
 
 def test_update_bcs_cluster_cloud_id_config(

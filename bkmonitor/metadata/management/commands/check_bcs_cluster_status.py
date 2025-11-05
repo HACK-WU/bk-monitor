@@ -293,12 +293,6 @@ class Command(BaseCommand):
             check_result["details"]["routing"] = routing_check
             self.output_check_result("routing", routing_check)
 
-            # 11. 集群资源使用情况检查
-            self.stdout.write("正在检查集群资源使用情况...")
-            resource_usage_check = self.check_cluster_resource_usage(cluster_info)
-            check_result["details"]["resource_usage"] = resource_usage_check
-            self.output_check_result("resource_usage", resource_usage_check)
-
             # 12. 集群初始化资源检查
             self.stdout.write("正在检查集群初始化资源...")
             init_resource_check = self.check_cluster_init_resources(cluster_info)
@@ -983,123 +977,6 @@ class Command(BaseCommand):
         except Exception as e:
             result["status"] = Status.ERROR
             result["issues"].append(f"数据路由检查异常: {str(e)}")
-
-        return result
-
-    @recode_final_result
-    def check_cluster_resource_usage(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查集群资源使用情况"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化集群资源使用检查输出"""
-            lines = []
-            if details.get("nodes"):
-                nodes = details["nodes"]
-                lines.append(f"    节点统计: {nodes['ready_count']}/{nodes['count']} 就绪")
-            if details.get("pods"):
-                pods = details["pods"]
-                lines.append(f"    Pod统计: {pods['total_count']}个")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            core_api = cluster_info.core_api
-
-            # 获取节点资源使用情况
-            try:
-                nodes = core_api.list_node()
-                node_metrics = []
-
-                for node in nodes.items:
-                    node_info = {
-                        "name": node.metadata.name,
-                        "status": "Unknown",
-                        "cpu_capacity": None,
-                        "memory_capacity": None,
-                        "pods_capacity": None,
-                        "conditions": [],
-                    }
-
-                    # 获取节点状态
-                    if node.status.conditions:
-                        for condition in node.status.conditions:
-                            if condition.type == "Ready":
-                                node_info["status"] = "Ready" if condition.status == "True" else "NotReady"
-                            node_info["conditions"].append(
-                                {
-                                    "type": condition.type,
-                                    "status": condition.status,
-                                    "reason": condition.reason,
-                                    "message": condition.message,
-                                }
-                            )
-
-                    # 获取节点资源信息
-                    if node.status.capacity:
-                        node_info["cpu_capacity"] = node.status.capacity.get("cpu")
-                        node_info["memory_capacity"] = node.status.capacity.get("memory")
-                        node_info["pods_capacity"] = node.status.capacity.get("pods")
-
-                    node_metrics.append(node_info)
-
-                    # 检查节点状态问题
-                    if node_info["status"] != "Ready":
-                        result["issues"].append(f"节点{node_info['name']}状态不正常: {node_info['status']}")
-
-                result["details"]["nodes"] = {
-                    "count": len(node_metrics),
-                    "ready_count": len([n for n in node_metrics if n["status"] == "Ready"]),
-                    "node_details": node_metrics,
-                }
-
-            except ApiException as e:
-                result["issues"].append(f"获取节点信息失败: {e.reason}")
-
-            # 检查Pod资源使用情况
-            try:
-                pods = core_api.list_pod_for_all_namespaces()
-                pod_status_count = {}
-                pod_details = []
-
-                for pod in pods.items:
-                    status = pod.status.phase if pod.status.phase else "Unknown"
-                    pod_status_count[status] = pod_status_count.get(status, 0) + 1
-
-                    # 收集监控相关Pod信息
-                    if any(keyword in pod.metadata.name.lower() for keyword in ["monitor", "prometheus", "bkmonitor"]):
-                        pod_details.append(
-                            {
-                                "name": pod.metadata.name,
-                                "namespace": pod.metadata.namespace,
-                                "status": status,
-                                "node_name": pod.spec.node_name,
-                                "restart_count": sum(
-                                    container.restart_count for container in pod.status.container_statuses or []
-                                ),
-                            }
-                        )
-
-                result["details"]["pods"] = {
-                    "total_count": len(pods.items),
-                    "status_distribution": pod_status_count,
-                    "monitor_pods": pod_details,
-                }
-
-                # 检查是否有异常Pod
-                if pod_status_count.get("Failed", 0) > 0:
-                    result["issues"].append(f"集群中有{pod_status_count['Failed']}个失败的Pod")
-
-            except ApiException as e:
-                result["issues"].append(f"获取Pod信息失败: {e.reason}")
-
-            # 确定整体状态
-            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            result["issues"].append(f"集群资源检查异常: {str(e)}")
 
         return result
 
