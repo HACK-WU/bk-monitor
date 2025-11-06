@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import copy
 import json
 from unittest import mock
-from unittest.mock import PropertyMock, patch
+from unittest.mock import PropertyMock
 
 import fakeredis
 import pytest
@@ -25,7 +25,6 @@ from kubernetes.dynamic.exceptions import NotFoundError, ResourceNotFoundError
 from metadata.models.bcs import BCSClusterInfo
 from kubernetes import client as k8s_client
 from metadata import config
-from metadata.utils import redis_tools
 
 
 @pytest.fixture
