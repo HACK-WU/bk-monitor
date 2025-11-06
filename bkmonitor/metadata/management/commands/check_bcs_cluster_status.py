@@ -12,14 +12,16 @@ import json
 import time
 import logging
 
-from kubernetes import client as k8s_client
+from kubernetes import client as k8s_client, dynamic as dynamic_client
 from kubernetes.client.rest import ApiException
+from kubernetes.dynamic.exceptions import NotFoundError, ResourceNotFoundError
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
+from django.conf import settings
 
 from core.drf_resource import api
 from bkmonitor.utils import consul
-from metadata import models
+from metadata import models, config
 from metadata.models.bcs.cluster import BCSClusterInfo
 from metadata.models.data_source import DataSource, DataSourceOption
 from metadata.models.bcs.resource import ServiceMonitorInfo, PodMonitorInfo
@@ -40,7 +42,7 @@ from metadata.models.influxdb_cluster import InfluxDBClusterInfo, InfluxDBHostIn
 from metadata.models.vm.record import AccessVMRecord
 from metadata.models.data_link.data_link import DataLink
 from metadata.models.bkdata.result_table import BkBaseResultTable
-
+from metadata.utils import hash_util, consul_tools
 
 logger = logging.getLogger("metadata")
 
@@ -57,7 +59,7 @@ def recode_final_result(fun):
 
     def inner(self: "Command", *args, **kwargs):
         result = fun(self, *args, **kwargs)
-        status = result.get("status", Status.UNKNOWN)
+        status = result.get("status", Status.UNKNOWN).upper()
 
         current_priority = status_priority.get(status, 0)
         self_priority = status_priority.get(self.status, 0)
@@ -256,6 +258,36 @@ class Command(BaseCommand):
             check_result["details"]["datasources"] = datasource_check
             self.output_check_result("datasources", datasource_check)
 
+            # 17. 检查DataSourceOption配置
+            self.stdout.write("正在检查DataSourceOption配置...")
+            datasource_options_check = self.check_datasource_options(cluster_info)
+            check_result["details"]["datasource_options"] = datasource_options_check
+            self.output_check_result("datasource_options", datasource_options_check)
+
+            # 18. 检查关联mq_cluster是否正常
+            self.stdout.write("正在检查关联mq_cluster是否正常...")
+            mq_cluster_check = self.check_mq_cluster(cluster_info)
+            check_result["details"]["mq_cluster"] = mq_cluster_check
+
+            # 19. 检查datasource的Consul配置
+            self.stdout.write("正在检查datasource的Consul配置...")
+            consul_config = self.check_datasource_consul_config(cluster_info)
+            check_result["details"]["datasource_consul_config"] = consul_config
+            self.output_check_result("datasource_consul_config", consul_config)
+
+            # 7. Consul配置检查
+            # todo 待确认
+            self.stdout.write("正在检查Consul配置...")
+            consul_check = self.check_consul_configuration_to_datasource(cluster_info)
+            check_result["details"]["consul"] = consul_check
+            self.output_check_result("consul", consul_check)
+
+            # 19. 检查空间类型与SpaceDataSource关联
+            self.stdout.write("正在检查空间类型配置...")
+            space_type_check = self.check_space_type_and_datasource(cluster_info)
+            check_result["details"]["space_type"] = space_type_check
+            self.output_check_result("space_type", space_type_check)
+
             # 5. 监控资源状态检查
             self.stdout.write("正在检查监控资源状态...")
             monitor_check = self.check_monitor_resources(cluster_info)
@@ -267,12 +299,6 @@ class Command(BaseCommand):
             storage_check = self.check_storage_clusters(cluster_info)
             check_result["details"]["storage"] = storage_check
             self.output_check_result("storage", storage_check)
-
-            # 7. Consul配置检查
-            self.stdout.write("正在检查datasource的Consul配置...")
-            consul_check = self.check_consul_configuration_to_datasource(cluster_info)
-            check_result["details"]["consul"] = consul_check
-            self.output_check_result("consul", consul_check)
 
             # 8. 数据采集配置检查
             self.stdout.write("正在检查数据采集配置...")
@@ -299,6 +325,12 @@ class Command(BaseCommand):
             check_result["details"]["init_resources"] = init_resource_check
             self.output_check_result("init_resources", init_resource_check)
 
+            # 12.1 检查BCS集群CRD资源状态
+            self.stdout.write("正在检查BCS集群CRD资源...")
+            crd_resource_check = self.check_bcs_cluster_crd_resource(cluster_info)
+            check_result["details"]["crd_resources"] = crd_resource_check
+            self.output_check_result("crd_resources", crd_resource_check)
+
             # 13. bk-collector配置检查
             self.stdout.write("正在检查bk-collector配置...")
             collector_config_check = self.check_bk_collector_config(cluster_info)
@@ -322,18 +354,6 @@ class Command(BaseCommand):
             cloud_id_check = self.check_cloud_id_configuration(cluster_info)
             check_result["details"]["cloud_id"] = cloud_id_check
             self.output_check_result("cloud_id", cloud_id_check)
-
-            # 17. 检查DataSourceOption配置
-            self.stdout.write("正在检查DataSourceOption配置...")
-            datasource_options_check = self.check_datasource_options(cluster_info)
-            check_result["details"]["datasource_options"] = datasource_options_check
-            self.output_check_result("datasource_options", datasource_options_check)
-
-            # 18. 检查空间类型与SpaceDataSource关联
-            self.stdout.write("正在检查空间类型配置...")
-            space_type_check = self.check_space_type_and_datasource(cluster_info)
-            check_result["details"]["space_type"] = space_type_check
-            self.output_check_result("space_type", space_type_check)
 
             # 20. 检查CustomReportSubscription
             self.stdout.write("正在检查CustomReportSubscription...")
@@ -752,6 +772,118 @@ class Command(BaseCommand):
             return {"status": Status.ERROR, "details": {}, "error": str(e)}
 
     @recode_final_result
+    def check_datasource_consul_config(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查datasource Consul配置"""
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化Consul配置检查输出"""
+            lines = []
+            if details:
+                consul_status = details.get("consul_status", {})
+                consistent_count = sum(1 for status in consul_status.values() if status.get("is_consistent"))
+                total_count = len(consul_status)
+                lines.append(f"    配置一致性: {consistent_count}/{total_count}个数据源配置一致")
+
+                if details.get("skipped_count", 0) > 0:
+                    lines.append(f"    跳过检查: {details['skipped_count']}个数据源(不支持Consul同步)")
+            return lines
+
+        result["formatter"] = format_output
+
+        try:
+            hash_consul = consul_tools.HashConsul()
+            consul_status = {}
+            skipped_count = 0
+
+            for data_id, datasource in self.data_sources.items():
+                try:
+                    # 检查数据源是否支持Consul配置刷新
+                    if not datasource.can_refresh_consul_and_gse():
+                        skipped_count += 1
+                        consul_status[data_id] = {
+                            "path": datasource.consul_config_path,
+                            "skipped": True,
+                            "reason": "数据源不支持Consul配置刷新",
+                        }
+                        continue
+
+                    # 获取Consul中的配置
+                    consul_config = hash_consul.get(datasource.consul_config_path)
+                    if not consul_config:
+                        consul_status[data_id] = {
+                            "path": datasource.consul_config_path,
+                            "exists": False,
+                            "is_consistent": False,
+                        }
+                        result["issues"].append(
+                            f"数据源data_id:{data_id}的Consul配置不存在, key:{datasource.consul_config_path}"
+                        )
+                        continue
+
+                    # 生成数据源的标准配置
+                    datasource_config = datasource.to_json(is_consul_config=True)
+
+                    # 比较配置是否一致
+                    is_consistent = consul_config == datasource_config
+                    consul_status[data_id] = {
+                        "path": datasource.consul_config_path,
+                        "exists": True,
+                        "is_consistent": is_consistent,
+                    }
+
+                    if not is_consistent:
+                        # 记录配置不一致的详细信息
+                        diff_keys = self._find_config_diff(consul_config, datasource_config)
+                        consul_status[data_id]["diff_keys"] = diff_keys
+                        result["issues"].append(
+                            f"数据源data_id:{data_id}的Consul配置与数据库配置不一致, key:{datasource.consul_config_path}, 差异字段:{','.join(diff_keys)}"
+                        )
+                        logger.warning(
+                            f"data_id->[{data_id}] consul config inconsistent, path: {datasource.consul_config_path}, diff_keys: {diff_keys}"
+                        )
+                except Exception as e:
+                    consul_status[data_id] = {"error": str(e)}
+                    result["issues"].append(f"数据源data_id:{data_id}配置检查异常: {str(e)}")
+                    logger.exception(f"data_id->[{data_id}] consul config check failed: {e}")
+
+            result["details"] = {
+                "consul_status": consul_status,
+                "skipped_count": skipped_count,
+                "total_count": len(self.data_sources),
+            }
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
+
+        except Exception as e:
+            result["status"] = Status.ERROR
+            result["issues"].append(f"Consul配置检查异常: {str(e)}")
+            logger.exception(f"check_datasource_consul_config failed: {e}")
+
+        return result
+
+    def _find_config_diff(self, config1: dict, config2: dict, prefix: str = "") -> list[str]:
+        """查找两个配置字典的差异字段"""
+        diff_keys = []
+        all_keys = set(config1.keys()) | set(config2.keys())
+
+        for key in all_keys:
+            current_path = f"{prefix}.{key}" if prefix else key
+
+            if key not in config1:
+                diff_keys.append(f"{current_path}(仅存在于配置2)")
+            elif key not in config2:
+                diff_keys.append(f"{current_path}(仅存在于配置1)")
+            else:
+                val1, val2 = config1[key], config2[key]
+                if isinstance(val1, dict) and isinstance(val2, dict):
+                    # 递归比较嵌套字典
+                    diff_keys.extend(self._find_config_diff(val1, val2, current_path))
+                elif val1 != val2:
+                    diff_keys.append(current_path)
+
+        return diff_keys
+
+    @recode_final_result
     def check_consul_configuration_to_datasource(self, cluster_info: BCSClusterInfo) -> dict:
         """检查datasource的Consul配置状态"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
@@ -981,6 +1113,238 @@ class Command(BaseCommand):
         return result
 
     @recode_final_result
+    def check_bcs_cluster_crd_resource(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查BCS集群CRD资源状态
+
+        检查项目包括：
+        1. DataIDResource CRD定义是否存在
+        2. 集群的DataIDResource资源配置状态
+        3. 资源配置与数据库配置的一致性
+        4. 资源标签和元数据完整性
+        """
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化CRD资源检查输出"""
+            lines = []
+            if details:
+                crd_status = details.get("crd_status", {})
+                if crd_status.get("exists"):
+                    lines.append(f"    CRD定义: {crd_status.get('kind')}/{crd_status.get('version')}")
+
+                resources = details.get("dataid_resources", [])
+                if resources:
+                    consistent_count = sum(1 for r in resources if r.get("is_consistent"))
+                    lines.append(f"    DataID资源: {len(resources)}个, 配置一致: {consistent_count}/{len(resources)}")
+            return lines
+
+        result["formatter"] = format_output
+
+        try:
+            # 获取动态客户端
+            try:
+                d_client = dynamic_client.DynamicClient(cluster_info.api_client)
+            except Exception as e:
+                result["status"] = Status.ERROR
+                result["issues"].append(f"无法连接到BCS集群: {str(e)}")
+                logger.exception(f"Failed to get dynamic client for cluster {cluster_info.cluster_id}: {e}")
+                return result
+
+            # 1. 检查DataIDResource CRD定义是否存在
+            try:
+                resource_api = d_client.resources.get(
+                    api_version=f"{config.BCS_RESOURCE_GROUP_NAME}/{config.BCS_RESOURCE_VERSION}",
+                    kind=config.BCS_RESOURCE_DATA_ID_RESOURCE_KIND,
+                )
+                result["details"]["crd_status"] = {
+                    "exists": True,
+                    "kind": config.BCS_RESOURCE_DATA_ID_RESOURCE_KIND,
+                    "version": config.BCS_RESOURCE_VERSION,
+                    "group": config.BCS_RESOURCE_GROUP_NAME,
+                }
+            except ResourceNotFoundError:
+                result["status"] = Status.ERROR
+                result["details"]["crd_status"] = {"exists": False}
+                result["issues"].append("DataIDResource CRD未定义，集群不支持监控资源注入")
+                return result
+            except Exception as e:
+                result["status"] = Status.ERROR
+                result["issues"].append(f"检查CRD定义失败: {str(e)}")
+                logger.exception(f"cluster_id->[{cluster_info.cluster_id}] Failed to check CRD definition: {e}")
+                return result
+
+            # 2. 检查集群的DataIDResource资源配置状态
+            dataid_resources = []
+            is_fed_cluster = BcsFederalClusterInfo.objects.filter(
+                fed_cluster_id=cluster_info.cluster_id, is_deleted=False
+            ).exists()
+
+            for usage, register_info in cluster_info.DATASOURCE_REGISTER_INFO.items():
+                # 联邦集群跳过非自定义指标
+                if is_fed_cluster and usage != cluster_info.DATA_TYPE_CUSTOM_METRIC:
+                    logger.info(f"cluster_id->[{cluster_info.cluster_id}] skip {usage} for federation cluster")
+                    continue
+
+                data_id = getattr(cluster_info, register_info["datasource_name"])
+                if data_id == 0:
+                    continue
+
+                resource_name = cluster_info.compose_dataid_resource_name(
+                    register_info["datasource_name"].lower(), is_fed_cluster=is_fed_cluster
+                )
+
+                try:
+                    # 获取集群中的资源实际配置
+                    cluster_resource = d_client.get(resource=resource_api, name=resource_name)
+
+                    # 生成期望的配置
+                    expected_config = cluster_info.make_config(
+                        register_info, usage=usage, is_fed_cluster=is_fed_cluster
+                    )
+
+                    # 比较配置是否一致
+                    is_consistent = self._compare_dataid_resource(cluster_resource, expected_config)
+
+                    resource_detail = {
+                        "name": resource_name,
+                        "usage": usage,
+                        "data_id": data_id,
+                        "exists": True,
+                        "is_consistent": is_consistent,
+                        "spec": {
+                            "dataID": cluster_resource.get("spec", {}).get("dataID"),
+                            "labels": cluster_resource.get("spec", {}).get("labels", {}),
+                        },
+                        "metadata": {
+                            "creation_timestamp": str(
+                                cluster_resource.get("metadata", {}).get("creationTimestamp", "")
+                            ),
+                            "labels": cluster_resource.get("metadata", {}).get("labels", {}),
+                        },
+                    }
+
+                    if not is_consistent:
+                        diff_info = self._get_dataid_resource_diff(cluster_resource, expected_config)
+                        resource_detail["diff"] = diff_info
+                        result["issues"].append(f"DataIDResource '{resource_name}' 配置不一致：{', '.join(diff_info)}")
+                    dataid_resources.append(resource_detail)
+
+                except NotFoundError:
+                    # 资源不存在
+                    dataid_resources.append(
+                        {
+                            "name": resource_name,
+                            "usage": usage,
+                            "data_id": data_id,
+                            "exists": False,
+                            "is_consistent": False,
+                        }
+                    )
+                    result["issues"].append(f"DataIDResource '{resource_name}' (data_id:{data_id}) 不存在于集群中")
+                except Exception as e:
+                    dataid_resources.append(
+                        {
+                            "name": resource_name,
+                            "usage": usage,
+                            "data_id": data_id,
+                            "exists": False,
+                            "error": str(e),
+                        }
+                    )
+                    result["issues"].append(f"DataIDResource '{resource_name}' 检查异常: {str(e)}")
+
+            result["details"]["dataid_resources"] = dataid_resources
+            result["details"]["is_fed_cluster"] = is_fed_cluster
+
+            # 确定整体状态
+            if not dataid_resources:
+                result["status"] = Status.WARNING
+                result["issues"].append("没有找到任何DataIDResource资源")
+            elif all(r.get("exists") and r.get("is_consistent") for r in dataid_resources if "error" not in r):
+                result["status"] = Status.SUCCESS
+            elif any(not r.get("exists") for r in dataid_resources):
+                result["status"] = Status.ERROR
+            else:
+                result["status"] = Status.WARNING
+
+        except Exception as e:
+            result["status"] = Status.ERROR
+            result["issues"].append(f"CRD资源检查异常: {str(e)}")
+
+        return result
+
+    def _compare_dataid_resource(self, cluster_resource: dict, expected_config: dict) -> bool:
+        """比较集群中的DataIDResource与期望配置是否一致"""
+        try:
+            # 比较spec中的关键字段
+            cluster_spec = cluster_resource.get("spec", {})
+            expected_spec = expected_config.get("spec", {})
+
+            # 比较dataID
+            if cluster_spec.get("dataID") != expected_spec.get("dataID"):
+                return False
+
+            # 比较labels
+            cluster_labels = cluster_spec.get("labels", {})
+            expected_labels = expected_spec.get("labels", {})
+            if cluster_labels != expected_labels:
+                return False
+
+            # 比较metricReplace
+            if cluster_spec.get("metricReplace", {}) != expected_spec.get("metricReplace", {}):
+                return False
+
+            # 比较dimensionReplace
+            if cluster_spec.get("dimensionReplace", {}) != expected_spec.get("dimensionReplace", {}):
+                return False
+
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to compare dataid resource: {e}")
+            return False
+
+    def _get_dataid_resource_diff(self, cluster_resource: dict, expected_config: dict) -> list[str]:
+        """获取DataIDResource配置差异信息"""
+        diff_info = []
+        try:
+            cluster_spec = cluster_resource.get("spec", {})
+            expected_spec = expected_config.get("spec", {})
+
+            # 检查dataID
+            if cluster_spec.get("dataID") != expected_spec.get("dataID"):
+                diff_info.append(
+                    f"dataID不一致(cluster:{cluster_spec.get('dataID')}, expected:{expected_spec.get('dataID')})"
+                )
+
+            # 检查labels
+            cluster_labels = cluster_spec.get("labels", {})
+            expected_labels = expected_spec.get("labels", {})
+            for key in set(cluster_labels.keys()) | set(expected_labels.keys()):
+                if cluster_labels.get(key) != expected_labels.get(key):
+                    diff_info.append(
+                        f"labels.{key}不一致(cluster:{cluster_labels.get(key)}, expected:{expected_labels.get(key)})"
+                    )
+
+            # 检查metricReplace
+            cluster_metric_replace = cluster_spec.get("metricReplace", {})
+            expected_metric_replace = expected_spec.get("metricReplace", {})
+            if cluster_metric_replace != expected_metric_replace:
+                diff_count = len(set(cluster_metric_replace.items()) ^ set(expected_metric_replace.items()))
+                diff_info.append(f"metricReplace有{diff_count}个差异")
+
+            # 检查dimensionReplace
+            cluster_dimension_replace = cluster_spec.get("dimensionReplace", {})
+            expected_dimension_replace = expected_spec.get("dimensionReplace", {})
+            if cluster_dimension_replace != expected_dimension_replace:
+                diff_count = len(set(cluster_dimension_replace.items()) ^ set(expected_dimension_replace.items()))
+                diff_info.append(f"dimensionReplace有{diff_count}个差异")
+
+        except Exception as e:
+            diff_info.append(f"检查差异失败: {str(e)}")
+
+        return diff_info
+
+    @recode_final_result
     def check_cluster_init_resources(self, cluster_info: BCSClusterInfo) -> dict:
         """检查集群初始化资源状态
 
@@ -1031,7 +1395,9 @@ class Command(BaseCommand):
 
                 try:
                     # TimeSeriesGroup 通过 bk_data_id 关联 DataSource，间接实现租户隔离
-                    ts_groups = models.TimeSeriesGroup.objects.filter(bk_data_id=data_id, is_delete=False)
+                    ts_groups = models.TimeSeriesGroup.objects.filter(
+                        bk_data_id=data_id, is_delete=False, bk_tenant_id=self.bk_tenant_id
+                    )
                     for ts_group in ts_groups:
                         metrics_count = models.TimeSeriesMetric.objects.filter(
                             group_id=ts_group.time_series_group_id
@@ -2142,6 +2508,153 @@ class Command(BaseCommand):
         except Exception as e:
             result["status"] = Status.ERROR
             result["issues"].append(f"云区域ID配置检查异常: {str(e)}")
+
+        return result
+
+    @recode_final_result
+    def check_mq_cluster(self, cluster_info: BCSClusterInfo):
+        """
+        检查mq集群状态
+        :param cluster_info: BCS集群信息
+        :return: 检查结果
+        """
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": [], "warnings": []}
+        issues = set()
+
+        def format_output(details: dict) -> list[str]:
+            """格式化MQ集群检查输出"""
+            lines = []
+            if details:
+                configured_count = len(details)
+                lines.append(f"    数据源配置: {configured_count}个")
+
+                error_count = sum(1 for detail in details.values() if detail.get("issues"))
+                if error_count > 0:
+                    lines.append(f"    异常配置: {error_count}个")
+
+                for data_id, detail in list(details.items()):  # 只显示前3个详情
+                    if isinstance(detail, dict):
+                        lines.append(f"    数据源{data_id}: 集群ID {detail.get('mq_cluster_id', 'N/A')}")
+                        if detail.get("mq_cluster_type"):
+                            lines.append(f"      集群类型: {detail['mq_cluster_type']}")
+            return lines
+
+        result["formatter"] = format_output
+
+        try:
+            for data_id, data_source in self.data_sources.items():
+                mq_cluster_id = data_source.mq_cluster_id
+                mq_config_id = data_source.mq_config_id
+                details = result["details"].setdefault(data_id, {})
+
+                mq_cluster = ClusterInfo.objects.filter(
+                    cluster_id=mq_cluster_id, bk_tenant_id=self.bk_tenant_id
+                ).first()
+                details.update(
+                    {
+                        "mq_cluster_id": mq_cluster_id,
+                    }
+                )
+
+                if not mq_cluster:
+                    error_message = f"MQ集群`{mq_cluster_id}`未找到"
+                    issues.add(error_message)
+                    details.setdefault("issues", []).append(error_message)
+                    continue
+
+                details.update(
+                    {
+                        "mq_cluster_type": mq_cluster.cluster_type,
+                    }
+                )
+                if mq_cluster.cluster_type not in data_source.MQ_CONFIG_DICT:
+                    error_message = f"MQ集群`{mq_cluster.cluster_type}`类型未找到"
+                    issues.add(error_message)
+                    details.setdefault("issues", []).append(error_message)
+                    continue
+
+                mq_config = (
+                    data_source.MQ_CONFIG_DICT[mq_cluster.cluster_type].objects.filter(bk_data_id=self.bk).first()
+                )
+
+                details.update(
+                    {
+                        "mq_config_id": mq_config_id,
+                    }
+                )
+                if not mq_config:
+                    error_message = f"MQ配置`{mq_config_id}`未找到"
+                    issues.add(error_message)
+                    details.setdefault("issues", []).append(error_message)
+                    continue
+
+                # 如果要刷新consul和gse，mq_cluster必须已经初始化了
+                if data_source.can_refresh_consul_and_gse() and mq_cluster.gse_stream_to_id == -1:
+                    error_message = f"`dataid({data_id})`的消息队列未初始化，请联系管理员处理"
+                    issues.add(error_message)
+                    details.setdefault("issues", []).append(error_message)
+
+                try:
+                    params = {
+                        "condition": {"plat_name": config.DEFAULT_GSE_API_PLAT_NAME, "channel_id": data_id},
+                        "operation": {"operator_name": settings.COMMON_USERNAME},
+                    }
+                    details.update({"gse_route_query_params": params})
+                    result = api.gse.query_route(**params)
+                    if not result:
+                        error_message = f"MQ集群`{mq_cluster_id}`未查询到路由配置"
+                        issues.add(error_message)
+                        details.setdefault("issues", []).append(error_message)
+
+                    # 查找匹配的路由配置
+                    old_route = None
+                    for route_info in result:
+                        if old_route:
+                            break
+
+                        stream_to_info_list = route_info.get("route", [])
+                        if not stream_to_info_list:
+                            continue
+
+                        for stream_to_info in stream_to_info_list:
+                            route_name = stream_to_info.get("name", "")
+                            # 如果路由名称匹配，则保存旧的路由配置
+                            if route_name != data_source.gse_route_config["name"]:
+                                continue
+
+                            old_route = {"name": route_name, "stream_to": stream_to_info["stream_to"]}
+                            break
+
+                    # 比较现有配置与新配置的差异
+                    old_hash = hash_util.object_md5(old_route)
+                    new_hash = hash_util.object_md5(data_source.gse_route_config)
+                    # 如果配置一致，则直接返回
+                    if old_hash != new_hash:
+                        error_message = f"MQ集群`{mq_cluster_id}`GSE路由配置不一致"
+                        issues.add(error_message)
+                        details.setdefault("issues", []).append(error_message)
+
+                except Exception as e:
+                    error_message = f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)}"
+                    issues.add(error_message)
+                    details.setdefault("issues", []).append(error_message)
+                    if config.is_built_in_data_id(data_id):
+                        details.setdefault("warnings", []).append(
+                            f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
+                        )
+                        result["warnings"].append(
+                            f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
+                        )
+
+            if not issues:
+                result["status"] = Status.SUCCESS
+            else:
+                result["status"] = Status.ERROR
+
+            result["issues"] = list(issues)
+        except Exception as e:
+            result["status"] = Status.ERROR
+            result["issues"].append(f"MQ集群检查异常: {str(e)}")
 
         return result
 

@@ -15,9 +15,11 @@ import elasticsearch5
 import pytest
 from django.conf import settings
 from kubernetes.client import V1NodeList, V1Node, V1NodeStatus, V1NodeCondition
+from kubernetes.dynamic import client as dynamic_client
 from unittest.mock import patch, MagicMock
 
 from api.kubernetes.default import FetchK8sClusterListResource
+from core.drf_resource import api
 from metadata import models
 from metadata.models import InfluxDBClusterInfo, InfluxDBStorage
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
@@ -27,7 +29,7 @@ from metadata.task.bcs import discover_bcs_clusters, update_bcs_cluster_cloud_id
 from metadata.tests.common_utils import consul_client
 from constants.common import DEFAULT_TENANT_ID
 from metadata.utils import consul_tools, redis_tools
-from .conftest import MockHashConsul, MockRedisTools
+from .conftest import MockHashConsul, MockRedisTools, MockDynamicClient
 from metadata.models.data_link.data_link import DataLink
 
 logger = logging.getLogger("metadata")
@@ -382,6 +384,9 @@ def mock_funcs(monkeypatch):
         monkeypatch.setattr(redis_tools, "RedisTools", MockRedisTools)
         monkeypatch.setattr(consul_tools, "refresh_router_version", MagicMock())
         monkeypatch.setattr(DataLink, "apply_data_link_with_retry", MagicMock())
+        monkeypatch.setattr(api.gse, "query_route", MagicMock())
+        monkeypatch.setattr(api.gse, "update_route", MagicMock())
+        monkeypatch.setattr(dynamic_client, "DynamicClient", MockDynamicClient)
 
         yield
 
@@ -434,8 +439,9 @@ def prepare_databases():
             defaults={"description": "默认InfluxDB集群", "version": "1.8.0", "schema": "http"},
         )
 
-    if not ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_KAFKA).exists():
-        ClusterInfo.objects.get_or_create(
+    mq_cluster = ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_KAFKA).first()
+    if not mq_cluster:
+        mq_cluster = ClusterInfo.objects.get_or_create(
             bk_tenant_id=BK_TENANT_ID,
             cluster_type=ClusterInfo.TYPE_KAFKA,
             cluster_name="default_kafka_cluster",
@@ -445,9 +451,31 @@ def prepare_databases():
             defaults={"description": "默认Kafka集群", "version": "2.8.0", "schema": "http"},
         )
 
+    if not ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_VM).exists():
+        ClusterInfo.objects.get_or_create(
+            bk_tenant_id=BK_TENANT_ID,
+            cluster_type=ClusterInfo.TYPE_VM,
+            cluster_name="default_vm_cluster",
+            domain_name="vm.example.com",
+            port=8428,
+            is_default_cluster=True,
+            defaults={"description": "默认VM集群", "version": "1.0", "schema": "http"},
+        )
+
+    changed_gse_stream_to_id = False
+    if mq_cluster.gse_stream_to_id == -1:
+        mq_cluster.gse_stream_to_id = 12132
+        mq_cluster.save()
+        changed_gse_stream_to_id = True
+
     yield
     InfluxDBProxyStorage.objects.filter(proxy_cluster_id=1001).delete()
     InfluxDBClusterInfo.objects.filter(cluster_name=instance_cluster_name).delete()
+
+    # 还原配置
+    if changed_gse_stream_to_id:
+        mq_cluster.gse_stream_to_id = -1
+        mq_cluster.save()
 
 
 @pytest.fixture
