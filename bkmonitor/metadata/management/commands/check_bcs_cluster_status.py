@@ -12,7 +12,8 @@ import json
 import time
 import logging
 
-from kubernetes import client as k8s_client, dynamic as dynamic_client
+from kubernetes import client as k8s_client
+from kubernetes.dynamic import client as dynamic_client
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic.exceptions import NotFoundError, ResourceNotFoundError
 from django.core.management.base import BaseCommand, CommandError
@@ -244,140 +245,141 @@ class Command(BaseCommand):
             self.stdout.write("正在测试BCS API连接...")
             bcs_api_check = self.check_bcs_api_connection(cluster_info, timeout)
             check_result["details"]["bcs_api"] = bcs_api_check
-            self.output_check_result("bcs_api", bcs_api_check)
+            self.output_check_result("check_bcs_api_connection", bcs_api_check)
 
             # 3. Kubernetes集群连接测试
             self.stdout.write("正在测试Kubernetes集群连接...")
             k8s_check = self.check_kubernetes_connection(cluster_info, timeout)
             check_result["details"]["kubernetes"] = k8s_check
-            self.output_check_result("kubernetes", k8s_check)
+            self.output_check_result("check_kubernetes_connection", k8s_check)
 
             # 4. 数据源配置验证
             self.stdout.write("正在验证数据源配置...")
             datasource_check = self.check_datasource_configuration(cluster_info)
             check_result["details"]["datasources"] = datasource_check
-            self.output_check_result("datasources", datasource_check)
+            self.output_check_result("check_datasource_configuration", datasource_check)
 
             # 17. 检查DataSourceOption配置
             self.stdout.write("正在检查DataSourceOption配置...")
             datasource_options_check = self.check_datasource_options(cluster_info)
             check_result["details"]["datasource_options"] = datasource_options_check
-            self.output_check_result("datasource_options", datasource_options_check)
+            self.output_check_result("check_datasource_options", datasource_options_check)
 
             # 18. 检查关联mq_cluster是否正常
             self.stdout.write("正在检查关联mq_cluster是否正常...")
             mq_cluster_check = self.check_mq_cluster(cluster_info)
             check_result["details"]["mq_cluster"] = mq_cluster_check
+            self.output_check_result("check_mq_cluster", mq_cluster_check)
 
             # 19. 检查datasource的Consul配置
             self.stdout.write("正在检查datasource的Consul配置...")
             consul_config = self.check_datasource_consul_config(cluster_info)
             check_result["details"]["datasource_consul_config"] = consul_config
-            self.output_check_result("datasource_consul_config", consul_config)
+            self.output_check_result("check_datasource_consul_config", consul_config)
 
             # 7. Consul配置检查
             # todo 待确认
             self.stdout.write("正在检查Consul配置...")
             consul_check = self.check_consul_configuration_to_datasource(cluster_info)
             check_result["details"]["consul"] = consul_check
-            self.output_check_result("consul", consul_check)
+            self.output_check_result("check_consul_configuration_to_datasource", consul_check)
 
             # 19. 检查空间类型与SpaceDataSource关联
             self.stdout.write("正在检查空间类型配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
             check_result["details"]["space_type"] = space_type_check
-            self.output_check_result("space_type", space_type_check)
+            self.output_check_result("check_space_type_and_datasource", space_type_check)
 
             # 5. 监控资源状态检查
             self.stdout.write("正在检查监控资源状态...")
             monitor_check = self.check_monitor_resources(cluster_info)
             check_result["details"]["monitor_resources"] = monitor_check
-            self.output_check_result("monitor_resources", monitor_check)
+            self.output_check_result("check_monitor_resources", monitor_check)
 
             # 6. 数据存储链路检查
             self.stdout.write("正在检查数据存储...")
             storage_check = self.check_storage_clusters(cluster_info)
             check_result["details"]["storage"] = storage_check
-            self.output_check_result("storage", storage_check)
+            self.output_check_result("check_storage_clusters", storage_check)
 
             # 8. 数据采集配置检查
             self.stdout.write("正在检查数据采集配置...")
             collector_check = self.check_data_collection_config(cluster_info)
             check_result["details"]["data_collection"] = collector_check
-            self.output_check_result("data_collection", collector_check)
+            self.output_check_result("check_data_collection_config", collector_check)
 
             # 9. 联邦集群关系检查（如果是联邦集群）
             if self.is_federation_cluster(cluster_info):
                 self.stdout.write("正在检查联邦集群关系...")
                 federation_check = self.check_federation_cluster(cluster_info)
                 check_result["details"]["federation"] = federation_check
-                self.output_check_result("federation", federation_check)
+                self.output_check_result("check_federation_cluster", federation_check)
 
             # 10. 数据路由配置检查
             self.stdout.write("正在检查数据路由配置...")
             routing_check = self.check_data_routing(cluster_info)
             check_result["details"]["routing"] = routing_check
-            self.output_check_result("routing", routing_check)
+            self.output_check_result("check_data_routing", routing_check)
 
             # 12. 集群初始化资源检查
             self.stdout.write("正在检查集群初始化资源...")
             init_resource_check = self.check_cluster_init_resources(cluster_info)
             check_result["details"]["init_resources"] = init_resource_check
-            self.output_check_result("init_resources", init_resource_check)
+            self.output_check_result("check_cluster_init_resources", init_resource_check)
 
             # 12.1 检查BCS集群CRD资源状态
             self.stdout.write("正在检查BCS集群CRD资源...")
             crd_resource_check = self.check_bcs_cluster_crd_resource(cluster_info)
             check_result["details"]["crd_resources"] = crd_resource_check
-            self.output_check_result("crd_resources", crd_resource_check)
+            self.output_check_result("check_bcs_cluster_crd_resource", crd_resource_check)
 
             # 13. bk-collector配置检查
             self.stdout.write("正在检查bk-collector配置...")
             collector_config_check = self.check_bk_collector_config(cluster_info)
             check_result["details"]["bk_collector"] = collector_config_check
-            self.output_check_result("bk_collector", collector_config_check)
+            self.output_check_result("check_bk_collector_config", collector_config_check)
 
             # 14. 检查集群所属空间
             self.stdout.write("正在检查集群所属空间...")
             space_permission_check = self.check_space_permissions(cluster_info)
             check_result["details"]["space_permissions"] = space_permission_check
-            self.output_check_result("space_permissions", space_permission_check)
+            self.output_check_result("check_space_permissions", space_permission_check)
 
             # 15. 检查BCS API Token配置
             self.stdout.write("正在检查BCS API Token配置...")
             api_token_check = self.check_bcs_api_token(cluster_info)
             check_result["details"]["api_token"] = api_token_check
-            self.output_check_result("api_token", api_token_check)
+            self.output_check_result("check_bcs_api_token", api_token_check)
 
             # 16. 检查云区域ID配置
             self.stdout.write("正在检查云区域ID配置...")
             cloud_id_check = self.check_cloud_id_configuration(cluster_info)
             check_result["details"]["cloud_id"] = cloud_id_check
-            self.output_check_result("cloud_id", cloud_id_check)
+            self.output_check_result("check_cloud_id_configuration", cloud_id_check)
 
             # 20. 检查CustomReportSubscription
             self.stdout.write("正在检查CustomReportSubscription...")
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
-            self.output_check_result("custom_report_subscription", custom_report_sub_check)
+            self.output_check_result("check_custom_report_subscription", custom_report_sub_check)
 
             # 22. 检查关联模型
             self.stdout.write("正在检查关联模型数据...")
             related_models_check = self.check_related_models(cluster_info)
             check_result["details"]["related_models"] = related_models_check
-            self.output_check_result("related_models", related_models_check)
+            self.output_check_result("check_related_models", related_models_check)
 
             # 23. 检查InfluxDB存储配置
             self.stdout.write("正在检查InfluxDB存储配置...")
             influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
             check_result["details"]["influxdb_storage"] = influxdb_storage_check
-            self.output_check_result("influxdb_storage", influxdb_storage_check)
+            self.output_check_result("check_influxdb_storage_config", influxdb_storage_check)
 
             # 24. 检查VM数据链路依赖
             self.stdout.write("正在检查VM数据链路依赖...")
             vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
             check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
-            self.output_check_result("vm_datalink_dependencies", vm_datalink_check)
+            self.output_check_result("check_vm_datalink_dependencies", vm_datalink_check)
 
             # 确定整体状态
             check_result["status"] = self.status
@@ -586,13 +588,10 @@ class Command(BaseCommand):
         result["formatter"] = format_output
 
         try:
-            # todo 应该检查是否全部具备三个数据源ID
-            # todo 检查DataSourceOption 模型
             datasource_status = {}
             for data_id, datasource in self.data_sources.items():
                 try:
                     # 检查数据源记录
-                    # todo 增加对绑定的mq集群的检查,包括配置
                     datasource_status[data_id] = {
                         "exists": True,
                         "data_name": datasource.data_name,
@@ -809,7 +808,16 @@ class Command(BaseCommand):
                         continue
 
                     # 获取Consul中的配置
-                    consul_config = hash_consul.get(datasource.consul_config_path)
+                    num, consul_config = hash_consul.get(datasource.consul_config_path)
+                    consul_config = consul_config.get("Value", {})
+                    if isinstance(consul_config, str):
+                        try:
+                            consul_config = json.loads(consul_config)
+                        except json.JSONDecodeError:
+                            consul_status[data_id] = {"error": "Consul配置JSON解析失败"}
+                            result["issues"].append(f"数据源data_id:{data_id}的Consul配置JSON解析失败")
+                            continue
+
                     if not consul_config:
                         consul_status[data_id] = {
                             "path": datasource.consul_config_path,
@@ -839,9 +847,7 @@ class Command(BaseCommand):
                         result["issues"].append(
                             f"数据源data_id:{data_id}的Consul配置与数据库配置不一致, key:{datasource.consul_config_path}, 差异字段:{','.join(diff_keys)}"
                         )
-                        logger.warning(
-                            f"data_id->[{data_id}] consul config inconsistent, path: {datasource.consul_config_path}, diff_keys: {diff_keys}"
-                        )
+
                 except Exception as e:
                     consul_status[data_id] = {"error": str(e)}
                     result["issues"].append(f"数据源data_id:{data_id}配置检查异常: {str(e)}")
@@ -861,20 +867,20 @@ class Command(BaseCommand):
 
         return result
 
-    def _find_config_diff(self, config1: dict, config2: dict, prefix: str = "") -> list[str]:
+    def _find_config_diff(self, consul_config: dict, datasource_config: dict, prefix: str = "") -> list[str]:
         """查找两个配置字典的差异字段"""
         diff_keys = []
-        all_keys = set(config1.keys()) | set(config2.keys())
+        all_keys = set(consul_config.keys()) | set(datasource_config.keys())
 
         for key in all_keys:
             current_path = f"{prefix}.{key}" if prefix else key
 
-            if key not in config1:
-                diff_keys.append(f"{current_path}(仅存在于配置2)")
-            elif key not in config2:
-                diff_keys.append(f"{current_path}(仅存在于配置1)")
+            if key not in consul_config:
+                diff_keys.append(f"consul 配置缺失{current_path} 字段")
+            elif key not in datasource_config:
+                diff_keys.append(f"consul 配置多余{current_path} 字段")
             else:
-                val1, val2 = config1[key], config2[key]
+                val1, val2 = consul_config[key], datasource_config[key]
                 if isinstance(val1, dict) and isinstance(val2, dict):
                     # 递归比较嵌套字典
                     diff_keys.extend(self._find_config_diff(val1, val2, current_path))

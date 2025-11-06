@@ -241,6 +241,21 @@ def enable_db_access(db):
     pass
 
 
+def singleton(cls):
+    """单例模式装饰器"""
+    # 使用字典存储类的实例，保证每个类有独立的实例存储
+    instances = {}
+
+    def get_instance(*args, **kwargs):
+        # 如果类实例不存在，则创建新实例
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        # 返回已存在的实例
+        return instances[cls]
+
+    return get_instance
+
+
 class HashConsulMocker:
     result_list = {}
 
@@ -273,6 +288,7 @@ class HashConsulMocker:
         return ("297766103", {"Key": key, "Value": val} if val else None)
 
 
+@singleton
 class MockHashConsul:
     """
     HashConsul的模拟类，用于单元测试中替代真实的Consul客户端
@@ -439,6 +455,7 @@ class MockHashConsul:
         self._kv_store = kv_store
 
 
+@singleton
 class MockRedisTools:
     """
     RedisTools的模拟类，用于单元测试中替代真实的Redis客户端
@@ -775,6 +792,7 @@ class _Exception:
         self.headers = ""
 
 
+@singleton
 class MockDynamicClient:
     """
     测试用动态客户端模拟对象（对齐 ensure_data_id_resource 与 init_resource 期望行为）
