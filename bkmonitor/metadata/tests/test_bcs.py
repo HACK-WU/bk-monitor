@@ -384,8 +384,8 @@ def mock_funcs(monkeypatch):
         monkeypatch.setattr(redis_tools, "RedisTools", MockRedisTools)
         monkeypatch.setattr(consul_tools, "refresh_router_version", MagicMock())
         monkeypatch.setattr(DataLink, "apply_data_link_with_retry", MagicMock())
-        monkeypatch.setattr(api.gse, "query_route", MagicMock())
-        monkeypatch.setattr(api.gse, "update_route", MagicMock())
+        monkeypatch.setattr(api.gse, "query_route", MagicMock(return_value={}))
+        monkeypatch.setattr(api.gse, "update_route", MagicMock(return_value={}))
         monkeypatch.setattr(dynamic_client, "DynamicClient", MockDynamicClient)
 
         yield
@@ -395,8 +395,10 @@ def mock_funcs(monkeypatch):
 @pytest.fixture()
 def prepare_databases():
     instance_cluster_name = "default"
+    proxy_cluster_id = 1001
+
     InfluxDBProxyStorage.objects.create(
-        proxy_cluster_id=1001,
+        proxy_cluster_id=proxy_cluster_id,
         instance_cluster_name=instance_cluster_name,
         service_name="influxdb_proxy",
         is_default=True,
@@ -404,6 +406,17 @@ def prepare_databases():
 
     InfluxDBClusterInfo.objects.create(
         host_name="test-influx-host-1", cluster_name=instance_cluster_name, host_readable=True
+    )
+
+    ClusterInfo.objects.get_or_create(
+        bk_tenant_id=BK_TENANT_ID,
+        cluster_type=ClusterInfo.TYPE_INFLUXDB,
+        cluster_name="influxdb_cluster",
+        domain_name="influxdb_cluster.example.com",
+        port=8428,
+        is_default_cluster=True,
+        cluster_id=proxy_cluster_id,
+        defaults={"description": "默认InfluxDB集群", "version": "1.0", "schema": "http"},
     )
 
     if not ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_VM).exists():

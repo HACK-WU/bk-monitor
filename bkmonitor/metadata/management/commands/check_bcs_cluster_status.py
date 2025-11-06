@@ -21,14 +21,12 @@ from django.utils import timezone
 from django.conf import settings
 
 from core.drf_resource import api
-from bkmonitor.utils import consul
 from metadata import models, config
 from metadata.models.bcs.cluster import BCSClusterInfo
 from metadata.models.data_source import DataSource, DataSourceOption
 from metadata.models.bcs.resource import ServiceMonitorInfo, PodMonitorInfo
 from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage
-from metadata.models.bcs.replace import ReplaceConfig
-from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, TimeSeriesMetric
+from metadata.models import BcsFederalClusterInfo
 from metadata.models.space.space import SpaceDataSource
 from metadata.models.space.constants import SpaceTypes
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
@@ -277,13 +275,6 @@ class Command(BaseCommand):
             check_result["details"]["datasource_consul_config"] = consul_config
             self.output_check_result("check_datasource_consul_config", consul_config)
 
-            # 7. Consul配置检查
-            # todo 待确认
-            self.stdout.write("正在检查Consul配置...")
-            consul_check = self.check_consul_configuration_to_datasource(cluster_info)
-            check_result["details"]["consul"] = consul_check
-            self.output_check_result("check_consul_configuration_to_datasource", consul_check)
-
             # 19. 检查空间类型与SpaceDataSource关联
             self.stdout.write("正在检查空间类型配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
@@ -301,12 +292,6 @@ class Command(BaseCommand):
             storage_check = self.check_storage_clusters(cluster_info)
             check_result["details"]["storage"] = storage_check
             self.output_check_result("check_storage_clusters", storage_check)
-
-            # 8. 数据采集配置检查
-            self.stdout.write("正在检查数据采集配置...")
-            collector_check = self.check_data_collection_config(cluster_info)
-            check_result["details"]["data_collection"] = collector_check
-            self.output_check_result("check_data_collection_config", collector_check)
 
             # 9. 联邦集群关系检查（如果是联邦集群）
             if self.is_federation_cluster(cluster_info):
@@ -328,6 +313,7 @@ class Command(BaseCommand):
             self.output_check_result("check_cluster_init_resources", init_resource_check)
 
             # 12.1 检查BCS集群CRD资源状态
+            # todo 增加对replace 替换配置模型的检查
             self.stdout.write("正在检查BCS集群CRD资源...")
             crd_resource_check = self.check_bcs_cluster_crd_resource(cluster_info)
             check_result["details"]["crd_resources"] = crd_resource_check
@@ -645,11 +631,11 @@ class Command(BaseCommand):
 
         try:
             # 检查ServiceMonitor资源
-            service_monitors = ServiceMonitorInfo.objects.filter(bcs_cluster_id=cluster_info.cluster_id)
+            service_monitors = ServiceMonitorInfo.objects.filter(cluster_id=cluster_info.cluster_id)
             service_monitor_count = service_monitors.count()
 
             # 检查PodMonitor资源
-            pod_monitors = PodMonitorInfo.objects.filter(bcs_cluster_id=cluster_info.cluster_id)
+            pod_monitors = PodMonitorInfo.objects.filter(cluster_id=cluster_info.cluster_id)
             pod_monitor_count = pod_monitors.count()
 
             result["details"]["service_monitors"] = {
@@ -888,132 +874,6 @@ class Command(BaseCommand):
                     diff_keys.append(current_path)
 
         return diff_keys
-
-    @recode_final_result
-    def check_consul_configuration_to_datasource(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查datasource的Consul配置状态"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化Consul配置检查输出"""
-            lines = []
-            if details:
-                consul_count = len(details.get("consul_status", {}))
-                lines.append(f"    Consul配置: {consul_count}个数据源")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            consul_client = consul.BKConsul()
-            consul_status = {}
-
-            for data_id, datasource in self.data_sources.items():
-                try:
-                    consul_path = datasource.consul_config_path
-                    consul_data = consul_client.kv.get(consul_path)
-
-                    if consul_data[1] is None:
-                        consul_status[data_id] = {"exists": False, "path": consul_path}
-                        result["issues"].append(f"数据源data_id:{data_id}在Consul中的配置不存在")
-                    else:
-                        consul_config = json.loads(consul_data[1]["Value"])
-                        consul_status[data_id] = {
-                            "exists": True,
-                            "path": consul_path,
-                            "last_modified": consul_data[1].get("ModifyIndex", 0),
-                            "has_result_tables": len(consul_config.get("result_table_list", [])) > 0,
-                        }
-                        if not consul_config.get("result_table_list"):
-                            result["issues"].append(f"数据源data_id:{data_id}在Consul中缺少结果表配置")
-
-                except DataSource.DoesNotExist:
-                    consul_status[data_id] = {"exists": False, "error": "数据源不存在"}
-                    result["issues"].append(f"数据源data_id:{data_id}不存在")
-                except Exception as e:
-                    consul_status[data_id] = {"exists": False, "error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}Consul配置检查异常: {str(e)}")
-
-            result["details"] = {"consul_status": consul_status}
-            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            result["issues"].append(f"Consul配置检查异常: {str(e)}")
-
-        return result
-
-    @recode_final_result
-    def check_data_collection_config(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查数据采集配置状态"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化数据采集配置检查输出"""
-            lines = []
-            if details:
-                lines.append(f"    替换配置: {details.get('replace_config_count', 0)}个")
-                lines.append(f"    指标组: {len(details.get('metric_groups', []))}个")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            # 检查替换配置
-            replace_configs = ReplaceConfig.objects.filter(
-                cluster_id=cluster_info.cluster_id, is_common=False, custom_level=ReplaceConfig.CUSTOM_LEVELS_CLUSTER
-            )
-            replace_config_count = replace_configs.count()
-
-            # 检查时序数据组配置
-            # 在bkmonitor/metadata/management/commands/refresh_ts_metric.py 中会刷新 TimeSeriesGroup
-            # TimeSeriesGroup 通过 bk_data_id 关联租户，DataSource 已包含 bk_tenant_id
-            # 因此间接实现了租户隔离，无需显式添加 bk_tenant_id 过滤
-            metric_groups = TimeSeriesGroup.objects.filter(
-                bk_data_id__in=[cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID]
-            )
-
-            metric_group_details = []
-            for group in metric_groups:
-                # TimeSeriesMetric 通过 group_id 关联 TimeSeriesGroup，间接实现租户隔离
-                metrics_count = TimeSeriesMetric.objects.filter(group_id=group.time_series_group_id).count()
-                metric_group_details.append(
-                    {
-                        "group_id": group.time_series_group_id,
-                        "table_id": group.table_id,
-                        "bk_data_id": group.bk_data_id,
-                        "metrics_count": metrics_count,
-                        "is_split_measurement": group.is_split_measurement,
-                        "enable_field_blacklist": group.enable_field_blacklist,
-                    }
-                )
-
-            result["details"] = {
-                "replace_config_count": replace_config_count,
-                "metric_groups": metric_group_details,
-                "collection_features": {
-                    "single_metric_table": any(g.is_split_measurement for g in metric_groups),
-                    "field_blacklist_enabled": any(g.enable_field_blacklist for g in metric_groups),
-                },
-            }
-
-            # 检查配置合理性
-            if replace_config_count == 0:
-                result["issues"].append("没有配置替换规则，可能影响数据采集")
-
-            if len(metric_group_details) == 0:
-                result["issues"].append("没有找到时序数据组配置")
-                result["status"] = Status.ERROR
-            elif not result["issues"]:
-                result["status"] = Status.SUCCESS
-            else:
-                result["status"] = Status.WARNING
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            result["issues"].append(f"数据采集配置检查异常: {str(e)}")
-
-        return result
 
     @recode_final_result
     def check_federation_cluster(self, cluster_info: BCSClusterInfo) -> dict:
@@ -2540,9 +2400,9 @@ class Command(BaseCommand):
 
                 for data_id, detail in list(details.items()):  # 只显示前3个详情
                     if isinstance(detail, dict):
-                        lines.append(f"    数据源{data_id}: 集群ID {detail.get('mq_cluster_id', 'N/A')}")
+                        lines.append(f"    数据源data_id`{data_id}`: 集群ID {detail.get('mq_cluster_id', 'N/A')}")
                         if detail.get("mq_cluster_type"):
-                            lines.append(f"      集群类型: {detail['mq_cluster_type']}")
+                            lines.append(f"    集群类型: {detail['mq_cluster_type']}")
             return lines
 
         result["formatter"] = format_output
@@ -2580,7 +2440,7 @@ class Command(BaseCommand):
                     continue
 
                 mq_config = (
-                    data_source.MQ_CONFIG_DICT[mq_cluster.cluster_type].objects.filter(bk_data_id=self.bk).first()
+                    data_source.MQ_CONFIG_DICT[mq_cluster.cluster_type].objects.filter(bk_data_id=data_id).first()
                 )
 
                 details.update(
@@ -2606,15 +2466,15 @@ class Command(BaseCommand):
                         "operation": {"operator_name": settings.COMMON_USERNAME},
                     }
                     details.update({"gse_route_query_params": params})
-                    result = api.gse.query_route(**params)
-                    if not result:
+                    route_config = api.gse.query_route(**params)
+                    if not route_config:
                         error_message = f"MQ集群`{mq_cluster_id}`未查询到路由配置"
                         issues.add(error_message)
                         details.setdefault("issues", []).append(error_message)
 
                     # 查找匹配的路由配置
                     old_route = None
-                    for route_info in result:
+                    for route_info in route_config:
                         if old_route:
                             break
 
