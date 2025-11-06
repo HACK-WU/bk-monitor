@@ -17,6 +17,7 @@ from elasticsearch_dsl import InnerDoc, Search, field
 
 from bkmonitor.documents import EventDocument
 from bkmonitor.documents.base import BaseDocument, Date
+from bkmonitor.documents.constants import ES_INDEX_SETTINGS
 from bkmonitor.models import NO_DATA_TAG_DIMENSION
 from constants.alert import (
     EVENT_SEVERITY,
@@ -130,14 +131,8 @@ class AlertDocument(BaseDocument):
     extra_info = field.Object(enabled=False)  # 扩展信息（策略快照等，禁用全文检索）
 
     class Index:
-        """Elasticsearch索引配置"""
-
-        name = "bkfta_alert"  # 索引名称
-        settings = {  # 索引设置
-            "number_of_shards": 3,  # 分片数
-            "number_of_replicas": 1,  # 副本数
-            "refresh_interval": "1s",  # 刷新间隔
-        }
+        name = "bkfta_alert"
+        settings = ES_INDEX_SETTINGS.copy()
 
     def get_index_time(self):
         """
