@@ -8,6 +8,7 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+from django.db.models.manager import BaseManager
 import json
 import time
 import logging
@@ -264,12 +265,6 @@ class Command(BaseCommand):
             check_result["details"]["mq_cluster"] = mq_cluster_check
             self.output_check_result("check_mq_cluster", mq_cluster_check)
 
-            # 19. 检查datasource的Consul配置
-            self.stdout.write("正在检查datasource的Consul配置...")
-            consul_config = self.check_datasource_consul_config(cluster_info)
-            check_result["details"]["datasource_consul_config"] = consul_config
-            self.output_check_result("check_datasource_consul_config", consul_config)
-
             # 19. 检查空间类型与SpaceDataSource关联
             self.stdout.write("正在检查datasource、space空间配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
@@ -331,6 +326,12 @@ class Command(BaseCommand):
             # init_resource_check = self.check_cluster_init_resources(cluster_info)
             # check_result["details"]["init_resources"] = init_resource_check
             # self.output_check_result("check_cluster_init_resources", init_resource_check)
+
+            # 19. 检查datasource的Consul配置
+            self.stdout.write("正在检查datasource的Consul配置...")
+            consul_config = self.check_datasource_consul_config(cluster_info)
+            check_result["details"]["datasource_consul_config"] = consul_config
+            self.output_check_result("check_datasource_consul_config", consul_config)
 
             # 12.1 检查BCS集群CRD资源状态
             # todo 增加对replace 替换配置模型的检查
@@ -421,7 +422,8 @@ class Command(BaseCommand):
                 BCSClusterInfo.CLUSTER_STATUS_RUNNING,
                 BCSClusterInfo.CLUSTER_RAW_STATUS_RUNNING,
             ]:
-                result["issues"].append(f"集群状态异常: {cluster_info.status}")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}集群状态异常: {cluster_info.status}")
 
             # 检查数据源ID配置
             missing_data_ids = []
@@ -430,14 +432,17 @@ class Command(BaseCommand):
                     missing_data_ids.append(data_type)
 
             if missing_data_ids:
-                result["issues"].append(f"缺少数据源ID配置: {', '.join(missing_data_ids)}")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}缺少数据源ID配置: {', '.join(missing_data_ids)}")
 
         except BCSClusterInfo.DoesNotExist:
             result["status"] = Status.NOT_FOUND
-            result["issues"].append("集群记录在数据库中不存在")
+            message = f"[BCSClusterInfo] [cluster_id={cluster_id}] "
+            result["issues"].append(f"{message}集群记录在数据库中不存在")
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"数据库查询异常: {str(e)}")
+            message = f"[BCSClusterInfo] [cluster_id={cluster_id}] "
+            result["issues"].append(f"{message}数据库查询异常: {str(e)}")
 
         return result
 
@@ -480,18 +485,21 @@ class Command(BaseCommand):
 
                 # 检查状态一致性
                 if target_cluster.get("status") != cluster_info.status:
+                    message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
                     result["issues"].append(
-                        f"集群状态不一致 - 数据库: {cluster_info.status}, BCS API: {target_cluster.get('status')}"
+                        f"{message}集群状态不一致 - 数据库: {cluster_info.status}, BCS API: {target_cluster.get('status')}"
                     )
             else:
                 result["status"] = Status.WARNING
                 result["details"] = {"api_accessible": True, "cluster_found": False}
-                result["issues"].append("集群在BCS API中未找到，可能已被删除")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}集群在BCS API中未找到，可能已被删除")
 
         except Exception as e:
             result["status"] = Status.ERROR
             result["details"] = {"api_accessible": False, "error": str(e)}
-            result["issues"].append(f"BCS API连接失败: {str(e)}")
+            message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}BCS API连接失败: {str(e)}")
 
         return result
 
@@ -527,11 +535,13 @@ class Command(BaseCommand):
 
                     # 检查数据源是否启用
                     if not datasource.is_enable:
-                        result["issues"].append(f"data_id:{data_id}未启用")
+                        message = f"[DataSource] [bk_data_id={data_id}] "
+                        result["issues"].append(f"{message}未启用")
 
                 except DataSource.DoesNotExist:
                     datasource_status[data_id] = {"exists": False}
-                    result["issues"].append(f"数据源data_id:{data_id}不存在")
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}不存在")
 
             result["details"] = {
                 "configured_data_ids": list(self.data_sources.keys()),
@@ -548,7 +558,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"数据源配置检查异常: {str(e)}")
+            message = f"[DataSource] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}数据源配置检查异常: {str(e)}")
 
         return result
 
@@ -593,7 +604,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"监控资源检查异常: {str(e)}")
+            message = f"[ServiceMonitor/PodMonitor] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}监控资源检查异常: {str(e)}")
 
         return result
 
@@ -622,7 +634,8 @@ class Command(BaseCommand):
                     ).first()
                     if not ds_rt:
                         storage_status[data_id] = {"exists": False, "error": "未找到结果表关联"}
-                        result["issues"].append(f"数据源data_id:{data_id}未找到结果表关联")
+                        message = f"[DataSourceResultTable] [bk_data_id={data_id}] "
+                        result["issues"].append(f"{message}未找到结果表关联")
                         continue
 
                     rt = ResultTable.objects.get(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
@@ -642,9 +655,8 @@ class Command(BaseCommand):
                             }
                         )
                         if cluster_status["status"] != Status.SUCCESS:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}InfluxDB集群{storage.storage_cluster.cluster_name}状态异常"
-                            )
+                            message = f"[InfluxDBStorage] [bk_data_id={data_id},cluster_name={storage.storage_cluster.cluster_name}] "
+                            result["issues"].append(f"{message}集群状态异常")
 
                     # 检查ES存储
                     es_storages = ESStorage.objects.filter(table_id=rt.table_id, bk_tenant_id=self.bk_tenant_id)
@@ -658,13 +670,13 @@ class Command(BaseCommand):
                             }
                         )
                         if cluster_status["status"] != Status.SUCCESS:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}ES集群{storage.storage_cluster.cluster_name}状态异常"
-                            )
+                            message = f"[ESStorage] [bk_data_id={data_id},cluster_name={storage.storage_cluster.cluster_name}] "
+                            result["issues"].append(f"{message}集群状态异常")
 
                 except Exception as e:
                     storage_status[data_id] = {"exists": False, "error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}存储检查异常: {str(e)}")
+                    message = f"[Storage] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}存储检查异常: {str(e)}")
 
             result["details"] = {"storage_status": storage_status}
             result["status"] = (
@@ -675,7 +687,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"存储集群检查异常: {str(e)}")
+            message = f"[Storage] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}存储集群检查异常: {str(e)}")
 
         return result
 
@@ -741,7 +754,8 @@ class Command(BaseCommand):
                             consul_config = json.loads(consul_config)
                         except json.JSONDecodeError:
                             consul_status[data_id] = {"error": "Consul配置JSON解析失败"}
-                            result["issues"].append(f"数据源data_id:{data_id}的Consul配置JSON解析失败")
+                            message = f"[DataSource] [bk_data_id={data_id}] "
+                            result["issues"].append(f"{message}Consul配置JSON解析失败")
                             continue
 
                     if not consul_config:
@@ -750,9 +764,8 @@ class Command(BaseCommand):
                             "exists": False,
                             "is_consistent": False,
                         }
-                        result["issues"].append(
-                            f"数据源data_id:{data_id}的Consul配置不存在, key:{datasource.consul_config_path}"
-                        )
+                        message = f"[DataSource] [bk_data_id={data_id},consul_path={datasource.consul_config_path}] "
+                        result["issues"].append(f"{message}Consul配置不存在")
                         continue
 
                     # 生成数据源的标准配置
@@ -770,13 +783,15 @@ class Command(BaseCommand):
                         # 记录配置不一致的详细信息
                         diff_keys = self._find_config_diff(consul_config, datasource_config)
                         consul_status[data_id]["diff_keys"] = diff_keys
+                        message = f"[DataSource] [bk_data_id={data_id},consul_path={datasource.consul_config_path}] "
                         result["issues"].append(
-                            f"数据源data_id:{data_id}的Consul配置与数据库配置不一致, key:{datasource.consul_config_path}, 差异字段:{','.join(diff_keys)}"
+                            f"{message}Consul配置与数据库配置不一致, 差异字段:{','.join(diff_keys)}"
                         )
 
                 except Exception as e:
                     consul_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}配置检查异常: {str(e)}")
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}配置检查异常: {str(e)}")
                     logger.exception(f"data_id->[{data_id}] consul config check failed: {e}")
 
             result["details"] = {
@@ -788,7 +803,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"Consul配置检查异常: {str(e)}")
+            message = f"[Consul] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}Consul配置检查异常: {str(e)}")
             logger.exception(f"check_datasource_consul_config failed: {e}")
 
         return result
@@ -837,7 +853,8 @@ class Command(BaseCommand):
 
             if not fed_clusters.exists():
                 result["status"] = Status.ERROR
-                result["issues"].append("联邦集群信息不存在")
+                message = f"[BcsFederalClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}联邦集群信息不存在")
                 return result
 
             federation_details = []
@@ -857,15 +874,18 @@ class Command(BaseCommand):
             # 检查联邦集群配置完整性
             for fed in federation_details:
                 if not fed["fed_namespaces"]:
-                    result["issues"].append(f"子集群{fed['sub_cluster_id']}没有配置命名空间")
+                    message = f"[BcsFederalClusterInfo] [sub_cluster_id={fed['sub_cluster_id']}] "
+                    result["issues"].append(f"{message}没有配置命名空间")
                 if not fed["builtin_metric_table_id"]:
-                    result["issues"].append(f"子集群{fed['sub_cluster_id']}缺少内置指标表ID")
+                    message = f"[BcsFederalClusterInfo] [sub_cluster_id={fed['sub_cluster_id']}] "
+                    result["issues"].append(f"{message}缺少内置指标表ID")
 
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"联邦集群检查异常: {str(e)}")
+            message = f"[BcsFederalClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}联邦集群检查异常: {str(e)}")
 
         return result
 
@@ -903,7 +923,8 @@ class Command(BaseCommand):
                 d_client = dynamic_client.DynamicClient(cluster_info.api_client)
             except Exception as e:
                 result["status"] = Status.ERROR
-                result["issues"].append(f"无法连接到BCS集群: {str(e)}")
+                message = f"[DynamicClient] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}无法连接到BCS集群: {str(e)}")
                 logger.exception(f"Failed to get dynamic client for cluster {cluster_info.cluster_id}: {e}")
                 return result
 
@@ -922,11 +943,13 @@ class Command(BaseCommand):
             except ResourceNotFoundError:
                 result["status"] = Status.ERROR
                 result["details"]["crd_status"] = {"exists": False}
-                result["issues"].append("DataIDResource CRD未定义，集群不支持监控资源注入")
+                message = f"[DataIDResource CRD] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}CRD未定义，集群不支持监控资源注入")
                 return result
             except Exception as e:
                 result["status"] = Status.ERROR
-                result["issues"].append(f"检查CRD定义失败: {str(e)}")
+                message = f"[DataIDResource CRD] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查CRD定义失败: {str(e)}")
                 logger.exception(f"cluster_id->[{cluster_info.cluster_id}] Failed to check CRD definition: {e}")
                 return result
 
@@ -983,7 +1006,10 @@ class Command(BaseCommand):
                     if not is_consistent:
                         diff_info = self._get_dataid_resource_diff(cluster_resource, expected_config)
                         resource_detail["diff"] = diff_info
-                        result["issues"].append(f"DataIDResource '{resource_name}' 配置不一致：{', '.join(diff_info)}")
+                        message = (
+                            f"[DataIDResource] [cluster_id={cluster_info.cluster_id},resource_name={resource_name}] "
+                        )
+                        result["issues"].append(f"{message}配置不一致：{', '.join(diff_info)}")
                     dataid_resources.append(resource_detail)
 
                 except NotFoundError:
@@ -997,7 +1023,8 @@ class Command(BaseCommand):
                             "is_consistent": False,
                         }
                     )
-                    result["issues"].append(f"DataIDResource '{resource_name}' (data_id:{data_id}) 不存在于集群中")
+                    message = f"[DataIDResource] [cluster_id={cluster_info.cluster_id},resource_name={resource_name},data_id={data_id}] "
+                    result["issues"].append(f"{message}不存在于集群中")
                 except Exception as e:
                     dataid_resources.append(
                         {
@@ -1008,7 +1035,8 @@ class Command(BaseCommand):
                             "error": str(e),
                         }
                     )
-                    result["issues"].append(f"DataIDResource '{resource_name}' 检查异常: {str(e)}")
+                    message = f"[DataIDResource] [cluster_id={cluster_info.cluster_id},resource_name={resource_name}] "
+                    result["issues"].append(f"{message}检查异常: {str(e)}")
 
             result["details"]["dataid_resources"] = dataid_resources
             result["details"]["is_fed_cluster"] = is_fed_cluster
@@ -1016,7 +1044,8 @@ class Command(BaseCommand):
             # 确定整体状态
             if not dataid_resources:
                 result["status"] = Status.WARNING
-                result["issues"].append("没有找到任何DataIDResource资源")
+                message = f"[DataIDResource] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}没有找到任何DataIDResource资源")
             elif all(r.get("exists") and r.get("is_consistent") for r in dataid_resources if "error" not in r):
                 result["status"] = Status.SUCCESS
             elif any(not r.get("exists") for r in dataid_resources):
@@ -1026,7 +1055,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"CRD资源检查异常: {str(e)}")
+            message = f"[DataIDResource] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}CRD资源检查异常: {str(e)}")
 
         return result
 
@@ -1138,11 +1168,13 @@ class Command(BaseCommand):
                     }
 
                     if not event_group.is_enable:
-                        result["issues"].append(f"K8s事件数据源data_id:{cluster_info.K8sEventDataID}的EventGroup未启用")
+                        message = f"[EventGroup] [bk_data_id={cluster_info.K8sEventDataID}] "
+                        result["issues"].append(f"{message}EventGroup未启用")
 
                 except models.EventGroup.DoesNotExist:
                     result["details"]["event_group"] = {"exists": False}
-                    result["issues"].append(f"K8s事件数据源data_id:{cluster_info.K8sEventDataID}的EventGroup不存在")
+                    message = f"[EventGroup] [bk_data_id={cluster_info.K8sEventDataID}] "
+                    result["issues"].append(f"{message}EventGroup不存在")
 
             # 2. 检查TimeSeriesGroup创建状态
             time_series_groups = []
@@ -1171,12 +1203,14 @@ class Command(BaseCommand):
                         )
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}的TimeSeriesGroup检查异常: {str(e)}")
+                    message = f"[TimeSeriesGroup] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}TimeSeriesGroup检查异常: {str(e)}")
 
             result["details"]["time_series_groups"] = time_series_groups
 
             if not time_series_groups:
-                result["issues"].append("没有找到任何TimeSeriesGroup记录")
+                message = f"[TimeSeriesGroup] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}没有找到任何TimeSeriesGroup记录")
 
             # 3. 检查SpaceDataSource关联状态
             space_datasources = []
@@ -1201,10 +1235,12 @@ class Command(BaseCommand):
                             }
                         )
                     else:
-                        result["issues"].append(f"数据源data_id:{data_id}未关联到空间{space_uid}")
+                        message = f"[SpaceDataSource] [bk_data_id={data_id},space_uid={space_uid}] "
+                        result["issues"].append(f"{message}未关联到空间")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}的SpaceDataSource检查异常: {str(e)}")
+                    message = f"[SpaceDataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}SpaceDataSource检查异常: {str(e)}")
 
             result["details"]["space_datasources"] = space_datasources
 
@@ -1231,12 +1267,15 @@ class Command(BaseCommand):
                 result["details"]["configmap_configs"] = bk_collector_configs
 
                 if not bk_collector_configs:
-                    result["issues"].append("未找到bk-collector相关的ConfigMap配置")
+                    message = f"[ConfigMap] [cluster_id={cluster_info.cluster_id}] "
+                    result["issues"].append(f"{message}未找到bk-collector相关的ConfigMap配置")
 
             except ApiException as e:
-                result["issues"].append(f"ConfigMap检查失败: {e.reason}")
+                message = f"[ConfigMap] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}ConfigMap检查失败: {e.reason}")
             except Exception as e:
-                result["issues"].append(f"ConfigMap检查异常: {str(e)}")
+                message = f"[ConfigMap] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}ConfigMap检查异常: {str(e)}")
 
             # 确定整体状态
             if not result["issues"]:
@@ -1248,7 +1287,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"集群初始化资源检查异常: {str(e)}")
+            message = f"[ClusterInitResources] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}集群初始化资源检查异常: {str(e)}")
 
         return result
 
@@ -1307,10 +1347,12 @@ class Command(BaseCommand):
                         )
                 else:
                     result["details"]["daemonset"] = {"exists": False}
-                    result["issues"].append("bk-collector DaemonSet未部署")
+                    message = f"[DaemonSet] [cluster_id={cluster_info.cluster_id},name=bk-collector] "
+                    result["issues"].append(f"{message}未部署")
 
             except ApiException as e:
-                result["issues"].append(f"DaemonSet检查失败: {e.reason}")
+                message = f"[DaemonSet] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查失败: {e.reason}")
 
             # 2. 检查bk-collector Pod运行状态
             try:
@@ -1341,20 +1383,21 @@ class Command(BaseCommand):
 
                     # 检查Pod是否有异常
                     if pod.status.phase != "Running":
-                        result["issues"].append(f"bk-collector Pod {pod.metadata.name}状态异常: {pod.status.phase}")
+                        message = f"[Pod] [cluster_id={cluster_info.cluster_id},pod_name={pod.metadata.name}] "
+                        result["issues"].append(f"{message}状态异常: {pod.status.phase}")
 
                     # 检查容器重启次数
                     if pod.status.container_statuses:
                         for container in pod.status.container_statuses:
                             if container.restart_count > 5:
-                                result["issues"].append(
-                                    f"bk-collector Pod {pod.metadata.name}中容器{container.name}重启次数过多: {container.restart_count}"
-                                )
+                                message = f"[Pod] [cluster_id={cluster_info.cluster_id},pod_name={pod.metadata.name},container_name={container.name}] "
+                                result["issues"].append(f"{message}容器重启次数过多: {container.restart_count}")
 
                 result["details"]["pods"] = pod_status
 
             except ApiException as e:
-                result["issues"].append(f"Pod检查失败: {e.reason}")
+                message = f"[Pod] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查失败: {e.reason}")
 
             # 3. 检查bk-collector配置文件完整性
             try:
@@ -1382,14 +1425,16 @@ class Command(BaseCommand):
                         )
 
                         if missing_configs:
-                            result["issues"].append(
-                                f"ConfigMap {cm.metadata.name}缺少关键配置: {', '.join(missing_configs)}"
+                            message = (
+                                f"[ConfigMap] [cluster_id={cluster_info.cluster_id},configmap_name={cm.metadata.name}] "
                             )
+                            result["issues"].append(f"{message}缺少关键配置: {', '.join(missing_configs)}")
 
                 result["details"]["config_files"] = config_files
 
             except ApiException as e:
-                result["issues"].append(f"配置文件检查失败: {e.reason}")
+                message = f"[ConfigMap] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}配置文件检查失败: {e.reason}")
 
             # 4. 检查数据采集配置有效性（检查dataID是否正确配置）
             collection_configs = {
@@ -1406,7 +1451,8 @@ class Command(BaseCommand):
             result["details"]["collection_configs"] = collection_configs
 
             if invalid_configs:
-                result["issues"].append(f"以下数据采集配置无效: {', '.join(invalid_configs)}")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}以下数据采集配置无效: {', '.join(invalid_configs)}")
 
             # 确定整体状态
             if not result["issues"]:
@@ -1418,7 +1464,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"bk-collector配置检查异常: {str(e)}")
+            message = f"[BkCollector] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}bk-collector配置检查异常: {str(e)}")
 
         return result
 
@@ -1441,7 +1488,8 @@ class Command(BaseCommand):
         try:
             # 检查API密钥是否配置
             if not cluster_info.api_key_content:
-                result["issues"].append("BCS API Token未配置")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}BCS API Token未配置")
                 result["status"] = Status.ERROR
                 result["details"] = {"api_key_configured": False}
                 return result
@@ -1450,7 +1498,8 @@ class Command(BaseCommand):
             from django.conf import settings
 
             if cluster_info.api_key_content != settings.BCS_API_GATEWAY_TOKEN:
-                result["issues"].append("BCS API Token与当前配置不一致")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}BCS API Token与当前配置不一致")
                 result["status"] = Status.WARNING
             else:
                 result["status"] = Status.SUCCESS
@@ -1463,7 +1512,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"BCS API Token检查异常: {str(e)}")
+            message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}BCS API Token检查异常: {str(e)}")
 
         return result
 
@@ -1525,18 +1575,21 @@ class Command(BaseCommand):
 
                     # 检查缺失的关键配置项
                     if missing_options:
-                        result["issues"].append(f"数据源data_id:{data_id}缺少关键配置项: {', '.join(missing_options)}")
+                        message = f"[DataSourceOption] [bk_data_id={data_id}] "
+                        result["issues"].append(f"{message}缺少关键配置项: {', '.join(missing_options)}")
 
                 except Exception as e:
                     option_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}配置检查异常: {str(e)}")
+                    message = f"[DataSourceOption] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}配置检查异常: {str(e)}")
 
             result["details"] = option_status
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"DataSourceOption检查异常: {str(e)}")
+            message = f"[DataSourceOption] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}检查异常: {str(e)}")
             logger.exception(f"检查DataSourceOption时发生异常: {e}")
 
         return result
@@ -1620,9 +1673,8 @@ class Command(BaseCommand):
                         if space_ds:
                             space_datasource_exists = True
                         else:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}(space_type:{space_type_id})缺少SpaceDataSource关联"
-                            )
+                            message = f"[SpaceDataSource] [bk_data_id={data_id},space_type_id={space_type_id}] "
+                            result["issues"].append(f"{message}缺少SpaceDataSource关联")
 
                         space = Space.objects.filter(space_id=space_uid, space_type_id=space_type_id).first()
                         if not space:
@@ -1643,14 +1695,16 @@ class Command(BaseCommand):
 
                 except Exception as e:
                     space_check_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}空间类型检查异常: {str(e)}")
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}空间类型检查异常: {str(e)}")
 
             result["details"] = space_check_status
             result["status"] = Status.SUCCESS if not result["issues"] else Status.ERROR
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"空间类型检查异常: {str(e)}")
+            message = f"[DataSource] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}空间类型检查异常: {str(e)}")
             logger.exception(f"检查空间类型时发生异常: {e}")
 
         return result
@@ -1701,7 +1755,8 @@ class Command(BaseCommand):
                     )
 
                 except Exception as e:
-                    result["issues"].append(f"订阅{sub.id}检查异常: {str(e)}")
+                    message = f"[CustomReportSubscription] [subscription_id={sub.id}] "
+                    result["issues"].append(f"{message}订阅检查异常: {str(e)}")
 
             result["details"] = {
                 "bk_biz_id": bk_biz_id,
@@ -1712,13 +1767,15 @@ class Command(BaseCommand):
 
             if subscription_count == 0:
                 result["status"] = Status.WARNING
-                result["issues"].append("没有找到自定义上报订阅配置")
+                message = f"[CustomReportSubscription] [bk_biz_id={bk_biz_id}] "
+                result["issues"].append(f"{message}没有找到自定义上报订阅配置")
             else:
                 result["status"] = Status.SUCCESS
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"CustomReportSubscription检查异常: {str(e)}")
+            message = f"[CustomReportSubscription] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}CustomReportSubscription检查异常: {str(e)}")
             logger.exception(f"检查CustomReportSubscription时发生异常: {e}")
 
         return result
@@ -1796,7 +1853,8 @@ class Command(BaseCommand):
                         }
 
                         if not time_field_exists:
-                            result["issues"].append(f"结果表{table_id}缺少时间字段")
+                            message = f"[ResultTableField] [table_id={table_id}] "
+                            result["issues"].append(f"{message}缺少时间字段")
 
                         # 检查ResultTableFieldOption
                         field_options = ResultTableFieldOption.objects.filter(
@@ -1809,10 +1867,12 @@ class Command(BaseCommand):
 
                     else:
                         datasource_result_table[data_id] = {"relation_exists": False}
-                        result["issues"].append(f"数据源data_id:{data_id}缺少结果表关联")
+                        message = f"[DataSourceResultTable] [bk_data_id={data_id}] "
+                        result["issues"].append(f"{message}缺少结果表关联")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}关联模型检查异常: {str(e)}")
+                    message = f"[DataSourceResultTable] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}关联模型检查异常: {str(e)}")
 
             # 检查 SpaceTypeToResultTableFilterAlias
             try:
@@ -1852,19 +1912,19 @@ class Command(BaseCommand):
                             }
 
                             if not filter_alias.status:
-                                result["issues"].append(
-                                    f"结果表table_id:{table_id}关联的空间类型过滤别名`{filter_alias.filter_alias}`未启用"
-                                )
+                                message = f"[SpaceTypeToResultTableFilterAlias] [table_id={table_id},filter_alias={filter_alias.filter_alias}] "
+                                result["issues"].append(f"{message}空间类型过滤别名未启用")
                         else:
                             filter_alias_details[table_id] = {"exists": False}
-                            result["warning"].append(
-                                f"结果表table_id:{table_id}关联的空间类型过滤别名`{bk_biz_id_alias}`不存在"
-                            )
+                            message = f"[SpaceTypeToResultTableFilterAlias] [table_id={table_id},bk_biz_id_alias={bk_biz_id_alias}] "
+                            # 注意：这里应该使用warnings而不是warning
+                            if "warnings" not in result:
+                                result["warnings"] = []
+                            result["warnings"].append(f"{message}空间类型过滤别名不存在")
 
                     except Exception as e:
-                        result["issues"].append(
-                            f"结果表table_id:{table_id}的SpaceTypeToResultTableFilterAlias检查异常: {str(e)}"
-                        )
+                        message = f"[SpaceTypeToResultTableFilterAlias] [table_id={table_id}] "
+                        result["issues"].append(f"{message}检查异常: {str(e)}")
 
                 space_type_filter_alias = {
                     "total_count": len(filter_alias_list),
@@ -1873,7 +1933,8 @@ class Command(BaseCommand):
                 }
 
             except Exception as e:
-                result["issues"].append(f"SpaceTypeToResultTableFilterAlias检查异常: {str(e)}")
+                message = f"[SpaceTypeToResultTableFilterAlias] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             result["details"] = {
                 "datasource_result_table": datasource_result_table,
@@ -1887,7 +1948,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"关联模型检查异常: {str(e)}")
+            message = f"[ResultTable] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}关联模型检查异常: {str(e)}")
 
         return result
 
@@ -1928,13 +1990,14 @@ class Command(BaseCommand):
                         continue
 
                     # 查询InfluxDB存储
-                    influx_storages = InfluxDBStorage.objects.filter(
+                    influx_storages: BaseManager[InfluxDBStorage] = InfluxDBStorage.objects.filter(
                         table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
                     )
 
                     for storage in influx_storages:
                         influxdb_storages.append(storage)
 
+                        message = f"[InfluxDBStorage] [id={storage.id},table_id={storage.table_id}] "
                         # 检查代理存储配置
                         if hasattr(storage, "influxdb_proxy_storage_id"):
                             try:
@@ -1952,12 +2015,19 @@ class Command(BaseCommand):
                                         }
                                     )
                                 else:
-                                    result["issues"].append(f"存储{storage.table_id}的代理存储配置不存在")
+                                    result["issues"].append(
+                                        f"{message}存储代理存储配置influxdb_proxy_storage_id[{storage.influxdb_proxy_storage_id}]不存在"
+                                    )
                             except Exception as e:
-                                result["issues"].append(f"存储{storage.table_id}代理配置检查异常: {str(e)}")
+                                result["issues"].append(
+                                    f"{message}存储代理配置influxdb_proxy_storage_id[{storage.influxdb_proxy_storage_id}]检查异常: {str(e)}"
+                                )
+                        else:
+                            result["issues"].append(f"{message}代理存储字段influxdb_proxy_storage_id为空")
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}InfluxDB存储检查异常: {str(e)}")
+                    message = f"[InfluxDBStorage] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}InfluxDB存储检查异常: {str(e)}")
 
             # 检查InfluxDBClusterInfo
             cluster_details = []
@@ -1976,7 +2046,8 @@ class Command(BaseCommand):
                     )
 
             except Exception as e:
-                result["issues"].append(f"InfluxDBClusterInfo检查异常: {str(e)}")
+                message = f"[InfluxDBClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             # 检查InfluxDBHostInfo
             host_details = []
@@ -1992,7 +2063,8 @@ class Command(BaseCommand):
                     )
 
             except Exception as e:
-                result["issues"].append(f"InfluxDBHostInfo检查异常: {str(e)}")
+                message = f"[InfluxDBHostInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             result["details"] = {
                 "influxdb_proxy_storage": {
@@ -2013,7 +2085,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"InfluxDB存储配置检查异常: {str(e)}")
+            message = f"[InfluxDBStorage] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}InfluxDB存储配置检查异常: {str(e)}")
             logger.exception(f"检查InfluxDB存储配置时发生异常: {e}")
 
         return result
@@ -2073,7 +2146,8 @@ class Command(BaseCommand):
                         )
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}VM访问记录检查异常: {str(e)}")
+                    message = f"[AccessVMRecord] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}VM访问记录检查异常: {str(e)}")
 
             # 检查DataLink
             try:
@@ -2089,7 +2163,8 @@ class Command(BaseCommand):
                     )
 
             except Exception as e:
-                result["issues"].append(f"DataLink检查异常: {str(e)}")
+                message = f"[DataLink] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             # 检查BcsFederalClusterInfo
             try:
@@ -2108,7 +2183,8 @@ class Command(BaseCommand):
                     )
 
             except Exception as e:
-                result["issues"].append(f"BcsFederalClusterInfo检查异常: {str(e)}")
+                message = f"[BcsFederalClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             # 检查BkBaseResultTable
             try:
@@ -2126,7 +2202,8 @@ class Command(BaseCommand):
                     )
 
             except Exception as e:
-                result["issues"].append(f"BkBaseResultTable检查异常: {str(e)}")
+                message = f"[BkBaseResultTable] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}检查异常: {str(e)}")
 
             result["details"] = {
                 "access_vm_record": {
@@ -2152,7 +2229,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"VM数据链路依赖检查异常: {str(e)}")
+            message = f"[VMDataLink] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}VM数据链路依赖检查异常: {str(e)}")
             logger.exception(f"检查VM数据链路依赖时发生异常: {e}")
 
         return result
@@ -2508,7 +2586,8 @@ class Command(BaseCommand):
         try:
             # 检查云区域ID是否配置
             if cluster_info.bk_cloud_id is None:
-                result["issues"].append("云区域ID未配置")
+                message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+                result["issues"].append(f"{message}云区域ID未配置")
                 result["status"] = Status.WARNING
             else:
                 result["status"] = Status.SUCCESS
@@ -2520,7 +2599,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"云区域ID配置检查异常: {str(e)}")
+            message = f"[BCSClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}云区域ID配置检查异常: {str(e)}")
 
         return result
 
@@ -2570,7 +2650,8 @@ class Command(BaseCommand):
                 )
 
                 if not mq_cluster:
-                    error_message = f"MQ集群mq_cluster_id`{mq_cluster_id}`未找到"
+                    message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id}] "
+                    error_message = f"{message}MQ集群未找到"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     continue
@@ -2581,7 +2662,8 @@ class Command(BaseCommand):
                     }
                 )
                 if mq_cluster.cluster_type not in data_source.MQ_CONFIG_DICT:
-                    error_message = f"MQ集群cluster_type`{mq_cluster.cluster_type}`类型未找到"
+                    message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},cluster_type={mq_cluster.cluster_type}] "
+                    error_message = f"{message}MQ集群类型未找到"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     continue
@@ -2596,14 +2678,16 @@ class Command(BaseCommand):
                     }
                 )
                 if not mq_config:
-                    error_message = f"MQ配置`{mq_config_id}`未找到"
+                    message = f"[MQConfig] [mq_config_id={mq_config_id},bk_data_id={data_id}] "
+                    error_message = f"{message}MQ配置未找到"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     continue
 
                 # 如果要刷新consul和gse，mq_cluster必须已经初始化了
                 if data_source.can_refresh_consul_and_gse() and mq_cluster.gse_stream_to_id == -1:
-                    error_message = f"`dataid({data_id})`的消息队列未初始化，请联系管理员处理"
+                    message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
+                    error_message = f"{message}消息队列未初始化，请联系管理员处理"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
 
@@ -2615,7 +2699,8 @@ class Command(BaseCommand):
                     details.update({"gse_route_query_params": params})
                     route_config = api.gse.query_route(**params)
                     if not route_config:
-                        error_message = f"MQ集群`{mq_cluster_id}`未查询到路由配置"
+                        message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
+                        error_message = f"{message}未查询到GSE路由配置"
                         issues.add(error_message)
                         details.setdefault("issues", []).append(error_message)
 
@@ -2643,21 +2728,20 @@ class Command(BaseCommand):
                     new_hash = hash_util.object_md5(data_source.gse_route_config)
                     # 如果配置一致，则直接返回
                     if old_hash != new_hash:
-                        error_message = f"MQ集群`{mq_cluster_id}`GSE路由配置不一致"
+                        message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
+                        error_message = f"{message}GSE路由配置不一致"
                         issues.add(error_message)
                         details.setdefault("issues", []).append(error_message)
 
                 except Exception as e:
-                    error_message = f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)}"
+                    message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
+                    error_message = f"{message}查询GSE路由失败: {str(e)}"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     if config.is_built_in_data_id(data_id):
-                        details.setdefault("warnings", []).append(
-                            f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
-                        )
-                        result["warnings"].append(
-                            f"MQ集群`{mq_cluster_id}`查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
-                        )
+                        warning_msg = f"{message}查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
+                        details.setdefault("warnings", []).append(warning_msg)
+                        result["warnings"].append(warning_msg)
 
             if not issues:
                 result["status"] = Status.SUCCESS
@@ -2667,7 +2751,8 @@ class Command(BaseCommand):
             result["issues"] = list(issues)
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"MQ集群检查异常: {str(e)}")
+            message = f"[ClusterInfo] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}MQ集群检查异常: {str(e)}")
 
         return result
 
