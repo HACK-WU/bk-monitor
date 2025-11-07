@@ -8,6 +8,8 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+import datetime
+
 from django.db.models.manager import BaseManager
 import json
 import time
@@ -31,6 +33,10 @@ from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, Inf
 from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, EventGroup
 from metadata.models.space.space import SpaceDataSource, Space
 from metadata.models.space.constants import SpaceTypes, SpaceStatus, ENABLE_V4_DATALINK_ETL_CONFIGS
+from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage, StorageClusterRecord
+from metadata.models import BcsFederalClusterInfo
+from metadata.models.space.space import SpaceDataSource
+from metadata.models.space.constants import SpaceTypes
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
 from metadata.models.result_table import (
     ResultTable,
@@ -288,6 +294,12 @@ class Command(BaseCommand):
             influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
             check_result["details"]["influxdb_storage"] = influxdb_storage_check
             self.output_check_result("check_influxdb_storage_config", influxdb_storage_check)
+
+            # 检查elasticsearch存储配置
+            self.stdout.write("正在检查elasticsearch存储配置...")
+            elasticsearch_storage_check = self.check_elasticsearch_storage_config(cluster_info)
+            check_result["details"]["elasticsearch_storage"] = elasticsearch_storage_check
+            self.output_check_result("check_elasticsearch_storage_config", elasticsearch_storage_check)
 
             # 24. 检查VM数据链路依赖
             self.stdout.write("正在检查VM数据链路依赖...")
@@ -1997,12 +2009,12 @@ class Command(BaseCommand):
                     for storage in influx_storages:
                         influxdb_storages.append(storage)
 
-                        message = f"[InfluxDBStorage] [id={storage.id},table_id={storage.table_id}] "
+                        message = f"[InfluxDBStorage] [table_id={storage.table_id}] "
                         # 检查代理存储配置
                         if hasattr(storage, "influxdb_proxy_storage_id"):
                             try:
                                 proxy_storage = InfluxDBProxyStorage.objects.filter(
-                                    proxy_cluster_id=storage.influxdb_proxy_storage_id
+                                    id=storage.influxdb_proxy_storage_id
                                 ).first()
 
                                 if proxy_storage:
@@ -2088,6 +2100,196 @@ class Command(BaseCommand):
             message = f"[InfluxDBStorage] [cluster_id={cluster_info.cluster_id}] "
             result["issues"].append(f"{message}InfluxDB存储配置检查异常: {str(e)}")
             logger.exception(f"检查InfluxDB存储配置时发生异常: {e}")
+
+        return result
+
+    @recode_final_result
+    def check_elasticsearch_storage_config(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查Elasticsearch存储配置
+
+        验证Elasticsearch存储相关配置的完整性和正确性
+        """
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化Elasticsearch存储配置检查输出"""
+            lines = []
+            if details:
+                storage_count = details.get("es_storage", {}).get("total_storages", 0)
+                cluster_count = details.get("cluster_info", {}).get("total_clusters", 0)
+                record_count = details.get("storage_cluster_records", {}).get("total_records", 0)
+                lines.append(f"    ES存储: {storage_count}")
+                lines.append(f"    ES集群: {cluster_count}")
+                lines.append(f"    存储集群记录: {record_count}")
+            return lines
+
+        result["formatter"] = format_output
+
+        try:
+            es_storage_details = []
+            cluster_details = {}
+            storage_cluster_records = []
+
+            # 检查ESStorage配置
+            for data_id in self.data_sources.keys():
+                try:
+                    ds_rt = DataSourceResultTable.objects.filter(
+                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
+
+                    if not ds_rt:
+                        continue
+
+                    # 查询ES存储
+                    es_storages = ESStorage.objects.filter(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
+
+                    for storage in es_storages:
+                        message = f"[ESStorage] [table_id={storage.table_id}] "
+
+                        # 检查存储集群配置
+                        if not storage.storage_cluster:
+                            result["issues"].append(
+                                f"{message}[ClusterInfo][cluster_id={storage.storage_cluster_id}]存储集群配置为空"
+                            )
+                            continue
+
+                        cluster = storage.storage_cluster
+
+                        # 检查集群类型
+                        if cluster.cluster_type != ClusterInfo.TYPE_ES:
+                            message_cluster = (
+                                f"[ClusterInfo] [cluster_id={cluster.cluster_id},cluster_type={cluster.cluster_type}] "
+                            )
+                            result["issues"].append(f"{message_cluster}集群类型不是ES")
+
+                        # 收集集群信息
+                        if cluster.cluster_id not in cluster_details:
+                            cluster_details[cluster.cluster_id] = {
+                                "cluster_name": cluster.cluster_name,
+                                "cluster_type": cluster.cluster_type,
+                                "domain_name": cluster.domain_name,
+                                "port": cluster.port,
+                                "is_default_cluster": cluster.is_default_cluster,
+                                "storage_count": 0,
+                            }
+                        cluster_details[cluster.cluster_id]["storage_count"] += 1
+
+                        # 检查关键配置项
+                        storage_detail = {
+                            "table_id": storage.table_id,
+                            "cluster_id": storage.storage_cluster_id,
+                            "date_format": storage.date_format,
+                            "slice_size": storage.slice_size,
+                            "slice_gap": storage.slice_gap,
+                            "retention": storage.retention,
+                            "warm_phase_days": storage.warm_phase_days,
+                            "time_zone": storage.time_zone,
+                            "source_type": storage.source_type,
+                            "need_create_index": storage.need_create_index,
+                        }
+
+                        # 检查date_format是否合法(只包含数字)
+                        try:
+                            test_str = datetime.datetime.utcnow().strftime(storage.date_format)
+                            if not test_str.isdigit():
+                                result["issues"].append(f"{message}date_format格式不合法，包含非数字字符")
+                        except Exception as e:
+                            result["issues"].append(f"{message}date_format格式验证失败: {str(e)}")
+
+                        # 检查时区设置是否合法(-12到12)
+                        if not (-12 <= storage.time_zone <= 12):
+                            result["issues"].append(f"{message}time_zone设置不合法: {storage.time_zone}")
+
+                        # 检查暖数据配置
+                        if storage.warm_phase_days > 0:
+                            warm_settings = storage.warm_phase_settings
+                            if not warm_settings:
+                                result["issues"].append(f"{message}warm_phase_days>0但warm_phase_settings为空")
+                            else:
+                                required_fields = ["allocation_attr_name", "allocation_attr_value", "allocation_type"]
+                                missing_fields = [f for f in required_fields if not warm_settings.get(f)]
+                                if missing_fields:
+                                    result["issues"].append(
+                                        f"{message}warm_phase_settings缺少必填字段: {', '.join(missing_fields)}"
+                                    )
+
+                        # 检查index_settings和mapping_settings是否为有效JSON
+                        try:
+                            json.loads(storage.index_settings)
+                        except (json.JSONDecodeError, TypeError):
+                            result["issues"].append(f"{message}index_settings不是有效的JSON格式")
+
+                        try:
+                            json.loads(storage.mapping_settings)
+                        except (json.JSONDecodeError, TypeError):
+                            result["issues"].append(f"{message}mapping_settings不是有效的JSON格式")
+
+                        es_storage_details.append(storage_detail)
+
+                        # 检查StorageClusterRecord记录
+                        try:
+                            cluster_records = StorageClusterRecord.objects.filter(
+                                table_id=storage.table_id, bk_tenant_id=self.bk_tenant_id, is_deleted=False
+                            ).order_by("-create_time")
+
+                            if not cluster_records.exists():
+                                result["issues"].append(
+                                    f"{message}[StorageClusterRecord][table_id={storage.table_id}]存储集群记录不存在"
+                                )
+                            else:
+                                # 检查是否有当前使用的集群记录
+                                current_record = cluster_records.filter(is_current=True).first()
+                                if not current_record:
+                                    result["issues"].append(f"{message}StorageClusterRecord没有is_current=True的记录")
+                                elif current_record.cluster_id != storage.storage_cluster_id:
+                                    message_record = f"[StorageClusterRecord] [table_id={storage.table_id},cluster_id={current_record.cluster_id}] "
+                                    result["issues"].append(
+                                        f"{message_record}当前集群ID与ESStorage的storage_cluster_id不一致，期望: {storage.storage_cluster_id}"
+                                    )
+
+                                # 收集集群记录信息
+                                for record in cluster_records:
+                                    record_detail = {
+                                        "table_id": record.table_id,
+                                        "cluster_id": record.cluster_id,
+                                        "is_current": record.is_current,
+                                        "enable_time": record.enable_time.isoformat() if record.enable_time else None,
+                                        "disable_time": record.disable_time.isoformat()
+                                        if record.disable_time
+                                        else None,
+                                        "create_time": record.create_time.isoformat() if record.create_time else None,
+                                    }
+                                    storage_cluster_records.append(record_detail)
+
+                        except Exception as e:
+                            result["issues"].append(f"{message}StorageClusterRecord检查异常: {str(e)}")
+
+                except Exception as e:
+                    message = f"[ESStorage] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}ES存储检查异常: {str(e)}")
+
+            result["details"] = {
+                "es_storage": {
+                    "total_storages": len(es_storage_details),
+                    "storage_details": es_storage_details[:10],  # 只显示前10个
+                },
+                "cluster_info": {
+                    "total_clusters": len(cluster_details),
+                    "clusters": list(cluster_details.values()),
+                },
+                "storage_cluster_records": {
+                    "total_records": len(storage_cluster_records),
+                    "records": storage_cluster_records[:20],  # 只显示前20个
+                },
+            }
+
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
+
+        except Exception as e:
+            result["status"] = Status.ERROR
+            message = f"[ESStorage] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}Elasticsearch存储配置检查异常: {str(e)}")
+            logger.exception(f"检查Elasticsearch存储配置时发生异常: {e}")
 
         return result
 
@@ -2700,9 +2902,10 @@ class Command(BaseCommand):
                     route_config = api.gse.query_route(**params)
                     if not route_config:
                         message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
-                        error_message = f"{message}未查询到GSE路由配置"
+                        error_message = f"{message}[api.gse.query_route] 未查询到GSE路由配置"
                         issues.add(error_message)
                         details.setdefault("issues", []).append(error_message)
+                        continue
 
                     # 查找匹配的路由配置
                     old_route = None
@@ -2729,17 +2932,17 @@ class Command(BaseCommand):
                     # 如果配置一致，则直接返回
                     if old_hash != new_hash:
                         message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
-                        error_message = f"{message}GSE路由配置不一致"
+                        error_message = f"{message}[api.gse.query_route] GSE路由配置不一致"
                         issues.add(error_message)
                         details.setdefault("issues", []).append(error_message)
 
                 except Exception as e:
                     message = f"[ClusterInfo] [mq_cluster_id={mq_cluster_id},bk_data_id={data_id}] "
-                    error_message = f"{message}查询GSE路由失败: {str(e)}"
+                    error_message = f"{message}[api.gse.query_route] 查询GSE路由失败: {str(e)}"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     if config.is_built_in_data_id(data_id):
-                        warning_msg = f"{message}查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
+                        warning_msg = f"{message}[api.gse.query_route]查询GSE路由失败: {str(e)},{data_id} 是内置数据源"
                         details.setdefault("warnings", []).append(warning_msg)
                         result["warnings"].append(warning_msg)
 

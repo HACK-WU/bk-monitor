@@ -23,7 +23,7 @@ from metadata import models
 from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, Space
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
 from metadata.models.bcs.resource import BCSClusterInfo
-from metadata.models.storage import ClusterInfo
+from metadata.models.storage import ClusterInfo, StorageClusterRecord
 from metadata.task.bcs import discover_bcs_clusters, update_bcs_cluster_cloud_id_config
 from metadata.models.result_table import ResultTable
 from metadata.tests.common_utils import consul_client
@@ -530,6 +530,8 @@ def delete_databases():
     InfluxDBStorage.objects.filter(table_id__in=rt_ids).delete()
     # 删除vm访问记录
     AccessVMRecord.objects.filter(bk_base_data_id__in=bk_data_ids).delete()
+    StorageClusterRecord.objects.filter(bk_data_id__in=bk_data_ids).delete()
+
     yield
 
 
