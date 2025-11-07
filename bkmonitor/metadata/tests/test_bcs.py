@@ -21,11 +21,12 @@ from unittest.mock import patch, MagicMock
 from api.kubernetes.default import FetchK8sClusterListResource
 from core.drf_resource import api
 from metadata import models
-from metadata.models import InfluxDBClusterInfo, InfluxDBStorage
+from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
 from metadata.models.bcs.resource import BCSClusterInfo
 from metadata.models.storage import ClusterInfo
 from metadata.task.bcs import discover_bcs_clusters, update_bcs_cluster_cloud_id_config
+from metadata.models.result_table import ResultTable
 from metadata.tests.common_utils import consul_client
 from constants.common import DEFAULT_TENANT_ID
 from metadata.utils import consul_tools, redis_tools
@@ -315,15 +316,21 @@ def mock_core_api():
 
 @pytest.fixture
 def mock_default_kwargs(monkeypatch):
+    def change_kwargs(m, targe_obj, kwargs):
+        default_kwargs = list(targe_obj.__defaults__)
+        for i, v in kwargs.items():
+            i = int(i)
+            default_kwargs[i] = v
+
+        default_kwargs = tuple(default_kwargs)
+        m.setattr(targe_obj, "__defaults__", default_kwargs)
+
     with monkeypatch.context() as m:
         m.setattr(settings, "BCS_API_GATEWAY_HOST", "domain_name_1")
         m.setattr(settings, "BCS_API_GATEWAY_PORT", "8000")
 
-        default_kwargs = list(BCSClusterInfo.register_cluster.__wrapped__.__defaults__)
-        default_kwargs[0] = "domain_name_1"
-        default_kwargs[1] = "8000"
-        default_kwargs = tuple(default_kwargs)
-        m.setattr(BCSClusterInfo.register_cluster.__wrapped__, "__defaults__", default_kwargs)
+        change_kwargs(m, BCSClusterInfo.register_cluster.__wrapped__, {0: "domain_name_1", 1: "8000"})
+        change_kwargs(m, ResultTable.create_result_table.__wrapped__, {15: "2_business_alias"})
 
         yield
 
@@ -519,10 +526,9 @@ def delete_databases():
     ResultTableField.objects.filter(table_id__in=rt_ids).delete()
     ResultTableOption.objects.filter(table_id__in=rt_ids).delete()
     DataSourceResultTable.objects.filter(bk_data_id__in=bk_data_ids).delete()
-
+    SpaceTypeToResultTableFilterAlias.objects.filter(table_id__in=rt_ids).delete()
     # 删除influxdb存储
     InfluxDBStorage.objects.filter(table_id__in=rt_ids).delete()
-
     # 删除vm访问记录
     AccessVMRecord.objects.filter(bk_base_data_id__in=bk_data_ids).delete()
     yield

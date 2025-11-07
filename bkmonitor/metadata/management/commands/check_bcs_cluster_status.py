@@ -287,6 +287,24 @@ class Command(BaseCommand):
             check_result["details"]["monitor_resources"] = monitor_check
             self.output_check_result("check_monitor_resources", monitor_check)
 
+            # 22. 检查关联的结果表
+            self.stdout.write("正在检查关联的结果表...")
+            related_models_check = self.check_related_result_table(cluster_info)
+            check_result["details"]["related_result_table"] = related_models_check
+            self.output_check_result("check_related_result_table", related_models_check)
+
+            # 23. 检查InfluxDB存储配置
+            self.stdout.write("正在检查InfluxDB存储配置...")
+            influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
+            check_result["details"]["influxdb_storage"] = influxdb_storage_check
+            self.output_check_result("check_influxdb_storage_config", influxdb_storage_check)
+
+            # 24. 检查VM数据链路依赖
+            self.stdout.write("正在检查VM数据链路依赖...")
+            vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
+            check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
+            self.output_check_result("check_vm_datalink_dependencies", vm_datalink_check)
+
             # 6. 数据存储链路检查
             self.stdout.write("正在检查数据存储...")
             storage_check = self.check_storage_clusters(cluster_info)
@@ -300,17 +318,12 @@ class Command(BaseCommand):
                 check_result["details"]["federation"] = federation_check
                 self.output_check_result("check_federation_cluster", federation_check)
 
-            # 10. 数据路由配置检查
-            self.stdout.write("正在检查数据路由配置...")
-            routing_check = self.check_data_routing(cluster_info)
-            check_result["details"]["routing"] = routing_check
-            self.output_check_result("check_data_routing", routing_check)
-
             # 12. 集群初始化资源检查
-            self.stdout.write("正在检查集群初始化资源...")
-            init_resource_check = self.check_cluster_init_resources(cluster_info)
-            check_result["details"]["init_resources"] = init_resource_check
-            self.output_check_result("check_cluster_init_resources", init_resource_check)
+            # todo 待确认
+            # self.stdout.write("正在检查集群初始化资源...")
+            # init_resource_check = self.check_cluster_init_resources(cluster_info)
+            # check_result["details"]["init_resources"] = init_resource_check
+            # self.output_check_result("check_cluster_init_resources", init_resource_check)
 
             # 12.1 检查BCS集群CRD资源状态
             # todo 增加对replace 替换配置模型的检查
@@ -320,10 +333,11 @@ class Command(BaseCommand):
             self.output_check_result("check_bcs_cluster_crd_resource", crd_resource_check)
 
             # 13. bk-collector配置检查
-            self.stdout.write("正在检查bk-collector配置...")
-            collector_config_check = self.check_bk_collector_config(cluster_info)
-            check_result["details"]["bk_collector"] = collector_config_check
-            self.output_check_result("check_bk_collector_config", collector_config_check)
+            # todo 待确认
+            # self.stdout.write("正在检查bk-collector配置...")
+            # collector_config_check = self.check_bk_collector_config(cluster_info)
+            # check_result["details"]["bk_collector"] = collector_config_check
+            # self.output_check_result("check_bk_collector_config", collector_config_check)
 
             # 14. 检查集群所属空间
             self.stdout.write("正在检查集群所属空间...")
@@ -348,24 +362,6 @@ class Command(BaseCommand):
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
             self.output_check_result("check_custom_report_subscription", custom_report_sub_check)
-
-            # 22. 检查关联模型
-            self.stdout.write("正在检查关联模型数据...")
-            related_models_check = self.check_related_models(cluster_info)
-            check_result["details"]["related_models"] = related_models_check
-            self.output_check_result("check_related_models", related_models_check)
-
-            # 23. 检查InfluxDB存储配置
-            self.stdout.write("正在检查InfluxDB存储配置...")
-            influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
-            check_result["details"]["influxdb_storage"] = influxdb_storage_check
-            self.output_check_result("check_influxdb_storage_config", influxdb_storage_check)
-
-            # 24. 检查VM数据链路依赖
-            self.stdout.write("正在检查VM数据链路依赖...")
-            vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
-            check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
-            self.output_check_result("check_vm_datalink_dependencies", vm_datalink_check)
 
             # 确定整体状态
             check_result["status"] = self.status
@@ -926,55 +922,6 @@ class Command(BaseCommand):
         except Exception as e:
             result["status"] = Status.ERROR
             result["issues"].append(f"联邦集群检查异常: {str(e)}")
-
-        return result
-
-    @recode_final_result
-    def check_data_routing(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查数据路由配置状态"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化数据路由检查输出"""
-            lines = []
-            if details:
-                routing_count = len(details.get("routing_status", {}))
-                lines.append(f"    路由配置: {routing_count}个数据源")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            routing_status = {}
-
-            for data_id, datasource in self.data_sources:
-                if data_id == 0:
-                    continue
-
-                try:
-                    routing_status[data_id] = {
-                        "transfer_cluster_id": datasource.transfer_cluster_id,
-                        "data_name": datasource.data_name,
-                        "mq_cluster_id": datasource.mq_cluster_id,
-                        "is_enable": datasource.is_enable,
-                    }
-
-                    # 检查路由配置合理性
-                    if not datasource.transfer_cluster_id:
-                        result["issues"].append(f"数据源data_id:{data_id}未配置转移集群")
-                    if not datasource.is_enable:
-                        result["issues"].append(f"数据源data_id:{data_id}未启用")
-
-                except DataSource.DoesNotExist:
-                    routing_status[data_id] = {"exists": False, "error": "数据源不存在"}
-                    result["issues"].append(f"数据源data_id:{data_id}不存在")
-
-            result["details"] = {"routing_status": routing_status}
-            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            result["issues"].append(f"数据路由检查异常: {str(e)}")
 
         return result
 
@@ -1563,7 +1510,7 @@ class Command(BaseCommand):
 
         try:
             expected_space_uid = f"bkcc__{cluster_info.bk_biz_id}"
-            data_ids = [cluster_info.K8sMetricDataID, cluster_info.CustomMetricDataID, cluster_info.K8sEventDataID]
+            data_ids = self.data_sources.keys()
 
             # 1. 检查SpaceDataSource数据源授权关系
             space_datasource_status = []
@@ -1975,8 +1922,8 @@ class Command(BaseCommand):
         return result
 
     @recode_final_result
-    def check_related_models(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查关联模型数据完整性
+    def check_related_result_table(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查关联的结果表
 
         验证结果表相关的配置数据是否完整
         """
@@ -1988,8 +1935,10 @@ class Command(BaseCommand):
             if details:
                 ds_rt_count = len(details.get("datasource_result_table", {}))
                 rt_options_count = len(details.get("result_table_options", {}))
+                filter_alias_count = details.get("space_type_filter_alias", {}).get("total_count", 0)
                 lines.append(f"    数据源结果表: {ds_rt_count}")
                 lines.append(f"    结果表配置: {rt_options_count}")
+                lines.append(f"    空间类型路由别名: {filter_alias_count}")
             return lines
 
         result["formatter"] = format_output
@@ -1999,6 +1948,8 @@ class Command(BaseCommand):
             result_table_options = {}
             result_table_fields = {}
             result_table_field_options = {}
+            space_type_filter_alias = {}
+            all_table_ids = set()
 
             # 检查 DataSourceResultTable
             for data_id, datasource in self.data_sources.items():
@@ -2009,6 +1960,7 @@ class Command(BaseCommand):
 
                     if ds_rt:
                         table_id = ds_rt.table_id
+                        all_table_ids.add(table_id)
                         tenant_consistent = ds_rt.bk_tenant_id == datasource.bk_tenant_id
 
                         datasource_result_table[data_id] = {
@@ -2060,11 +2012,73 @@ class Command(BaseCommand):
                 except Exception as e:
                     result["issues"].append(f"数据源data_id:{data_id}关联模型检查异常: {str(e)}")
 
+            # 检查 SpaceTypeToResultTableFilterAlias
+            try:
+                from metadata.models.space.space import SpaceTypeToResultTableFilterAlias
+
+                filter_alias_list = []
+                filter_alias_details = {}
+
+                result_tables = ResultTable.objects.filter(
+                    table_id__in=all_table_ids, bk_tenant_id=self.bk_tenant_id
+                ).values_list("table_id", "bk_biz_id_alias")
+
+                for table_id, bk_biz_id_alias in result_tables:
+                    try:
+                        # bk_biz_id_alias 为空，不要检查
+                        if not bk_biz_id_alias:
+                            continue
+                        # 查询该结果表的空间类型过滤别名
+                        filter_alias = SpaceTypeToResultTableFilterAlias.objects.filter(
+                            table_id=table_id, filter_alias=bk_biz_id_alias, space_type=SpaceTypes.BKCC.value
+                        ).first()
+
+                        if filter_alias:
+                            filter_alias_list.append(
+                                {
+                                    "table_id": table_id,
+                                    "space_type": filter_alias.space_type,
+                                    "filter_alias": filter_alias.filter_alias,
+                                    "status": filter_alias.status,
+                                }
+                            )
+
+                            filter_alias_details[table_id] = {
+                                "exists": True,
+                                "filter_alias": filter_alias.filter_alias,
+                                "status": filter_alias.status,
+                            }
+
+                            if not filter_alias.status:
+                                result["issues"].append(
+                                    f"结果表table_id:{table_id}关联的空间类型过滤别名`{filter_alias.filter_alias}`未启用"
+                                )
+                        else:
+                            filter_alias_details[table_id] = {"exists": False}
+                            result["warning"].append(
+                                f"结果表table_id:{table_id}关联的空间类型过滤别名`{bk_biz_id_alias}`不存在"
+                            )
+
+                    except Exception as e:
+                        result["issues"].append(
+                            f"结果表table_id:{table_id}的SpaceTypeToResultTableFilterAlias检查异常: {str(e)}"
+                        )
+
+                space_type_filter_alias = {
+                    "total_count": len(filter_alias_list),
+                    "filter_aliases": filter_alias_list,
+                    "details": filter_alias_details,
+                }
+
+            except Exception as e:
+                result["issues"].append(f"SpaceTypeToResultTableFilterAlias检查异常: {str(e)}")
+
             result["details"] = {
                 "datasource_result_table": datasource_result_table,
                 "result_table_options": result_table_options,
                 "result_table_fields": result_table_fields,
                 "result_table_field_options": result_table_field_options,
+                "space_type_filter_alias": space_type_filter_alias,
             }
 
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
@@ -2072,7 +2086,6 @@ class Command(BaseCommand):
         except Exception as e:
             result["status"] = Status.ERROR
             result["issues"].append(f"关联模型检查异常: {str(e)}")
-            logger.exception(f"检查关联模型时发生异常: {e}")
 
         return result
 
@@ -2402,7 +2415,7 @@ class Command(BaseCommand):
                     if isinstance(detail, dict):
                         lines.append(f"    数据源data_id`{data_id}`: 集群ID {detail.get('mq_cluster_id', 'N/A')}")
                         if detail.get("mq_cluster_type"):
-                            lines.append(f"    集群类型: {detail['mq_cluster_type']}")
+                            lines.append(f"    集群类型mq_cluster_type: {detail['mq_cluster_type']}")
             return lines
 
         result["formatter"] = format_output
@@ -2423,7 +2436,7 @@ class Command(BaseCommand):
                 )
 
                 if not mq_cluster:
-                    error_message = f"MQ集群`{mq_cluster_id}`未找到"
+                    error_message = f"MQ集群mq_cluster_id`{mq_cluster_id}`未找到"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     continue
@@ -2434,7 +2447,7 @@ class Command(BaseCommand):
                     }
                 )
                 if mq_cluster.cluster_type not in data_source.MQ_CONFIG_DICT:
-                    error_message = f"MQ集群`{mq_cluster.cluster_type}`类型未找到"
+                    error_message = f"MQ集群cluster_type`{mq_cluster.cluster_type}`类型未找到"
                     issues.add(error_message)
                     details.setdefault("issues", []).append(error_message)
                     continue
