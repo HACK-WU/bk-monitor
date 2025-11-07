@@ -10,7 +10,6 @@ specific language governing permissions and limitations under the License.
 
 import datetime
 
-from django.db.models.manager import BaseManager
 import json
 import time
 import logging
@@ -34,9 +33,9 @@ from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, EventGroup
 from metadata.models.space.space import SpaceDataSource, Space
 from metadata.models.space.constants import SpaceTypes, SpaceStatus, ENABLE_V4_DATALINK_ETL_CONFIGS
 from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage, StorageClusterRecord
-from metadata.models import BcsFederalClusterInfo
+from metadata.models import BcsFederalClusterInfo, ResultTableConfig, VMStorageBindingConfig, DataBusConfig
 from metadata.models.space.space import SpaceDataSource
-from metadata.models.space.constants import SpaceTypes
+from metadata.models.space.constants import SpaceTypes, EtlConfigs, ENABLE_V4_DATALINK_ETL_CONFIGS
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
 from metadata.models.result_table import (
     ResultTable,
@@ -50,6 +49,7 @@ from metadata.models.vm.record import AccessVMRecord
 from metadata.models.data_link.data_link import DataLink
 from metadata.models.bkdata.result_table import BkBaseResultTable
 from metadata.utils import hash_util, consul_tools
+from metadata.models.data_link.utils import compose_bkdata_data_id_name, compose_bkdata_table_id
 
 logger = logging.getLogger("metadata")
 
@@ -202,7 +202,12 @@ class Command(BaseCommand):
         # 输出问题信息
         if result.get("issues"):
             for issue in result["issues"]:
-                self.stdout.write(f"    ⚠ {issue}")
+                self.stdout.write(f"    ⚠ issue:{issue}")
+
+        # 打印警告信息
+        if result.get("warnings"):
+            for warning in result["warnings"]:
+                self.stdout.write(f"    ⚠ warning:{warning}")
 
         # 调用对应的格式化函数输出关键信息
         formatter = result.get("formatter")
@@ -372,7 +377,7 @@ class Command(BaseCommand):
             self.output_check_result("check_cloud_id_configuration", cloud_id_check)
 
             # 20. 检查CustomReportSubscription
-            self.stdout.write("正在检查CustomReportSubscription...")
+            self.stdout.write("正在检查自定义上报订阅...")
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
             self.output_check_result("check_custom_report_subscription", custom_report_sub_check)
@@ -610,7 +615,7 @@ class Command(BaseCommand):
             }
 
             if 0 in [service_monitor_count, pod_monitor_count]:
-                result["status"] = Status.WARNING
+                result["status"] = Status.ERROR
             else:
                 result["status"] = Status.SUCCESS
 
@@ -620,106 +625,6 @@ class Command(BaseCommand):
             result["issues"].append(f"{message}监控资源检查异常: {str(e)}")
 
         return result
-
-    @recode_final_result
-    def check_storage_clusters(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查数据存储集群状态"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化存储集群检查输出"""
-            lines = []
-            if details:
-                storage_count = len(details.get("storage_status", {}))
-                lines.append(f"    存储配置: {storage_count}个数据源")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            # 获取数据源相关的结果表
-            storage_status = {}
-            for data_id in self.data_sources:
-                try:
-                    ds_rt = DataSourceResultTable.objects.filter(
-                        bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
-                    ).first()
-                    if not ds_rt:
-                        storage_status[data_id] = {"exists": False, "error": "未找到结果表关联"}
-                        message = f"[DataSourceResultTable] [bk_data_id={data_id}] "
-                        result["issues"].append(f"{message}未找到结果表关联")
-                        continue
-
-                    rt = ResultTable.objects.get(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
-                    storage_status[data_id] = {"exists": True, "table_id": rt.table_id, "storage_clusters": []}
-
-                    # 检查InfluxDB存储
-                    influxdb_storages = InfluxDBStorage.objects.filter(
-                        table_id=rt.table_id, bk_tenant_id=self.bk_tenant_id
-                    )
-                    for storage in influxdb_storages:
-                        cluster_status = self._check_storage_cluster_health(storage.storage_cluster, "influxdb")
-                        storage_status[data_id]["storage_clusters"].append(
-                            {
-                                "type": "influxdb",
-                                "cluster_name": storage.storage_cluster.cluster_name,
-                                "status": cluster_status,
-                            }
-                        )
-                        if cluster_status["status"] != Status.SUCCESS:
-                            message = f"[InfluxDBStorage] [bk_data_id={data_id},cluster_name={storage.storage_cluster.cluster_name}] "
-                            result["issues"].append(f"{message}集群状态异常")
-
-                    # 检查ES存储
-                    es_storages = ESStorage.objects.filter(table_id=rt.table_id, bk_tenant_id=self.bk_tenant_id)
-                    for storage in es_storages:
-                        cluster_status = self._check_storage_cluster_health(storage.storage_cluster, "elasticsearch")
-                        storage_status[data_id]["storage_clusters"].append(
-                            {
-                                "type": "elasticsearch",
-                                "cluster_name": storage.storage_cluster.cluster_name,
-                                "status": cluster_status,
-                            }
-                        )
-                        if cluster_status["status"] != Status.SUCCESS:
-                            message = f"[ESStorage] [bk_data_id={data_id},cluster_name={storage.storage_cluster.cluster_name}] "
-                            result["issues"].append(f"{message}集群状态异常")
-
-                except Exception as e:
-                    storage_status[data_id] = {"exists": False, "error": str(e)}
-                    message = f"[Storage] [bk_data_id={data_id}] "
-                    result["issues"].append(f"{message}存储检查异常: {str(e)}")
-
-            result["details"] = {"storage_status": storage_status}
-            result["status"] = (
-                Status.SUCCESS
-                if not result["issues"]
-                else (Status.WARNING if any("状态异常" in issue for issue in result["issues"]) else Status.ERROR)
-            )
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            message = f"[Storage] [cluster_id={cluster_info.cluster_id}] "
-            result["issues"].append(f"{message}存储集群检查异常: {str(e)}")
-
-        return result
-
-    def _check_storage_cluster_health(self, cluster: ClusterInfo, cluster_type: str) -> dict:
-        """检查存储集群健康状态"""
-        try:
-            if cluster_type in ["influxdb", "elasticsearch"]:
-                return {
-                    "status": Status.SUCCESS,
-                    "details": {
-                        "domain": cluster.domain_name,
-                        "port": cluster.port,
-                        "is_default": cluster.is_default_cluster,
-                    },
-                }
-            else:
-                return {"status": Status.UNKNOWN, "details": {}, "error": f"不支持的集群类型: {cluster_type}"}
-        except Exception as e:
-            return {"status": Status.ERROR, "details": {}, "error": str(e)}
 
     @recode_final_result
     def check_datasource_consul_config(self, cluster_info: BCSClusterInfo) -> dict:
@@ -766,7 +671,7 @@ class Command(BaseCommand):
                             consul_config = json.loads(consul_config)
                         except json.JSONDecodeError:
                             consul_status[data_id] = {"error": "Consul配置JSON解析失败"}
-                            message = f"[DataSource] [bk_data_id={data_id}] "
+                            message = f"[Consul] [DataSource][bk_data_id={data_id}] "
                             result["issues"].append(f"{message}Consul配置JSON解析失败")
                             continue
 
@@ -776,8 +681,10 @@ class Command(BaseCommand):
                             "exists": False,
                             "is_consistent": False,
                         }
-                        message = f"[DataSource] [bk_data_id={data_id},consul_path={datasource.consul_config_path}] "
-                        result["issues"].append(f"{message}Consul配置不存在")
+                        message = f"[Consul] [DataSource][bk_data_id={data_id}]"
+                        result["issues"].append(
+                            f"{message} consul_path={datasource.consul_config_path}Consul配置不存在"
+                        )
                         continue
 
                     # 生成数据源的标准配置
@@ -795,14 +702,14 @@ class Command(BaseCommand):
                         # 记录配置不一致的详细信息
                         diff_keys = self._find_config_diff(consul_config, datasource_config)
                         consul_status[data_id]["diff_keys"] = diff_keys
-                        message = f"[DataSource] [bk_data_id={data_id},consul_path={datasource.consul_config_path}] "
+                        message = f"[Consul] [DataSource][bk_data_id={data_id}]"
                         result["issues"].append(
-                            f"{message}Consul配置与数据库配置不一致, 差异字段:{','.join(diff_keys)}"
+                            f"{message}consul_path={datasource.consul_config_path}]Consul配置与数据库配置不一致, 差异字段:{','.join(diff_keys)}"
                         )
 
                 except Exception as e:
                     consul_status[data_id] = {"error": str(e)}
-                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    message = f"[Consul][DataSource] [bk_data_id={data_id}] "
                     result["issues"].append(f"{message}配置检查异常: {str(e)}")
                     logger.exception(f"data_id->[{data_id}] consul config check failed: {e}")
 
@@ -1733,62 +1640,56 @@ class Command(BaseCommand):
             """格式化CustomReportSubscription检查输出"""
             lines = []
             if details:
-                lines.append(f"    订阅数量: {details.get('subscription_count', 0)}")
                 if details.get("subscription_exists"):
                     lines.append(f"    业务ID: {details.get('bk_biz_id')}")
+                data_source_count = details.get("data_source_subscriptions", {}).get("total_count", 0)
+                if data_source_count > 0:
+                    lines.append(f"    数据源订阅: {data_source_count}")
             return lines
 
         result["formatter"] = format_output
 
         try:
-            bk_biz_id = cluster_info.bk_biz_id
-
-            # 查询自定义上报订阅配置
-            subscriptions = CustomReportSubscription.objects.filter(bk_biz_id=bk_biz_id)
-
-            subscription_count = subscriptions.count()
-            subscription_details = []
-
-            for sub in subscriptions:
+            # 检查每个数据源的订阅配置
+            data_source_subscriptions = {}
+            for data_id, datasource in self.data_sources.items():
                 try:
-                    # 检查订阅参数完整性
-                    config_complete = bool(sub.config)
+                    # 查询此数据源的订阅配置
+                    ds_subscription = CustomReportSubscription.objects.filter(
+                        bk_biz_id=self.bk_biz_id, bk_data_id=data_id
+                    ).first()
 
-                    if hasattr(sub, "subscription_id") and sub.subscription_id:
-                        # 配置存在
-                        pass
-
-                    subscription_details.append(
-                        {
-                            "subscription_id": sub.id,
-                            "bk_data_id": sub.bk_data_id,
-                            "config_complete": config_complete,
+                    if ds_subscription:
+                        data_source_subscriptions[data_id] = {
+                            "subscription_id": ds_subscription.subscription_id,
+                            "subscription_exists": True,
+                            "config_complete": bool(ds_subscription.config),
                         }
-                    )
+                    else:
+                        data_source_subscriptions[data_id] = {
+                            "subscription_exists": False,
+                        }
+                        message = f"[CustomReportSubscription] [bk_data_id={data_id},bk_biz_id={self.bk_biz_id}] "
+                        result["issues"].append(f"{message}数据源未配置自定义上报订阅")
 
                 except Exception as e:
-                    message = f"[CustomReportSubscription] [subscription_id={sub.id}] "
-                    result["issues"].append(f"{message}订阅检查异常: {str(e)}")
+                    message = f"[CustomReportSubscription] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}数据源订阅检查异常: {str(e)}")
 
             result["details"] = {
-                "bk_biz_id": bk_biz_id,
-                "subscription_exists": subscription_count > 0,
-                "subscription_count": subscription_count,
-                "subscriptions": subscription_details,
+                "bk_biz_id": self.bk_biz_id,
+                "data_source_subscriptions": {
+                    "total_count": len([v for v in data_source_subscriptions.values() if v.get("subscription_exists")]),
+                    "details": data_source_subscriptions,
+                },
             }
 
-            if subscription_count == 0:
-                result["status"] = Status.WARNING
-                message = f"[CustomReportSubscription] [bk_biz_id={bk_biz_id}] "
-                result["issues"].append(f"{message}没有找到自定义上报订阅配置")
-            else:
-                result["status"] = Status.SUCCESS
+            result["status"] = Status.SUCCESS if not result["issues"] else Status.ERROR
 
         except Exception as e:
             result["status"] = Status.ERROR
             message = f"[CustomReportSubscription] [cluster_id={cluster_info.cluster_id}] "
             result["issues"].append(f"{message}CustomReportSubscription检查异常: {str(e)}")
-            logger.exception(f"检查CustomReportSubscription时发生异常: {e}")
 
         return result
 
@@ -1992,19 +1893,35 @@ class Command(BaseCommand):
             proxy_storage_details = []
             influxdb_storages = []
 
-            for data_id in self.data_sources.keys():
+            for data_id, data_source in self.data_sources.items():
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
                         bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if not ds_rt:
+                        result["issues"].append(f"[DataSourceResultTable] [bk_data_id={data_id}] 数据源结果表不存在")
+                        continue
+
+                    result_table = ResultTable.objects.filter(
+                        table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
+                    if not result_table:
+                        result["issues"].append(f"[ResultTable] [table_id={ds_rt.table_id}] 结果表不存在")
+                        continue
+
+                    if result_table.default_storage != ClusterInfo.TYPE_INFLUXDB:
                         continue
 
                     # 查询InfluxDB存储
-                    influx_storages: BaseManager[InfluxDBStorage] = InfluxDBStorage.objects.filter(
+                    influx_storages = InfluxDBStorage.objects.filter(
                         table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
                     )
+
+                    if not influx_storages.exists():
+                        message = f"[InfluxDBStorage] [table_id={ds_rt.table_id}] "
+                        result["issues"].append(f"{message}InfluxDB存储不存在")
+                        continue
 
                     for storage in influx_storages:
                         influxdb_storages.append(storage)
@@ -2131,17 +2048,32 @@ class Command(BaseCommand):
             storage_cluster_records = []
 
             # 检查ESStorage配置
-            for data_id in self.data_sources.keys():
+            for data_id, data_source in self.data_sources.items():
                 try:
                     ds_rt = DataSourceResultTable.objects.filter(
                         bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
 
                     if not ds_rt:
+                        result["issues"].append(f"[DataSourceResultTable] [data_id={data_id}] 存储结果表不存在")
+                        continue
+
+                    result_table = ResultTable.objects.filter(
+                        table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
+                    if not result_table:
+                        result["issues"].append(f"[ResultTable] [table_id={ds_rt.table_id}] 结果表不存在")
+                        continue
+
+                    if result_table.default_storage != ClusterInfo.TYPE_ES:
                         continue
 
                     # 查询ES存储
                     es_storages = ESStorage.objects.filter(table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id)
+                    if not es_storages:
+                        message = f"[ESStorage] [table_id={ds_rt.table_id}] "
+                        result["issues"].append(f"{message}存储配置为空")
+                        continue
 
                     for storage in es_storages:
                         message = f"[ESStorage] [table_id={storage.table_id}] "
@@ -2298,6 +2230,7 @@ class Command(BaseCommand):
         """检查VM数据链路依赖模型
 
         验证VM数据链路创建和访问所依赖的各个模型配置是否完整
+        参考apply_data_link()方法的流程，确保检查逻辑与实际业务流程一致
         """
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
@@ -2315,15 +2248,19 @@ class Command(BaseCommand):
 
         result["formatter"] = format_output
 
-        try:
-            access_vm_records = []
-            data_link_records = []
-            federal_cluster_records = []
-            bkbase_result_tables = []
+        access_vm_records = []
+        data_links = []
 
-            # 检查AccessVMRecord
-            for data_id in self.data_sources.keys():
+        # 检查是否是联邦代理集群
+        is_federal = BcsFederalClusterInfo.objects.filter(
+            fed_cluster_id=cluster_info.cluster_id, is_deleted=False
+        ).exists()
+
+        try:
+            for data_id, data_source in self.data_sources.items():
+                # 为每个数据源独立处理，遵循循环内异常隔离原则
                 try:
+                    # 1. 检查DataSourceResultTable关联
                     ds_rt = DataSourceResultTable.objects.filter(
                         bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
                     ).first()
@@ -2331,103 +2268,211 @@ class Command(BaseCommand):
                     if not ds_rt:
                         continue
 
-                    # 查询VM访问记录
-                    vm_records = AccessVMRecord.objects.filter(
-                        result_table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
-                    )
+                    # 2. 检查ResultTable配置
+                    result_table = ResultTable.objects.filter(
+                        table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
 
-                    for vm_record in vm_records:
-                        access_vm_records.append(
-                            {
-                                "result_table_id": vm_record.result_table_id,
-                                "vm_result_table_id": vm_record.vm_result_table_id,
-                                "vm_cluster_id": vm_record.vm_cluster_id,
-                                "storage_cluster_id": vm_record.storage_cluster_id,
-                                "data_type": vm_record.data_type,
-                            }
+                    if not result_table:
+                        result["issues"].append(
+                            f"[DataSourceResultTable] [data_id={data_id}] "
+                            f"未找到对应的结果表 [table_id={ds_rt.table_id}]"
+                        )
+                        continue
+
+                    if result_table.default_storage != ClusterInfo.TYPE_INFLUXDB:
+                        continue
+
+                    need_continue = False
+                    # 3. 没开启v4数据链路，并且也没开启vm数据链路，需要跳过
+                    if (
+                        data_source.etl_config not in ENABLE_V4_DATALINK_ETL_CONFIGS
+                        and not settings.ENABLE_V2_VM_DATA_LINK
+                    ):
+                        need_continue = True
+
+                    # 没开启INFLUXDB存储，需要进行vm数据链路检查
+                    if not settings.ENABLE_INFLUXDB_STORAGE:
+                        need_continue = False
+
+                    # 6. 检查AccessVMRecord（参考apply_data_link流程中创建的记录）
+                    vm_record = AccessVMRecord.objects.filter(
+                        result_table_id=ds_rt.table_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
+
+                    # 在need_continue为True的状态下，vm_records为空,则跳过
+                    if not vm_record and need_continue:
+                        continue
+                    # 在need_continue为False的状态下，vm_records不存在时，属于异常情况，需要记录异常信息
+                    if not vm_record and not need_continue:
+                        result["issues"].append(
+                            f"[AccessVMRecord] [result_table_id={ds_rt.table_id}] 未找到对应的VM访问记录"
+                        )
+                        continue
+                    # 在need_continue为True的状态下，vm_records存在时，也属于异常情况
+                    # 可能之前创建过vm数据链路，所以需要进行vm数据链路检查
+                    if vm_record and need_continue:
+                        result["warnings"].append(
+                            f"[ENABLE_V2_VM_DATA_LINK={settings.ENABLE_V2_VM_DATA_LINK}]"
+                            f"[ENABLE_INFLUXDB_STORAGE={settings.ENABLE_INFLUXDB_STORAGE}]"
+                            f"当前不支持接入vm数据链路，但存在VM访问记录"
                         )
 
-                except Exception as e:
-                    message = f"[AccessVMRecord] [bk_data_id={data_id}] "
-                    result["issues"].append(f"{message}VM访问记录检查异常: {str(e)}")
+                    # 收集VM访问记录
+                    access_vm_records.append(
+                        {
+                            "result_table_id": vm_record.result_table_id,
+                            "vm_result_table_id": vm_record.vm_result_table_id,
+                            "vm_cluster_id": vm_record.vm_cluster_id,
+                            "storage_cluster_id": vm_record.storage_cluster_id,
+                            "data_type": vm_record.data_type,
+                        }
+                    )
 
-            # 检查DataLink
-            try:
-                data_links = DataLink.objects.filter(bk_tenant_id=self.bk_tenant_id)
+                    # 优先级1: 检查是否是联邦代理集群
+                    if is_federal:
+                        data_link_strategy = DataLink.BCS_FEDERAL_PROXY_TIME_SERIES
+                    # 优先级2: 根据ETL配置选择策略
+                    elif data_source.etl_config == EtlConfigs.BK_EXPORTER.value:
+                        data_link_strategy = DataLink.BK_EXPORTER_TIME_SERIES
+                    elif data_source.etl_config == EtlConfigs.BK_STANDARD.value:
+                        data_link_strategy = DataLink.BK_STANDARD_TIME_SERIES
+                    else:
+                        # 默认策略
+                        data_link_strategy = DataLink.BK_STANDARD_V2_TIME_SERIES
 
-                for data_link in data_links:
-                    data_link_records.append(
+                    # 8. 组装bkbase_data_name（与apply_data_link保持一致）
+                    bkbase_data_name = compose_bkdata_data_id_name(
+                        data_name=data_source.data_name, strategy=data_link_strategy
+                    )
+
+                    # 9. 检查DataLink配置（参考apply_data_link中创建/获取的BkBaseResultTable）
+                    data_link = DataLink.objects.filter(
+                        bk_tenant_id=data_source.bk_tenant_id,
+                        data_link_name=bkbase_data_name,
+                        namespace=settings.DEFAULT_VM_DATA_LINK_NAMESPACE,
+                        data_link_strategy=data_link_strategy,
+                    ).first()
+
+                    if not data_link:
+                        result["issues"].append(
+                            f"[DataLink] [data_link_name={bkbase_data_name}] "
+                            f"[strategy={data_link_strategy}] 未找到对应的数据链路配置"
+                        )
+                        continue
+
+                    data_links.append(
                         {
                             "data_link_name": data_link.data_link_name,
                             "data_link_strategy": data_link.data_link_strategy,
-                            "namespace": data_link.namespace,
                         }
                     )
 
-            except Exception as e:
-                message = f"[DataLink] [cluster_id={cluster_info.cluster_id}] "
-                result["issues"].append(f"{message}检查异常: {str(e)}")
+                    # 10. 检查BkBaseResultTable（apply_data_link流程中首先创建的对象）
+                    bk_base_result_table = BkBaseResultTable.objects.filter(
+                        data_link_name=data_link.data_link_name, bk_tenant_id=self.bk_tenant_id
+                    ).first()
 
-            # 检查BcsFederalClusterInfo
-            try:
-                federal_clusters = BcsFederalClusterInfo.objects.filter(
-                    fed_cluster_id=cluster_info.cluster_id, is_deleted=False
-                )
+                    if not bk_base_result_table:
+                        result["issues"].append(
+                            f"[BkBaseResultTable] [data_link_name={data_link.data_link_name}] "
+                            f"未找到对应的BkBaseResultTable记录"
+                        )
 
-                for fed_cluster in federal_clusters:
-                    federal_cluster_records.append(
-                        {
-                            "fed_cluster_id": fed_cluster.fed_cluster_id,
-                            "sub_cluster_id": fed_cluster.sub_cluster_id,
-                            "fed_namespaces": fed_cluster.fed_namespaces,
-                            "builtin_metric_table_id": fed_cluster.fed_builtin_metric_table_id,
-                        }
-                    )
+                    # 11. 组装bkbase_vmrt_name并检查相关配置（参考compose_configs流程）
+                    bkbase_vmrt_name = compose_bkdata_table_id(table_id=ds_rt.table_id, strategy=data_link_strategy)
 
-            except Exception as e:
-                message = f"[BcsFederalClusterInfo] [cluster_id={cluster_info.cluster_id}] "
-                result["issues"].append(f"{message}检查异常: {str(e)}")
+                    # 12. 检查ResultTableConfig（compose_configs中创建的第一个配置）
+                    vm_table_id_ins = ResultTableConfig.objects.filter(
+                        name=bkbase_vmrt_name,
+                        data_link_name=data_link.data_link_name,
+                        namespace=data_link.namespace,
+                        bk_tenant_id=self.bk_tenant_id,
+                    ).first()
 
-            # 检查BkBaseResultTable
-            try:
-                bkbase_tables = BkBaseResultTable.objects.filter(bk_tenant_id=self.bk_tenant_id)
+                    if not vm_table_id_ins:
+                        result["issues"].append(
+                            f"[ResultTableConfig] [name={bkbase_vmrt_name}] "
+                            f"[data_link_name={data_link.data_link_name}] 未找到对应的结果表配置"
+                        )
 
-                for bkbase_table in bkbase_tables:
-                    bkbase_result_tables.append(
-                        {
-                            "data_link_name": bkbase_table.data_link_name,
-                            "monitor_table_id": bkbase_table.monitor_table_id,
-                            "bkbase_table_id": bkbase_table.bkbase_table_id,
-                            "storage_type": bkbase_table.storage_type,
-                            "status": bkbase_table.status,
-                        }
-                    )
+                    # 13. 检查VMStorageBindingConfig（compose_configs中创建的第二个配置）
+                    vm_storage_ins = VMStorageBindingConfig.objects.filter(
+                        name=bkbase_vmrt_name,
+                        data_link_name=data_link.data_link_name,
+                        namespace=data_link.namespace,
+                        bk_tenant_id=self.bk_tenant_id,
+                    ).first()
 
-            except Exception as e:
-                message = f"[BkBaseResultTable] [cluster_id={cluster_info.cluster_id}] "
-                result["issues"].append(f"{message}检查异常: {str(e)}")
+                    if not vm_storage_ins:
+                        result["issues"].append(
+                            f"[VMStorageBindingConfig] [name={bkbase_vmrt_name}] "
+                            f"[data_link_name={data_link.data_link_name}] 未找到对应的VM存储绑定配置"
+                        )
 
+                    # 14. 检查DataBusConfig（compose_configs中创建的第三个配置）
+                    data_bus_ins = DataBusConfig.objects.filter(
+                        name=bkbase_vmrt_name,
+                        data_link_name=data_link.data_link_name,
+                        namespace=data_link.namespace,
+                        bk_tenant_id=self.bk_tenant_id,
+                    ).first()
+
+                    if not data_bus_ins:
+                        result["issues"].append(
+                            f"[DataBusConfig] [name={bkbase_vmrt_name}] "
+                            f"[data_link_name={data_link.data_link_name}] 未找到对应的DataBus配置"
+                        )
+
+                    vm_cluster = ClusterInfo.objects.filter(
+                        cluster_id=vm_record.vm_cluster_id, bk_tenant_id=self.bk_tenant_id
+                    ).first()
+                    if not vm_cluster:
+                        result["issues"].append(
+                            f"[ClusterInfo] [cluster_id={vm_record.storage_cluster_id}] 未找到对应的vm集群信息"
+                        )
+                        continue
+
+                    try:
+                        configs = data_link.compose_configs(
+                            bk_biz_id=self.bk_biz_id,
+                            data_source=data_source,
+                            table_id=ds_rt.table_id,
+                            storage_cluster_name=vm_cluster.cluster_name,
+                        )
+                        result["details"]["configs"] = configs
+                    except Exception as e:
+                        result["issues"].append(
+                            f"[DataLink] [data_link_name={data_link.data_link_name}] "
+                            f"[data_link.compose_configs] 获取配置异常: {str(e)}"
+                        )
+
+                except Exception as e:
+                    # 遵循循环内异常隔离原则，单个数据源检查失败不影响其他数据源
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}检查异常: {str(e)}")
+                    logger.exception(f"检查数据源 {data_id} 的VM链路依赖时发生异常: {e}")
+
+            # 设置详细信息
             result["details"] = {
                 "access_vm_record": {
                     "total_records": len(access_vm_records),
-                    "table_mapping": access_vm_records[:10],  # 只显示前10个
+                    "records": access_vm_records,
                 },
                 "data_link": {
-                    "total_links": len(data_link_records),
-                    "link_details": data_link_records[:10],
+                    "total_links": len(data_links),
+                    "links": data_links,
                 },
                 "federal_cluster_info": {
-                    "is_federal": len(federal_cluster_records) > 0,
-                    "federal_count": len(federal_cluster_records),
-                    "federal_details": federal_cluster_records,
-                },
-                "bkbase_result_table": {
-                    "total_tables": len(bkbase_result_tables),
-                    "table_details": bkbase_result_tables[:10],
+                    "is_federal": is_federal,
                 },
             }
 
-            result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
+            # 设置状态
+            if result["issues"]:
+                result["status"] = Status.WARNING
+            else:
+                result["status"] = Status.SUCCESS
 
         except Exception as e:
             result["status"] = Status.ERROR

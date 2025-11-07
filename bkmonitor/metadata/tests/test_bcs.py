@@ -20,10 +20,11 @@ from unittest.mock import patch, MagicMock
 from api.kubernetes.default import FetchK8sClusterListResource
 from core.drf_resource import api
 from metadata import models
+from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, BkBaseResultTable
 from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, Space
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
 from metadata.models.bcs.resource import BCSClusterInfo
-from metadata.models.storage import ClusterInfo, StorageClusterRecord
+from metadata.models.storage import ClusterInfo, StorageClusterRecord, ESStorage
 from metadata.task.bcs import discover_bcs_clusters, update_bcs_cluster_cloud_id_config
 from metadata.models.result_table import ResultTable
 from metadata.tests.common_utils import consul_client
@@ -317,10 +318,11 @@ def mock_settings(monkeypatch):
     monkeypatch.setattr(FetchK8sClusterListResource, "cache_type", None)
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
     monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
-    monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
     monkeypatch.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
-    # 不启用influxdb存储
+        # 不启用influxdb存储
     monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", False)
+    # 不启用VM存储
+    monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", False)
 
     with patch.object(settings, "BCS_CUSTOM_EVENT_STORAGE_CLUSTER_ID", None, create=True):
         yield
@@ -528,9 +530,11 @@ def delete_databases():
     SpaceTypeToResultTableFilterAlias.objects.filter(table_id__in=rt_ids).delete()
     # 删除influxdb存储
     InfluxDBStorage.objects.filter(table_id__in=rt_ids).delete()
+    ESStorage.objects.filter(table_id__in=rt_ids).delete()
     # 删除vm访问记录
     AccessVMRecord.objects.filter(bk_base_data_id__in=bk_data_ids).delete()
-    StorageClusterRecord.objects.filter(bk_data_id__in=bk_data_ids).delete()
+    StorageClusterRecord.objects.filter(table_id__in=rt_ids).delete()
+    BkBaseResultTable.objects.filter(monitor_table_id__in=rt_ids).delete()
 
     yield
 

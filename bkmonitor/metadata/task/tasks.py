@@ -514,6 +514,7 @@ def access_bkdata_vm(
     allow_access_v2_data_link: bool = False,
 ):
     """接入计算平台 VM 任务"""
+
     logger.info("bk_biz_id: %s, table_id: %s, data_id: %s start access bkdata vm", bk_biz_id, table_id, data_id)
     try:
         _access_bkdata_vm(
