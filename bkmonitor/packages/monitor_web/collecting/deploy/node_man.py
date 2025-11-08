@@ -322,9 +322,8 @@ class NodeManInstaller(BaseInstaller):
             api.node_man.switch_subscription(subscription_id=last_version.subscription_id, action="disable")
             api.node_man.run_subscription(
                 subscription_id=last_version.subscription_id,
-                actions={step["id"]: "UNINSTALL" for step in subscription_params["steps"]},
+                actions={step["id"]: "UNINSTALL_AND_DELETE" for step in subscription_params["steps"]},
             )
-            api.node_man.delete_subscription(subscription_id=last_version.subscription_id)
 
         # 管理自动巡检开关状态
         if settings.IS_SUBSCRIPTION_ENABLED:
@@ -520,9 +519,8 @@ class NodeManInstaller(BaseInstaller):
             subscription_params = self._get_deploy_params(self.collect_config.deployment_config)
             api.node_man.run_subscription(
                 subscription_id=subscription_id,
-                actions={step["id"]: "UNINSTALL" for step in subscription_params["steps"]},
+                actions={step["id"]: "UNINSTALL_AND_DELETE" for step in subscription_params["steps"]},
             )
-            api.node_man.delete_subscription(subscription_id=subscription_id)
 
         # 删除部署记录及采集配置
         DeploymentConfigVersion.objects.filter(config_meta_id=self.collect_config.id).delete()
