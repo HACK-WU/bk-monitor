@@ -240,12 +240,12 @@ class TestOperateConsulConfig:
 
 
 def test_discover_bcs_clusters(
-    mocker,
-    monkeypatch,
-    monkeypatch_cluster_management_fetch_clusters,
-    monkeypatch_k8s_node_list_by_cluster,
-    monkeypatch_cmdb_get_info_by_ip,
-    add_bcs_cluster_info,
+        mocker,
+        monkeypatch,
+        monkeypatch_cluster_management_fetch_clusters,
+        monkeypatch_k8s_node_list_by_cluster,
+        monkeypatch_cmdb_get_info_by_ip,
+        add_bcs_cluster_info,
 ):
     """测试周期刷新bcs集群列表 ."""
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
@@ -341,21 +341,23 @@ def configure_celery():
     from alarm_backends.service.scheduler.app import app
 
     app.conf.clear()
-    app.conf.update(CELERY_ALWAYS_EAGER=True, CELERY_EAGER_PROPAGATES=True)
+    app.conf.task_always_eager = True
+    app.conf.task_eager_propagates = True
 
     yield
 
 
 @pytest.fixture
 def mock_settings(monkeypatch):
-    with monkeypatch.context() as m:
-        m.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
-        m.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
-        m.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
-        m.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
-        # 启用influxdb存储
-        m.setattr(settings, "ENABLE_INFLUXDB_STORAGE", True)
+    monkeypatch.setattr(FetchK8sClusterListResource, "cache_type", None)
+    monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
+    monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
+    monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
+    monkeypatch.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
+    # 启用influxdb存储
+    monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", True)
 
+    with patch.object(settings, "BCS_CUSTOM_EVENT_STORAGE_CLUSTER_ID", None, create=True):
         yield
 
 
@@ -400,7 +402,7 @@ def mock_funcs(monkeypatch):
 
 # 准备数据
 @pytest.fixture()
-def prepare_databases():
+def prepare_databases(monkeypatch):
     instance_cluster_name = "default"
     proxy_cluster_id = 1001
 
@@ -488,7 +490,26 @@ def prepare_databases():
         mq_cluster.save()
         changed_gse_stream_to_id = True
 
-    yield
+    # 创建Kafka 集群
+    kafka_cluster = ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_KAFKA,
+                                               is_default_cluster=True).first()
+    if not kafka_cluster:
+        kafka_cluster = ClusterInfo.objects.create(
+            bk_tenant_id=BK_TENANT_ID,
+            cluster_type=ClusterInfo.TYPE_KAFKA,
+            cluster_name="default_kafka_cluster",
+            domain_name="kafka.example.com",
+            port=9092,
+            is_default_cluster=True,
+            defaults={"description": "默认Kafka集群", "version": "2.8.0", "schema": "http"},
+        )
+
+        # 将其配置为默认 Kafka 存储
+        # monkeypatch.setattr(settings, "BCS_KAFKA_STORAGE_CLUSTER_ID", kafka_cluster.cluster_id)
+    with patch.object(settings, "BCS_KAFKA_STORAGE_CLUSTER_ID", kafka_cluster.cluster_id, create=True):
+        yield
+
+    # 删除创建的库
     InfluxDBProxyStorage.objects.filter(proxy_cluster_id=1001).delete()
     InfluxDBClusterInfo.objects.filter(cluster_name=instance_cluster_name).delete()
 
@@ -535,21 +556,20 @@ def delete_databases():
 
 
 def test_check_bcs_clusters_status(
-    mocker,
-    monkeypatch,
-    monkeypatch_cluster_management_fetch_clusters,
-    monkeypatch_k8s_node_list_by_cluster,
-    monkeypatch_cmdb_get_info_by_ip,
-    mock_core_api,
-    mock_default_kwargs,
-    mock_settings,
-    mock_funcs,
-    prepare_databases,
-    delete_databases,
-    configure_celery,
+        mocker,
+        monkeypatch,
+        monkeypatch_cluster_management_fetch_clusters,
+        monkeypatch_k8s_node_list_by_cluster,
+        monkeypatch_cmdb_get_info_by_ip,
+        mock_core_api,
+        mock_default_kwargs,
+        mock_settings,
+        mock_funcs,
+        prepare_databases,
+        delete_databases,
+        configure_celery,
 ):
     """测试周期刷新bcs集群列表 ."""
-    monkeypatch.setattr(FetchK8sClusterListResource, "cache_type", None)
 
     # 测试状态标记为删除
     discover_bcs_clusters()
@@ -565,7 +585,7 @@ def test_check_bcs_clusters_status(
 
 
 def test_update_bcs_cluster_cloud_id_config(
-    monkeypatch, monkeypatch_k8s_node_list_by_cluster, monkeypatch_cmdb_get_info_by_ip, add_bcs_cluster_info
+        monkeypatch, monkeypatch_k8s_node_list_by_cluster, monkeypatch_cmdb_get_info_by_ip, add_bcs_cluster_info
 ):
     """测试补齐云区域ID到集群信息 ."""
     update_bcs_cluster_cloud_id_config()
