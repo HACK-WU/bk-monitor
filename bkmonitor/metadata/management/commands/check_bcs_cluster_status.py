@@ -26,9 +26,9 @@ from metadata.models.bcs.cluster import BCSClusterInfo
 from metadata.models.data_source import DataSource, DataSourceOption
 from metadata.models.bcs.resource import ServiceMonitorInfo, PodMonitorInfo
 from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage
-from metadata.models import BcsFederalClusterInfo
-from metadata.models.space.space import SpaceDataSource
-from metadata.models.space.constants import SpaceTypes
+from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, EventGroup
+from metadata.models.space.space import SpaceDataSource, Space
+from metadata.models.space.constants import SpaceTypes, SpaceStatus
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
 from metadata.models.result_table import (
     ResultTable,
@@ -276,7 +276,7 @@ class Command(BaseCommand):
             self.output_check_result("check_datasource_consul_config", consul_config)
 
             # 19. 检查空间类型与SpaceDataSource关联
-            self.stdout.write("正在检查空间类型配置...")
+            self.stdout.write("正在检查datasource、space空间配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
             check_result["details"]["space_type"] = space_type_check
             self.output_check_result("check_space_type_and_datasource", space_type_check)
@@ -304,6 +304,12 @@ class Command(BaseCommand):
             vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
             check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
             self.output_check_result("check_vm_datalink_dependencies", vm_datalink_check)
+
+            # 25. 检查VM发布空间路由
+            self.stdout.write("正在检查VM发布空间路由...")
+            vm_publish_space_router_check = self.check_vm_publish_space_router(cluster_info)
+            check_result["details"]["vm_publish_space_router"] = vm_publish_space_router_check
+            self.output_check_result("check_vm_publish_space_router", vm_publish_space_router_check)
 
             # 6. 数据存储链路检查
             self.stdout.write("正在检查数据存储...")
@@ -1591,6 +1597,39 @@ class Command(BaseCommand):
 
         return result
 
+    def _get_space_info_by_biz_id(self, bk_biz_id: int, datasource: DataSource) -> dict:
+        """
+        通过业务ID获取空间信息
+        """
+
+        target_bk_biz_id = bk_biz_id
+        data_id = datasource.bk_data_id
+
+        if target_bk_biz_id == 0:
+            if TimeSeriesGroup.objects.filter(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id).exists():
+                # 自定义时序指标，查找所属空间
+                target_bk_biz_id = datasource.data_name.split("_")[0]
+            elif EventGroup.objects.filter(bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id).exists():
+                # 自定义事件，查找所属空间
+                target_bk_biz_id = datasource.data_name.split("_")[-1]
+            try:
+                # 不符合要求的data_name，无法解析业务字段，使用默认全局业务。
+                target_bk_biz_id = int(target_bk_biz_id)
+            except (ValueError, TypeError):
+                target_bk_biz_id = 0
+
+        space_type_id = datasource.space_type_id
+        space_uid = datasource.space_uid
+
+        if target_bk_biz_id != 0:
+            space = Space.objects.get_space_info_by_biz_id(bk_biz_id=int(target_bk_biz_id))
+            space_type_id, space_uid = space["space_type"], space["space_id"]
+
+        return {
+            "space_type_id": space_type_id,
+            "space_uid": space_uid,
+        }
+
     @recode_final_result
     def check_space_type_and_datasource(self, cluster_info: BCSClusterInfo) -> dict:
         """检查空间类型与SpaceDataSource关联
@@ -1616,28 +1655,39 @@ class Command(BaseCommand):
 
             for data_id, datasource in self.data_sources.items():
                 try:
-                    space_type_id = datasource.space_type_id
-                    space_uid = datasource.space_uid
+                    space_info = self._get_space_info_by_biz_id(bk_biz_id=self.bk_biz_id, datasource=datasource)
+                    space_type_id = space_info.get("space_type_id", datasource.space_type_id)
+                    space_uid = space_info.get("space_uid", datasource.space_uid)
 
                     # 检查是否为全局空间类型
                     is_all_space_type = space_type_id == SpaceTypes.ALL.value
 
                     space_datasource_exists = False
-                    tenant_consistent = True
 
-                    if not is_all_space_type:
+                    if space_type_id and space_uid:
                         # 查询SpaceDataSource关联
                         space_ds = SpaceDataSource.objects.filter(
-                            bk_data_id=data_id, space_uid=space_uid, bk_tenant_id=self.bk_tenant_id
+                            bk_data_id=data_id,
+                            space_id=space_uid,
+                            bk_tenant_id=self.bk_tenant_id,
+                            space_type_id=space_type_id,
                         ).first()
 
                         if space_ds:
                             space_datasource_exists = True
-                            # 检查租户一致性
-                            tenant_consistent = space_ds.bk_tenant_id == datasource.bk_tenant_id
                         else:
                             result["issues"].append(
                                 f"数据源data_id:{data_id}(space_type:{space_type_id})缺少SpaceDataSource关联"
+                            )
+
+                        space = Space.objects.filter(space_id=space_uid, space_type_id=space_type_id).first()
+                        if not space:
+                            result["issues"].append(
+                                f"数据源data_id:{data_id}(space_type:{space_type_id})关联的空间不存在"
+                            )
+                        elif space.status != SpaceStatus.NORMAL.value:
+                            result["issues"].append(
+                                f"数据源data_id:{data_id}(space_type:{space_type_id})关联的空间状态异常: {space.status}"
                             )
 
                     space_check_status[data_id] = {
@@ -1645,11 +1695,7 @@ class Command(BaseCommand):
                         "space_type_id": space_type_id,
                         "is_all_space_type": is_all_space_type,
                         "space_datasource_exists": space_datasource_exists if not is_all_space_type else None,
-                        "tenant_consistent": tenant_consistent,
                     }
-
-                    if not is_all_space_type and not tenant_consistent:
-                        result["issues"].append(f"数据源data_id:{data_id}的租户ID不一致")
 
                 except Exception as e:
                     space_check_status[data_id] = {"error": str(e)}
@@ -2164,6 +2210,61 @@ class Command(BaseCommand):
             result["status"] = Status.ERROR
             result["issues"].append(f"VM数据链路依赖检查异常: {str(e)}")
             logger.exception(f"检查VM数据链路依赖时发生异常: {e}")
+
+        return result
+
+    @recode_final_result
+    def check_vm_publish_space_router(self, cluster_info: BCSClusterInfo):
+        """
+        检查vm推送并发布空间路由功能
+        """
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化空间路由检查输出"""
+            lines = []
+            if details:
+                counts = details.get("counts", {})
+                lines.append(f"    参与校验结果表数: {counts.get('total_checked_tables', 0)}")
+                lines.append(f"    空间路由缺失数: {counts.get('space_router_missing_count', 0)}")
+                lines.append(f"    data_label路由缺失数: {counts.get('data_label_missing_count', 0)}")
+                lines.append(f"    结果表详情缺失数: {counts.get('detail_missing_count', 0)}")
+                # 仅展示少量缺失样例，方便定位
+                sr_missing = details.get("space_router_missing_tables", [])
+                dl_missing = details.get("data_label_missing_tables", [])
+                td_missing = details.get("detail_missing_tables", [])
+                if sr_missing:
+                    lines.append(f"    空间路由缺失样例: {', '.join(sr_missing)}")
+                if dl_missing:
+                    lines.append(f"    data_label路由缺失样例: {', '.join(dl_missing)}")
+                if td_missing:
+                    lines.append(f"    结果表详情缺失样例: {', '.join(td_missing)}")
+            return lines
+
+        result["formatter"] = format_output
+
+        from django.conf import settings
+        from metadata.models.space.constants import SPACE_TO_RESULT_TABLE_KEY
+        from metadata.utils.redis_tools import RedisTools
+
+        for data_id, datasource in self.data_sources.items():
+            try:
+                space_info = self._get_space_info_by_biz_id(self.bk_biz_id, datasource)
+                space_type = space_info.get("space_type_id", datasource.space_type_id)
+                space_id = space_info.get("space_uid", datasource.space_uid)
+
+                if settings.ENABLE_MULTI_TENANT_MODE:
+                    space_redis_key = f"{space_type}__{space_id}|{self.bk_tenant_id}"
+                else:
+                    space_redis_key = f"{space_type}__{space_id}"
+                values = RedisTools.hmget(SPACE_TO_RESULT_TABLE_KEY, [space_redis_key])
+
+                if not values:
+                    result["issues"].append(f"数据源data_id:{data_id}空间路由检查异常: 空间路由不存在")
+                    continue
+
+            except Exception as e:
+                result["issues"].append(f"数据源data_id:{data_id}空间路由检查异常: {str(e)}")
 
         return result
 

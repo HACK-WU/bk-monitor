@@ -21,7 +21,7 @@ from unittest.mock import patch, MagicMock
 from api.kubernetes.default import FetchK8sClusterListResource
 from core.drf_resource import api
 from metadata import models
-from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias
+from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, Space
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
 from metadata.models.bcs.resource import BCSClusterInfo
 from metadata.models.storage import ClusterInfo
@@ -30,7 +30,7 @@ from metadata.models.result_table import ResultTable
 from metadata.tests.common_utils import consul_client
 from constants.common import DEFAULT_TENANT_ID
 from metadata.utils import consul_tools, redis_tools
-from .conftest import MockHashConsul, MockRedisTools, MockDynamicClient
+from .conftest import MockHashConsul, MockDynamicClient
 from metadata.models.data_link.data_link import DataLink
 
 logger = logging.getLogger("metadata")
@@ -240,12 +240,12 @@ class TestOperateConsulConfig:
 
 
 def test_discover_bcs_clusters(
-        mocker,
-        monkeypatch,
-        monkeypatch_cluster_management_fetch_clusters,
-        monkeypatch_k8s_node_list_by_cluster,
-        monkeypatch_cmdb_get_info_by_ip,
-        add_bcs_cluster_info,
+    mocker,
+    monkeypatch,
+    monkeypatch_cluster_management_fetch_clusters,
+    monkeypatch_k8s_node_list_by_cluster,
+    monkeypatch_cmdb_get_info_by_ip,
+    add_bcs_cluster_info,
 ):
     """测试周期刷新bcs集群列表 ."""
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
@@ -390,7 +390,6 @@ def mock_funcs(monkeypatch):
         # mock 同步数据库
         monkeypatch.setattr(InfluxDBStorage, "sync_db", MagicMock())
         monkeypatch.setattr(consul_tools, "HashConsul", MockHashConsul)
-        monkeypatch.setattr(redis_tools, "RedisTools", MockRedisTools)
         monkeypatch.setattr(consul_tools, "refresh_router_version", MagicMock())
         monkeypatch.setattr(DataLink, "apply_data_link_with_retry", MagicMock())
         monkeypatch.setattr(api.gse, "query_route", MagicMock(return_value={}))
@@ -490,9 +489,18 @@ def prepare_databases(monkeypatch):
         mq_cluster.save()
         changed_gse_stream_to_id = True
 
+    if not Space.objects.filter(space_type_id="bkcc", space_id="2").exists():
+        Space.objects.create(
+            bk_tenant_id=BK_TENANT_ID,
+            space_name="default_space",
+            space_id="2",
+            space_type_id="bkcc",
+        )
+
     # 创建Kafka 集群
-    kafka_cluster = ClusterInfo.objects.filter(bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_KAFKA,
-                                               is_default_cluster=True).first()
+    kafka_cluster = ClusterInfo.objects.filter(
+        bk_tenant_id=BK_TENANT_ID, cluster_type=ClusterInfo.TYPE_KAFKA, is_default_cluster=True
+    ).first()
     if not kafka_cluster:
         kafka_cluster = ClusterInfo.objects.create(
             bk_tenant_id=BK_TENANT_ID,
@@ -556,18 +564,18 @@ def delete_databases():
 
 
 def test_check_bcs_clusters_status(
-        mocker,
-        monkeypatch,
-        monkeypatch_cluster_management_fetch_clusters,
-        monkeypatch_k8s_node_list_by_cluster,
-        monkeypatch_cmdb_get_info_by_ip,
-        mock_core_api,
-        mock_default_kwargs,
-        mock_settings,
-        mock_funcs,
-        prepare_databases,
-        delete_databases,
-        configure_celery,
+    mocker,
+    monkeypatch,
+    monkeypatch_cluster_management_fetch_clusters,
+    monkeypatch_k8s_node_list_by_cluster,
+    monkeypatch_cmdb_get_info_by_ip,
+    mock_core_api,
+    mock_default_kwargs,
+    mock_settings,
+    mock_funcs,
+    prepare_databases,
+    delete_databases,
+    configure_celery,
 ):
     """测试周期刷新bcs集群列表 ."""
 
@@ -585,7 +593,7 @@ def test_check_bcs_clusters_status(
 
 
 def test_update_bcs_cluster_cloud_id_config(
-        monkeypatch, monkeypatch_k8s_node_list_by_cluster, monkeypatch_cmdb_get_info_by_ip, add_bcs_cluster_info
+    monkeypatch, monkeypatch_k8s_node_list_by_cluster, monkeypatch_cmdb_get_info_by_ip, add_bcs_cluster_info
 ):
     """测试补齐云区域ID到集群信息 ."""
     update_bcs_cluster_cloud_id_config()

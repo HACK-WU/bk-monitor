@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import copy
 import json
 from unittest import mock
-from unittest.mock import PropertyMock
+from unittest.mock import PropertyMock, patch
 
 import fakeredis
 import pytest
@@ -25,6 +25,7 @@ from kubernetes.dynamic.exceptions import NotFoundError, ResourceNotFoundError
 from metadata.models.bcs import BCSClusterInfo
 from kubernetes import client as k8s_client
 from metadata import config
+from metadata.utils import redis_tools
 
 
 @pytest.fixture
@@ -151,6 +152,8 @@ def pytest_configure():
     mock.patch(
         "alarm_backends.core.storage.redis.redis.Redis", return_value=fakeredis.FakeRedis(decode_responses=True)
     ).start()
+
+    patch.object(redis_tools, "RedisTools", MockRedisTools()).start()
 
 
 @pytest.fixture
@@ -472,6 +475,10 @@ class MockRedisTools:
         # 记录方法调用历史，便于测试验证
         self._call_history = []
 
+    def __call__(self):
+        # 返回示例本身
+        return self
+
     def get_client(self):
         """
         模拟获取Redis客户端
@@ -587,6 +594,10 @@ class MockRedisTools:
         self._data_store[key]["value"].update(field_value)
         return True
 
+    def hmset_to_redis(self, key: str, field_value: dict[str, str]) -> bool:
+        """推送表数据到 redis"""
+        return self.hmset(key, field_value)
+
     def hget(self, key: str, field: str) -> str | None:
         """
         模拟获取哈希字段值
@@ -606,7 +617,7 @@ class MockRedisTools:
 
         return self._data_store[key]["value"].get(field)
 
-    def hmget(self, key: str, *fields) -> list:
+    def hmget(self, key: str, fields: list) -> list:
         """
         模拟批量获取哈希字段值
 
