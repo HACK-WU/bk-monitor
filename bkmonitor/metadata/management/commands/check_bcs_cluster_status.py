@@ -29,7 +29,7 @@ from metadata.models.bcs.resource import ServiceMonitorInfo, PodMonitorInfo
 from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage, DorisStorage
 from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, EventGroup
 from metadata.models.space.space import SpaceDataSource, Space
-from metadata.models.space.constants import SpaceTypes, SpaceStatus
+from metadata.models.space.constants import SpaceTypes, SpaceStatus, ENABLE_V4_DATALINK_ETL_CONFIGS
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
 from metadata.models.result_table import (
     ResultTable,
@@ -2254,6 +2254,14 @@ class Command(BaseCommand):
 
             for data_id, datasource in self.data_sources.items():
                 try:
+
+                    is_v4_datalink_etl_config = datasource.etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS
+                    if (
+                        is_v4_datalink_etl_config and settings.ENABLE_V2_VM_DATA_LINK) or not settings.ENABLE_INFLUXDB_STORAGE:
+                        pass
+                    else:
+                        continue
+
                     # 获取空间信息
                     space_info = self._get_space_info_by_biz_id(self.bk_biz_id, datasource)
                     space_type_id = space_info.get("space_type_id", datasource.space_type_id)
@@ -2532,7 +2540,7 @@ class Command(BaseCommand):
                 "datalink_check": datalink_check,
             }
 
-            if sum(1 for ds in log_datasources if ds.get("v4_enabled"))==0:
+            if sum(1 for ds in log_datasources if ds.get("v4_enabled")) == 0:
                 result["warnings"].append("没有启用V4链路的日志数据源")
 
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
