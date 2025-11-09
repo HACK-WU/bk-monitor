@@ -14,7 +14,6 @@ import logging
 import elasticsearch5
 import pytest
 from django.conf import settings
-from kubernetes.client import V1NodeList, V1Node, V1NodeStatus, V1NodeCondition
 from kubernetes.dynamic import client as dynamic_client
 from unittest.mock import patch, MagicMock
 
@@ -29,9 +28,10 @@ from metadata.task.bcs import discover_bcs_clusters, update_bcs_cluster_cloud_id
 from metadata.models.result_table import ResultTable
 from metadata.tests.common_utils import consul_client
 from constants.common import DEFAULT_TENANT_ID
-from metadata.utils import consul_tools, redis_tools
+from metadata.utils import consul_tools
 from .conftest import MockHashConsul, MockDynamicClient
 from metadata.models.data_link.data_link import DataLink
+from bkmonitor.utils import tenant
 
 logger = logging.getLogger("metadata")
 
@@ -280,41 +280,6 @@ BK_TENANT_ID = "system"
 
 
 @pytest.fixture
-def mock_core_api():
-    """创建模拟的节点数据"""
-    # 创建节点条件
-    ready_condition = V1NodeCondition(
-        type="Ready", status="True", reason="KubeletReady", message="kubelet is posting ready status"
-    )
-
-    not_ready_condition = V1NodeCondition(
-        type="Ready", status="False", reason="KubeletNotReady", message="kubelet is not ready"
-    )
-
-    # 创建节点状态
-    node1_status = V1NodeStatus(conditions=[ready_condition], capacity={"cpu": "4", "memory": "8Gi", "pods": "110"})
-
-    node2_status = V1NodeStatus(conditions=[ready_condition], capacity={"cpu": "8", "memory": "16Gi", "pods": "110"})
-
-    node3_status = V1NodeStatus(conditions=[not_ready_condition], capacity={"cpu": "4", "memory": "8Gi", "pods": "110"})
-
-    # 创建节点
-    node1 = V1Node(metadata={"name": "node-1"}, status=node1_status)
-
-    node2 = V1Node(metadata={"name": "node-2"}, status=node2_status)
-
-    node3 = V1Node(metadata={"name": "node-3"}, status=node3_status)
-
-    # 创建节点列表
-    nodes_list = V1NodeList(items=[node1, node2, node3])
-
-    with patch("metadata.models.bcs.cluster.BCSClusterInfo.core_api") as mock_core_api:
-        mock_core_api.list_node.return_value = nodes_list
-        mock_core_api.list_namespace.return_value = MagicMock(items=[])
-        yield mock_core_api
-
-
-@pytest.fixture
 def mock_default_kwargs(monkeypatch):
     def change_kwargs(m, targe_obj, kwargs):
         default_kwargs = list(targe_obj.__defaults__)
@@ -354,8 +319,8 @@ def mock_settings(monkeypatch):
     monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
     monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
     monkeypatch.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
-    # 启用influxdb存储
-    monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", True)
+    # 不启用influxdb存储
+    monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", False)
 
     with patch.object(settings, "BCS_CUSTOM_EVENT_STORAGE_CLUSTER_ID", None, create=True):
         yield
@@ -383,7 +348,8 @@ def mock_funcs(monkeypatch):
         # mock 获取业务ID
         mock_get_tenant_datalink_biz_id.return_value = 2
         # mock 获取数据源
-        mock_apply_for_data_id_from_gse.return_value = 400
+        mock_apply_for_data_id_from_gse.side_effect = [400, 500, 600]
+
         mock_apply_for_data_id_from_bkdata.side_effect = get_data_id
         mock_refresh_custom_report_config.return_value = MagicMock()
 
@@ -395,6 +361,10 @@ def mock_funcs(monkeypatch):
         monkeypatch.setattr(api.gse, "query_route", MagicMock(return_value={}))
         monkeypatch.setattr(api.gse, "update_route", MagicMock(return_value={}))
         monkeypatch.setattr(dynamic_client, "DynamicClient", MockDynamicClient)
+        monkeypatch.setattr(api.bk_login, "list_tenant",
+                            MagicMock(return_value=[{"id": "system", "name": "Blueking", "status": "enabled"}]))
+
+        monkeypatch.setattr(tenant, "get_tenant_default_biz_id", MagicMock(return_value=settings.DEFAULT_BK_BIZ_ID))
 
         yield
 
@@ -537,7 +507,7 @@ def delete_databases():
     from metadata.models.result_table import ResultTable, ResultTableField, ResultTableOption
     from metadata.models.vm.record import AccessVMRecord
 
-    bk_data_ids = [100, 200, 300]
+    bk_data_ids = [100, 200, 300, 400, 500, 600]
     DataSource.objects.filter(bk_data_id__in=bk_data_ids).delete()
     KafkaTopicInfo.objects.filter(bk_data_id__in=bk_data_ids).delete()
     DataSourceOption.objects.filter(bk_data_id__in=bk_data_ids).delete()
@@ -564,12 +534,10 @@ def delete_databases():
 
 
 def test_check_bcs_clusters_status(
-    mocker,
     monkeypatch,
     monkeypatch_cluster_management_fetch_clusters,
     monkeypatch_k8s_node_list_by_cluster,
     monkeypatch_cmdb_get_info_by_ip,
-    mock_core_api,
     mock_default_kwargs,
     mock_settings,
     mock_funcs,
@@ -586,9 +554,8 @@ def test_check_bcs_clusters_status(
 
     command = Command()
     result = command.check_cluster_status("BCS-K8S-00000")
-    # 修复：只序列化可JSON序列化的部分，避免直接序列化Django模型对象
-    # print(json.dumps(result, default=str))
 
+    assert result
     command.output_summary_report(result)
 
 

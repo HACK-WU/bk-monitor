@@ -246,12 +246,6 @@ class Command(BaseCommand):
             check_result["details"]["bcs_api"] = bcs_api_check
             self.output_check_result("check_bcs_api_connection", bcs_api_check)
 
-            # 3. Kubernetes集群连接测试
-            self.stdout.write("正在测试Kubernetes集群连接...")
-            k8s_check = self.check_kubernetes_connection(cluster_info, timeout)
-            check_result["details"]["kubernetes"] = k8s_check
-            self.output_check_result("check_kubernetes_connection", k8s_check)
-
             # 4. 数据源配置验证
             self.stdout.write("正在验证数据源配置...")
             datasource_check = self.check_datasource_configuration(cluster_info)
@@ -498,63 +492,6 @@ class Command(BaseCommand):
             result["status"] = Status.ERROR
             result["details"] = {"api_accessible": False, "error": str(e)}
             result["issues"].append(f"BCS API连接失败: {str(e)}")
-
-        return result
-
-    @recode_final_result
-    def check_kubernetes_connection(self, cluster_info: BCSClusterInfo, timeout: int) -> dict:
-        """检查Kubernetes集群连接状态"""
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
-
-        def format_output(details: dict) -> list[str]:
-            """格式化Kubernetes检查输出"""
-            lines = []
-            if details.get("nodes"):
-                nodes = details["nodes"]
-                lines.append(f"    节点统计: {nodes['ready']}/{nodes['total']} 就绪")
-            return lines
-
-        result["formatter"] = format_output
-
-        try:
-            # 测试Kubernetes API连接
-            core_api = cluster_info.core_api
-
-            # 获取节点列表
-            nodes = core_api.list_node(timeout_seconds=timeout)
-            node_count = len(nodes.items)
-            ready_nodes = 0
-
-            for node in nodes.items:
-                for condition in node.status.conditions:
-                    if condition.type == "Ready" and condition.status == "True":
-                        ready_nodes += 1
-                        break
-
-            result["details"]["nodes"] = {
-                "total": node_count,
-                "ready": ready_nodes,
-            }
-
-            # 获取命名空间列表
-            namespaces = core_api.list_namespace(timeout_seconds=timeout)
-            result["details"]["namespaces_count"] = len(namespaces.items)
-
-            result["status"] = Status.SUCCESS
-
-            # 检查节点健康状态
-            if ready_nodes < node_count:
-                result["issues"].append(f"有{node_count - ready_nodes}个节点未就绪")
-
-        except k8s_client.ApiException as e:
-            result["status"] = Status.ERROR
-            result["details"]["api_error"] = {"status": e.status, "reason": e.reason}
-            result["issues"].append(f"Kubernetes API调用失败: {e.status} {e.reason}")
-
-        except Exception as e:
-            result["status"] = Status.ERROR
-            result["details"]["error"] = str(e)
-            result["issues"].append(f"Kubernetes连接异常: {str(e)}")
 
         return result
 
