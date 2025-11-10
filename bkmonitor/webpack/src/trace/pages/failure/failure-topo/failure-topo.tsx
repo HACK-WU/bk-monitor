@@ -521,8 +521,6 @@ export default defineComponent({
           attrs: {
             ...shape.attrs,
             stroke: 'rgba(58, 132, 255, 1)',
-            shadowColor: 'rgba(58, 132, 255, 0.3)',
-            shadowOffsetX: -3,
             endArrow: false,
             lineDash: false,
             lineWidth: 0,
@@ -534,8 +532,6 @@ export default defineComponent({
           attrs: {
             ...shape.attrs,
             stroke: 'rgba(58, 132, 255, 1)',
-            shadowColor: 'rgba(58, 132, 255, 0.3)',
-            shadowOffsetX: 3,
             endArrow: false,
             lineDash: false,
             lineWidth: 0,
