@@ -103,18 +103,23 @@ class Command(BaseCommand):
     检测指定集群ID在整个监控关联链路中的运行状态，包括：
     1. 数据库记录状态检查 - 验证集群基本信息和配置
     2. BCS API连接性测试 - 测试与BCS服务的通信
-    3. Kubernetes集群连接测试 - 验证K8s API可用性
-    4. 数据源配置验证 - 检查监控数据源配置
-    5. 监控资源状态检查 - ServiceMonitor和PodMonitor状态
-    6. 数据存储链路检查 - InfluxDB、ES等存储集群状态
-    7. Consul配置检查 - 验证配置中心数据同步
-    8. 数据采集配置检查 - 替换配置和指标组配置
-    9. 联邦集群关系检查 - 联邦集群拓扑和命名空间映射
-    10. 数据路由配置检查 - Transfer集群和MQ配置
-    11. 集群资源使用情况检查 - 节点、Pod状态和资源使用
-    12. 集群初始化资源检查 - EventGroup、TimeSeriesGroup、SpaceDataSource关联状态
-    13. bk-collector配置检查 - DaemonSet部署状态、Pod运行状态、配置文件完整性
-    14. 集群业务权限检查 - SpaceDataSource授权、space_uid配置、bk_biz_id配置
+    3. 数据源配置验证 - 检查监控数据源配置
+    4. DataSourceOption配置检查 - 验证数据源选项配置完整性
+    5. MQ集群关联检查 - 检查消息队列集群配置状态
+    6. 空间类型与SpaceDataSource关联检查 - 验证空间配置和数据源关联
+    7. 监控资源状态检查 - ServiceMonitor和PodMonitor状态
+    8. 关联结果表检查 - 验证结果表及相关配置完整性
+    9. InfluxDB存储配置检查 - 验证InfluxDB存储链路配置
+    10. Elasticsearch存储配置检查 - 验证ES存储链路配置
+    11. VM数据链路依赖检查 - 验证VM数据链路相关模型配置完整性
+    12. VM发布空间路由检查 - 验证VM空间路由Redis配置
+    13. 日志V4数据链路检查 - 验证日志数据链路配置（ES/Doris存储）
+    14. 联邦集群关系检查 - 联邦集群拓扑和命名空间映射（如果是联邦集群）
+    15. Consul配置检查 - 验证datasource配置中心数据同步
+    16. BCS集群CRD资源检查 - 验证ServiceMonitor/PodMonitor等CRD资源状态
+    17. BCS API Token配置检查 - 验证API访问令牌配置
+    18. 云区域ID配置检查 - 验证集群云区域配置
+    19. 自定义上报订阅检查 - 验证CustomReportSubscription配置
 
     使用示例:
     python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001
@@ -257,104 +262,104 @@ class Command(BaseCommand):
             check_result["details"]["bcs_api"] = bcs_api_check
             self.output_check_result("check_bcs_api_connection", bcs_api_check)
 
-            # 4. 数据源配置验证
+            # 3. 数据源配置验证
             self.stdout.write("正在验证数据源配置...")
             datasource_check = self.check_datasource_configuration(cluster_info)
             check_result["details"]["datasources"] = datasource_check
             self.output_check_result("check_datasource_configuration", datasource_check)
 
-            # 17. 检查DataSourceOption配置
+            # 4. 检查DataSourceOption配置
             self.stdout.write("正在检查DataSourceOption配置...")
             datasource_options_check = self.check_datasource_options(cluster_info)
             check_result["details"]["datasource_options"] = datasource_options_check
             self.output_check_result("check_datasource_options", datasource_options_check)
 
-            # 18. 检查关联mq_cluster是否正常
+            # 5. 检查关联mq_cluster是否正常
             self.stdout.write("正在检查关联mq_cluster是否正常...")
             mq_cluster_check = self.check_mq_cluster(cluster_info)
             check_result["details"]["mq_cluster"] = mq_cluster_check
             self.output_check_result("check_mq_cluster", mq_cluster_check)
 
-            # 19. 检查空间类型与SpaceDataSource关联
+            # 6. 检查空间类型与SpaceDataSource关联
             self.stdout.write("正在检查datasource、space空间配置...")
             space_type_check = self.check_space_type_and_datasource(cluster_info)
             check_result["details"]["space_type"] = space_type_check
             self.output_check_result("check_space_type_and_datasource", space_type_check)
 
-            # 5. 监控资源状态检查
+            # 7. 监控资源状态检查
             self.stdout.write("正在检查监控资源状态...")
             monitor_check = self.check_monitor_resources(cluster_info)
             check_result["details"]["monitor_resources"] = monitor_check
             self.output_check_result("check_monitor_resources", monitor_check)
 
-            # 22. 检查关联的结果表
+            # 8. 检查关联的结果表
             self.stdout.write("正在检查关联的结果表...")
             related_models_check = self.check_related_result_table(cluster_info)
             check_result["details"]["related_result_table"] = related_models_check
             self.output_check_result("check_related_result_table", related_models_check)
 
-            # 23. 检查InfluxDB存储配置
+            # 9. 检查InfluxDB存储配置
             self.stdout.write("正在检查InfluxDB存储配置...")
             influxdb_storage_check = self.check_influxdb_storage_config(cluster_info)
             check_result["details"]["influxdb_storage"] = influxdb_storage_check
             self.output_check_result("check_influxdb_storage_config", influxdb_storage_check)
 
-            # 检查elasticsearch存储配置
+            # 10. 检查elasticsearch存储配置
             self.stdout.write("正在检查elasticsearch存储配置...")
             elasticsearch_storage_check = self.check_elasticsearch_storage_config(cluster_info)
             check_result["details"]["elasticsearch_storage"] = elasticsearch_storage_check
             self.output_check_result("check_elasticsearch_storage_config", elasticsearch_storage_check)
 
-            # 24. 检查VM数据链路依赖
+            # 11. 检查VM数据链路依赖
             self.stdout.write("正在检查VM数据链路依赖...")
             vm_datalink_check = self.check_vm_datalink_dependencies(cluster_info)
             check_result["details"]["vm_datalink_dependencies"] = vm_datalink_check
             self.output_check_result("check_vm_datalink_dependencies", vm_datalink_check)
 
-            # 25. 检查VM发布空间路由
+            # 12. 检查VM发布空间路由
             self.stdout.write("正在检查VM发布空间路由...")
             vm_publish_space_router_check = self.check_vm_publish_space_router(cluster_info)
             check_result["details"]["vm_publish_space_router"] = vm_publish_space_router_check
             self.output_check_result("check_vm_publish_space_router", vm_publish_space_router_check)
 
-            # 检查日志v4数据链路
+            # 13. 检查日志v4数据链路
             self.stdout.write("正在检查日志v4数据链路...")
             log_v4_datalink_check = self.check_log_datalink(cluster_info)
             check_result["details"]["log_v4_datalink"] = log_v4_datalink_check
             self.output_check_result("check_log_datalink", log_v4_datalink_check)
 
-            # 9. 联邦集群关系检查（如果是联邦集群）
+            # 14. 联邦集群关系检查（如果是联邦集群）
             if self.is_federation_cluster(cluster_info):
                 self.stdout.write("正在检查联邦集群关系...")
                 federation_check = self.check_federation_cluster(cluster_info)
                 check_result["details"]["federation"] = federation_check
                 self.output_check_result("check_federation_cluster", federation_check)
 
-            # 19. 检查datasource的Consul配置
+            # 15. 检查datasource的Consul配置
             self.stdout.write("正在检查datasource的Consul配置...")
             consul_config = self.check_datasource_consul_config(cluster_info)
             check_result["details"]["datasource_consul_config"] = consul_config
             self.output_check_result("check_datasource_consul_config", consul_config)
 
-            # 12.1 检查BCS集群CRD资源状态
+            # 16. 检查BCS集群CRD资源状态
             self.stdout.write("正在检查BCS集群CRD资源...")
             crd_resource_check = self.check_bcs_cluster_crd_resource(cluster_info)
             check_result["details"]["crd_resources"] = crd_resource_check
             self.output_check_result("check_bcs_cluster_crd_resource", crd_resource_check)
 
-            # 15. 检查BCS API Token配置
+            # 17. 检查BCS API Token配置
             self.stdout.write("正在检查BCS API Token配置...")
             api_token_check = self.check_bcs_api_token(cluster_info)
             check_result["details"]["api_token"] = api_token_check
             self.output_check_result("check_bcs_api_token", api_token_check)
 
-            # 16. 检查云区域ID配置
+            # 18. 检查云区域ID配置
             self.stdout.write("正在检查云区域ID配置...")
             cloud_id_check = self.check_cloud_id_configuration(cluster_info)
             check_result["details"]["cloud_id"] = cloud_id_check
             self.output_check_result("check_cloud_id_configuration", cloud_id_check)
 
-            # 20. 检查CustomReportSubscription
+            # 19. 检查CustomReportSubscription
             self.stdout.write("正在检查自定义上报订阅...")
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
@@ -1570,18 +1575,16 @@ class Command(BaseCommand):
                         if space_ds:
                             space_datasource_exists = True
                         else:
-                            message = f"[SpaceDataSource] [bk_data_id={data_id},space_type_id={space_type_id}] "
+                            message = f"[SpaceDataSource] [bk_data_id={data_id},space_uid={space_uid},space_type_id={space_type_id}] "
                             result["issues"].append(f"{message}缺少SpaceDataSource关联")
 
                         space = Space.objects.filter(space_id=space_uid, space_type_id=space_type_id).first()
                         if not space:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}(space_type:{space_type_id})关联的空间不存在"
-                            )
+                            message = f"[Space] [space_uid={space_uid},space_type_id={space_type_id}] "
+                            result["issues"].append(f"{message}空间不存在")
                         elif space.status != SpaceStatus.NORMAL.value:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}(space_type:{space_type_id})关联的空间状态异常: {space.status}"
-                            )
+                            message = f"[Space] [space_uid={space_uid},space_type_id={space_type_id}] "
+                            result["issues"].append(f"{message}空间状态异常: {space.status}")
 
                     space_check_status[data_id] = {
                         "space_uid": space_uid,
@@ -1600,7 +1603,7 @@ class Command(BaseCommand):
 
         except Exception as e:
             result["status"] = Status.ERROR
-            message = f"[DataSource] [cluster_id={cluster_info.cluster_id}] "
+            message = f"[SpaceDataSource] [cluster_id={cluster_info.cluster_id}] "
             result["issues"].append(f"{message}空间类型检查异常: {str(e)}")
             logger.exception(f"检查空间类型时发生异常: {e}")
 
@@ -2521,22 +2524,24 @@ class Command(BaseCommand):
 
                     # 记录缺失项
                     if not space_router_exists:
+                        message = f"[Redis] [bk_data_id={data_id},space_redis_key={space_redis_key}] "
                         result["issues"].append(
-                            f"数据源data_id:{data_id}缺少空间路由配置, key:{SPACE_TO_RESULT_TABLE_KEY}/{space_redis_key}"
+                            f"{message}缺少空间路由配置, key:{SPACE_TO_RESULT_TABLE_KEY}/{space_redis_key}"
                         )
 
                 except Exception as e:
                     router_status[data_id] = {"error": str(e)}
-                    result["issues"].append(f"数据源data_id:{data_id}空间路由检查异常: {str(e)}")
-                    logger.exception(f"data_id->[{data_id}] 空间路由检查失败: {e}")
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}空间路由检查异常: {str(e)}")
+                    logger.exception(f"检查数据源 {data_id} 的空间路由时发生异常: {e}")
 
             result["details"] = {"router_status": router_status, "total_datasources": len(self.data_sources)}
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"VM空间路由检查异常: {str(e)}")
-            logger.exception(f"check_vm_publish_space_router failed: {e}")
+            message = f"[VMPublishSpaceRouter] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}VM空间路由检查异常: {str(e)}")
 
         return result
 
@@ -2594,7 +2599,8 @@ class Command(BaseCommand):
                     rt = ResultTable.objects.filter(bk_tenant_id=self.bk_tenant_id, table_id=table_id).first()
 
                     if not rt:
-                        result["issues"].append(f"数据源data_id:{data_id}关联的结果表{table_id}不存在")
+                        message = f"[ResultTable] [bk_data_id={data_id},table_id={table_id}] "
+                        result["issues"].append(f"{message}结果表不存在")
                         continue
 
                     if rt.default_storage != ClusterInfo.TYPE_ES:
@@ -2614,7 +2620,8 @@ class Command(BaseCommand):
                                 ResultTableOption.OPTION_ENABLE_V4_LOG_DATA_LINK, False
                             )
                         except Exception as e:
-                            result["issues"].append(f"数据源data_id:{data_id}的V4链路启用配置解析失败: {str(e)}")
+                            message = f"[ResultTableOption] [bk_data_id={data_id},table_id={table_id}] "
+                            result["issues"].append(f"{message}V4链路启用配置解析失败: {str(e)}")
 
                     log_ds_info = {
                         "data_id": data_id,
@@ -2632,7 +2639,8 @@ class Command(BaseCommand):
                         ).first()
 
                         if not datalink_option:
-                            result["issues"].append(f"数据源data_id:{data_id}启用了V4链路但缺少数据链路配置项")
+                            message = f"[ResultTableOption] [bk_data_id={data_id},table_id={table_id}] "
+                            result["issues"].append(f"{message}启用了V4链路但缺少数据链路配置项")
                             log_ds_info["config_exists"] = False
                         else:
                             log_ds_info["config_exists"] = True
@@ -2659,9 +2667,8 @@ class Command(BaseCommand):
                                             "es_storage_exists": True,
                                         }
                                     else:
-                                        result["issues"].append(
-                                            f"数据源data_id:{data_id}配置了ES存储但ES存储记录不存在"
-                                        )
+                                        message = f"[ESStorage] [bk_data_id={data_id},table_id={table_id}] "
+                                        result["issues"].append(f"{message}配置了ES存储但ES存储记录不存在")
                                         storage_check[f"{data_id}_es"] = {
                                             "table_id": table_id,
                                             "es_storage_exists": False,
@@ -2681,9 +2688,8 @@ class Command(BaseCommand):
                                             "doris_storage_exists": True,
                                         }
                                     else:
-                                        result["issues"].append(
-                                            f"数据源data_id:{data_id}配置了Doris存储但Doris存储记录不存在"
-                                        )
+                                        message = f"[DorisStorage] [bk_data_id={data_id},table_id={table_id}] "
+                                        result["issues"].append(f"{message}配置了Doris存储但Doris存储记录不存在")
                                         storage_check[f"{data_id}_doris"] = {
                                             "table_id": table_id,
                                             "doris_storage_exists": False,
@@ -2696,11 +2702,13 @@ class Command(BaseCommand):
                                 log_ds_info["doris_storage_exists"] = doris_storage_exists
 
                             except (json.JSONDecodeError, TypeError) as e:
-                                result["issues"].append(f"数据源data_id:{data_id}的数据链路配置JSON解析失败: {str(e)}")
+                                message = f"[ResultTableOption] [bk_data_id={data_id},table_id={table_id}] "
+                                result["issues"].append(f"{message}数据链路配置JSON解析失败: {str(e)}")
                                 log_ds_info["config_valid"] = False
                                 log_ds_info["error"] = f"JSON解析失败: {str(e)}"
                             except Exception as e:
-                                result["issues"].append(f"数据源data_id:{data_id}的数据链路配置验证失败: {str(e)}")
+                                message = f"[ResultTableOption] [bk_data_id={data_id},table_id={table_id}] "
+                                result["issues"].append(f"{message}数据链路配置验证失败: {str(e)}")
                                 log_ds_info["config_valid"] = False
                                 log_ds_info["error"] = f"配置验证失败: {str(e)}"
 
@@ -2725,7 +2733,8 @@ class Command(BaseCommand):
                                     "data_link_strategy": datalink.data_link_strategy,
                                 }
                             else:
-                                result["issues"].append(f"数据源data_id:{data_id}的计算平台结果表存在但DataLink不存在")
+                                message = f"[DataLink] [bk_data_id={data_id},namespace=bklog,data_link_name={bkbase_rt.data_link_name}] "
+                                result["issues"].append(f"{message}计算平台结果表存在但DataLink不存在")
                                 datalink_check[data_id] = {
                                     "table_id": table_id,
                                     "data_link_name": bkbase_rt.data_link_name,
@@ -2733,7 +2742,8 @@ class Command(BaseCommand):
                                 }
                         else:
                             # V4链路应该有BkBaseResultTable记录
-                            result["issues"].append(f"数据源data_id:{data_id}启用了V4链路但缺少计算平台结果表记录")
+                            message = f"[BkBaseResultTable] [bk_data_id={data_id},table_id={table_id}] "
+                            result["issues"].append(f"{message}启用了V4链路但缺少计算平台结果表记录")
                             datalink_check[data_id] = {
                                 "table_id": table_id,
                                 "bkbase_rt_exists": False,
@@ -2741,8 +2751,9 @@ class Command(BaseCommand):
 
                         # 检查数据源created_from字段
                         if datasource.created_from != DataIdCreatedFromSystem.BKDATA.value:
+                            message = f"[DataSource] [bk_data_id={data_id}] "
                             result["issues"].append(
-                                f"数据源data_id:{data_id}启用了V4链路但created_from不是BKDATA: {datasource.created_from}"
+                                f"{message}启用了V4链路但created_from不是BKDATA: {datasource.created_from}"
                             )
                             log_ds_info["created_from_correct"] = False
                         else:
@@ -2751,8 +2762,9 @@ class Command(BaseCommand):
                     log_datasources.append(log_ds_info)
 
                 except Exception as e:
-                    result["issues"].append(f"数据源data_id:{data_id}日志链路检查异常: {str(e)}")
-                    logger.exception(f"检查数据源data_id:{data_id}日志链路时发生异常: {e}")
+                    message = f"[DataSource] [bk_data_id={data_id}] "
+                    result["issues"].append(f"{message}日志链路检查异常: {str(e)}")
+                    logger.exception(f"检查数据源 {data_id} 的日志链路时发生异常: {e}")
 
             result["details"] = {
                 "log_datasources": log_datasources,
@@ -2761,13 +2773,14 @@ class Command(BaseCommand):
             }
 
             if sum(1 for ds in log_datasources if ds.get("v4_enabled")) == 0:
-                result["warnings"].append("没有启用V4链路的日志数据源")
+                result["warnings"].append("[LogDataLink] 没有启用V4链路的日志数据源")
 
             result["status"] = Status.SUCCESS if not result["issues"] else Status.WARNING
 
         except Exception as e:
             result["status"] = Status.ERROR
-            result["issues"].append(f"日志V4数据链路检查异常: {str(e)}")
+            message = f"[LogDataLink] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}日志V4数据链路检查异常: {str(e)}")
             logger.exception(f"检查日志V4数据链路时发生异常: {e}")
 
         return result
