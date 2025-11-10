@@ -20,8 +20,13 @@ from unittest.mock import patch, MagicMock
 from api.kubernetes.default import FetchK8sClusterListResource
 from core.drf_resource import api
 from metadata import models
-from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, BkBaseResultTable
-from metadata.models import InfluxDBClusterInfo, InfluxDBStorage, SpaceTypeToResultTableFilterAlias, Space
+from metadata.models import (
+    InfluxDBClusterInfo,
+    InfluxDBStorage,
+    SpaceTypeToResultTableFilterAlias,
+    Space,
+    BkBaseResultTable,
+)
 from metadata.models.influxdb_cluster import InfluxDBProxyStorage
 from metadata.models.bcs.resource import BCSClusterInfo
 from metadata.models.storage import ClusterInfo, StorageClusterRecord, ESStorage
@@ -319,10 +324,10 @@ def mock_settings(monkeypatch):
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
     monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
     monkeypatch.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
-        # 不启用influxdb存储
+    # 不启用influxdb存储
     monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", False)
-    # 不启用VM存储
-    monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", False)
+    # 启用VM存储
+    monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
 
     with patch.object(settings, "BCS_CUSTOM_EVENT_STORAGE_CLUSTER_ID", None, create=True):
         yield
@@ -363,8 +368,11 @@ def mock_funcs(monkeypatch):
         monkeypatch.setattr(api.gse, "query_route", MagicMock(return_value={}))
         monkeypatch.setattr(api.gse, "update_route", MagicMock(return_value={}))
         monkeypatch.setattr(dynamic_client, "DynamicClient", MockDynamicClient)
-        monkeypatch.setattr(api.bk_login, "list_tenant",
-                            MagicMock(return_value=[{"id": "system", "name": "Blueking", "status": "enabled"}]))
+        monkeypatch.setattr(
+            api.bk_login,
+            "list_tenant",
+            MagicMock(return_value=[{"id": "system", "name": "Blueking", "status": "enabled"}]),
+        )
 
         monkeypatch.setattr(tenant, "get_tenant_default_biz_id", MagicMock(return_value=settings.DEFAULT_BK_BIZ_ID))
 

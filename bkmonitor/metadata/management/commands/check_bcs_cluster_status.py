@@ -14,7 +14,6 @@ import json
 import time
 import logging
 
-from kubernetes import client as k8s_client
 from kubernetes.dynamic import client as dynamic_client
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic.exceptions import NotFoundError, ResourceNotFoundError
@@ -32,17 +31,17 @@ from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, Inf
 from metadata.models import BcsFederalClusterInfo, TimeSeriesGroup, EventGroup
 from metadata.models.space.space import SpaceDataSource, Space
 from metadata.models.space.constants import SpaceTypes, SpaceStatus, ENABLE_V4_DATALINK_ETL_CONFIGS
-from metadata.models.storage import ClusterInfo, InfluxDBStorage, ESStorage, InfluxDBProxyStorage, StorageClusterRecord
-from metadata.models import BcsFederalClusterInfo, ResultTableConfig, VMStorageBindingConfig, DataBusConfig
-from metadata.models.space.space import SpaceDataSource
-from metadata.models.space.constants import SpaceTypes, EtlConfigs, ENABLE_V4_DATALINK_ETL_CONFIGS
+from metadata.models.storage import StorageClusterRecord
+from metadata.models import ResultTableConfig, VMStorageBindingConfig, DataBusConfig
+from metadata.models.space.constants import EtlConfigs
 from metadata.models.custom_report.subscription_config import CustomReportSubscription
 from metadata.models.result_table import (
     ResultTable,
     ResultTableOption,
     ResultTableField,
     ResultTableFieldOption,
-    DataSourceResultTable, LogV4DataLinkOption,
+    DataSourceResultTable,
+    LogV4DataLinkOption,
 )
 from metadata.models.influxdb_cluster import InfluxDBClusterInfo, InfluxDBHostInfo
 from metadata.models.vm.record import AccessVMRecord
@@ -324,25 +323,12 @@ class Command(BaseCommand):
             check_result["details"]["log_v4_datalink"] = log_v4_datalink_check
             self.output_check_result("check_log_datalink", log_v4_datalink_check)
 
-            # 6. 数据存储链路检查
-            self.stdout.write("正在检查数据存储...")
-            storage_check = self.check_storage_clusters(cluster_info)
-            check_result["details"]["storage"] = storage_check
-            self.output_check_result("check_storage_clusters", storage_check)
-
             # 9. 联邦集群关系检查（如果是联邦集群）
             if self.is_federation_cluster(cluster_info):
                 self.stdout.write("正在检查联邦集群关系...")
                 federation_check = self.check_federation_cluster(cluster_info)
                 check_result["details"]["federation"] = federation_check
                 self.output_check_result("check_federation_cluster", federation_check)
-
-            # 12. 集群初始化资源检查
-            # todo 待确认
-            # self.stdout.write("正在检查集群初始化资源...")
-            # init_resource_check = self.check_cluster_init_resources(cluster_info)
-            # check_result["details"]["init_resources"] = init_resource_check
-            # self.output_check_result("check_cluster_init_resources", init_resource_check)
 
             # 19. 检查datasource的Consul配置
             self.stdout.write("正在检查datasource的Consul配置...")
@@ -351,18 +337,10 @@ class Command(BaseCommand):
             self.output_check_result("check_datasource_consul_config", consul_config)
 
             # 12.1 检查BCS集群CRD资源状态
-            # todo 增加对replace 替换配置模型的检查
             self.stdout.write("正在检查BCS集群CRD资源...")
             crd_resource_check = self.check_bcs_cluster_crd_resource(cluster_info)
             check_result["details"]["crd_resources"] = crd_resource_check
             self.output_check_result("check_bcs_cluster_crd_resource", crd_resource_check)
-
-            # 13. bk-collector配置检查
-            # todo 待确认
-            # self.stdout.write("正在检查bk-collector配置...")
-            # collector_config_check = self.check_bk_collector_config(cluster_info)
-            # check_result["details"]["bk_collector"] = collector_config_check
-            # self.output_check_result("check_bk_collector_config", collector_config_check)
 
             # 15. 检查BCS API Token配置
             self.stdout.write("正在检查BCS API Token配置...")
@@ -2484,8 +2462,7 @@ class Command(BaseCommand):
 
     @recode_final_result
     def check_vm_publish_space_router(self, cluster_info: BCSClusterInfo) -> dict:
-        """检查VM推送并发布空间路由功能
-        """
+        """检查VM推送并发布空间路由功能"""
         result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
 
         def format_output(details: dict) -> list[str]:
@@ -2507,8 +2484,6 @@ class Command(BaseCommand):
             from django.conf import settings
             from metadata.models.space.constants import (
                 SPACE_TO_RESULT_TABLE_KEY,
-                DATA_LABEL_TO_RESULT_TABLE_KEY,
-                RESULT_TABLE_DETAIL_KEY,
             )
             from metadata.utils.redis_tools import RedisTools
 
@@ -2516,10 +2491,10 @@ class Command(BaseCommand):
 
             for data_id, datasource in self.data_sources.items():
                 try:
-
                     is_v4_datalink_etl_config = datasource.etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS
                     if (
-                        is_v4_datalink_etl_config and settings.ENABLE_V2_VM_DATA_LINK) or not settings.ENABLE_INFLUXDB_STORAGE:
+                        is_v4_datalink_etl_config and settings.ENABLE_V2_VM_DATA_LINK
+                    ) or not settings.ENABLE_INFLUXDB_STORAGE:
                         pass
                     else:
                         continue
@@ -2576,7 +2551,7 @@ class Command(BaseCommand):
         4. 数据源和结果表关联正常
         5. 计算平台链路配置正确性
         """
-        result = {"status": Status.UNKNOWN, "details": {}, "issues": []}
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": [], "warnings": []}
 
         def format_output(details: dict) -> list[str]:
             """格式化日志数据链路检查输出"""
@@ -2605,7 +2580,6 @@ class Command(BaseCommand):
             # 遍历所有数据源，检查日志相关配置
             for data_id, datasource in self.data_sources.items():
                 try:
-
                     # 获取数据源关联的结果表
                     dsrt = DataSourceResultTable.objects.filter(
                         bk_data_id=data_id, bk_tenant_id=self.bk_tenant_id
@@ -2617,9 +2591,7 @@ class Command(BaseCommand):
                     table_id = dsrt.table_id
 
                     # 获取结果表信息
-                    rt = ResultTable.objects.filter(
-                        bk_tenant_id=self.bk_tenant_id, table_id=table_id
-                    ).first()
+                    rt = ResultTable.objects.filter(bk_tenant_id=self.bk_tenant_id, table_id=table_id).first()
 
                     if not rt:
                         result["issues"].append(f"数据源data_id:{data_id}关联的结果表{table_id}不存在")
@@ -2642,9 +2614,7 @@ class Command(BaseCommand):
                                 ResultTableOption.OPTION_ENABLE_V4_LOG_DATA_LINK, False
                             )
                         except Exception as e:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}的V4链路启用配置解析失败: {str(e)}"
-                            )
+                            result["issues"].append(f"数据源data_id:{data_id}的V4链路启用配置解析失败: {str(e)}")
 
                     log_ds_info = {
                         "data_id": data_id,
@@ -2662,9 +2632,7 @@ class Command(BaseCommand):
                         ).first()
 
                         if not datalink_option:
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}启用了V4链路但缺少数据链路配置项"
-                            )
+                            result["issues"].append(f"数据源data_id:{data_id}启用了V4链路但缺少数据链路配置项")
                             log_ds_info["config_exists"] = False
                         else:
                             log_ds_info["config_exists"] = True
@@ -2723,22 +2691,16 @@ class Command(BaseCommand):
                                         }
 
                                 log_ds_info["es_storage_configured"] = bool(datalink_config.es_storage_config)
-                                log_ds_info["doris_storage_configured"] = bool(
-                                    datalink_config.doris_storage_config
-                                )
+                                log_ds_info["doris_storage_configured"] = bool(datalink_config.doris_storage_config)
                                 log_ds_info["es_storage_exists"] = es_storage_exists
                                 log_ds_info["doris_storage_exists"] = doris_storage_exists
 
                             except (json.JSONDecodeError, TypeError) as e:
-                                result["issues"].append(
-                                    f"数据源data_id:{data_id}的数据链路配置JSON解析失败: {str(e)}"
-                                )
+                                result["issues"].append(f"数据源data_id:{data_id}的数据链路配置JSON解析失败: {str(e)}")
                                 log_ds_info["config_valid"] = False
                                 log_ds_info["error"] = f"JSON解析失败: {str(e)}"
                             except Exception as e:
-                                result["issues"].append(
-                                    f"数据源data_id:{data_id}的数据链路配置验证失败: {str(e)}"
-                                )
+                                result["issues"].append(f"数据源data_id:{data_id}的数据链路配置验证失败: {str(e)}")
                                 log_ds_info["config_valid"] = False
                                 log_ds_info["error"] = f"配置验证失败: {str(e)}"
 
@@ -2763,9 +2725,7 @@ class Command(BaseCommand):
                                     "data_link_strategy": datalink.data_link_strategy,
                                 }
                             else:
-                                result["issues"].append(
-                                    f"数据源data_id:{data_id}的计算平台结果表存在但DataLink不存在"
-                                )
+                                result["issues"].append(f"数据源data_id:{data_id}的计算平台结果表存在但DataLink不存在")
                                 datalink_check[data_id] = {
                                     "table_id": table_id,
                                     "data_link_name": bkbase_rt.data_link_name,
@@ -2773,9 +2733,7 @@ class Command(BaseCommand):
                                 }
                         else:
                             # V4链路应该有BkBaseResultTable记录
-                            result["issues"].append(
-                                f"数据源data_id:{data_id}启用了V4链路但缺少计算平台结果表记录"
-                            )
+                            result["issues"].append(f"数据源data_id:{data_id}启用了V4链路但缺少计算平台结果表记录")
                             datalink_check[data_id] = {
                                 "table_id": table_id,
                                 "bkbase_rt_exists": False,
