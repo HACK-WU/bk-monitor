@@ -120,11 +120,13 @@ class Command(BaseCommand):
     17. BCS API Token配置检查 - 验证API访问令牌配置
     18. 云区域ID配置检查 - 验证集群云区域配置
     19. 自定义上报订阅检查 - 验证CustomReportSubscription配置
+    20. TimeSeriesGroup和EventGroup数据完整性检查 - 验证自定义指标和事件组配置
 
     使用示例:
     python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001
-    python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001 --format json
-    python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001 --timeout 60
+    python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001 -v             # 同时展示详细信息
+    python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001 --format json  # 输出JSON格式
+    python manage.py check_bcs_cluster_status --cluster-id BCS-K8S-00001 --timeout 60   # 设置超时时间
     """
 
     help = "检测BCS集群在监控关联链路中的运行状态"
@@ -133,6 +135,8 @@ class Command(BaseCommand):
         self.cluster_info = None
         self.bk_biz_id = None
         self.bk_tenant_id = None
+        self.format_type = None
+        self.verbose = False  # 详细输出模式标志
 
         self.status = Status.UNKNOWN
         self.errors = []
@@ -146,6 +150,12 @@ class Command(BaseCommand):
         parser.add_argument("--cluster-id", type=str, required=True, help="BCS集群ID，例如: BCS-K8S-00001")
         parser.add_argument("--format", choices=["text", "json"], default="text", help="输出格式，支持text和json")
         parser.add_argument("--timeout", type=int, default=30, help="连接测试超时时间（秒），默认30秒")
+        parser.add_argument(
+            "-v",
+            "--verbose",
+            action="store_true",
+            help="启用详细输出模式，展示更多检查细节信息（仅在text模式下生效）",
+        )
 
     @property
     def data_sources(self) -> dict[str, DataSource]:
@@ -167,24 +177,27 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         """主处理函数，执行集群状态检测流程"""
         cluster_id = options["cluster_id"]
-        format_type = options["format"]
+        self.format_type = options["format"]
         timeout = options["timeout"]
+        self.verbose = options.get("verbose", False)
 
         try:
             # 输出检测开始信息
-            if format_type == "text":
+            if self.format_type == "text":
                 self.stdout.write(self.style.SUCCESS("=" * 60))
                 self.stdout.write(self.style.SUCCESS("BCS集群关联状态检测"))
                 self.stdout.write(self.style.SUCCESS("=" * 60))
                 self.stdout.write(f"集群ID: {cluster_id}")
                 self.stdout.write(f"检测时间: {timezone.now().isoformat()}")
+                if self.verbose:
+                    self.stdout.write("输出模式: 详细模式")
                 self.stdout.write("")
 
             # 执行集群状态检测（检测过程中已经实时输出结果）
             check_result = self.check_cluster_status(cluster_id, timeout)
 
             # 输出汇总信息
-            if format_type == "json":
+            if self.format_type == "json":
                 self.stdout.write(json.dumps(check_result, indent=2, ensure_ascii=False, default=str))
             else:
                 self.output_summary_report(check_result)
@@ -223,7 +236,35 @@ class Command(BaseCommand):
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"输出{component}格式化信息失败: {e}"))
 
+        # 详细模式：输出完整的details信息
+        if self.verbose and result.get("details"):
+            self.stdout.write("    详细信息:")
+            self._output_verbose_details(result["details"], indent=6)
+
         self.stdout.write("")  # 空行分隔
+
+    def _output_verbose_details(self, data, indent=4):
+        """递归输出详细信息（仅在verbose模式下）"""
+        prefix = " " * indent
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict | list):
+                    self.stdout.write(f"{prefix}{key}:")
+                    self._output_verbose_details(value, indent + 2)
+                else:
+                    # 过滤掉一些不需要展示的内部字段
+                    if key not in ["cluster_model", "formatter"]:
+                        self.stdout.write(f"{prefix}{key}: {value}")
+        elif isinstance(data, list):
+            for i, item in enumerate(data):
+                if isinstance(item, dict | list):
+                    self.stdout.write(f"{prefix}[{i}]:")
+                    self._output_verbose_details(item, indent + 2)
+                else:
+                    self.stdout.write(f"{prefix}[{i}]: {item}")
+        else:
+            self.stdout.write(f"{prefix}{data}")
 
     def check_cluster_status(self, cluster_id: str, timeout: int = 30) -> dict:
         """执行完整的集群状态检测"""
@@ -364,6 +405,12 @@ class Command(BaseCommand):
             custom_report_sub_check = self.check_custom_report_subscription(cluster_info)
             check_result["details"]["custom_report_subscription"] = custom_report_sub_check
             self.output_check_result("check_custom_report_subscription", custom_report_sub_check)
+
+            # 20. 检查TimeSeriesGroup和EventGroup数据完整性
+            self.stdout.write("正在检查TimeSeriesGroup和EventGroup数据完整性...")
+            custom_groups_check = self.check_custom_groups_integrity(cluster_info)
+            check_result["details"]["custom_groups"] = custom_groups_check
+            self.output_check_result("check_custom_groups_integrity", custom_groups_check)
 
             # 确定整体状态
             check_result["status"] = self.status
@@ -1891,7 +1938,10 @@ class Command(BaseCommand):
                         result["issues"].append(f"[ResultTable] [table_id={ds_rt.table_id}] 结果表不存在")
                         continue
 
-                    if result_table.default_storage != ClusterInfo.TYPE_INFLUXDB:
+                    if (
+                        result_table.default_storage != ClusterInfo.TYPE_INFLUXDB
+                        or not settings.ENABLE_INFLUXDB_STORAGE
+                    ):
                         continue
 
                     # 查询InfluxDB存储
@@ -2972,6 +3022,117 @@ class Command(BaseCommand):
             result["status"] = Status.ERROR
             message = f"[ClusterInfo] [cluster_id={cluster_info.cluster_id}] "
             result["issues"].append(f"{message}MQ集群检查异常: {str(e)}")
+
+        return result
+
+    @recode_final_result
+    def check_custom_groups_integrity(self, cluster_info: BCSClusterInfo) -> dict:
+        """检查TimeSeriesGroup和EventGroup数据完整性
+
+        验证自定义指标和事件组是否正确关联到相应的数据源，并确保其配置符合预期。
+        参考discover_bcs_clusters()函数的逻辑，主要检查：
+        1. TimeSeriesGroup是否存在并正确关联到CustomMetricDataID
+        2. EventGroup是否存在并正确正确关联到K8sEventDataID
+        3. 结果表、存储配置、字段定义等相关配置是否完整
+        """
+        result = {"status": Status.UNKNOWN, "details": {}, "issues": [], "warnings": []}
+
+        def format_output(details: dict) -> list[str]:
+            """格式化自定义组检查输出"""
+            lines = []
+            if details:
+                ts_info = details.get("time_series_group", {})
+                event_info = details.get("event_group", {})
+
+                if ts_info.get("exists"):
+                    lines.append("    TimeSeriesGroup: 存在")
+                    lines.append(f"      组ID: {ts_info.get('group_id')}")
+                    lines.append(f"      组名: {ts_info.get('group_name')}")
+                else:
+                    lines.append("    TimeSeriesGroup: 不存在")
+
+                if event_info.get("exists"):
+                    lines.append("    EventGroup: 存在")
+                    lines.append(f"      组ID: {event_info.get('group_id')}")
+                    lines.append(f"      组名: {event_info.get('group_name')}")
+                else:
+                    lines.append("    EventGroup: 不存在")
+            return lines
+
+        result["formatter"] = format_output
+
+        try:
+            # 1. 检查TimeSeriesGroup（自定义指标）
+            custom_metric_data_id = cluster_info.CustomMetricDataID
+            if custom_metric_data_id and custom_metric_data_id != 0:
+                ts_group = TimeSeriesGroup.objects.filter(
+                    bk_data_id=custom_metric_data_id, bk_tenant_id=self.bk_tenant_id
+                ).first()
+
+                if ts_group:
+                    result["details"]["time_series_group"] = {
+                        "exists": True,
+                        "group_id": ts_group.time_series_group_id,
+                        "group_name": ts_group.time_series_group_name,
+                        "table_id": ts_group.table_id,
+                        "is_enable": ts_group.is_enable,
+                        "data_label": ts_group.data_label,
+                    }
+
+                    # 检查TimeSeriesGroup是否启用
+                    if not ts_group.is_enable:
+                        message = f"[TimeSeriesGroup] [time_series_group_id={ts_group.time_series_group_id},bk_data_id={custom_metric_data_id}] "
+                        result["warnings"].append(f"{message}自定义指标组未启用")
+                else:
+                    result["details"]["time_series_group"] = {"exists": False}
+                    message = f"[TimeSeriesGroup] [bk_data_id={custom_metric_data_id}] "
+                    result["issues"].append(f"{message}自定义指标组不存在")
+            else:
+                result["details"]["time_series_group"] = {"exists": False, "data_id_not_configured": True}
+                result["warnings"].append("[TimeSeriesGroup] CustomMetricDataID未配置")
+
+            # 2. 检查EventGroup（自定义事件）
+            k8s_event_data_id = cluster_info.K8sEventDataID
+            if k8s_event_data_id and k8s_event_data_id != 0:
+                event_group = EventGroup.objects.filter(
+                    bk_data_id=k8s_event_data_id, bk_tenant_id=self.bk_tenant_id
+                ).first()
+
+                if event_group:
+                    result["details"]["event_group"] = {
+                        "exists": True,
+                        "group_id": event_group.event_group_id,
+                        "group_name": event_group.event_group_name,
+                        "table_id": event_group.table_id,
+                        "is_enable": event_group.is_enable,
+                        "status": event_group.status,
+                        "data_label": event_group.data_label,
+                    }
+
+                    # 检查EventGroup是否启用
+                    if not event_group.is_enable:
+                        message = f"[EventGroup] [event_group_id={event_group.event_group_id},bk_data_id={k8s_event_data_id}] "
+                        result["warnings"].append(f"{message}自定义事件组未启用")
+
+                else:
+                    result["details"]["event_group"] = {"exists": False}
+                    message = f"[EventGroup] [bk_data_id={k8s_event_data_id}] "
+                    result["issues"].append(f"{message}自定义事件组不存在")
+            else:
+                result["details"]["event_group"] = {"exists": False, "data_id_not_configured": True}
+                result["warnings"].append("[EventGroup] K8sEventDataID未配置")
+
+            # 确定整体状态
+            if not result["issues"]:
+                result["status"] = Status.SUCCESS if not result["warnings"] else Status.WARNING
+            else:
+                result["status"] = Status.WARNING
+
+        except Exception as e:
+            result["status"] = Status.ERROR
+            message = f"[CustomGroups] [cluster_id={cluster_info.cluster_id}] "
+            result["issues"].append(f"{message}自定义组检查异常: {str(e)}")
+            logger.exception(f"检查自定义组时发生异常: {e}")
 
         return result
 

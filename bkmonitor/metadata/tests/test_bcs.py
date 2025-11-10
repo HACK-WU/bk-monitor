@@ -324,8 +324,8 @@ def mock_settings(monkeypatch):
     monkeypatch.setattr(settings, "BCS_CLUSTER_SOURCE", "cluster-manager")
     monkeypatch.setattr(settings, "BCS_API_GATEWAY_TOKEN", "token")
     monkeypatch.setattr(settings, "ENABLE_MULTI_TENANT_MODE", False)
-    # 不启用influxdb存储
-    monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", False)
+    # 启用influxdb存储
+    monkeypatch.setattr(settings, "ENABLE_INFLUXDB_STORAGE", True)
     # 启用VM存储
     monkeypatch.setattr(settings, "ENABLE_V2_VM_DATA_LINK", True)
 
@@ -567,10 +567,13 @@ def test_check_bcs_clusters_status(
     from metadata.management.commands.check_bcs_cluster_status import Command
 
     command = Command()
+    # command.verbose=True  #
     result = command.check_cluster_status("BCS-K8S-00000")
 
     assert result
     command.output_summary_report(result)
+    # import json
+    # print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
 
 
 def test_update_bcs_cluster_cloud_id_config(
