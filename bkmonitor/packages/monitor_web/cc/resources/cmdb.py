@@ -49,14 +49,12 @@ def get_agent_status(bk_biz_id: int, hosts: list[Host]) -> dict[int, int]:
 
     # 获取主机数据状态，查询最近三分钟
     data_source_class = load_data_source(DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.TIME_SERIES)
-    # group by 分组的字段一定会返回
     data_source = data_source_class(
         bk_biz_id=bk_biz_id,
         interval=60,
         metrics=[{"field": "usage", "method": "AVG", "alias": "A"}],
         table="system.cpu_summary",
         group_by=["bk_host_id", "bk_target_ip", "bk_target_cloud_id"],
-        #  group_by=["bk_host_id"] if is_ipv6_biz(bk_biz_id) else ["bk_target_ip", "bk_target_cloud_id"],
     )
     query = UnifyQuery(data_sources=[data_source], bk_biz_id=bk_biz_id, expression="a")
     now = int(time.time()) * 1000
@@ -69,14 +67,14 @@ def get_agent_status(bk_biz_id: int, hosts: list[Host]) -> dict[int, int]:
             continue
 
         bk_host_id = None
-        #  if is_ipv6_biz(bk_biz_id) and record.get("bk_host_id"):
-        #  bk_host_id 有值证明是IPv6主机
         if record.get("bk_host_id"):
-            bk_host_id = int(record["bk_host_id"])
-        #  elif not is_ipv6_biz(bk_biz_id) and record.get("bk_target_ip") and record.get("bk_target_cloud_id") is not None:
-        #  bk_target_ip和bk_target_cloud_id有值证明是IPv4主机
-        elif record.get("bk_target_ip") and record.get("bk_target_cloud_id") is not None:
-            bk_host_id = ip_to_host_id.get((record["bk_target_ip"], int(record["bk_target_cloud_id"])))
+            try:
+                bk_host_id = int(record["bk_host_id"])
+            except ValueError:
+                pass
+        if not bk_host_id:
+            if record.get("bk_target_ip") and record.get("bk_target_cloud_id") is not None:
+                bk_host_id = ip_to_host_id.get((record["bk_target_ip"], int(record["bk_target_cloud_id"])))
 
         if bk_host_id:
             status[bk_host_id] = AGENT_STATUS.ON
