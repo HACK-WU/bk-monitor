@@ -111,14 +111,15 @@ class NotEqualCondition(EqualCondition):
 
 class IncludeCondition(SimpleCondition):
     def _is_match(self, data_field):
-        data_value = data_field.to_str_list()
-        if not data_value:
+        data_value_list = data_field.to_str_list()
+        if not data_value_list:
             return False
-        data_value = data_value[0]
-        cond_value = self.cond_field.to_str_list()
-        for v in cond_value:
-            if v in data_value:
-                return True
+        # 这里data_value 匹配一个即可
+        for data_value in data_value_list:
+            cond_value = self.cond_field.to_str_list()
+            for v in cond_value:
+                if v in data_value:
+                    return True
         return False
 
 
