@@ -60,6 +60,60 @@ class BackendAssignMatchManager(AlertAssignMatchManager):
         """
         适配分派规则, 后台通过缓存获取
         :return: 返回匹配的分派规则列表
+
+        返回示例：
+        matched_rules = [
+            AssignRuleMatch(
+                assign_rule={
+                    "id": 2001,
+                    "is_enabled": True,
+                    "assign_group_id": 3001,
+                    "group_name": "数据库告警组",
+                    "user_groups": [101, 102],
+                    "user_type": "main",
+                    "actions": [
+                        # 通知动作（含升级配置）
+                        {
+                            "action_type": "notice",
+                            "is_enabled": True,
+                            "upgrade_config": {
+                                "is_enabled": True,
+                                "upgrade_interval": 30,  # 分钟
+                                "user_groups": [201, 202, 203],
+                            },
+                        },
+                        # ITSM 动作（同时包含 id 与 action_id，兼容不同聚合逻辑）
+                        {
+                            "action_type": "itsm",
+                            "is_enabled": True,
+                            "id": 50011,                         # 规则内动作记录ID
+                            "action_id": "ITSMSvc-CreateTicket", # 流程服务配置ID
+                        },
+                    ],
+                    "conditions": [
+                        {"field": "alert.scenario", "value": "host_process", "operator": "==", "condition": "and"},
+                        {"field": "bk_host_id", "value": ["12345", "67890"], "operator": "in", "condition": "and"},
+                    ],
+                    "additional_tags": [
+                        {"key": "dispatch.bk_group", "value": "DB"},
+                    ],
+                    "alert_severity": 3,
+                },
+                assign_rule_snap={
+                    "id": 2001,
+                    "user_groups": [101, 102],
+                    "conditions": [
+                        {"field": "alert.scenario", "value": "host_process", "operator": "==", "condition": "and"},
+                        {"field": "bk_host_id", "value": ["12345", "67890"], "operator": "in", "condition": "and"},
+                    ],
+                    "last_group_index": 0,
+                    "last_upgrade_time": 1720000000,
+                },
+                alert=AlertDocument(...),
+            )
+        ]
+
+
         """
         # 初始化匹配的规则列表为空
         matched_rules = []
@@ -125,6 +179,7 @@ class AlertAssigneeManager:
         """
         self._is_new = new_alert  # 标记是否为新告警
         self.alert = alert  # 初始化告警对象
+
         # 设置默认的分派模式为仅通知，也就是默认通知,后续会根据分派模式获取到对应的通知人员
         self.assign_mode = assign_mode or [AssignMode.ONLY_NOTICE]
         self.notice_type = notice_type  # 设置通知类型
@@ -143,8 +198,10 @@ class AlertAssigneeManager:
 
         self.matched_group: list[AssignRuleMatch] = None  # 匹配的告警组ID
         self.is_matched = False  # 初始化匹配状态为未匹配
+
         # 获取告警分派管理对象，如果是默认通知，则返回None。否则会更新matched_group的值
         self.match_manager: BackendAssignMatchManager = self.get_match_manager()
+
         # 获取告警分派的通知负责人对象，如果是默认通知，则返回None
         self.notice_appointees_object: AlertAssignee = self.get_notice_appointees_object()
         self._is_new = new_alert  # 再次设置是否为新告警，可能是为了确保属性的正确性

@@ -73,36 +73,49 @@ def load_field_instance(field_name, field_value):
     return cond_field_class(field_name, field_value)
 
 
-def load_agg_condition_instance(agg_condition):
+def load_agg_condition_instance(agg_condition: list[dict]):
     """
     Load Condition instance by condition model
     :param agg_condition:
             [{"field":"ip", "method":"eq", "value":"111"}, {"field":"ip", "method":"eq", "value":"111", "method": "eq"}]
     :return: condition object
     """
-    conditions_config = []
+    or_cond: conditions.OrCondList = []
+    and_cond: conditions.AndCondList = []
 
-    condition = []
     for c in agg_condition:
-        if c.get("condition") == "or" and condition:
-            conditions_config.append(condition)
-            condition = []
+        if c.get("condition") == "or" and and_cond:
+            or_cond.append(and_cond)
+            and_cond = []
 
-        condition.append({"field": c["key"], "method": c["method"], "value": c["value"]})
+        and_cond.append({"field": c["key"], "method": c["method"], "value": c["value"]})
 
-    if condition:
-        conditions_config.append(condition)
-    return load_condition_instance(conditions_config)
+    if and_cond:
+        or_cond.append(and_cond)
+    return load_condition_instance(or_cond)
 
 
-def load_condition_instance(conditions_config, default_value_if_not_exists=True):
+def load_condition_instance(
+    or_conditions_list: conditions.OrCondList, default_value_if_not_exists=True
+) -> conditions.OrCondition:
     """
     根据conditions配置加载Conditions实例，构建组合条件对象树
 
     参数:
-        conditions_config: 条件配置列表，每个元素是一个条件列表，用于构建OrCondition对象
-                          格式为: [[{"field":"ip", "method":"eq", "value":"111"}, {}], []]
-                          支持多级嵌套结构，每个子列表代表一个OR条件组
+        or_conditions_list参考示例：
+         [
+            [
+                {"field": "status", "value": "active", "operator": "==", "condition": "and"},
+                {"field": "type", "value": "user", "operator": "==", "condition": "and"}
+            ],
+            [
+                {"field": "age", "value": 18, "operator": ">=", "condition": "or"},
+                {"field": "status", "value": "inactive", "operator": "==", "condition": "and"},
+                {"field": "type", "value": "admin", "operator": "==", "condition": "and"}
+            ]
+        ]
+
+
         default_value_if_not_exists: 布尔值，当条件字段不存在时的默认处理策略
                                    True表示返回空值继续处理，False表示抛出异常
 
@@ -119,19 +132,19 @@ def load_condition_instance(conditions_config, default_value_if_not_exists=True)
     6. 组装完整的条件树
     """
     # 检查conditions_config是否为列表或元组，如果不是则抛出异常
-    if not isinstance(conditions_config, list | tuple):
+    if not isinstance(or_conditions_list, list | tuple):
         raise Exception("Config Incorrect, Check your settings.")
 
     # 创建OrCondition对象作为根节点容器
     or_cond_obj = conditions.OrCondition()
 
     # 遍历顶层OR条件组
-    for cond_item_list in conditions_config:
+    for and_conditions_list in or_conditions_list:
         # 创建AND条件容器
         and_cond_obj = conditions.AndCondition()
 
         # 处理单个条件项
-        for cond_item in cond_item_list:
+        for cond_item in and_conditions_list:
             # 提取条件三要素
             field_name = cond_item.get("field")
             method = cond_item.get("method", "eq")

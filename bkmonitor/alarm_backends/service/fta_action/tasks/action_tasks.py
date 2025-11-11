@@ -49,7 +49,7 @@ logger = logging.getLogger("fta_action.run")
 
 
 @app.task(ignore_result=True, queue="celery_running_action")
-def run_action(action_type, action_info):
+def run_action(action_type: str, action_info: dict):
     """
     自愈动作的执行入口函数，动态加载处理器模块并执行指定操作
 

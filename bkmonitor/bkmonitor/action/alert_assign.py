@@ -19,7 +19,7 @@ from api.cmdb.define import Host, Set, Module
 from bkmonitor.documents import AlertDocument, AlertLog
 from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.range import load_condition_instance
-from bkmonitor.utils.range.conditions import OrCondition
+from bkmonitor.utils.range.conditions import OrCondition, OrCondList, AndCondList
 from constants.action import ActionPluginType, AssignMode, UserGroupType
 from constants.alert import EVENT_SEVERITY_DICT
 from core.drf_resource import api
@@ -117,8 +117,8 @@ class AssignRuleMatch:
         ]
         """
         # 初始化或条件组和临时与条件组
-        or_cond = []
-        and_cond = []
+        or_cond: OrCondList = []
+        and_cond: AndCondList = []
 
         # 遍历规则中的所有条件，根据条件的逻辑关系（and/or）进行分组
         for condition in self.assign_rule["conditions"]:
@@ -137,7 +137,7 @@ class AssignRuleMatch:
             or_cond.append(and_cond)
 
         # 加载条件实例，准备进行条件检查
-        self.dimension_check = load_condition_instance(or_cond, False)
+        self.dimension_check: OrCondition = load_condition_instance(or_cond, False)
 
     def assign_group(self):
         return {"group_id": self.assign_rule["assign_group_id"]}
@@ -184,7 +184,7 @@ class AssignRuleMatch:
             return True
         return self.snap_rule_id and self.rule_id and self.snap_rule_id != self.rule_id
 
-    def is_matched(self, dimensions) -> bool:
+    def is_matched(self, dimensions: dict) -> bool:
         """
         当前规则是否适配
         :param dimensions: 告警维度信息
@@ -419,33 +419,60 @@ class AlertAssignMatchManager:
         # 返回构建好的CMDB维度信息
         return cmdb_dimensions
 
-    def get_match_dimensions(self):
+    def get_match_dimensions(self) -> dict:
         """
         获取当前告警的匹配维度信息，整合多数据源维度属性
-
-        返回值:
-            dict: 包含以下维度字段的字典
-                - alert.event_source: 事件源插件ID
-                - alert.scenario: 告警场景类型
-                - alert.strategy_id: 策略唯一标识
-                - alert.name: 告警名称
-                - alert.metric: 指标列表
-                - alert.labels: 标签列表
-                - is_empty_users: 通知用户是否为空标志
-                - notice_users: 通知用户列表
-                - ip: 告警IP地址
-                - bk_cloud_id: 云区域ID
-                - bk_host_id: 主机唯一标识
-                - 动态维度字段: 从alert.dimensions解析的维度键值对
-                - origin_dimensions: 原始告警维度数据
-                - tags.*: 第三方标签内容
-                - cmdb相关属性: 从CMDB获取的节点属性
 
         该方法聚合了四类维度数据：
         1. 告警基础属性字段
         2. 结构化维度数据
         3. 第三方系统标签
         4. CMDB拓扑属性
+
+        返回示例：
+        {
+            # 告警基础属性
+            "alert.event_source": "bk_monitor_log",
+            "alert.scenario": "host_process",
+            "alert.strategy_id": "10101",
+            "alert.name": "CPU 使用率过高",
+            "alert.metric": ["cpu_usage", "load1"],
+            "alert.labels": ["scope:app", "env:prod"],
+            "labels": ["scope:app", "env:prod"],
+            "is_empty_users": "false",
+            "notice_users": {
+                "mail": ["alice@example.com", "bob@example.com"],
+                "wecom": ["alice", "bob"],
+                "chat_id": ["wxid_xxx"]
+            },
+            "ip": "10.0.0.12",
+            "bk_cloud_id": "2",
+            "bk_host_id": "2000123456",
+
+            # 维度对象（alert.dimensions）展开后合并的键值
+            "bk_target_ip": "10.0.0.12",
+            "process.name": "mysqld",
+            "env": "prod",              # 注意：如果维度 key 为 "tags.env" 会被转成 "env"
+
+            # 原始告警维度（origin_alarm.data.dimensions）并入
+            "k8s_cluster_id": "BCS-K8S-00001",
+            "pod_name": "payment-api-7b9d4f7dcf-s2k8x",
+
+            # 事件标签（alert.event.tags），以 "tags." 前缀写入
+            "tags.env": "prod",
+            "tags.service": "payment",
+            "tags.region": "gz",
+
+            # CMDB 属性（来自 host/sets/modules），值为列表
+            "host.bk_host_innerip": ["10.0.0.12"],
+            "host.os_type": ["LINUX"],
+            "host.bk_biz_name": ["在线支付"],
+            "set.bk_set_name": ["支付集群"],
+            "module.bk_module_name": ["payment-api"],
+            "module.bk_module_id": ["12345"]
+        }
+
+
         """
         # 第一部分： 告警的属性字段
         # 构建基础维度字典，包含告警核心属性和上下文信息
@@ -541,6 +568,59 @@ class AlertAssignMatchManager:
         返回值:
             List[AssignRuleMatch]: 匹配成功的规则对象列表，按优先级排序
 
+          返回示例：
+        matched_rules = [
+            AssignRuleMatch(
+                assign_rule={
+                    "id": 2001,
+                    "is_enabled": True,
+                    "assign_group_id": 3001,
+                    "group_name": "数据库告警组",
+                    "user_groups": [101, 102],
+                    "user_type": "main",
+                    "actions": [
+                        # 通知动作（含升级配置）
+                        {
+                            "action_type": "notice",
+                            "is_enabled": True,
+                            "upgrade_config": {
+                                "is_enabled": True,
+                                "upgrade_interval": 30,  # 分钟
+                                "user_groups": [201, 202, 203],
+                            },
+                        },
+                        # ITSM 动作（同时包含 id 与 action_id，兼容不同聚合逻辑）
+                        {
+                            "action_type": "itsm",
+                            "is_enabled": True,
+                            "id": 50011,                         # 规则内动作记录ID
+                            "action_id": "ITSMSvc-CreateTicket", # 流程服务配置ID
+                        },
+                    ],
+                    "conditions": [
+                        {"field": "alert.scenario", "value": "host_process", "operator": "==", "condition": "and"},
+                        {"field": "bk_host_id", "value": ["12345", "67890"], "operator": "in", "condition": "and"},
+                    ],
+                    "additional_tags": [
+                        {"key": "dispatch.bk_group", "value": "DB"},
+                    ],
+                    "alert_severity": 3,
+                },
+                assign_rule_snap={
+                    "id": 2001,
+                    "user_groups": [101, 102],
+                    "conditions": [
+                        {"field": "alert.scenario", "value": "host_process", "operator": "==", "condition": "and"},
+                        {"field": "bk_host_id", "value": ["12345", "67890"], "operator": "in", "condition": "and"},
+                    ],
+                    "last_group_index": 0,
+                    "last_upgrade_time": 1720000000,
+                },
+                alert=AlertDocument(...),
+            )
+        ]
+
+
         处理流程:
         1. 模式检查：若未启用规则分派模式直接返回空列表
         2. 动态分组转换：将动态分组条件转换为主机关联ID
@@ -627,6 +707,91 @@ class AlertAssignMatchManager:
 
         此方法遍历所有匹配的规则对象，收集通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和规则快照信息。
         它还根据通知类型决定是否获取升级用户组，并处理用户组的去重和更新。
+
+
+        返回示例：
+        matched_rule_info = {
+            # 通知负责人用户组ID列表（去重后）
+            "notice_appointees": [101, 102, 105],
+
+            # 关注组ID列表（去重后）
+            "follow_groups": [201, 202],
+
+            # ITSM操作配置字典
+            # key: ITSM action_id（流程服务配置ID）
+            # value: 该ITSM操作关联的用户组ID列表
+            "itsm_actions": {
+                "ITSMSvc-CreateTicket": [101, 102],
+                "ITSMSvc-ApprovalFlow": [105]
+            },
+
+            # 告警级别（取所有匹配规则中的最小值）
+            # 1-致命, 2-预警, 3-提醒
+            "severity": 2,
+
+            # 附加标签列表
+            "additional_tags": [
+                {"key": "dispatch.bk_group", "value": "DB"},
+                {"key": "dispatch.team", "value": "backend"},
+                {"key": "priority", "value": "high"}
+            ],
+
+            # 规则快照字典
+            # key: 规则ID（字符串格式）
+            # value: 规则的完整快照信息
+            "rule_snaps": {
+                "2001": {
+                    "id": 2001,
+                    "assign_group_id": 3001,
+                    "group_name": "数据库告警组",
+                    "user_groups": [101, 102],
+                    "user_type": "main",
+                    "conditions": [
+                        {
+                            "field": "alert.scenario",
+                            "value": "host_process",
+                            "operator": "==",
+                            "condition": "and"
+                        },
+                        {
+                            "field": "bk_host_id",
+                            "value": ["12345", "67890"],
+                            "operator": "in",
+                            "condition": "and"
+                        }
+                    ],
+                    "actions": [
+                        {
+                            "action_type": "notice",
+                            "is_enabled": True,
+                            "upgrade_config": {
+                                "is_enabled": True,
+                                "upgrade_interval": 30,
+                                "user_groups": [201, 202, 203]
+                            }
+                        }
+                    ],
+                    "additional_tags": [
+                        {"key": "dispatch.bk_group", "value": "DB"}
+                    ],
+                    "alert_severity": 2,
+                    # 升级相关字段（如果发生过升级）
+                    "last_group_index": 0,
+                    "last_upgrade_time": 1720000000
+                }
+            },
+
+            # 告警组信息（取第一个匹配规则的组信息）
+            "group_info": {
+                "group_id": 3001,
+                "group_name": "数据库告警组"
+            }
+        }
+
+        主要功能：
+        1. 收集所有匹配规则的相关信息（通知组、关注组、ITSM操作等）
+        2. 根据通知类型处理用户组获取逻辑
+        3. 构建完整的匹配规则信息字典供后续使用
         """
         # 如果没有匹配的规则，则不执行任何操作
         if not self.matched_rules:
@@ -635,13 +800,18 @@ class AlertAssignMatchManager:
         # 初始化通知用户组、关注组、ITSM用户组、所有告警级别、附加标签和新规则快照的空容器
         notice_user_groups = []
         follow_groups = []
+
+        # itsm_user_groups 数据示例
+        # {
+        #     "action_id": ["user_group_id1", "user_group_id2"],
+        # }
         itsm_user_groups = defaultdict(list)
         all_severity = []
         additional_tags = []
         new_rule_snaps = {}
 
         # 遍历所有匹配的规则对象
-        for rule_obj in self.matched_rules:
+        for rule_obj in self.matched_rules:  # type: AssignRuleMatch
             # 将规则对象的附加标签添加到总附加标签列表中
             additional_tags.extend(rule_obj.additional_tags)
             # 将规则对象的告警级别添加到所有告警级别列表中，如果规则对象的告警级别未设置，则使用当前告警的级别
@@ -712,33 +882,85 @@ class AlertAssignMatchManager:
     def get_alert_log(self):
         """
         获取告警分派流水日志
+
+        生成告警分派操作的流水日志记录，用于追踪告警级别变更和规则匹配情况。
+        该日志会记录告警适配到的分派规则组信息以及级别调整详情。
+
+        返回:
+            dict: 告警日志字典，包含以下字段：
+                - op_type: 操作类型（ACTION）
+                - event_id: 事件ID（当前时间戳）
+                - alert_id: 告警ID
+                - severity: 告警级别
+                - description: 日志描述（JSON格式）
+                - create_time: 创建时间
+                - time: 时间戳
+            None: 当没有匹配到规则时返回None
+
+        日志示例:
+        {
+            "op_type": "ACTION",
+            "event_id": 1720000000,
+            "alert_id": "abc123.1720000000.456.789.1",
+            "severity": 2,
+            "description": {
+                "text": "告警适配到自动分派规则组数据库告警组, 级别由【提醒】调整至【预警】",
+                "router_info": {
+                    "router_name": "alarm-dispatch",
+                    "params": {"biz_id": 2, "group_id": 3001}
+                },
+                "action_plugin_type": "assign"
+            },
+            "create_time": 1720000000,
+            "time": 1720000000
+        }
+
+        处理流程:
+        1. 检查是否有匹配的规则，无规则则直接返回
+        2. 比较告警级别是否发生变化，生成对应的日志内容
+        3. 构建包含路由信息的日志描述
+        4. 组装完整的告警日志字典并返回
         """
+        # 如果没有适配到告警规则，直接返回None，不生成日志
         if not self.matched_rules:
-            # 如果没有适配到告警规则，忽略
             return
+
+        # 获取当前时间戳，用于日志记录
         current_time = int(time.time())
+
+        # 判断告警级别是否发生变化，生成相应的日志内容
         if self.severity and self.severity != self.origin_severity:
+            # 告警级别发生变化时，记录变更信息到日志
             logger.info(
                 "Change alert(%s) severity from %s to %s by rule", self.alert.id, self.origin_severity, self.severity
             )
+            # 生成级别调整的提示文本
+            # 格式：告警适配到自动分派规则组{组名}, 级别由【原级别】调整至【新级别】
             content = _("告警适配到自动分派规则组${}$, 级别由【{}】调整至【{}】").format(
                 self.matched_group_info["group_name"],
                 EVENT_SEVERITY_DICT.get(self.origin_severity, self.origin_severity),
                 EVENT_SEVERITY_DICT.get(self.severity, self.severity),
             )
         else:
+            # 告警级别未发生变化时，生成级别维持不变的提示文本
+            # 格式：告警适配到自动分派规则组{组名}, 级别维持【当前级别】不变
             content = _("告警适配到自动分派规则组${}$, 级别维持【{}】不变").format(
                 self.matched_group_info["group_name"],
                 EVENT_SEVERITY_DICT.get(self.origin_severity, self.origin_severity),
                 EVENT_SEVERITY_DICT.get(self.severity, self.severity),
             )
+
+        # 构建日志描述对象，包含文本内容、路由信息和插件类型
         description = {
+            # 日志显示的文本内容
             "text": content,
-            # ?bizId={bk_biz_id}#/alarm-dispatch?group_id={group_id}
+            # 前端路由信息，用于跳转到告警分派页面
+            # 路由格式：?bizId={bk_biz_id}#/alarm-dispatch?group_id={group_id}
             "router_info": {
-                "router_name": "alarm-dispatch",
-                "params": {"biz_id": self.bk_biz_id, "group_id": self.matched_group_info["group_id"]},
+                "router_name": "alarm-dispatch",  # 路由名称
+                "params": {"biz_id": self.bk_biz_id, "group_id": self.matched_group_info["group_id"]},  # 路由参数
             },
+            # 动作插件类型标识
             "action_plugin_type": "assign",
         }
         alert_log = dict(
@@ -750,6 +972,8 @@ class AlertAssignMatchManager:
             create_time=current_time,
             time=current_time,
         )
+
+        # 返回构建好的告警日志
         return alert_log
 
     def update_assign_tags(self):

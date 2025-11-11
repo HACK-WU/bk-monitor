@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -9,12 +8,18 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import re
 import sre_constants
+from typing import Any
+
+# 类型别名定义：增强条件组的可读性
+# AndCondList: 与条件组列表，表示需要同时满足的条件集合
+AndCondList = list[dict[str, Any]]
+# OrCondList: 或条件组列表，表示多个与条件组的或关系（满足任一组即可）
+OrCondList = list[AndCondList]
 
 
-class Condition(object):
+class Condition:
     def is_match(self, data):
         raise NotImplementedError("You should implement this.")
 
@@ -64,6 +69,7 @@ class OrCondition(CompositeCondition):
     OR条件匹配器
     有一个条件匹配则匹配成功
     """
+
     def is_match(self, data):
         if not self.conditions:
             return True
@@ -79,6 +85,7 @@ class AndCondition(CompositeCondition):
     AND条件匹配器
     有一个条件不匹配则匹配失败
     """
+
     def is_match(self, data):
         # 匹配条件为空，则默认匹配
         if not self.conditions:
@@ -99,7 +106,7 @@ class EqualCondition(SimpleCondition):
 
 class NotEqualCondition(EqualCondition):
     def _is_match(self, data_field):
-        return not super(NotEqualCondition, self)._is_match(data_field)
+        return not super()._is_match(data_field)
 
 
 class IncludeCondition(SimpleCondition):
@@ -117,7 +124,7 @@ class IncludeCondition(SimpleCondition):
 
 class ExcludeCondition(IncludeCondition):
     def _is_match(self, data_field):
-        return not super(ExcludeCondition, self)._is_match(data_field)
+        return not super()._is_match(data_field)
 
 
 class GreaterCondition(SimpleCondition):
@@ -129,7 +136,7 @@ class GreaterCondition(SimpleCondition):
 
 class LesserOrEqualCondition(GreaterCondition):
     def _is_match(self, data_field):
-        return not super(LesserOrEqualCondition, self)._is_match(data_field)
+        return not super()._is_match(data_field)
 
 
 class LesserCondition(SimpleCondition):
@@ -141,7 +148,7 @@ class LesserCondition(SimpleCondition):
 
 class GreaterOrEqualCondition(LesserCondition):
     def _is_match(self, data_field):
-        return not super(GreaterOrEqualCondition, self)._is_match(data_field)
+        return not super()._is_match(data_field)
 
 
 class RegularCondition(SimpleCondition):
@@ -153,7 +160,7 @@ class RegularCondition(SimpleCondition):
         cond_value = self.cond_field.to_str_list()
         for v in cond_value:
             try:
-                reg = re.compile(r"%s" % v)
+                reg = re.compile(rf"{v}")
             except sre_constants.error:
                 return False
 
@@ -164,7 +171,7 @@ class RegularCondition(SimpleCondition):
 
 class NotRegularCondition(RegularCondition):
     def _is_match(self, data_field):
-        return not super(NotRegularCondition, self)._is_match(data_field)
+        return not super()._is_match(data_field)
 
 
 class IsSuperSetCondition(SimpleCondition):

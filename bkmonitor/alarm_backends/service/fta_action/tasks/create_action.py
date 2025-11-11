@@ -818,7 +818,7 @@ class CreateActionProcessor:
                 # 所有的通知，需要判断信号是否为有效状态
                 continue
 
-            itsm_actions = []  # 流程服务类型的告警套餐
+            itsm_actions: list[dict] = []  # 流程服务类型的告警套餐
             # 告警分派处理，并返回分派管理对象
             assignee_manager: AlertAssigneeManager = self.alert_assign_handle(
                 alert, action_configs, origin_action_ids, itsm_actions
