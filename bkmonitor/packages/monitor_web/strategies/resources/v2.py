@@ -2125,14 +2125,12 @@ class GetMetricListV2Resource(Resource):
         return f"{prefix}:{metric['result_table_id'].replace('.', ':')}:{metric['metric_field']}"
 
     @classmethod
-    def get_metric_list(cls, bk_biz_id: int, metrics: QuerySet):
+    def get_metric_list(cls, bk_biz_id: int, metrics: QuerySet[MetricListCache]):
         """
         指标数据
         """
         metric_list: list[dict] = []
-        for metric in metrics:
-            metric: MetricListCache
-
+        for metric in metrics:  # type MetricListCache
             default_trigger_config = (
                 DEFAULT_TRIGGER_CONFIG_MAP.get(metric.data_source_label, {})
                 .get(metric.data_type_label, {})

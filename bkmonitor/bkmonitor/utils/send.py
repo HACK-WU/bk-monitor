@@ -241,45 +241,94 @@ class BaseSender:
 
     def send(self, notice_way: str, notice_receivers: list, action_plugin=ActionPluginType.NOTICE):
         """
-        统一发送通知
-        :return: :return: {
-            "user1": {"result": true, "message": "OK"},
-            "user2": {"result": false, "message": "发送失败"}
-        }
-        :rtype: dict
+        统一发送通知接口
+
+        该方法是通知发送的核心入口，负责根据不同的通知方式（微信、邮件、短信等）
+        向指定的接收人列表发送通知消息，并收集每个接收人的发送结果。
+
+        参数:
+            notice_way: 通知方式，如 'weixin'、'email'、'sms'、'voice'、'wxwork-bot' 等
+            notice_receivers: 通知接收人列表，可以是用户名、邮箱地址、webhook地址等
+            action_plugin: 动作插件类型，默认为 ActionPluginType.NOTICE（通知类型）
+
+        返回值:
+            dict: 每个接收人的发送结果字典，格式如下：
+            {
+                "user1": {"result": True, "message": "OK"},
+                "user2": {"result": False, "message": "发送失败"}
+            }
+
+        执行流程:
+            1. 检查并调整消息格式（Markdown或纯文本）
+            2. 处理异常内容
+            3. 获取适配后的通知内容
+            4. 动态调用对应的发送方法
+            5. 统计发送结果并上报监控指标
         """
+        # ==================== 步骤1: 检查并调整消息格式 ====================
+        # 如果实际通知方式与初始化时的方式不一致，需要重新设置消息类型和编码
         if notice_way != self.notice_way:
-            # 需要判断真正通知的方式是否与默认的一致，不一致的话要重置msg_type
+            # 判断当前通知方式是否支持Markdown格式
+            # settings.MD_SUPPORTED_NOTICE_WAYS 包含支持Markdown的通知方式列表
             self.msg_type = "markdown" if notice_way in settings.MD_SUPPORTED_NOTICE_WAYS else "text"
+
+            # 设置消息编码：某些通知方式（如企业微信机器人）不需要编码，其他使用UTF-8
             self.encoding = None if notice_way in self.NoEncoding else self.Utf8Encoding
+
+        # ==================== 步骤2: 处理异常内容 ====================
+        # 如果消息内容本身是一个异常对象，直接返回失败结果
+        # 这种情况通常发生在消息渲染或准备阶段出错时
         if isinstance(self.content, Exception):
             return {
                 notice_receiver: {"message": str(self.content), "result": False} for notice_receiver in notice_receivers
             }
+
+        # ==================== 步骤3: 获取适配后的通知内容 ====================
+        # 根据不同的通知方式对消息内容进行格式化处理
+        # 例如：邮件需要HTML格式，企业微信需要特定的JSON结构等
         self.content = self.get_notice_content(notice_way, self.content)
+
+        # ==================== 步骤4: 动态调用对应的发送方法 ====================
+        # 根据通知方式动态获取对应的发送方法
+        # 例如：notice_way='weixin' 会调用 self.send_weixin() 方法
+        #      notice_way='wxwork-bot' 会调用 self.send_wxwork_bot() 方法（'-'替换为'_'）
         method = getattr(self, "send_{}".format(notice_way.replace("-", "_")), None)
+
         if method:
+            # 如果存在专用的发送方法，则调用该方法
             notice_results = method(notice_receivers, action_plugin=action_plugin)
         else:
+            # 如果没有专用方法，使用默认的通用发送方法
+            # 通常用于处理第三方或自定义的通知渠道
             notice_results = self.send_default(notice_way, notice_receivers)
 
+        # ==================== 步骤5: 统计发送结果并上报监控指标 ====================
         if notice_results:
+            # 初始化成功和失败计数器
             failed_count = 0
             succeed_count = 0
+
+            # 遍历所有接收人的发送结果，统计成功和失败数量
             for result in notice_results.values():
                 if result["result"]:
                     succeed_count += 1
                 else:
                     failed_count += 1
+
+            # 上报失败指标到监控系统（Prometheus）
+            # 用于监控告警通知的发送质量和成功率
             if failed_count:
                 metrics.ACTION_NOTICE_API_CALL_COUNT.labels(
                     notice_way=notice_way, status=metrics.StatusEnum.FAILED
                 ).inc(failed_count)
+
+            # 上报成功指标到监控系统
             if succeed_count:
                 metrics.ACTION_NOTICE_API_CALL_COUNT.labels(
                     notice_way=notice_way, status=metrics.StatusEnum.SUCCESS
                 ).inc(succeed_count)
 
+        # 返回所有接收人的发送结果字典
         return notice_results
 
     def send_default(self, notice_way, notice_receivers, sender=None):

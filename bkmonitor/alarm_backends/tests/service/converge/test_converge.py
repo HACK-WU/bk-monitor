@@ -20,6 +20,14 @@ ten_hour_ago = NOW - ONE_HOUR * 10
 five_hour_ago = NOW - ONE_HOUR * 5
 
 
+@pytest.fixture(scope="module", autouse=True)
+def mock_settings():
+    from django.conf import settings
+
+    with patch.object(settings, "USE_TZ", True):
+        yield
+
+
 def get_alert_dict():
     alert_dict = {
         "dedupe_md5": "632af25faf3bddc789c579f0961f0232",

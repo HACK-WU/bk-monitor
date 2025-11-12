@@ -731,14 +731,24 @@ class AlertAssignee:
             user_type: 用户组类型枚举值，默认为主通知组类型
                       可选值: UserGroupType.MAIN(主组), UserGroupType.BACKUP(备用组)等
 
-        返回值:
-            dict: 包含完整通知配置的字典，结构示例：
-                {
-                    "weixin": ["admin", "test_user"],
-                    "email": ["admin@example.com"],
-                    "wxbot_mention_users": [{"user1": ["group1_user"]}]
-                }
-            其中键为通知方式名称，值为对应的接收人列表，特殊键"wxbot_mention_users"存储@用户映射关系
+        返回示例:
+          {
+                # 微信通知接收人列表
+                "weixin": ["admin", "user1", "user2"],
+
+                # 邮件通知接收人列表
+                "email": ["admin@example.com", "user1@example.com"],
+
+                # 短信通知接收人列表
+                "sms": ["admin", "user3"],
+
+                # 电话通知接收人列表（按用户组分组）
+                "voice": [
+                    ["admin", "user1"],      # 第一个用户组
+                    ["user2", "user3"]       # 第二个用户组
+                ]
+            }
+
 
         执行流程:
         1. 从用户组获取基础通知配置（通过get_group_notify_configs方法）
@@ -748,80 +758,123 @@ class AlertAssignee:
         5. 清理空的wxbot_mention_users字段
         """
 
-        # step 1 通过用户组获取对应时间段的通知渠道
+        # ========== 步骤1: 获取用户组通知配置 ==========
+        # 根据通知类型和用户组类型，从用户组配置中获取对应时间段的通知渠道信息
+        # 返回格式: {group_id: {"notice_way": {...}, "mention_users": [...]}}
         group_notify_items = self.get_group_notify_configs(notice_type, user_type)
 
-        # step 3 根据通知方式和用户组进行关联配置
+        # ========== 步骤2: 初始化通知配置字典 ==========
+        # 如果没有传入已有配置，则创建一个新的defaultdict，键为通知方式，值为接收人列表
         notify_configs = notify_configs or defaultdict(list)
+
+        # 确定当前通知阶段：如果未指定则使用告警级别作为默认值
+        # 例如：告警级别可能是 "1"(致命), "2"(预警), "3"(提醒)
         notice_phase = notice_phase or self.alert.severity
+
+        # 根据通知类型确定阶段匹配的字段名
+        # 告警通知使用"level"字段，执行通知使用"phase"字段
         notice_item_phase_key = "level" if notice_type == NoticeType.ALERT_NOTICE else "phase"
+
+        # 初始化企业微信机器人@用户列表（用于存储需要@的用户映射关系）
         notify_configs["wxbot_mention_users"] = notify_configs.get("wxbot_mention_users", [])
 
-        # 主要处理逻辑：遍历用户组通知配置
+        # ========== 步骤3: 遍历用户组通知配置，构建完整的通知接收人列表 ==========
         for group_id, notify_info in group_notify_items.items():
+            # 提取当前用户组的通知方式配置和需要@的用户列表
             notify_item = notify_info["notice_way"]
             mention_users = notify_info["mention_users"]
+
+            # 如果该用户组没有配置通知方式，跳过处理
             if not notify_item:
                 continue
 
+            # 获取当前用户组的所有成员列表
+            # 格式: ["user1", "user2", "user3"]
             group_users = self.all_group_users.get(group_id, [])
+
+            # 初始化当前阶段匹配的通知方式列表
             notice_ways = []
 
-            # 获取当前阶段匹配的通知方式配置
+            # ========== 步骤3.1: 匹配当前阶段的通知方式配置 ==========
+            # 遍历通知配置项，找到与当前阶段（告警级别或执行阶段）匹配的配置
+            # notify_config示例: [{"level": "1", "notice_ways": [{"name": "weixin", "receivers": [...]}]}]
             for notify_config_item in notify_item["notify_config"]:
                 if notice_phase == notify_config_item[notice_item_phase_key]:
+                    # 找到匹配的阶段配置，提取通知方式列表
                     notice_ways = notify_config_item.get("notice_ways")
 
-            # 处理具体通知方式
+            # ========== 步骤3.2: 处理每种通知方式的接收人 ==========
             for notice_way in notice_ways:
+                # 获取通知方式类型，如: "weixin"(微信), "email"(邮件), "voice"(电话)等
                 notice_way_type = notice_way["name"]
 
-                # 电话通知特殊处理（用户列表去重存储）
+                # ========== 特殊处理1: 电话通知 ==========
+                # 电话通知需要按用户组整体存储，避免重复拨打
+                # 存储格式: {"voice": [["user1", "user2"], ["user3", "user4"]]}
                 if notice_way_type == NoticeWay.VOICE:
+                    # 检查当前用户组是否已添加，避免重复
                     if group_users not in notify_configs[notice_way_type]:
                         notify_configs[notice_way_type].append(group_users)
                     continue
 
-                # 企业微信渠道处理（包含@用户映射）
+                # ========== 特殊处理2: 有明确指定接收人的通知方式 ==========
                 if notice_way.get("receivers"):
+                    # ========== 特殊处理2.1: BKChat渠道（蓝鲸聊天工具） ==========
+                    # BKChat支持多种子渠道，格式为 "子渠道类型|接收人ID"
+                    # 例如: "wxwork|user123" 表示通过企业微信发送给user123
                     if notice_way_type == NoticeWay.BK_CHAT:
-                        # BKChat渠道解析隐藏通知方式
                         for receiver in notice_way["receivers"]:
                             try:
+                                # 尝试解析子渠道类型和接收人ID
                                 real_notice_way, receiver_id = receiver.split("|")
                             except ValueError:
+                                # 如果解析失败（没有"|"分隔符），直接作为普通接收人处理
                                 notify_configs[notice_way_type].append(receiver)
                                 continue
+                            # 按"bkchat|子渠道"的格式存储接收人
+                            # 例如: {"bkchat|wxwork": ["user123", "user456"]}
                             notify_configs[f"{notice_way_type}|{real_notice_way}"].append(receiver_id)
                     else:
-                        # 普通通知方式处理（去重后添加接收人）
+                        # ========== 特殊处理2.2: 普通通知方式（微信、邮件等） ==========
+                        # 过滤掉已存在的接收人，避免重复通知
                         receivers = [
                             receiver
                             for receiver in notice_way["receivers"]
                             if receiver not in notify_configs[notice_way_type]
                         ]
+
+                        # 将新的接收人添加到通知配置中
                         if receivers:
                             notify_configs[notice_way_type].extend(receivers)
 
-                        # 记录需要@的用户信息
+                        # ========== 处理企业微信机器人@用户功能 ==========
+                        # 如果配置了需要@的用户，记录每个接收人对应需要@的用户列表
+                        # 用于在企业微信群消息中@特定用户
                         if mention_users:
                             for receiver in notice_way["receivers"]:
+                                # self.wxbot_mention_users格式: {"receiver1": ["mention_user1", "mention_user2"]}
                                 self.wxbot_mention_users[receiver].extend(mention_users)
                     continue
 
-                # 默认通知逻辑（无指定接收人时使用用户组成员）
+                # ========== 默认处理: 无指定接收人时使用用户组全体成员 ==========
+                # 当通知方式没有指定具体接收人时，默认通知该用户组的所有成员
                 for group_user in group_users:
+                    # 去重检查：避免同一用户被重复添加
                     if group_user not in notify_configs[notice_way_type]:
                         notify_configs[notice_way_type].append(group_user)
 
-        # 处理@用户映射关系存储
+        # ========== 步骤4: 处理企业微信机器人@用户映射关系 ==========
+        # 如果存在需要@的用户映射，将其添加到通知配置中
+        # 格式: {"wxbot_mention_users": [{"receiver1": ["user1", "user2"]}]}
         if self.wxbot_mention_users:
             notify_configs["wxbot_mention_users"].append(self.wxbot_mention_users)
 
-        # 清理空的@用户字段
+        # ========== 步骤5: 清理空的@用户字段 ==========
+        # 如果最终没有需要@的用户，移除该字段以保持数据整洁
         if not notify_configs["wxbot_mention_users"]:
             notify_configs.pop("wxbot_mention_users")
 
+        # 返回完整的通知配置字典
         return notify_configs
 
     def add_appointee_to_notify_group(self, notify_configs):
