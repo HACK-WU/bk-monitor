@@ -156,8 +156,10 @@ class CustomTemplateRenderer:
         notice_way = context.get("notice_way")
         if notice_way == NoticeWay.MAIL:
             content = content.replace("\n", "")
+        if context.get("is_json"):
+            # 模板渲染目标是一个 JSON，内容需先序列化，以确保格式正确。
+            alarm_content = json.dumps(alarm_content, ensure_ascii=False)[1:-1]
 
-        # 设置用户内容到上下文
         context["user_content"] = alarm_content
 
         # 判断是否需要截断超长内容
@@ -263,6 +265,9 @@ class AlarmNoticeTemplate:
         for renderer in self.Renderers:
             template_message = renderer.render(template_message, context)
 
+        is_json: bool = context.get("is_json", False)
+        if is_json:
+            return template_message
         return template_message.replace("\\n", "\n").replace("\\t", "\t")
 
     @staticmethod
