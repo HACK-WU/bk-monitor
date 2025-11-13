@@ -9,7 +9,7 @@ from bkmonitor.models.fta.action import ConvergeInstance, ConvergeRelation, Acti
 from bkmonitor.models.base import CacheRouter, CacheNode
 from alarm_backends.service.scheduler.app import app
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(databases="__all__")
 NOW = int(time.time())
 
 ONE_HOUR = 60 * 60
@@ -391,7 +391,7 @@ class TestActionConverge:
                 "alert_ids": [alert.id],
                 "severity": alert.severity,
                 "execute_times": alert.cycle_handle_record[str(action["id"])]["execute_times"],
-                "relation_id": action["id"],
+                "action_id": action["id"],
             }
             # 创建动作，并进行动作收敛
             action_ids = CreateActionProcessor(**params).do_create_actions()

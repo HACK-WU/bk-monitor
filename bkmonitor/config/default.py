@@ -736,100 +736,188 @@ ACCESS_LATENCY_THRESHOLD_CONSTANT = 180
 # kafka是否自动提交配置
 KAFKA_AUTO_COMMIT = True
 
+# Django模型默认主键字段类型
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
+# ============================================================================
+# 数据库路由配置
+# ============================================================================
+# 数据库路由器列表，按优先级顺序执行
+# 1. bk_dataview.router.DBRouter: Grafana可视化数据库路由器
+#    - 负责将bk_dataview应用的模型路由到独立的Grafana数据库
 DATABASE_ROUTERS = ["bk_dataview.router.DBRouter"]
 
 # 是否开启表访问次数统计
+# 通过环境变量ENABLE_TABLE_VISIT_COUNT控制，用于性能监控和优化
+# 2. bkmonitor.db_routers.TableVisitCountRouter: 表访问统计路由器（可选）
+#    - 记录每个模型的访问频率
+#    - 每分钟输出一次统计日志
+#    - 用于分析热点表和优化数据库性能
 if os.getenv("ENABLE_TABLE_VISIT_COUNT", "false").lower() == "true":
     DATABASE_ROUTERS.append("bkmonitor.db_routers.TableVisitCountRouter")
 
-# 数据库配置
-# 后台DB配置
+# ============================================================================
+# 数据库连接配置获取
+# ============================================================================
+# 后台核心业务数据库配置
+# 包含：monitor_api、metadata、bkmonitor、apm、calendars等应用的数据
 (
-    BACKEND_MYSQL_NAME,
-    BACKEND_MYSQL_HOST,
-    BACKEND_MYSQL_PORT,
-    BACKEND_MYSQL_USER,
-    BACKEND_MYSQL_PASSWORD,
+    BACKEND_MYSQL_NAME,  # 数据库名称
+    BACKEND_MYSQL_HOST,  # 数据库主机地址
+    BACKEND_MYSQL_PORT,  # 数据库端口
+    BACKEND_MYSQL_USER,  # 数据库用户名
+    BACKEND_MYSQL_PASSWORD,  # 数据库密码
 ) = get_backend_mysql_settings()
-# SaaS DB配置
+
+# SaaS前台业务数据库配置
+# 包含：用户管理、权限、前台配置等数据
 SAAS_MYSQL_NAME, SAAS_MYSQL_HOST, SAAS_MYSQL_PORT, SAAS_MYSQL_USER, SAAS_MYSQL_PASSWORD = get_saas_mysql_settings()
-# 后台DB扩展配置
+
+# 后台告警专用数据库配置
+# 包含：ActionInstance、ConvergeInstance、ConvergeRelation等告警相关模型
 (
-    BACKEND_ALERT_MYSQL_NAME,
-    BACKEND_ALERT_MYSQL_HOST,
-    BACKEND_ALERT_MYSQL_PORT,
-    BACKEND_ALERT_MYSQL_USER,
-    BACKEND_ALERT_MYSQL_PASSWORD,
+    BACKEND_ALERT_MYSQL_NAME,  # 告警数据库名称
+    BACKEND_ALERT_MYSQL_HOST,  # 告警数据库主机地址
+    BACKEND_ALERT_MYSQL_PORT,  # 告警数据库端口
+    BACKEND_ALERT_MYSQL_USER,  # 告警数据库用户名
+    BACKEND_ALERT_MYSQL_PASSWORD,  # 告警数据库密码
 ) = get_backend_alert_mysql_settings()
 
-# 判断前后台DB配置是否相同，如果不同则需要使用路由
+# ============================================================================
+# 动态路由器配置
+# ============================================================================
+# 判断前后台数据库配置是否相同，决定是否启用后台路由器
+# 如果前后台使用不同的数据库实例，则需要添加BackendRouter进行路由分离
+# 3. bkmonitor.db_routers.BackendRouter: 后台业务路由器（条件启用）
+#    - 根据应用标签（app_label）将后台应用路由到monitor_api数据库
+#    - 将告警相关模型路由到backend_alert数据库
+#    - 支持动态路由覆盖机制（通过UsingDB上下文管理器）
 if SAAS_MYSQL_NAME != BACKEND_MYSQL_NAME or SAAS_MYSQL_HOST != BACKEND_MYSQL_HOST:
     DATABASE_ROUTERS.append("bkmonitor.db_routers.BackendRouter")
+    # 后台数据库标识，用于代码中引用后台数据库
     BACKEND_DATABASE_NAME = "monitor_api"
+    # 是否需要对monitor_api数据库执行迁移
     MIGRATE_MONITOR_API = True
 else:
+    # 前后台使用同一数据库，统一使用default标识
     BACKEND_DATABASE_NAME = "default"
+    # 不需要单独迁移monitor_api数据库
     MIGRATE_MONITOR_API = False
 
-# Grafana DB配置
+# ============================================================================
+# Grafana数据库配置获取
+# ============================================================================
+# Grafana可视化平台专用数据库配置
 (
-    GRAFANA_MYSQL_NAME,
-    GRAFANA_MYSQL_HOST,
-    GRAFANA_MYSQL_PORT,
-    GRAFANA_MYSQL_USER,
-    GRAFANA_MYSQL_PASSWORD,
+    GRAFANA_MYSQL_NAME,  # Grafana数据库名称
+    GRAFANA_MYSQL_HOST,  # Grafana数据库主机地址
+    GRAFANA_MYSQL_PORT,  # Grafana数据库端口
+    GRAFANA_MYSQL_USER,  # Grafana数据库用户名
+    GRAFANA_MYSQL_PASSWORD,  # Grafana数据库密码
 ) = get_grafana_mysql_settings()
 
+# ============================================================================
+# 数据库引擎选择
+# ============================================================================
+# 尝试使用连接池引擎以提升性能
+# dj_db_conn_pool: 基于SQLAlchemy连接池的Django数据库后端
+# 优点：
+# 1. 减少数据库连接创建和销毁的开销
+# 2. 提高并发处理能力
+# 3. 支持连接复用和自动回收
 try:
-    # 判断 dj_db_conn_pool 是否存在
+    # 判断 dj_db_conn_pool 模块是否存在
     importlib.import_module("dj_db_conn_pool")
 
+    # 仅在web角色下使用连接池，worker和api角色使用标准引擎
     assert ROLE == "web"
     default_db_engine = "dj_db_conn_pool.backends.mysql"
 except (AssertionError, ModuleNotFoundError):
+    # 连接池模块不存在或非web角色，使用Django标准MySQL引擎
     default_db_engine = "django.db.backends.mysql"
 
+# ============================================================================
+# 数据库实例配置
+# ============================================================================
+# Django数据库配置字典，定义所有数据库连接
 DATABASES = {
+    # --------------------------------------------------------------------
+    # default: SaaS前台主数据库
+    # --------------------------------------------------------------------
+    # 用途：存储前台业务数据，包括用户配置、权限、会话等
+    # 特点：使用连接池引擎（web角色），支持高并发访问
     "default": {
-        "ENGINE": default_db_engine,
-        "NAME": SAAS_MYSQL_NAME,
-        "USER": SAAS_MYSQL_USER,
-        "PASSWORD": SAAS_MYSQL_PASSWORD,
-        "HOST": SAAS_MYSQL_HOST,
-        "PORT": SAAS_MYSQL_PORT,
+        "ENGINE": default_db_engine,  # 数据库引擎（支持连接池）
+        "NAME": SAAS_MYSQL_NAME,  # 数据库名称
+        "USER": SAAS_MYSQL_USER,  # 数据库用户
+        "PASSWORD": SAAS_MYSQL_PASSWORD,  # 数据库密码
+        "HOST": SAAS_MYSQL_HOST,  # 数据库主机
+        "PORT": SAAS_MYSQL_PORT,  # 数据库端口
+        # 连接池配置（仅在使用dj_db_conn_pool引擎时生效）
         "POOL_OPTIONS": {
-            "POOL_SIZE": 5,
-            "MAX_OVERFLOW": -1,
-            "RECYCLE": 600,
+            "POOL_SIZE": 5,  # 连接池大小：保持5个活跃连接
+            "MAX_OVERFLOW": -1,  # 最大溢出连接数：-1表示无限制
+            "RECYCLE": 600,  # 连接回收时间：600秒后回收连接
         },
-        "OPTIONS": {"charset": "utf8mb4", "read_timeout": 300},
+        # MySQL连接选项
+        "OPTIONS": {
+            "charset": "utf8mb4",  # 字符集：支持emoji等特殊字符
+            "read_timeout": 300,  # 读取超时：5分钟
+        },
     },
+    # --------------------------------------------------------------------
+    # monitor_api: 后台核心业务数据库
+    # --------------------------------------------------------------------
+    # 用途：存储监控核心数据，包括策略、告警、元数据等
+    # 应用：monitor_api、metadata、bkmonitor、apm、calendars
+    # 特点：使用标准引擎，不使用连接池
     "monitor_api": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": BACKEND_MYSQL_NAME,
-        "USER": BACKEND_MYSQL_USER,
-        "PASSWORD": BACKEND_MYSQL_PASSWORD,
-        "HOST": BACKEND_MYSQL_HOST,
-        "PORT": BACKEND_MYSQL_PORT,
-        "OPTIONS": {"charset": "utf8mb4", "read_timeout": 300},
+        "ENGINE": "django.db.backends.mysql",  # 标准MySQL引擎
+        "NAME": BACKEND_MYSQL_NAME,  # 数据库名称
+        "USER": BACKEND_MYSQL_USER,  # 数据库用户
+        "PASSWORD": BACKEND_MYSQL_PASSWORD,  # 数据库密码
+        "HOST": BACKEND_MYSQL_HOST,  # 数据库主机
+        "PORT": BACKEND_MYSQL_PORT,  # 数据库端口
+        "OPTIONS": {
+            "charset": "utf8mb4",  # 字符集
+            "read_timeout": 300,  # 读取超时：5分钟
+        },
     },
+    # --------------------------------------------------------------------
+    # bk_dataview: Grafana可视化数据库
+    # --------------------------------------------------------------------
+    # 用途：存储Grafana仪表盘、数据源、用户配置等
+    # 特点：独立数据库，避免与业务数据混合
+    # 配置优先级：优先使用Grafana专用配置，否则使用后台数据库配置
     "bk_dataview": {
         "ENGINE": "django.db.backends.mysql",
         "NAME": GRAFANA_MYSQL_NAME,
+        # 如果未配置Grafana专用用户，则使用后台数据库用户
         "USER": GRAFANA_MYSQL_USER or BACKEND_MYSQL_USER,
         "PASSWORD": GRAFANA_MYSQL_PASSWORD or BACKEND_MYSQL_PASSWORD,
+        # 如果未配置Grafana专用主机，则使用后台数据库主机
         "HOST": GRAFANA_MYSQL_HOST or BACKEND_MYSQL_HOST,
         "PORT": GRAFANA_MYSQL_PORT or BACKEND_MYSQL_PORT,
         "OPTIONS": {"charset": "utf8mb4", "read_timeout": 300},
     },
 }
 
+# ============================================================================
+# 告警数据库配置（动态配置）
+# ============================================================================
+# backend_alert: 告警处理专用数据库
+# 用途：存储告警实例、收敛实例、收敛关系等告警相关数据
+# 模型：ActionInstance、ConvergeInstance、ConvergeRelation
+# 配置策略：
+# 1. 如果告警数据库与后台数据库在同一主机，则复用monitor_api配置
+# 2. 如果告警数据库独立部署，则使用专用配置
+# 优点：支持告警数据的物理隔离，提升告警处理性能
 if BACKEND_ALERT_MYSQL_HOST == BACKEND_MYSQL_HOST:
+    # 告警数据库与后台数据库在同一主机，复用配置
     DATABASES["backend_alert"] = {}
     DATABASES["backend_alert"].update(DATABASES["monitor_api"])
 else:
+    # 告警数据库独立部署，使用专用配置
     DATABASES["backend_alert"] = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": BACKEND_ALERT_MYSQL_NAME,
