@@ -186,44 +186,115 @@ class ActionPlugin(AbstractRecordModel):
         verbose_name_plural = "响应动作插件"
         db_table = "action_plugin"
 
+    # 公共参数配置字典
+    # 存储各个蓝鲸系统的访问地址，用于在请求数据中提供统一的URL配置
+    # 这些参数会被注入到所有资源请求的上下文中，供Jinja2模板渲染使用
     PUBLIC_PARAMS = {
-        "bk_paas_inner_host": settings.BK_COMPONENT_API_URL.rstrip("/"),
-        "bk_paas_host": settings.BK_PAAS_HOST.rstrip("/"),
-        "job_site_url": settings.JOB_URL.rstrip("/"),
-        "sops_site_url": settings.BK_SOPS_HOST.rstrip("/"),
-        "itsm_site_url": settings.BK_ITSM_HOST.rstrip("/"),
+        "bk_paas_inner_host": settings.BK_COMPONENT_API_URL.rstrip("/"),  # 蓝鲸组件API内部访问地址
+        "bk_paas_host": settings.BK_PAAS_HOST.rstrip("/"),  # 蓝鲸PaaS平台访问地址
+        "job_site_url": settings.JOB_URL.rstrip("/"),  # 作业平台访问地址
+        "sops_site_url": settings.BK_SOPS_HOST.rstrip("/"),  # 标准运维访问地址
+        "itsm_site_url": settings.BK_ITSM_HOST.rstrip("/"),  # 流程服务访问地址
     }
 
     @staticmethod
     def get_request_data(data_mapping, validate_request_data):
+        """
+        构建并返回格式化后的请求数据
+
+        该方法将数据映射配置与验证后的请求数据合并，使用Jinja2模板引擎
+        进行渲染，生成最终的请求参数。主要用于动态构建资源请求所需的参数。
+
+        参数:
+            data_mapping: dict - 数据映射配置，定义了如何将请求数据映射为目标格式
+                                 可包含Jinja2模板表达式，如 {"key": "{{value}}"}
+            validate_request_data: dict - 已验证的请求数据，包含实际的参数值
+                                          该字典会被更新，添加PUBLIC_PARAMS中的公共参数
+
+        返回值:
+            dict - 经过Jinja2模板渲染后的最终请求数据字典
+                   所有模板变量都已被替换为实际值
+
+        执行步骤:
+        1. 将PUBLIC_PARAMS公共参数合并到validate_request_data中
+        2. 将data_mapping转换为JSON字符串
+        3. 使用Jinja2Renderer渲染JSON字符串，替换其中的模板变量
+        4. 将渲染后的JSON字符串解析为Python字典并返回
+
+        示例:
+            data_mapping = {"url": "{{bk_paas_host}}/api/v1/"}
+            validate_request_data = {"param1": "value1"}
+            结果: {"url": "http://paas.example.com/api/v1/"}
+        """
+        # 将公共参数（各系统URL地址）合并到请求数据中
         validate_request_data.update(ActionPlugin.PUBLIC_PARAMS)
+        # 使用Jinja2模板引擎渲染数据映射配置，将模板变量替换为实际值后返回
         return json.loads(Jinja2Renderer.render(json.dumps(data_mapping), validate_request_data))
 
     def perform_resource_request(self, req_type, **kwargs) -> list:
+        """
+        执行资源请求并返回格式化后的数据列表
+
+        该方法根据配置的schema动态导入资源模块，执行资源请求，并将响应数据
+        按照映射规则进行格式化处理，最终返回标准化的数据列表。
+
+        参数:
+            req_type: str - 请求类型，用于从config_schema中获取对应的请求配置
+            **kwargs: dict - 传递给资源请求的关键字参数
+
+        返回值:
+            list - 格式化后的响应数据列表，每个元素为字典类型
+                   如果导入失败或资源类不存在，返回空列表
+
+        执行流程:
+        1. 从config_schema中获取指定请求类型的配置schema
+        2. 动态导入配置中指定的资源模块
+        3. 验证资源类是否存在于模块中
+        4. 实例化资源类并执行请求，获取原始响应数据
+        5. 使用JMESPath表达式提取所需的数据字段
+        6. 遍历数据并使用Jinja2模板引擎进行字段映射和格式化
+        7. 返回处理后的标准化数据列表
+        """
+        # 从配置schema中获取当前请求类型的配置信息
         request_schema: dict[str, Any] = self.config_schema[req_type]
 
         try:
+            # 动态导入资源模块，resource_module为模块路径字符串
+            # 例如： api.common.default
             resource_module = import_module(request_schema.get("resource_module", ""))
         except ImportError as err:
+            # 模块导入失败时记录异常并返回空列表
             logger.exception(err)
             return []
 
+        # 获取资源类的类名
+        # 例如:CommonBaseResource
         source_class = request_schema["resource_class"]
+        # 检查模块中是否存在指定的资源类
         if not hasattr(resource_module, source_class):
             return []
 
+        # 从模块中获取资源类对象
         request_class = getattr(resource_module, source_class)
+        # 合并请求数据映射配置和传入的参数，更新kwargs
         kwargs.update(self.get_request_data(request_schema.get("request_data_mapping", {}), kwargs))
+        # 实例化资源类并执行请求，将响应数据包装在response字段中
         data = {"response": request_class(**request_schema.get("init_kwargs", {})).request(**kwargs)}
 
+        # 使用JMESPath表达式从响应数据中提取目标数据，如果提取失败则返回空列表
         data = jmespath.search(request_schema["resource_data"], data) or []
+        # 确保数据为列表格式，如果是单个对象则转换为包含该对象的列表
         data = data if isinstance(data, list) else [data]
+        # 获取字段映射配置，用于将原始数据字段映射为目标字段
         mapping = request_schema["mapping"]
+        # 初始化响应数据列表
         rsp_data = []
 
+        # 遍历所有数据项进行格式化处理
         for item in data:
-            # 遍历所有内容
+            # 将公共参数（如各系统的URL地址）合并到当前数据项中
             item.update(self.PUBLIC_PARAMS)
+            # 使用Jinja2模板引擎渲染映射配置中的每个字段值，生成最终的数据项
             rsp_data.append({key: Jinja2Renderer.render(value, item) for key, value in mapping.items()})
         return rsp_data
 

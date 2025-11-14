@@ -455,7 +455,7 @@ class GetPluginTemplatesResource(Resource):
         plugin_id = serializers.IntegerField(required=True, label="插件ID")
         bk_biz_id = serializers.IntegerField(required=True, label="业务ID")
 
-    def get_object(self, plugin_id):
+    def get_object(self, plugin_id) -> ActionPlugin:
         """获取到对应的插件，不存在则抛出异常"""
         try:
             return ActionPlugin.objects.get(id=plugin_id)
