@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 import logging
 from collections import defaultdict
-from typing import Dict, List, Union
 from urllib.parse import urljoin
 
 from django.conf import settings
@@ -104,7 +103,7 @@ class CheckAllowedByApmApplicationResource(Resource):
                 app = Application.objects.get(bk_biz_id=validated_request_data["bk_biz_id"], app_name=application_name)
                 application_id = app.application_id
             except Application.DoesNotExist:
-                raise ValueError("Application({}) does not exist".format(application_name))
+                raise ValueError(f"Application({application_name}) does not exist")
 
         apm_resource = Permission.make_resource(resource_type=ApmApplication.id, instance_id=application_id)
         client = Permission()
@@ -121,7 +120,9 @@ class CheckAllowedResource(Resource):
             type = serializers.CharField(required=True, label="资源类型")
             id = serializers.CharField(required=True, label="资源ID")
 
-        resources = serializers.ListField(required=True, allow_empty=False, label="资源列表", child=ResourceSerializer())
+        resources = serializers.ListField(
+            required=True, allow_empty=False, label="资源列表", child=ResourceSerializer()
+        )
         action_ids = serializers.ListField(required=True, allow_empty=False, label="动作ID列表")
         username = serializers.CharField(required=False, allow_null=True, label="指定用户名")
 
@@ -183,7 +184,9 @@ class GetAuthorityApplyInfoResource(Resource):
             type = serializers.CharField(required=True, label="资源类型")
             id = serializers.CharField(required=True, label="资源ID")
 
-        resources = serializers.ListField(required=True, allow_empty=False, label="资源列表", child=ResourceSerializer())
+        resources = serializers.ListField(
+            required=True, allow_empty=False, label="资源列表", child=ResourceSerializer()
+        )
         action_ids = serializers.ListField(required=True, allow_empty=False, label="动作ID列表")
 
     def perform_request(self, validated_request_data):
@@ -284,6 +287,7 @@ class CreateOrUpdateExternalPermission(Resource):
         }
 
         try:
+            # todo 已记录
             data = api.itsm.create_fast_approval_ticket(ticket_data)
         except Exception as e:
             logger.error(f"审批创建异常: {e}")
@@ -308,7 +312,7 @@ class CreateOrUpdateExternalPermission(Resource):
         """
         # 如果是非cmdb业务，尝试获取关联cmdb业务，用于审批单据
         space: Space = SpaceApi.get_space_detail(bk_biz_id=validated_request_data["bk_biz_id"])
-        related_space: Union[Space, None] = SpaceApi.get_related_space(space.space_uid, SpaceTypeEnum.BKCC.value)
+        related_space: Space | None = SpaceApi.get_related_space(space.space_uid, SpaceTypeEnum.BKCC.value)
         if not related_space:
             raise ValidationError(
                 f"create approval ticket failed, related space not found, space_uid: {space.space_uid}"
@@ -486,7 +490,7 @@ class GetExternalPermissionList(Resource):
                     resource_to_user[resource_key]["status"] = permission_status
                     resource_to_user[resource_key]["bk_biz_id"] = permission.bk_biz_id
 
-            permission_list: List[Dict] = list(resource_to_user.values())
+            permission_list: list[dict] = list(resource_to_user.values())
 
         for permission in permission_list:
             permission["authorizer"] = authorizer_map.value.get(str(permission["bk_biz_id"]), "")
@@ -593,6 +597,7 @@ class CallbackResource(Resource):
         token = serializers.CharField(required=False, label="校验token")
 
     def perform_request(self, validated_request_data):
+        # todo  已记录
         if validated_request_data.get("token"):
             verify_data = TokenVerifyResource().request({"token": validated_request_data["token"]})
             if not verify_data.get("is_passed", False):

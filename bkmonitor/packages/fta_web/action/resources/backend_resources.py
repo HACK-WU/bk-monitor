@@ -61,6 +61,7 @@ class ITSMCallbackResource(Resource):
         token = serializers.CharField(required=True, label="校验token")
 
     def perform_request(self, validated_request_data):
+        # todo 已记录
         verify_data = TokenVerifyResource().request({"token": validated_request_data["token"]})
         if not verify_data.get("is_valid", False):
             return {"message": "Error Token", "result": False}

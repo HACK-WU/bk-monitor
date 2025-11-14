@@ -289,6 +289,7 @@ class BaseActionProcessor:
             "meta": {"callback_url": os.path.join(settings.BK_PAAS_INNER_HOST, "fta/action/instances/callback/")},
         }
         try:
+            # todo 已记录
             approve_info = CreateFastApprovalTicketResource().request(**ticket_data)
         except BaseException as error:
             self.set_finished(
@@ -316,6 +317,7 @@ class BaseActionProcessor:
 
         sn = kwargs.get("sn") or self.action.outputs.get("approve_info", {}).get("sn")
         try:
+            # todo 已记录
             approve_result = TicketApproveResultResource().request(**{"sn": [sn]})[0]
         except BaseException as error:
             logger.exception("get approve result error : %s, request sn: %s", error, sn)
@@ -899,6 +901,7 @@ class BaseActionProcessor:
             return
         sn = kwargs.get("sn") or self.action.outputs.get("approve_info", {}).get("sn")
         try:
+            # todo 已记录
             TicketRevokeResource().request(
                 {
                     "sn": sn,

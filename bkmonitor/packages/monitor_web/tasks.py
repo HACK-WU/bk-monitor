@@ -178,6 +178,7 @@ def update_external_approval_status():
     周期性查询外部版权限审批单据状态，更新审批结果
     """
     for record in ExternalPermissionApplyRecord.objects.filter(status="approval").exclude(approval_sn=""):
+        # todo 已记录
         approve_result = api.itsm.ticket_approve_result({"sn": [record.approval_sn]})[0]
         current_status = approve_result.pop("current_status", "")
         if current_status and current_status == "FINISHED":
