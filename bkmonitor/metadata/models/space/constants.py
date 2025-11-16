@@ -166,17 +166,17 @@ class EtlConfigs(Enum):
     - Prometheus exporter数据
     """
 
-    # === 系统监控类 ETL 配置（多指标单表模式） ===
-    BK_SYSTEM_BASEREPORT = "bk_system_basereport"  # 主机基础监控数据（CPU、内存、磁盘等）
-    BK_UPTIMECHECK_HEARTBEAT = "bk_uptimecheck_heartbeat"  # 拨测心跳监控
-    BK_UPTIMECHECK_HTTP = "bk_uptimecheck_http"  # HTTP拨测监控
-    BK_UPTIMECHECK_TCP = "bk_uptimecheck_tcp"  # TCP拨测监控
-    BK_UPTIMECHECK_UDP = "bk_uptimecheck_udp"  # UDP拨测监控
-    BK_SYSTEM_PROC_PORT = "bk_system_proc_port"  # 系统进程端口监控
-    BK_SYSTEM_PROC = "bk_system_proc"  # 系统进程监控
-
-    # === 自定义监控类 ETL 配置 ===
-    BK_STANDARD_V2_TIME_SERIES = "bk_standard_v2_time_series"  # 标准时序数据V2格式
+    # 多指标单表(system)
+    BK_SYSTEM_BASEREPORT = "bk_system_basereport"
+    BK_UPTIMECHECK_HEARTBEAT = "bk_uptimecheck_heartbeat"
+    BK_UPTIMECHECK_HTTP = "bk_uptimecheck_http"
+    BK_UPTIMECHECK_TCP = "bk_uptimecheck_tcp"
+    BK_UPTIMECHECK_UDP = "bk_uptimecheck_udp"
+    BK_SYSTEM_PROC_PORT = "bk_system_proc_port"
+    BK_SYSTEM_PROC = "bk_system_proc"
+    # 自定义多指标单表
+    BK_STANDARD_V2_TIME_SERIES = "bk_standard_v2_time_series"
+    BK_STANDARD_V2_EVENT = "bk_standard_v2_event"
 
     # === 多租户监控类 ETL 配置 ===
     BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG = "bk_multi_tenancy_basereport"  # 多租户主机基础数据
@@ -207,6 +207,7 @@ class EtlConfigs(Enum):
         (BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG, "bk_multi_tenancy_basereport"),
         (BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG, "bk_multi_tenancy_system_proc_perf"),
         (BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG, "bk_multi_tenancy_system_proc_port"),
+        (BK_STANDARD_V2_EVENT, "bk_standard_v2_event"),
     )
 
 
