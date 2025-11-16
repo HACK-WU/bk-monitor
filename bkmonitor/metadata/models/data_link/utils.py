@@ -146,9 +146,10 @@ def compose_bkdata_data_id_name(data_name: str, strategy: str | None = None) -> 
         chinese_pinyin = "".join(lazy_pinyin(chinese_characters))
         refine_data_name += chinese_pinyin
 
-    # 标准化命名格式：
-    # 1. 添加固定前缀'bkm_'
-    # 2. 使用正则替换连续下划线为单个下划线
+    # 将减号替换为下划线
+    refine_data_name = refine_data_name.replace("-", "_")
+
+    # 替换连续的下划线为单个下划线
     data_id_name = f"bkm_{re.sub(r'_+', '_', refine_data_name)}"
 
     # 超长名称处理机制：
