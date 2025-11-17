@@ -242,7 +242,11 @@ SYSTEM_BASE_DATA_ETL_CONFIGS = [
 
 # 日志和事件类数据的ETL配置类型列表
 # 用于处理系统日志、应用事件等非指标类数据
-LOG_EVENT_ETL_CONFIGS = [EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value, EtlConfigs.BK_FLAT_BATCH.value]
+LOG_EVENT_ETL_CONFIGS = [
+    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,
+    EtlConfigs.BK_FLAT_BATCH.value,
+    EtlConfigs.BK_STANDARD_V2_EVENT.value,
+]
 
 # ===== 特殊空间配置 =====
 # BKCC类型中的特殊空间配置
