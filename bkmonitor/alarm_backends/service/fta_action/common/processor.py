@@ -156,6 +156,7 @@ class ActionProcessor(BaseActionProcessor):
         # - execute_notice: 执行通知发送
         # - execute_job: 执行作业平台任务
         # - execute_sops: 执行标准运维流程
+        # todo 没有传入参数，后续无法获取到服务ID，也无法获取到inputs参数
         return execute_func()
 
     def jinja_render(self, template_value):
