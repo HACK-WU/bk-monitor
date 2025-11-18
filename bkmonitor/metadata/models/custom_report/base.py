@@ -211,6 +211,7 @@ class CustomGroupBase(models.Model):
         default_storage_config=None,
         additional_options: dict | None = None,
         data_label: str | None = None,
+        bk_biz_id_alias: str | None = None,
     ):
         """
         创建一个新的自定义分组记录
@@ -238,6 +239,7 @@ class CustomGroupBase(models.Model):
         :param additional_options: 附带创建的 ResultTableOption，默认为None
         :param data_label: 数据标签，用于标识数据分类，默认为None
         :param bk_tenant_id: 租户ID，默认为DEFAULT_TENANT_ID
+        :param bk_biz_id_alias: 业务ID别名
         :return: group object，返回创建的自定义分组对象
         """
         # 创建流程：pre_check -> _create -> create_result_table -> 配置更新
@@ -329,6 +331,7 @@ class CustomGroupBase(models.Model):
             option=option,
             data_label=data_label,
             bk_tenant_id=bk_tenant_id,
+            bk_biz_id_alias=bk_biz_id_alias,
         )
 
         # 更新分组的指标信息
