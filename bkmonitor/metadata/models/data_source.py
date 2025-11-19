@@ -35,6 +35,7 @@ from metadata.models.space.constants import (
     LOG_EVENT_ETL_CONFIGS,
     SPACE_UID_HYPHEN,
     SYSTEM_BASE_DATA_ETL_CONFIGS,
+    EtlConfigs,
     SpaceTypes,
 )
 from metadata.utils import consul_tools, hash_util
@@ -775,9 +776,13 @@ class DataSource(models.Model):
         if bk_data_id is None and settings.IS_ASSIGN_DATAID_BY_GSE:
             from metadata.models.space.constants import ENABLE_V4_DATALINK_ETL_CONFIGS
 
-            # V3/V4链路判断逻辑：根据ETL配置和系统设置决定使用哪种链路
-            if settings.ENABLE_V2_VM_DATA_LINK and etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS:
-                # === V4链路：从计算平台获取DataID ===
+            # 开启V4链路后，特定etl_config的data_id均从计算平台获取
+            enabled_custom_event_v4 = (
+                etl_config == EtlConfigs.BK_STANDARD_V2_EVENT.value and settings.ENABLE_V4_EVENT_GROUP_DATA_LINK
+            )
+            if (
+                settings.ENABLE_V2_VM_DATA_LINK and etl_config in ENABLE_V4_DATALINK_ETL_CONFIGS
+            ) or enabled_custom_event_v4:
                 logger.info(f"apply for data id from bkdata,type_label->{type_label},etl_config->{etl_config}")
                 is_base = False
 
