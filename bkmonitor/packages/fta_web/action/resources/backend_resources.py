@@ -61,26 +61,63 @@ class ITSMCallbackResource(Resource):
         token = serializers.CharField(required=True, label="校验token")
 
     def perform_request(self, validated_request_data):
-        # todo 已记录
+        """
+        处理ITSM系统的审批回调请求
+
+        参数:
+            validated_request_data: 经过序列化验证的请求数据字典，包含以下字段：
+                - sn: 工单号（字符串）
+                - title: 工单标题（字符串），格式包含动作实例ID，如"[告警异常防御审批] (action_id)"
+                - updated_by: 更新人（字符串）
+                - approve_result: 审批结果（布尔值），True表示通过，False表示拒绝
+                - token: 校验token（字符串），用于验证回调请求的合法性
+
+        返回值:
+            字典类型，包含以下字段：
+                - result: 布尔值，表示处理是否成功
+                - message: 字符串，返回处理结果的描述信息
+
+        该方法实现ITSM审批回调的完整处理流程：
+        1. 验证回调请求的token合法性（防止非法请求）
+        2. 从工单标题中提取动作实例ID
+        3. 查询对应的动作实例对象
+        4. 将审批结果推送到异步队列进行后续处理
+        5. 返回处理结果给ITSM系统
+        """
+        # 步骤1: 调用ITSM的TokenVerify接口验证token的有效性
+        # 防止非法的回调请求，确保只有ITSM系统能够触发回调
         verify_data = TokenVerifyResource().request({"token": validated_request_data["token"]})
         if not verify_data.get("is_valid", False):
+            # token验证失败，返回错误信息
             return {"message": "Error Token", "result": False}
 
+        # 步骤2: 获取所有动作实例的查询集
         queryset = ActionInstance.objects.all()
 
-        # 通过title找到对应的Id
+        # 步骤3: 使用正则表达式从工单标题中提取动作实例ID
+        # 工单标题格式示例: "[告警异常防御审批]:是否继续执行套餐【xxx】 (12345)"
+        # ACTION_ID_MATCH正则: r"\(\s*([\w\|]+)\s*\)" 用于匹配括号中的ID
         action_id = self.ACTION_ID_MATCH.findall(validated_request_data["title"])
         if not action_id:
+            # 标题格式不正确，无法提取ID
             return {"message": "Error ticket", "result": False}
+
+        # 步骤4: 根据提取的ID查询对应的动作实例
         try:
             action_inst = queryset.get(id=action_id[0])
         except ActionInstance.DoesNotExist:
+            # 动作实例不存在，返回错误信息
             return dict(message=_("对应的ID{}不存在").format(action_id), result=False)
 
-        # 推送回调内容至队列进行处理
+        # 步骤5: 将审批回调内容推送到异步执行队列
+        # 通过消息队列异步处理审批结果，避免阻塞ITSM的回调请求
+        # callback_func="approve_callback" 指定调用动作实例的approve_callback方法
+        # kwargs传递完整的审批结果数据（包括sn、审批人、审批结果等）
         PushActionProcessor.push_action_to_execute_queue(
             action_inst, callback_func="approve_callback", kwargs=validated_request_data
         )
+
+        # 步骤6: 返回成功响应给ITSM系统
         return dict(result=True, message="success")
 
 
