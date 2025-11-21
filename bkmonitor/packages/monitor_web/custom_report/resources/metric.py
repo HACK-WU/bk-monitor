@@ -17,6 +17,7 @@ from bkm_space.define import SpaceTypeEnum
 from bkm_space.errors import NoRelatedResourceError
 from bkmonitor.models import MetricListCache, QueryConfigModel, StrategyModel
 from bkmonitor.utils.request import get_request_tenant_id, get_request_username
+from bkmonitor.utils.user import get_admin_username
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import api, resource
 from core.drf_resource.base import Resource
@@ -266,7 +267,7 @@ class CreateCustomTimeSeries(Resource):
         """
         # 处理平台级与业务级配置的业务ID映射逻辑
         input_bk_biz_id = 0 if validated_request_data["is_platform"] else validated_request_data["bk_biz_id"]
-        operator = get_request_username() or settings.COMMON_USERNAME
+        operator = get_request_username() or get_admin_username(bk_tenant_id=get_request_tenant_id())
 
         # 构建数据名称与空间UID
         data_name = self.data_name(validated_request_data["bk_biz_id"], validated_request_data["name"])
