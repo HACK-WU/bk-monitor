@@ -21,7 +21,6 @@ from monitor_web.models.plugin import CollectorPluginMeta, PluginVersionHistory
 from monitor_web.plugin.constant import PluginType
 from monitor_web.plugin.manager import BuiltInPluginManager
 from monitor_web.plugin.serializers import LogSerializer
-from monitor_web.tasks import append_event_metric_list_cache
 
 
 class LogPluginManager(BuiltInPluginManager):
@@ -132,6 +131,8 @@ class LogPluginManager(BuiltInPluginManager):
         return dimensions
 
     def create_result_table(self, current_version, source_label, type_label, event_info_list):
+        from monitor_web.tasks import append_event_metric_list_cache
+
         access = EventDataAccessor(current_version, self.operator)
         data_id = access.create_data_id(source_label, type_label)
         group_info = access.create_result_table(data_id, event_info_list)
@@ -162,6 +163,8 @@ class LogPluginManager(BuiltInPluginManager):
         return group_info
 
     def modify_result_table(self, current_version, event_info_list):
+        from monitor_web.tasks import append_event_metric_list_cache
+
         access = EventDataAccessor(current_version, self.operator)
         group_info = access.modify_result_table(event_info_list)
         event_items = []
