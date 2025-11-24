@@ -11,16 +11,17 @@ specific language governing permissions and limitations under the License.
 import json
 import logging
 import time
+from typing import Any
 from urllib.parse import urlencode
 
 import arrow
 from django.conf import settings
 
-from bkmonitor.data_source import load_data_source
+from bkmonitor.data_source import load_data_source, DataSource, UnifyQuery
 from bkmonitor.documents import AlertDocument
 from bkmonitor.models import Event, QueryConfigModel
 from bkmonitor.utils import time_tools
-from constants.data_source import DataSourceLabel, DataTypeLabel
+from constants.data_source import DataSourceLabel, DataTypeLabel, GrayUnifyQueryDataSources
 
 __all__ = ["get_event_relation_info", "get_alert_relation_info"]
 
@@ -50,46 +51,23 @@ def get_event_relation_info(event: Event):
     ):
         return ""
 
-    query_config = event.origin_config["items"][0]["query_configs"][0]
-    data_source_class = load_data_source(query_config["data_source_label"], query_config["data_type_label"])
-    data_source = data_source_class.init_by_query_config(query_config, bk_biz_id=event.bk_biz_id)
-
-    data_source.filter_dict.update(
-        {
-            key: value
-            for key, value in event.origin_alarm["data"]["dimensions"].items()
-            if key in query_config.get("agg_dimension", [])
-        }
-    )
-
+    bk_biz_id: int = event.bk_biz_id
+    query_config: dict[str, Any] = event.origin_config["items"][0]["query_configs"][0]
+    dimensions: dict[str, str] = event.origin_alarm.get("data", {}).get("dimensions", {})
     content = get_data_source_log(
-        event, data_source, query_config, int(event.latest_anomaly_record.source_time.timestamp())
+        bk_biz_id, query_config, dimensions, int(event.latest_anomaly_record.source_time.timestamp())
     )
     return content[: settings.EVENT_RELATED_INFO_LENGTH] if settings.EVENT_RELATED_INFO_LENGTH else content
 
 
 def get_alert_relation_info(alert: AlertDocument, length_limit=True):
     """
-    获取事件最近的日志信息，支持多类型告警源关联查询
-
-    参数:
-        alert: AlertDocument对象，包含告警基础信息和策略配置
-        length_limit: 布尔值，控制返回内容是否进行长度截断（默认True）
-
-    返回值:
-        str类型，包含关联日志信息或空字符串：
-        - 日志聚类新类告警返回聚类详情
-        - 日志聚类数量告警返回统计信息
-        - 普通日志/事件告警返回原始日志内容
-        - 无匹配类型返回空字符串
-
-    处理流程：
-    1. 优先处理日志聚类相关标签（新类/数量告警）
-    2. 回退到通用日志/事件关联信息查询
-    3. 根据配置进行内容长度截断
+    获取事件最近的日志
+    1. 自定义事件：查询事件关联的最近一条事件信息
+    2. 日志关键字：查询符合条件的一条日志信息
+    3. 第三方告警源： 查询符合条件的一条告警信息
     """
     if not alert.strategy:
-        # 策略配置缺失时直接返回空字符串
         return ""
 
     content = ""
@@ -127,7 +105,6 @@ def get_alert_relation_info(alert: AlertDocument, length_limit=True):
     ):
         content = get_alert_relation_info_for_log(alert, not length_limit)
 
-    # 执行内容长度截断处理
     if length_limit:
         content = content[: settings.EVENT_RELATED_INFO_LENGTH] if settings.EVENT_RELATED_INFO_LENGTH else content
     return content
@@ -293,130 +270,81 @@ def get_clustering_log(
 
 
 def get_alert_relation_info_for_log(alert: AlertDocument, is_raw=False):
-    """
-    获取告警关联日志信息的主函数，包含重试机制
-
-    参数:
-        alert: 告警文档对象，包含策略配置和事件信息
-        is_raw: 布尔值，指示是否返回原始日志数据（默认False）
-
-    返回值:
-        成功时返回日志内容（字符串或原始数据结构）
-        失败时返回空值或抛出异常（当两次尝试均失败时）
-
-    该函数实现以下核心流程：
-    1. 加载并初始化数据源实例
-    2. 构建维度过滤条件
-    3. 首次尝试获取日志内容
-    4. 异常处理及重试机制
-    """
-
-    # 加载数据源类并初始化实例
-    query_config = alert.strategy["items"][0]["query_configs"][0]
-    data_source_class = load_data_source(query_config["data_source_label"], query_config["data_type_label"])
-    data_source = data_source_class.init_by_query_config(query_config, bk_biz_id=alert.event.bk_biz_id)
-
-    # 构建维度过滤条件：仅保留聚合维度相关的字段
-    data_source.filter_dict.update(
-        {
-            key: value
-            for key, value in alert.origin_alarm.get("data", {}).get("dimensions", {}).items()
-            if key in query_config.get("agg_dimension", [])
-        }
-    )
-
-    # 配置重试间隔时间（毫秒转秒）
+    bk_biz_id: int = alert.event.bk_biz_id
     retry_interval = settings.DELAY_TO_GET_RELATED_INFO_INTERVAL
-
-    # 首次尝试获取日志内容
+    query_config: dict[str, Any] = alert.strategy["items"][0]["query_configs"][0]
+    dimensions: dict[str, str] = alert.origin_alarm.get("data", {}).get("dimensions", {})
     try:
-        content = get_data_source_log(alert, data_source, query_config, alert.event.time, is_raw)
+        content = get_data_source_log(bk_biz_id, query_config, dimensions, alert.event.time, is_raw)
         if content:
             return content
         logger.info("alert(%s) related info is empty, try again after %s ms", alert.id, retry_interval)
     except BaseException as error:
         logger.error("alert(%s) related info failed: %s, try again after %s ms", alert.id, str(error), retry_interval)
 
-    # 当第一次获取失败之后，等待指定间隔后重试
+    # 当第一次获取失败之后，再重新获取一次
     time.sleep(retry_interval / 1000)
-    return get_data_source_log(alert, data_source, query_config, alert.event.time, is_raw)
+    return get_data_source_log(bk_biz_id, query_config, dimensions, alert.event.time, is_raw)
 
 
-def get_data_source_log(alert, data_source, query_config, source_time, is_raw=False):
+def get_data_source_log(
+    bk_biz_id: int, query_config: dict[str, Any], dimensions: dict[str, str], source_time: int, is_raw=False
+) -> str:
     """
-    查询指定时间范围内的数据源日志并格式化返回内容
-
-    参数:
-        alert: 告警对象，包含事件基本信息和原始告警数据
-        data_source: 数据源对象，需实现query_log方法进行日志查询
-        query_config: 查询配置字典，包含以下关键字段:
-            - agg_interval: 聚合间隔（秒）
-            - data_source_label: 数据源标签
-            - data_type_label: 数据类型标签
-            - index_set_id: 索引集ID（日志类数据源）
-            - query_string: 查询语句
-            - agg_dimension: 聚合维度列表
-        source_time: 时间戳（秒），作为查询时间基准
-        is_raw: 布尔值，是否返回原始关联信息链接
-
-    返回值:
-        格式化后的日志内容字符串，根据数据源类型返回不同格式：
-        - BK_LOG_SEARCH/BK_FTA返回特定字段内容
-        - 其他数据源返回JSON序列化字符串
-        - 无记录时返回空字符串
-
-    该方法实现完整的日志查询处理流程：
-    1. 构建查询时间范围（事件开始前5个周期至1个周期后）
-    2. 执行日志查询并处理结果
-    3. 根据数据源类型进行差异化处理
-    4. 生成带上下文信息的查询链接（当is_raw=True时）
-    5. 格式化返回最终内容
+    查询指定数据源日志
+    :param bk_biz_id: 业务 ID
+    :param query_config: 查询配置
+    :param dimensions: 告警维度
+    :param source_time: 异常事件时间戳
+    :param is_raw:
+    :return:
     """
-    # 计算查询时间范围（事件开始前5个周期至1个周期后）
-    interval = query_config.get("agg_interval", 60)
+
+    data_source_key: tuple[str, str] = (query_config["data_source_label"], query_config["data_type_label"])
+    data_source: DataSource = load_data_source(*data_source_key).init_by_query_config(query_config, bk_biz_id=bk_biz_id)
+    data_source.filter_dict.update(
+        {key: value for key, value in dimensions.items() if key in query_config.get("agg_dimension", [])}
+    )
+
+    # 查询时间为事件开始到5个周期后
+    interval: int = query_config.get("agg_interval", 60)
     start_time = int(source_time) - 5 * interval
     end_time = int(source_time) + interval
+    if data_source_key in GrayUnifyQueryDataSources:
+        # 支持 UnifyQuery 的数据源通过 UnifyQuery 模块进行查询，以支持多数据源联合查询的灰度能力。
+        uq: UnifyQuery = UnifyQuery(bk_biz_id=bk_biz_id, data_sources=[data_source], expression="")
+        records, __ = uq.query_log(start_time * 1000, end_time * 1000, limit=1)
+    else:
+        records, __ = data_source.query_log(start_time=start_time * 1000, end_time=end_time * 1000, limit=1)
 
-    # 执行日志查询（时间戳转换为毫秒）
-    records, _ = data_source.query_log(start_time=start_time * 1000, end_time=end_time * 1000, limit=1)
-
-    # 处理空查询结果
     if not records:
         return ""
 
     record = records[0]
-
-    # 处理蓝鲸日志平台数据源的特殊逻辑
-    if (
-        query_config["data_source_label"] == DataSourceLabel.BK_LOG_SEARCH
-        and query_config["data_type_label"] == DataTypeLabel.LOG
-    ):
+    if data_source_key in (DataSourceLabel.BK_LOG_SEARCH, DataTypeLabel.LOG):
         index_set_id = query_config["index_set_id"]
         start_time_str = time_tools.utc2biz_str(start_time)
         end_time_str = time_tools.utc2biz_str(end_time)
         addition = [
             {"field": dimension_field, "operator": "=", "value": dimension_value}
-            for dimension_field, dimension_value in alert.origin_alarm.get("data", {}).get("dimensions", {}).items()
+            for dimension_field, dimension_value in dimensions.items()
             if dimension_field in query_config.get("agg_dimension", [])
         ]
         params = {
-            "bizId": alert.event.bk_biz_id,
+            "bizId": bk_biz_id,
             "addition": json.dumps(addition),
             "start_time": start_time_str,
             "end_time": end_time_str,
             "keyword": query_config["query_string"],
         }
-        # 构建原始日志链接（当is_raw=True时）
+        # 如果为指定不截断原始关联信息，则拼接查询链接
         if is_raw:
             bklog_link = f"{settings.BKLOGSEARCH_HOST}#/retrieve/{index_set_id}?{urlencode(params)}"
             record["bklog_link"] = bklog_link
-
-    # 根据不同数据源类型提取内容
     if query_config["data_source_label"] in [DataSourceLabel.BK_MONITOR_COLLECTOR, DataSourceLabel.CUSTOM]:
         content = record["event"]["content"]
     elif query_config["data_source_label"] == DataSourceLabel.BK_FTA:
         content = record["description"]
     else:
         content = json.dumps(record, ensure_ascii=False)
-
     return content
