@@ -301,6 +301,7 @@ class BaseMetricCacheManager:
                 metric_hash_dict[metric_id] = m
 
         # 遍历非缓存数据[最新数据]
+        processed_metric_ids: set[str] = set()
         for table in self.get_tables():
             # 处理每个结果表中的指标
             for metric in self.get_metrics_by_table(table):
@@ -338,7 +339,11 @@ class BaseMetricCacheManager:
                     metric.get("related_id", ""),
                 )
 
-                # 处理指标实例的创建/更新逻辑
+                # 重复指标，不处理
+                if metric_id in processed_metric_ids:
+                    continue
+                processed_metric_ids.add(metric_id)
+
                 metric_instance = metric_hash_dict.pop(metric_id, None)
                 # 处理新增指标
                 if metric_instance is None:
@@ -1527,13 +1532,11 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
 
     def get_metric_pool(self):
         # 去掉进程采集相关,因为实际是自定义指标上报上来的。
-        metric_queryset = MetricListCache.objects.filter(
+        return MetricListCache.objects.filter(
             data_source_label=DataSourceLabel.BK_MONITOR_COLLECTOR,
             data_type_label=DataTypeLabel.TIME_SERIES,
             bk_tenant_id=self.bk_tenant_id,
         ).exclude(result_table_id="")
-
-        return metric_queryset
 
     def get_tables(self):
         """
@@ -1735,7 +1738,7 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                     "bk_biz_id": plugin.bk_biz_id,
                     "table_type": "plugin",
                     "table_id": plugin_version.get_result_table_id(plugin, table["table_name"]).lower(),
-                    "data_label": (f"{plugin.plugin_type}_{plugin.plugin_id}").lower(),
+                    "data_label": f"{plugin.plugin_type}_{plugin.plugin_id}".lower(),
                     "table_name_zh": table["table_desc"],
                     "default_storage": "",
                     "label": plugin.label,
