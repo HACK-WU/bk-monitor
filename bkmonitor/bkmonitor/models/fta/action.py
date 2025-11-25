@@ -190,11 +190,12 @@ class ActionPlugin(AbstractRecordModel):
     # 存储各个蓝鲸系统的访问地址，用于在请求数据中提供统一的URL配置
     # 这些参数会被注入到所有资源请求的上下文中，供Jinja2模板渲染使用
     PUBLIC_PARAMS = {
-        "bk_paas_inner_host": settings.BK_COMPONENT_API_URL.rstrip("/"),  # 蓝鲸组件API内部访问地址
-        "bk_paas_host": settings.BK_PAAS_HOST.rstrip("/"),  # 蓝鲸PaaS平台访问地址
-        "job_site_url": settings.JOB_URL.rstrip("/"),  # 作业平台访问地址
-        "sops_site_url": settings.BK_SOPS_HOST.rstrip("/"),  # 标准运维访问地址
-        "itsm_site_url": settings.BK_ITSM_HOST.rstrip("/"),  # 流程服务访问地址
+        "bk_paas_inner_host": settings.BK_COMPONENT_API_URL.rstrip("/"),
+        "bk_paas_host": settings.BK_PAAS_HOST.rstrip("/"),
+        "job_site_url": settings.JOB_URL.rstrip("/"),
+        "sops_site_url": settings.BK_SOPS_HOST.rstrip("/"),
+        "itsm_site_url": settings.BK_ITSM_HOST.rstrip("/"),
+        "incident_saas_site_url": settings.BK_INCIDENT_SAAS_HOST.rstrip("/"),  # 故障分析SaaS URL
     }
 
     @staticmethod
