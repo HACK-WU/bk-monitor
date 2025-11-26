@@ -199,7 +199,6 @@ class ActionPlugin(AbstractRecordModel):
         "itsm_v4_api_url": settings.BK_ITSM_V4_API_URL.rstrip("/"),
         "itsm_v4_system_id": settings.BK_ITSM_V4_SYSTEM_ID,
         "incident_saas_site_url": settings.BK_INCIDENT_SAAS_HOST.rstrip("/"),  # 故障分析SaaS URL
-
     }
 
     @staticmethod
@@ -637,6 +636,7 @@ class ActionInstance(AbstractRecordModel):
                 # 如果需要详情链接，并且当前任务没有第三方链接
                 content_template = _("{}点击$查看任务详情$").format(_(content_template))
         if self.status == ActionStatus.WAITING:
+            # approve_info 这个字段针对的是旧版ITSM流程服务，新版ITSM没有这个字段。
             approve_info = self.outputs.get("approve_info")
             if approve_info:
                 content_template = _("套餐【{{action_name}}】触发异常防御审批，点击$查看工单详情$")
