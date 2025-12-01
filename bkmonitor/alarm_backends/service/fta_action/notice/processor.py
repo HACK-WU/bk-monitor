@@ -285,12 +285,30 @@ class ActionProcessor(BaseActionProcessor):
 
     def need_send_notice(self, notice_way):
         """
-        是否需要电话通知
-        :return:
+        判断是否需要发送通知（主要用于语音告警防御收敛）
+
+        参数:
+            notice_way: 通知方式，如语音、短信、邮件等
+
+        返回值:
+            tuple: (是否需要发送, 收敛的动作ID)
+                - 第一个元素为布尔值，True表示需要发送，False表示被收敛
+                - 第二个元素为字符串或None，当被收敛时返回收敛的动作ID，否则返回None
+
+        该方法实现语音告警的防御收敛机制，防止短时间内重复发送语音告警：
+        1. 非语音通知直接放行
+        2. 提取告警的公共维度信息，构建维度哈希
+        3. 基于告警信号、业务ID、告警级别、维度哈希、策略ID和接收人构建唯一标识
+        4. 使用Redis的SET NX命令实现分布式锁，确保相同维度的语音告警在TTL时间内只发送一次
+        5. 如果设置成功则允许发送，否则返回已存在的动作ID表示被收敛
         """
+        # 1. 非语音通知直接放行，无需收敛
         if notice_way != NoticeWay.VOICE:
             return True, None
+
+        # 2. 提取告警的公共维度信息，构建维度哈希用于标识相同维度的告警
         try:
+            # 将告警的公共维度转换为 "key_value" 格式的列表，并序列化为JSON字符串
             common_dimensions = json.dumps(
                 [
                     "{}_{}".format(d["key"], d["value"])
@@ -299,25 +317,32 @@ class ActionProcessor(BaseActionProcessor):
                 ]
             )
         except AttributeError as error:
+            # 如果获取维度信息失败，记录错误日志并使用空字符串
             logger.error("Get common_dimension of alert[{}] error: %s", self.context["alert"], str(error))
             common_dimensions = ""
 
+        # 3. 构建语音告警的唯一标识标签，用于防御收敛
         labels = {
-            "signal": self.action.signal,
-            "notice_way": NoticeWay.VOICE,
-            "bk_biz_id": self.action.bk_biz_id,
-            "level": self.action.alert_level,
-            "dimension_hash": common_dimensions,
-            "strategy_id": self.action.strategy_id,
+            "signal": self.action.signal,  # 告警信号类型（如异常、恢复等）
+            "notice_way": NoticeWay.VOICE,  # 通知方式固定为语音
+            "bk_biz_id": self.action.bk_biz_id,  # 业务ID
+            "level": self.action.alert_level,  # 告警级别
+            "dimension_hash": common_dimensions,  # 维度哈希，用于标识相同维度的告警
+            "strategy_id": self.action.strategy_id,  # 策略ID
         }
         client = NOTICE_VOICE_COLLECT_KEY.client
 
+        # 4. 添加接收人信息到标签中，确保相同接收人的告警被收敛
         labels["receiver"] = self.notice_receivers
         collect_key = NOTICE_VOICE_COLLECT_KEY.get_key(**labels)
 
+        # 5. 使用Redis的SET NX命令尝试设置收敛键，如果设置成功说明是首次发送
+        # ex: 设置过期时间为TTL（默认2分钟）
+        # nx: 仅当键不存在时才设置，实现分布式锁的效果
         if client.set(collect_key, self.action.es_action_id, ex=NOTICE_VOICE_COLLECT_KEY.ttl, nx=True):
             return True, None
 
+        # 6. 如果设置失败，说明在TTL时间内已有相同维度的语音告警发送过，需要收敛
         collect_action_id = client.get(collect_key)
         logger.info(
             f"action({self.action.id}) voice alarm skip, voice alarm by action({collect_action_id}) {NOTICE_VOICE_COLLECT_KEY.ttl} second age"

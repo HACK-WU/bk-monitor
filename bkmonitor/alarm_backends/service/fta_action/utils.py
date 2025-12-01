@@ -437,7 +437,7 @@ class AlertAssignee:
                 UserGroup.translate_notice_ways(notify_config)
         return notify_item  # 返回找到的通知配置项
 
-    def get_group_notify_configs(self, notice_type, user_type):
+    def get_group_notify_configs(self, notice_type, user_type) -> dict:
         """
         获取通知组对应的通知方式配置信息
 
@@ -746,7 +746,22 @@ class AlertAssignee:
                 "voice": [
                     ["admin", "user1"],      # 第一个用户组
                     ["user2", "user3"]       # 第二个用户组
-                ]
+                ],
+
+                # 蓝鲸信息流子渠道：企业微信机器人
+                # 这里的 key 是 "bkchat|wxwork-bot"，value 是对应子渠道的接收人 id
+                "bkchat|wxwork-bot": ["wxbot_user_1", "wxbot_user_2"],
+
+                # 蓝鲸信息流子渠道：邮件（通过 BKChat 下发邮件）
+                "bkchat|mail": ["notify@example.com"],
+
+                # 如果有配置 @ 用户
+                "wxbot_mention_users": [
+                    {
+                        # 例如：发给 wxbot_user_1 时，要在消息里@ admin 和 user1
+                        "wxbot_user_1": ["admin", "user1"],
+                    }
+                ],
             }
 
 

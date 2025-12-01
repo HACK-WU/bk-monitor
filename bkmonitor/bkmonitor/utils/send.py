@@ -516,6 +516,7 @@ class Sender(BaseSender):
         logger.info(f"send.voice({notice_receivers}): \ncontent: {self.content}, \n action_plugin {action_plugin}")
 
         try:
+            # 接口内部是一个一个进行电话通知
             msg_result = api.cmsi.send_voice(
                 bk_tenant_id=self.bk_tenant_id,
                 receiver__username=notice_receivers,

@@ -831,7 +831,7 @@ class CreateActionProcessor:
                 # 告警分派异常, 搜索日志: [alert assign error]
                 continue
             if not assignee_manager.is_matched and not self.strategy_id:
-                # 第三方告警如果没有适配到的规则，且没有对应的策略ID，直接忽略
+                # 告警分派如果没有适配到的规则，且没有对应的策略ID，直接忽略
                 # 没有策略ID，那么也没有对应的action,后续没有处理的必要
                 continue
 
@@ -849,8 +849,9 @@ class CreateActionProcessor:
                     logger.info("ignore to send supervise notice for alert(%s) due to notice qos", alert.id)
                     continue
             else:
-                assignees = assignee_manager.get_assignees()  # 常规通知处理分支
-                followers = assignee_manager.get_assignees(user_type=UserGroupType.FOLLOWER)  # 告警关注人
+                # 示例：["zhangsan", "lisi"]
+                assignees: list[str] = assignee_manager.get_assignees()  # 常规通知处理分支
+                followers: list[str] = assignee_manager.get_assignees(user_type=UserGroupType.FOLLOWER)  # 告警关注人
 
             # 用户组合并与去重处理
             alerts_assignee[alert.id] = self.get_alert_related_users(assignees + supervisors, alerts_assignee[alert.id])
@@ -1217,8 +1218,8 @@ class CreateActionProcessor:
                 ]
                 follow_notify_info[notice_way] = valid_receivers
 
-            inputs["notify_info"] = notify_info
-            inputs["follow_notify_info"] = follow_notify_info
+            inputs["notify_info"] = notify_info  # type: dict[str, list[str]]
+            inputs["follow_notify_info"] = follow_notify_info  # type: dict[str, list[str]]
 
         # 执行二次确认处理
         # 异常捕获确保不影响主流程

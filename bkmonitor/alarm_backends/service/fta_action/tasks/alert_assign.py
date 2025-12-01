@@ -267,7 +267,7 @@ class AlertAssigneeManager:
         )
         return manager  # 返回告警分派管理对象
 
-    def get_notify_info(self, user_type=UserGroupType.MAIN):
+    def get_notify_info(self, user_type=UserGroupType.MAIN) -> dict[str, list]:
         """
         获取通知渠道和通知人员信息
         """
@@ -424,9 +424,20 @@ class AlertAssigneeManager:
             self.origin_notice_users_object.add_appointee_to_notify_group(notify_configs=notify_configs)
         return notify_configs  # 返回更新后的通知配置信息
 
-    def get_assignees(self, by_group=False, user_type=UserGroupType.MAIN):
+    def get_assignees(self, by_group=False, user_type=UserGroupType.MAIN) -> list | dict:
         """
         获取对应的通知人员 包含指派的通知人员 和 设置的通知人员
+        :param by_group: 是否按组返回
+        :param user_type: 人员类型
+
+        by_group=False,返回示例：
+            ["admin", "user1", "user2"]
+
+        by_group=True,返回示例：
+            {
+               101: ["admin", "user1"], # 告警组ID：通知人员列表
+               102: ["user2", "admin"],
+           }
         """
         if self.is_matched:  # 如果当前已经有分派适配
             # 只返回指派的人员
@@ -442,7 +453,7 @@ class AlertAssigneeManager:
             return self.match_manager.matched_rule_info["itsm_actions"]
         return {}  # 如果不存在匹配管理器，则返回空字典
 
-    def get_appointees(self, action_id=None, user_type=UserGroupType.MAIN):
+    def get_appointees(self, action_id=None, user_type=UserGroupType.MAIN) -> list | dict:
         """
         # 获取分派的负责人
         """
@@ -486,7 +497,7 @@ class AlertAssigneeManager:
         matched_info = self.match_manager.matched_rule_info
         return AlertAssignee(self.alert, matched_info["notice_appointees"], matched_info["follow_groups"])
 
-    def get_origin_notice_receivers(self, by_group=False, user_type=UserGroupType.MAIN):
+    def get_origin_notice_receivers(self, by_group=False, user_type=UserGroupType.MAIN) -> dict | list:
         """
         获取默认通知的所有接受人员
         """
@@ -496,7 +507,7 @@ class AlertAssigneeManager:
         # 否则，调用原始通知用户对象的get_assignee_by_user_groups方法获取接受人员
         return self.origin_notice_users_object.get_assignee_by_user_groups(by_group, user_type=user_type)
 
-    def get_origin_notice_all_receivers(self):
+    def get_origin_notice_all_receivers(self) -> dict:
         """
         获取所有的原始告警的接收人员，包含机器人会话ID
         """
@@ -588,7 +599,7 @@ class AlertAssigneeManager:
         # 否则，调用原始通知用户对象的get_assignee_by_user_groups方法获取关注人员
         return self.origin_notice_users_object.get_assignee_by_user_groups(by_group, user_type=user_type)
 
-    def get_origin_notice_users_object(self, user_groups):
+    def get_origin_notice_users_object(self, user_groups: list[int]) -> AlertAssignee:
         """
         获取仅通知的
         :param user_groups: 告警组

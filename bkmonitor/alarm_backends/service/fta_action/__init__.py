@@ -162,7 +162,7 @@ class BaseActionProcessor:
 
         # 9. 初始化通知接收人信息
         # 优先使用上下文中的通知接收人，否则使用动作的分配人
-        self.notice_receivers = self.context.get("notice_receiver") or self.action.assignee
+        self.notice_receivers: list = self.context.get("notice_receiver") or self.action.assignee
         # 确保通知接收人为列表格式
         self.notice_receivers = (
             self.notice_receivers if isinstance(self.notice_receivers, list) else [self.notice_receivers]
