@@ -399,7 +399,7 @@ class AlertAssignee:
         self.follow_groups = follow_groups or []  # 初始化关注责任人组
         # 获取该业务下告警主机的负责人或所在模块负责人
         self.biz_group_users = self.get_biz_group_users()
-        # 所有组用户的默认字典，格式为{组ID: [用户ID, ...]}
+        # 所有组(主要负责人和关注负责人)用户的默认字典，格式为{组ID: [用户ID, ...]}
         self.all_group_users = defaultdict(list)
         # 微信机器人及用户的默认字典，
         self.wxbot_mention_users = defaultdict(list)

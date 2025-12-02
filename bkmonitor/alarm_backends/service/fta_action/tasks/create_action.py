@@ -1218,6 +1218,7 @@ class CreateActionProcessor:
                 ]
                 follow_notify_info[notice_way] = valid_receivers
 
+            # dict{"通知渠道": ["通知对象1","通知对象2"],}
             inputs["notify_info"] = notify_info  # type: dict[str, list[str]]
             inputs["follow_notify_info"] = follow_notify_info  # type: dict[str, list[str]]
 
