@@ -9,7 +9,6 @@ specific language governing permissions and limitations under the License.
 """
 
 import json
-from typing import NewType
 
 from django.utils.translation import gettext_lazy as _lazy
 
@@ -119,7 +118,6 @@ CONVERGE_FUNC_CHOICES = [
     (function, desc) for function, desc in CONVERGE_FUNCTION.items()
 ] + HIDDEN_CONVERGE_FUNCTION_CHOICES
 
-# 默认的收敛维度
 CONVERGE_DIMENSION = {
     "strategy_id": _lazy("策略"),
     "alert_name": _lazy("告警名称"),
@@ -136,22 +134,21 @@ CONVERGE_DIMENSION = {
     "alarm_attr_id": _lazy("告警特性"),
 }
 
-# 所有的收敛维度
 ALL_CONVERGE_DIMENSION = {
     "dimensions": _lazy("维度"),
     "strategy_id": _lazy("策略"),
     "alert_name": _lazy("告警名称"),
     "bk_biz_id": _lazy("业务"),
     "alert_level": _lazy("告警级别"),
-    "signae_receiver": _lazy("通知人员"),
-    "noticl": _lazy("告警信号"),
+    "signal": _lazy("告警信号"),
+    "notice_receiver": _lazy("通知人员"),
     "notice_way": _lazy("通知方式"),
     "group_notice_way": _lazy("带组员类型的通知方式"),
     "alert_info": _lazy("告警信息"),
     "notice_info": _lazy("通知信息"),
     "action_info": _lazy("告警套餐信息"),
 }
-# 用于匹配的收敛维度
+
 COMPARED_CONVERGE_DIMENSION = {
     "alert_info": _lazy("告警信息"),
     "notice_info": _lazy("通知信息"),
@@ -548,10 +545,6 @@ class ConvergeType:
     ACTION = "action"
 
 
-action_instance_id = NewType("action_instance_id", int)
-converge_instance_id = NewType("converge_instance_id", int)
-
-
 class ActionDisplayStatus:
     RUNNING = "running"
     SUCCESS = "success"
@@ -563,15 +556,6 @@ class ActionDisplayStatus:
 
 
 class ActionStatus:
-    """
-    动作状态定义类，包含任务执行的全生命周期状态标识
-
-    该类集中管理所有动作状态常量，并定义状态分组用于流程控制：
-    - 状态常量：定义17种原子状态标识符
-    - 状态分组：按业务逻辑划分的6类状态集合
-    - 转换规则：通过集合运算实现状态流转校验
-    """
-
     RECEIVED = "received"
     WAITING = "waiting"
     CONVERGING = "converging"
@@ -591,24 +575,15 @@ class ActionStatus:
     UNAUTHORIZED = "unauthorized"
     CHECKING = "checking"
 
-    # 执行中的状态集合，包含任务生命周期中持续运行的中间状态
-    # 包含状态：已接收、等待中、汇聚中、休眠中、已汇聚、运行中
+    # 执行中的状态
     PROCEED_STATUS = [RECEIVED, WAITING, CONVERGING, SLEEP, CONVERGED, RUNNING]
 
-    # 最终状态集合，表示任务执行的终止状态
-    # 包含状态：成功、部分成功、失败、部分失败、已跳过、防护状态
     END_STATUS = [SUCCESS, PARTIAL_SUCCESS, FAILURE, PARTIAL_FAILURE, SKIPPED, SHIELD]
 
-    # 可执行状态集合，表示任务可以被调度执行的状态
-    # 包含状态：已接收、已汇聚、运行中、重试中
     CAN_EXECUTE_STATUS = [RECEIVED, CONVERGED, RUNNING, RETRYING]
 
-    # 忽略状态集合，表示需要被过滤的特殊状态
-    # 包含状态：运行中、休眠中、已跳过、防护状态
     IGNORE_STATUS = {RUNNING, SLEEP, SKIPPED, SHIELD}
 
-    # 可同步状态集合，表示支持结果同步的状态
-    # 包含等待中、汇聚中、休眠中、已汇聚、运行中、成功、部分成功、部分失败、失败、已跳过、防护状态
     CAN_SYNC_STATUS = [
         WAITING,
         CONVERGING,
@@ -622,9 +597,6 @@ class ActionStatus:
         SKIPPED,
         SHIELD,
     ]
-
-    # 采集同步状态集合，表示需要收集同步结果的状态
-    # 包含状态：等待中、运行中、成功、部分成功、失败、已跳过
     COLLECT_SYNC_STATUS = [WAITING, RUNNING, SUCCESS, PARTIAL_SUCCESS, FAILURE, SKIPPED]
 
 
@@ -676,7 +648,6 @@ ACTION_END_STATUS = [
 ]
 
 
-# 通知方式
 class NoticeWay:
     SMS = "sms"
     MAIL = "mail"
@@ -706,7 +677,6 @@ class NoticeWay:
     }
 
 
-# 通知渠道
 class NoticeChannel:
     USER = "user"
     WX_BOT = "wxwork-bot"
@@ -724,7 +694,6 @@ class NoticeChannel:
 BKCHAT_TRIGGER_TYPE_MAPPING = {"WEWORK_BOT": NoticeWay.WX_BOT, "EMAIL": NoticeWay.MAIL, "MINI_PROGRAM": "mini_program"}
 
 
-# 通知方式对应的渠道
 class NoticeWayChannel:
     MAPPING = {
         NoticeWay.SMS: NoticeChannel.USER,
@@ -737,7 +706,6 @@ class NoticeWayChannel:
     }
 
 
-# 通知类型
 class NoticeType:
     """# NOCC:function-redefined(工具误报:没有重复定义)
     策略通知的类型
@@ -766,26 +734,23 @@ class MessageQueueSignal:
     CLOSE_PUSH = "CLOSE_PUSH"
 
 
-# 动作信号
 class ActionSignal:
-    MANUAL = "manual"  # 手动处理
-    ABNORMAL = "abnormal"  # 异常，告警触发
-    RECOVERED = "recovered"  # 恢复，告警恢复
-    CLOSED = "closed"  # 告警关闭
-    ACK = "ack"  # 告警确认
-    NO_DATA = "no_data"  # 无数据
-    COLLECT = "collect"  # 汇总
-    EXECUTE = "execute"  # 执行动作
-    EXECUTE_SUCCESS = "execute_success"  # 动作执行成功
-    EXECUTE_FAILED = "execute_failed"  # 动作执行失败
-    DEMO = "demo"  # 调试
-    UNSHIELDED = "unshielded"  # 解除屏蔽
-    UPGRADE = "upgrade"  # 通知升级(告警升级)
+    MANUAL = "manual"
+    ABNORMAL = "abnormal"
+    RECOVERED = "recovered"
+    CLOSED = "closed"
+    ACK = "ack"
+    NO_DATA = "no_data"
+    COLLECT = "collect"
+    EXECUTE = "execute"
+    EXECUTE_SUCCESS = "execute_success"
+    EXECUTE_FAILED = "execute_failed"
+    DEMO = "demo"
+    UNSHIELDED = "unshielded"
+    UPGRADE = "upgrade"
     INCIDENT = "incident"
 
-    # 正常的action信号
     NORMAL_SIGNAL = [ABNORMAL, RECOVERED, CLOSED, NO_DATA, MANUAL, ACK]
-    # 异常的action信号
     ABNORMAL_SIGNAL = [ABNORMAL, NO_DATA]
 
     ACTION_SIGNAL_DICT = {
@@ -805,7 +770,6 @@ class ActionSignal:
         INCIDENT: _lazy("故障生成时"),
     }
 
-    # 动作信号映射
     ACTION_SIGNAL_MAPPING = {
         ABNORMAL: "ANOMALY_NOTICE",
         RECOVERED: "RECOVERY_NOTICE",
@@ -813,7 +777,6 @@ class ActionSignal:
         CLOSED: CLOSED,
     }
 
-    # 消息队列操作类型
     MESSAGE_QUEUE_OPERATE_TYPE_MAPPING = {
         ABNORMAL: MessageQueueSignal.ANOMALY_PUSH,
         RECOVERED: MessageQueueSignal.RECOVERY_PUSH,
@@ -821,7 +784,6 @@ class ActionSignal:
         CLOSED: MessageQueueSignal.CLOSE_PUSH,
     }
 
-    # 动作信号选择
     ACTION_SIGNAL_CHOICE = [(key, value) for key, value in ACTION_SIGNAL_DICT.items()]
 
 
