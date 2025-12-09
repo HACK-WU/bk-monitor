@@ -135,3 +135,9 @@ class Config:
             "enabled": True,
         },
     }
+
+
+# 是否同步执行celery 任务
+if getattr(settings, "CELERY_ALWAYS_SYNC", False):
+    Config.task_always_eager = True
+    Config.task_eager_propagates = True
