@@ -522,7 +522,12 @@ class DataSource(models.Model):
     # TODO：多租户,需要等待BkBase接口协议,理论上需要补充租户ID,不再有默认接入者概念
     @classmethod
     def apply_for_data_id_from_bkdata(
-        cls, data_name: str, bk_biz_id: int, is_base: bool = False, event_type="metric"
+        cls,
+        data_name: str,
+        bk_biz_id: int,
+        is_base: bool = False,
+        event_type: str = "metric",
+        prefer_kafka_cluster_name: str | None = None,
     ) -> int:
         """
         从计算平台(BkData)申请data_id
@@ -536,6 +541,7 @@ class DataSource(models.Model):
         :param bk_biz_id: 业务ID，默认使用settings.DEFAULT_BKDATA_BIZ_ID
         :param is_base: 是否是基础数据源，默认为False
         :param event_type: 数据类型，可选值为"metric"或"log"，默认为"metric"
+        :param prefer_kafka_cluster_name: KafkaChannel 资源名称（bkbase侧），用于 DataId.spec.preferCluster
         :return: int，成功申请到的data_id
         :raises BKAPIError: 当申请失败或超时时抛出异常
         """
@@ -549,7 +555,12 @@ class DataSource(models.Model):
         try:
             # 提交data_id申请
             apply_data_id_v2(
-                data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type, namespace=namespace
+                data_name=data_name,
+                bk_biz_id=bk_biz_id,
+                is_base=is_base,
+                event_type=event_type,
+                namespace=namespace,
+                prefer_kafka_cluster_name=prefer_kafka_cluster_name,
             )
             # 写入记录
         except BKAPIError as e:
@@ -794,7 +805,13 @@ class DataSource(models.Model):
                 logger.info(f"apply for data id from bkdata,type_label->{type_label},etl_config->{etl_config}")
                 is_base = False
 
-                # 判断是否为系统基础数据配置（如主机监控、进程监控等）
+                # 如果需要走V4链路，则需要确保Kafka集群已经注册到bkbase平台
+                if not mq_cluster.registered_to_bkbase:
+                    raise ValueError(
+                        f"kafka cluster {mq_cluster.cluster_name} is not registered to bkbase, please contact administrator to register"
+                    )
+
+                # 根据清洗类型判断是否是系统基础数据
                 if etl_config in SYSTEM_BASE_DATA_ETL_CONFIGS:
                     is_base = True
 
@@ -809,7 +826,11 @@ class DataSource(models.Model):
 
                 # 从计算平台申请DataID，支持系统基础数据和日志事件数据
                 bk_data_id = cls.apply_for_data_id_from_bkdata(
-                    data_name=data_name, bk_biz_id=bk_biz_id, is_base=is_base, event_type=event_type
+                    data_name=data_name,
+                    bk_biz_id=bk_biz_id,
+                    is_base=is_base,
+                    event_type=event_type,
+                    prefer_kafka_cluster_name=mq_cluster.cluster_name,
                 )
                 # 设置为V4链路标识，用于后续的链路版本识别
                 created_from = DataIdCreatedFromSystem.BKDATA.value

@@ -30,6 +30,7 @@ def apply_data_id_v2(
     namespace: str = settings.DEFAULT_VM_DATA_LINK_NAMESPACE,
     is_base: bool = False,
     event_type: str = "metric",
+    prefer_kafka_cluster_name: str | None = None,
 ) -> bool:
     """
     下发 data_id 资源并记录配置信息
@@ -73,7 +74,10 @@ def apply_data_id_v2(
     )
 
     # 生成数据链路配置
-    data_id_config = data_id_config_ins.compose_config(event_type=event_type)
+    data_id_config = data_id_config_ins.compose_config(
+        event_type=event_type,
+        prefer_kafka_cluster_name=prefer_kafka_cluster_name,
+    )
 
     # 调用数据链路API应用配置
     api.bkdata.apply_data_link(config=[data_id_config], bk_tenant_id=bk_tenant_id)
