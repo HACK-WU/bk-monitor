@@ -105,9 +105,8 @@ class DefaultContent(BaseContextObject):
     # 首次异常时间
     @cached_property
     def begin_time(self):
-        # 使用用户时区格式化时间
-        timezone_name = self.parent.user_timezone
-        return format_user_time(self.parent.alarm.begin_time, timezone_name=timezone_name)
+        # alarm.begin_time 已经是用户时区格式化的字符串
+        return self.parent.alarm.begin_time
 
     # 持续时间
     @cached_property
