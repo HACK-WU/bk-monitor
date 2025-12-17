@@ -99,7 +99,7 @@ class ConvergeManager:
             instance_id=self.instance.id,
             end_timestamp=self.end_timestamp,
             instance_type=self.instance_type,
-            strategy_id=getattr(self.instance, "strategy_id", 0),
+            strategy_id=getattr(self.instanec, "strategy_id", 0),
             converged_condition=self.converge_config["converged_condition"],
         )
 

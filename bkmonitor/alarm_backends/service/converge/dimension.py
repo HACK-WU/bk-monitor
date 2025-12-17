@@ -159,7 +159,7 @@ class DimensionHandler:
         for key, values in self.converged_condition.items():
             if values is None:
                 values = ""
-            if isinstance(values, (list, set)):
+            if isinstance(values, list | set):
                 values = "_".join([str(value) for value in values])
             else:
                 values = str(values)
@@ -262,22 +262,13 @@ class DimensionCalculator:
 
     def calc_dimension(self):
         """
-        计算收敛维度与Redis存储操作
+        计算并存储收敛维度信息到Redis
 
-        处理流程:
-        1. 生成基于创建时间的时间戳评分
-        2. 创建Redis管道批量操作
-        3. 遍历用于匹配的收敛维度：
-           - 从收敛上下文中获取对应维度值
-           - 根据策略ID，维度以及维度值生成key-value，格式为：
-             - key: f"fta_action.converge.{strategy_id}.{dimension}.{value}"
-             - value: f"{instance_type}_{action_instance_id}:{score}"
-           - 清理过期key
-           - 添加新key-value
-        4. 执行管道命令并返回收敛信息
+        将当前实例按各个维度值存储到Redis有序集合中，用于后续收敛匹配。
+        存储格式: key=fta_action.converge.{策略ID}.{维度名}.{维度值}, value={实例类型}_{实例ID}, score=创建时间戳
 
         返回值:
-            调用compile_converge_info方法生成的收敛结果对象
+            dict: 包含实例类型、收敛配置、上下文等信息的字典
         """
         # 使用创建时间作为评分
         score = arrow.get(self.related_instance.create_time).replace(tzinfo="utc").timestamp
@@ -289,7 +280,7 @@ class DimensionCalculator:
             if values is None or not str(values):
                 continue
             # 如果值为空的话，忽略掉这个维度
-            if not isinstance(values, (list, set)):
+            if not isinstance(values, list | set):
                 values = [str(values)]
             for value in values:
                 # value本身就包含了告警的相关信息
@@ -345,7 +336,7 @@ class DimensionCalculator:
             if values is None:
                 return
             # 如果值为空的话，忽略掉这个维度
-            if isinstance(values, (list, set)):
+            if isinstance(values, list | set):
                 values = "_".join([str(value) for value in values])
             label_info[dimension] = values
 

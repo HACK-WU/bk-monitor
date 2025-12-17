@@ -441,38 +441,59 @@ class ActionInstance(AbstractRecordModel):
 
     def batch_create_sub_actions(self, followed=False):
         """
-        根据notify分批次实现
+        批量创建子任务：将父任务按"通知方式+接收人"维度拆分成多个独立的子任务
+
+        参数:
+            followed: 是否为关注人通知（False=负责人通知，True=关注人通知）
+
+        返回值:
+            sub_actions: 子任务列表，每个子任务负责向一个接收人发送一种通知
+
+        核心流程:
+            1. 根据followed参数选择通知配置（负责人或关注人）
+            2. 处理微信机器人@用户配置，按chat_id聚合并去重
+            3. 遍历通知信息，按"通知方式+接收人"维度创建子任务
+            4. 过滤被排除的通知方式和空接收人
         """
-        # 初始化通知信息，根据是否关注来选择通知配置
+        # 步骤1: 根据通知类型选择配置源
+        # notify_info 结构: {"weixin": ["user1", "user2"], "mail": ["user3"], ...}
         notify_info = self.inputs.get("notify_info", {})
         if followed:
-            # 如果是关注人通知，则用follower的配置
+            # 关注人通知使用独立的配置
             notify_info = self.inputs.get("follow_notify_info", {})
 
-        # 初始化子动作列表和排除的通知方式列表
+        # 步骤2: 初始化子任务列表和排除规则
         sub_actions = []
         exclude_notice_ways = self.inputs.get("exclude_notice_ways", [])
 
-        # 处理微信机器人@用户配置，确保每个chat_id对应一个去重后的用户列表
+        # 步骤3: 处理微信机器人@用户配置
+        # 原始数据: [{"chat_id1": ["user1", "user2"]}, {"chat_id1": ["user2", "user3"]}, ...]
+        # 目标结构: {"chat_id1": {"user1", "user2", "user3"}, ...}
         mention_users_list = notify_info.pop("wxbot_mention_users", [])
         wxbot_mention_users = defaultdict(list)
         for mention_users_dict in mention_users_list:
             for chat_id, users in mention_users_dict.items():
                 wxbot_mention_users[chat_id].extend(users)
+        # 去重：将每个chat_id的用户列表转为集合
         wxbot_mention_users = {chat_id: set(users) for chat_id, users in wxbot_mention_users.items()}
 
-        # 遍历通知信息，创建子动作
+        # 步骤4: 遍历通知信息，按"通知方式+接收人"维度创建子任务
         for notice_way, notice_receivers in notify_info.items():
+            # 过滤被排除的通知方式
             if notice_way in exclude_notice_ways:
-                # 当前的通知方式被排除，不创建对应的具体通知
                 continue
+
+            # 为每个接收人创建独立的子任务
             for notice_receiver in notice_receivers:
                 if not notice_receiver:
                     continue
-                # 创建并添加子动作到列表中
+
+                # 创建子任务实例并添加到列表
+                # 每个子任务负责: 通过指定的通知方式向指定的接收人发送告警通知
                 sub_actions.append(
                     self.create_sub_notice_action(notice_way, notice_receiver, wxbot_mention_users, followed)
                 )
+
         return sub_actions
 
     def create_sub_notice_action(self, notice_way, notice_receiver, mention_users=None, followed=False):
