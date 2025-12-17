@@ -145,7 +145,7 @@ class PushActionProcessor:
 
             # 处理非语音通知的收敛配置解析
             if action_instance.inputs.get("notice_way") != NoticeWay.VOICE:
-                # 语音通知直接跳过收敛流程
+                # 当通知策略是语音通知的时候，不走收敛模块， 通过执行模块进行收敛
                 # 从策略配置中匹配防御规则
                 # TODO 处理无策略配置时的告警推送逻辑
                 strategy = action_instance.strategy
