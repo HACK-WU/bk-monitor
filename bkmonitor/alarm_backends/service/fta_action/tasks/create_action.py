@@ -676,11 +676,12 @@ class CreateActionProcessor:
         return assignee_manager
 
     @classmethod
-    def is_action_config_valid(cls, alert, action_config):
+    def is_action_config_valid(cls, alert, action_config, config_id):
         """
         当前处理套餐是否有效
         :param alert:
         :param action_config:
+        :param config_id:
         :return:
         """
         if action_config and action_config["is_enabled"]:
@@ -690,7 +691,7 @@ class CreateActionProcessor:
             op_type=AlertLog.OpType.ACTION,
             alert_id=[alert.id],
             description=_("处理套餐【{}】已经被删除或禁用，系统自动忽略该处理").format(
-                action_config.get("name") or action_config.get("config_id")
+                action_config.get("name") or config_id
             ),
             time=current_timestamp,
             create_time=current_timestamp,
@@ -894,7 +895,7 @@ class CreateActionProcessor:
             for action in actions + itsm_actions:
                 action_config = action_configs.get(str(action["config_id"]))
                 # 处理套餐无效则跳过
-                if not self.is_action_config_valid(alert, action_config):
+                if not self.is_action_config_valid(alert, action_config, action["config_id"]):
                     continue
                 # 获取到插件
                 action_plugin = action_plugins.get(str(action_config["plugin_id"]))
