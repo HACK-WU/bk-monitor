@@ -11,7 +11,7 @@ specific language governing permissions and limitations under the License.
 import json
 import logging
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from django.conf import settings
 from django.db import models, transaction
@@ -1326,8 +1326,27 @@ class DataLink(models.Model):
         4. 组装各资源配置的详细参数
         5. 返回完整的配置列表供后续链路申请使用
         """
+        from metadata.models import ResultTableField, ResultTableOption
+
         bkbase_data_name = utils.compose_bkdata_data_id_name(data_source.data_name, self.data_link_strategy)
         bkbase_vmrt_name = utils.compose_bkdata_table_id(table_id, self.data_link_strategy)
+
+        # 白名单配置
+        whitelist: dict[Literal["metrics", "tags"], list[str]] | None = None
+        option = ResultTableOption.objects.filter(
+            table_id=table_id, bk_tenant_id=self.bk_tenant_id, name=ResultTableOption.OPTION_ENABLE_FIELD_BLACK_LIST
+        ).first()
+        if option and option.value == "false":
+            result_table_fields = ResultTableField.objects.filter(
+                table_id=table_id, bk_tenant_id=self.bk_tenant_id, is_disabled=False
+            )
+            metrics, tags = [], []
+            for field in result_table_fields:
+                if field.tag == ResultTableField.FIELD_TAG_METRIC:
+                    metrics.append(field.field_name)
+                elif field.tag == ResultTableField.FIELD_TAG_DIMENSION:
+                    tags.append(field.field_name)
+            whitelist = {"metrics": metrics, "tags": tags}
 
         with transaction.atomic():
             # 渲染所需的资源配置
@@ -1370,7 +1389,7 @@ class DataLink(models.Model):
 
         configs = [
             vm_table_id_ins.compose_config(),
-            vm_storage_ins.compose_config(),
+            vm_storage_ins.compose_config(whitelist=whitelist),
             data_bus_ins.compose_config(sinks=sinks, transform_format=transform_format),
         ]
         return configs
