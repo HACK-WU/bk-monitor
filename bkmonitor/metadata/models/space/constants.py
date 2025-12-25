@@ -219,11 +219,12 @@ SPACE_DATASOURCE_ETL_LIST = [item[0] for item in EtlConfigs._choices_labels.valu
 # 启用V4数据链路的ETL配置类型列表
 # V4数据链路提供更好的性能和稳定性，这些配置类型优先使用V4方式申请DataID
 ENABLE_V4_DATALINK_ETL_CONFIGS = [
-    EtlConfigs.BK_STANDARD_V2_TIME_SERIES.value,  # 标准时序数据
-    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,  # 多租户Agent事件
-    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,  # 多租户基础监控
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,  # 多租户进程性能
-    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,  # 多租户进程端口
+    EtlConfigs.BK_STANDARD_V2_TIME_SERIES.value,
+    EtlConfigs.BK_MULTI_TENANCY_AGENT_EVENT_ETL_CONFIG.value,
+    EtlConfigs.BK_MULTI_TENANCY_BASEREPORT_ETL_CONFIG.value,
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PERF_ETL_CONFIG.value,
+    EtlConfigs.BK_MULTI_TENANCY_SYSTEM_PROC_PORT_ETL_CONFIG.value,
+    EtlConfigs.BK_STANDARD_V2_EVENT.value,
 ]
 
 # 若启用插件接入V4数据链路，则将BK_EXPORTER和BK_STANDARD也加入到V4数据链路
