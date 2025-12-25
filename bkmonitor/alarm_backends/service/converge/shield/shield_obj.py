@@ -415,48 +415,52 @@ class ShieldObj:
 
 
 class AlertShieldObj(ShieldObj):
-    """
-    告警屏蔽对象
-    用于对告警进行屏蔽匹配
-    """
+    # 类级别的缓存，用于存储告警维度信息
+    _alert_dimension_cache = {}
 
-    def get_dimension(self, alert: AlertDocument):
+    @classmethod
+    def _get_cached_alert_dimension(cls, alert: AlertDocument):
+        """获取缓存的告警维度信息，避免重复计算
+
+        :param alert: 告警文档对象
+        :return: 告警维度字典
         """
-        提取告警的维度信息用于屏蔽匹配
+        cache_key = f"{alert.id}_{alert.strategy_id}"
 
-        执行流程:
-        1. 从告警文档中提取原始维度和标准维度
-        2. 补充策略ID、告警级别、拓扑节点等关键维度
-        3. 统一维度字段命名（兼容多种命名格式）
-        4. 扩展tags前缀的维度，提高匹配成功率
+        if cache_key in cls._alert_dimension_cache:
+            return cls._alert_dimension_cache[cache_key]
 
-        返回值示例:
-        {
-            "strategy_id": 123,
-            "level": 1,
-            "bk_biz_id": 2,
-            "bk_host_id": 100001,
-            "bk_topo_node": [{"bk_obj_id": "module", "bk_inst_id": 10}],
-            "metric_id": ["system.cpu.usage"],
-            "ip": "127.0.0.1",
-            "bk_target_ip": "127.0.0.1",
-            "bk_cloud_id": "0",
-            "bk_target_cloud_id": "0",
-            "service_instance_id": "5001",
-            "bk_target_service_instance_id": "5001",
-            "bk_service_instance_id": "5001",
-            "tags.device_name": "eth0",
-            "device_name": "eth0",  # 自动扩展的无前缀维度
-            "tags.disk": "/data",
-            "disk": "/data"  # 自动扩展的无前缀维度
-        }
+        # 计算告警维度
+        dimension = cls._calculate_alert_dimension(alert)
+
+        # 缓存结果，限制缓存大小避免内存泄漏
+        if len(cls._alert_dimension_cache) > 1000:
+            # 简单的缓存清理策略：删除最旧的一半缓存
+            keys_to_remove = list(cls._alert_dimension_cache.keys())[:500]
+            for key in keys_to_remove:
+                cls._alert_dimension_cache.pop(key, None)
+
+        cls._alert_dimension_cache[cache_key] = dimension
+        return dimension
+
+    @staticmethod
+    def _calculate_alert_dimension(alert: AlertDocument):
+        """计算告警维度信息
+
+        :param alert: 告警文档对象
+        :return: 告警维度字典
         """
+        dimension = {}
         try:
-            dimension = copy.deepcopy(alert.origin_alarm["data"]["dimensions"])
-        except BaseException as error:
+            # 检查 origin_alarm 是否为空，避免重复的异常日志
+            if alert.origin_alarm and alert.origin_alarm.get("data"):
+                dimension = copy.deepcopy(alert.origin_alarm["data"]["dimensions"])
+        except (TypeError, KeyError):
             # 有可能第三方告警没有维度信息
-            dimension = {}
-            logger.info("Get origin alarm dimensions  of alert(%s) error, %s", alert.id, str(error))
+            pass
+        except BaseException as error:
+            logger.exception("get origin alarm dimensions of alert(%s) error, %s", alert.id, str(error))
+
         alert_dimensions = [d.to_dict() for d in alert.dimensions]
         dimension.update({d["key"]: d.get("value", "") for d in alert_dimensions})
         dimension["strategy_id"] = alert.strategy_id
@@ -513,6 +517,14 @@ class AlertShieldObj(ShieldObj):
                 # 将带tags前缀的维度转换为不带前缀，扩大搜索维度  (tags.device_name => device_name)
                 new_dimensions[key[len(tag_prefix) :]] = value
         return new_dimensions
+
+    def get_dimension(self, alert: AlertDocument):
+        """获取告警维度信息（使用缓存优化）
+
+        :param alert: 告警文档对象
+        :return: 告警维度字典
+        """
+        return self._get_cached_alert_dimension(alert)
 
     def is_match(self, alert: AlertDocument):
         source_time = arrow.now()
