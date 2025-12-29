@@ -382,30 +382,62 @@ class GetHostOrTopoNodeDetailResource(ApiAuthResource):
         return list(set_nodes.values())
 
     def perform_request(self, params):
+        """
+        统一处理主机、拓扑节点、进程的详情查询请求
+
+        参数:
+            params: 请求参数字典，包含以下可选字段
+                - bk_biz_id: 业务ID（必需）
+                - bk_host_id: 主机ID（查询主机/进程时使用）
+                - bk_inst_id: 拓扑节点实例ID（查询拓扑节点时使用）
+                - bk_obj_id: 拓扑节点对象ID（查询拓扑节点时使用）
+                - bk_process_name: 进程名称（查询进程时使用）
+                - topo_tree: 是否返回拓扑树结构（默认False）
+
+        返回值:
+            list: 详情信息列表，每项包含name、type、value等字段
+                示例: [
+                    {"name": "主机名", "type": "string", "value": "host-001"},
+                    {"name": "内网IP", "type": "link", "value": {...}, "children": [...]},
+                ]
+
+        该方法实现多种对象详情查询的统一入口，包含：
+        1. 参数有效性检查
+        2. 根据参数类型路由到不同的查询方法
+        3. 过滤空值子项并更新计数
+        4. 临时分享场景的链接数据转换
+        """
+        # 1. 参数有效性检查：至少需要主机ID或拓扑节点信息之一
         if not params.get("bk_host_id") and not params.get("bk_inst_id") and not params.get("bk_obj_id"):
             return {}
 
+        # 2. 根据参数类型路由到不同的查询方法
+        # 2.1 查询主机的拓扑树结构（集群-模块层级关系）
         if params.get("topo_tree") is True and params.get("bk_host_id"):
             return self.get_topo_node_info(bk_biz_id=params["bk_biz_id"], bk_host_id=params["bk_host_id"])
 
+        # 2.2 查询拓扑节点详情（集群、模块等）
         if "bk_obj_id" in params and "bk_inst_id" in params:
             info = self.get_node_info(params["bk_biz_id"], params["bk_obj_id"], params["bk_inst_id"])
         else:
+            # 2.3 查询进程详情（进程名、别名、绑定信息）
             if "bk_process_name" in params:
                 info = self.get_process_info(
                     bk_biz_id=params["bk_biz_id"],
                     bk_host_id=params["bk_host_id"],
                     bk_process_name=params["bk_process_name"],
                 )
+            # 2.4 查询主机详情（主机名、IP、操作系统、资源配置等）
             else:
                 info = self.get_host_info(bk_biz_id=params["bk_biz_id"], bk_host_id=params["bk_host_id"])
 
+        # 3. 过滤空值子项并更新计数（如内网IP的IPv4/IPv6子项）
         for item in info:
             if "children" in item:
                 item["children"] = list(filter(lambda c: c["value"], item["children"]))
                 item["count"] = len(item["children"])
 
-        # 临时分享处理返回链接数据
+        # 4. 临时分享场景处理：将链接类型转换为纯文本（避免分享链接失效）
         request = get_request(peaceful=True)
         if request and getattr(request, "token", None):
             for info_item in info:

@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 
 import inspect
 
-
+from importlib import import_module
 from alarm_backends.core.handlers import base
 from bkmonitor.utils.common_utils import package_contents
 
@@ -18,7 +18,7 @@ from bkmonitor.utils.common_utils import package_contents
 HANDLER_ROOT_MODULE = "alarm_backends.service"
 
 
-def autodiscover_handlers():
+def autodiscover_handlers() -> dict:
     """
     自动发现并注册服务处理器的工厂函数
 
@@ -44,9 +44,11 @@ def autodiscover_handlers():
     # 遍历服务类型子模块
     for service_type in package_contents(HANDLER_ROOT_MODULE):
         pkg = f"{HANDLER_ROOT_MODULE}.{service_type}"
-        # 动态查找handler模块
-        handler_module = find_related_module(pkg, "handler")
-        if handler_module is None:
+        try:
+            # 动态导入handler模块（如 alarm_backends.service.access.handler）
+            handler_module = import_module(f"{pkg}.handler")
+        except ImportError:
+            # handler模块不存在，跳过该服务
             continue
 
         # 筛选模块中的处理器类

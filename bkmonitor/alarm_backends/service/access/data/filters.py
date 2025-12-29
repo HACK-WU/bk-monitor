@@ -81,23 +81,65 @@ class HostStatusFilter(base.Filter):
 
     def filter(self, record: DataRecord):
         """
-        如果主机运营状态为不监控的几种类型，则直接过滤
+        根据主机运营状态过滤监控数据记录
 
-        :param record: DataRecord / EventRecord
+        如果主机运营状态为不监控的几种类型，则直接过滤该记录。
+        该方法会检查主机的ignore_monitoring标志，决定是否保留该监控数据。
+
+        参数:
+            record: DataRecord / EventRecord 监控数据记录对象
+
+        返回值:
+            True: 该记录应被过滤（丢弃）
+            False: 该记录应被保留（继续处理）
+
+        处理流程:
+        1. 检查是否为主机数据（包含bk_host_id或bk_target_ip维度）
+        2. 验证主机标识的有效性
+        3. 根据主机标识查询主机信息（优先使用bk_host_id）
+        4. 检查主机的ignore_monitoring状态，更新记录的保留标志
+
+
+          raw_data:
+            {
+                "bk_target_ip":"127.0.0.1",
+                "load5":1.38,
+                "bk_target_cloud_id":"0",
+                "time":1569246480
+            }
+
+        output_standard_data:
+            {
+                "record_id":"f7659f5811a0e187c71d119c7d625f23",
+                "value":1.38,
+                "values":{
+                    "timestamp":1569246480,
+                    "load5":1.38
+                },
+                "dimensions":{
+                    "bk_target_ip":"127.0.0.1",
+                    "bk_target_cloud_id":"0"
+                },
+                "time":1569246480
+            }
+
         """
-        # 非主机数据不处理
+        # 非主机数据不处理，直接放行
         if "bk_host_id" not in record.dimensions and "bk_target_ip" not in record.dimensions:
             return False
 
-        # 过滤非法的主机数据
+        # 过滤非法的主机数据：既没有主机ID也没有目标IP的记录
         if not record.dimensions.get("bk_target_ip") and not record.dimensions.get("bk_host_id"):
             return True
 
+        # 根据主机标识查询主机信息（优先使用bk_host_id）
         if record.dimensions.get("bk_host_id"):
+            # 通过主机ID查询（推荐方式，更精确）
             host = HostManager.get_by_id(
                 bk_tenant_id=record.bk_tenant_id, bk_host_id=record.dimensions["bk_host_id"], using_mem=True
             )
         elif "bk_target_ip" in record.dimensions and "bk_target_cloud_id" in record.dimensions:
+            # 通过IP和云区域ID查询（兼容旧数据）
             host = HostManager.get(
                 bk_tenant_id=record.bk_tenant_id,
                 ip=record.dimensions["bk_target_ip"],
@@ -105,17 +147,25 @@ class HostStatusFilter(base.Filter):
                 using_mem=True,
             )
         else:
+            # 缺少必要的查询条件，过滤该记录
             return False
 
+        # 主机不存在，记录日志并过滤
         if host is None:
             logger.debug(f"Discard the record ({record.raw_data}) because host is unknown")
             return True
 
+        # 根据主机的ignore_monitoring标志更新记录中所有指标项的保留状态
         is_filtered = host.ignore_monitoring
         for item in record.items:
+            # 只有当主机未被忽略且原本保留标志为True时，才保留该指标项
             record.is_retains[item.id] = not is_filtered and record.is_retains[item.id]
+
+        # 记录过滤日志
         if is_filtered:
             logger.debug(
                 f"Discard the record ({record.raw_data}) because host({host.display_name}) status is {host.bk_state}"
             )
+
+        # 返回False表示不过滤整个记录，但内部已更新各指标项的保留状态
         return False

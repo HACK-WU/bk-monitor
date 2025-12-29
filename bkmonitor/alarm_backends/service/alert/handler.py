@@ -60,7 +60,10 @@ class AlertHandler(base.BaseHandler):
 
     def __init__(self, service, *args, **kwargs):
         super().__init__()
-        self.service = service
+
+        from alarm_backends.management.commands.run_discovery_service import Command
+
+        self.service: Command = service
         self.run_once = True
         self._stop_signal = False
         self.topic_data_id = {}
@@ -93,7 +96,7 @@ class AlertHandler(base.BaseHandler):
 
     def handle(self):
         """
-        事件处理主流程，包含内置/自定义事件源的双线程处理机制
+        告警事件处理主流程，基于多线程架构实现分布式事件消费
 
         参数:
             无
@@ -102,52 +105,78 @@ class AlertHandler(base.BaseHandler):
             无返回值（通过线程异步处理事件流）
 
         执行流程:
-        1. 初始化信号处理机制
+        1. 注册系统信号处理器，支持优雅退出
         2. 启动三个核心线程：
-           - 领导者选举线程
-           - 消费者管理线程
-           - 事件轮询线程
-        3. 持续执行服务注册/续约
-        4. 异常处理与资源回收
+           - 领导者选举线程：负责data_id分配和任务调度
+           - 消费者管理线程：动态管理Kafka消费者实例
+           - 事件轮询线程：从Kafka拉取并处理告警事件
+        3. 主线程持续执行服务注册/续约，维持服务可见性
+        4. 监听停止信号，协调各线程优雅退出并清理资源
+
+        架构说明:
+        - 内置topic: 蓝鲸监控专用事件流，直接写入Kafka
+        - 自定义topic: 通过EventPluginInstance接入的第三方事件源
+        - 采用HashRing算法实现data_id的分布式负载均衡
         """
-        # 事件源分类处理说明:
-        # 1. 内置topic: 直接写入Kafka的标准化事件流
-        # 2. 自定义topic: 通过通用事件源接入管道处理
+        # 步骤1: 注册信号处理器，捕获SIGTERM(kill)和SIGINT(Ctrl+C)信号
+        # 当收到终止信号时，调用self._stop方法设置停止标志位
         signal.signal(signal.SIGTERM, self._stop)
         signal.signal(signal.SIGINT, self._stop)
 
-        # 核心线程初始化:
+        # 步骤2: 初始化三个核心工作线程
+        # InheritParentThread: 继承父线程上下文的线程类，确保Django配置等环境变量正确传递
+
+        # 领导者线程: 通过Redis分布式锁实现leader选举
+        # 职责: 从metadata获取所有data_id的Kafka配置，使用HashRing分配给各个worker节点
         leader = InheritParentThread(target=self.run_leader)
+
+        # 消费者管理线程: 根据leader分配的任务动态创建/更新/删除Kafka消费者
+        # 职责: 监听Redis中的分配结果，维护self.consumers字典，管理消费者生命周期
         consumer_manager = InheritParentThread(target=self.run_consumer_manager)
+
+        # 轮询线程: 从Kafka消费者拉取事件数据并分发到告警构建任务
+        # 职责: 批量poll事件(最多MAX_RETRIEVE_NUMBER条)，按MAX_EVENT_NUMBER分批推送到run_alert_builder
         poller = InheritParentThread(target=self.run_poller)
 
-        # 并行启动线程
+        # 步骤3: 并行启动所有工作线程
+        # 三个线程独立运行，通过共享状态(self.consumers, Redis)协同工作
         leader.start()
         consumer_manager.start()
         poller.start()
 
         try:
+            # 步骤4: 主线程进入服务注册循环
             while True:
                 try:
+                    # 向Consul注册服务，维持心跳，确保在集群中可见
+                    # 其他节点通过Consul发现所有活跃的worker，用于HashRing计算
                     self.service.register()
                 except Exception as error:
+                    # 注册失败不影响主流程，记录日志后继续运行
                     logger.exception(
                         "[main poller thread] register service failed, retry later, error info %s", str(error)
                     )
 
-                # 停止信号检测与优雅退出:
+                # 步骤5: 检查停止信号，执行优雅退出流程
                 if self._stop_signal:
+                    # 等待所有工作线程完成当前任务并退出
+                    # join()会阻塞直到线程结束，确保数据处理完整性
                     leader.join()  # 等待领导线程结束
                     consumer_manager.join()  # 等待消费者管理线程结束
                     poller.join()  # 等待轮询线程结束
-                    self.service.unregister()  # 服务注销
+
+                    # 从Consul注销服务，通知集群该节点已下线
+                    self.service.unregister()
                     break
 
+                # 每15秒执行一次服务注册，保持服务心跳
                 time.sleep(15)
         except Exception as e:
+            # 捕获主循环中的未预期异常，记录详细日志
             logger.exception("Do event poller task in host(%s) failed %s", self.ip, str(e))
         finally:
-            # 资源清理: 关闭所有消费者连接
+            # 步骤6: 资源清理，确保所有Kafka消费者正确关闭
+            # close_consumer会提交offset并关闭连接，防止消息重复消费
             map(lambda c: self.close_consumer(c), self.consumers.values())
 
     @always_retry(10)
@@ -380,47 +409,82 @@ class AlertHandler(base.BaseHandler):
     @always_retry(10)
     def run_poller(self):
         """
-        通过批量拉取数据
-        :return:
+        Kafka事件轮询线程主函数，批量拉取告警事件并分发到处理任务
+
+        参数:
+            无
+
+        返回值:
+            无返回值（持续运行直到收到停止信号）
+
+        执行流程:
+        1. 释放消费者锁（防止初始化时锁未释放）
+        2. 循环遍历所有Kafka消费者，批量poll事件数据
+        3. 将拉取的事件按MAX_EVENT_NUMBER分批推送到告警构建任务
+        4. 检查停止信号，执行优雅退出
+        5. 处理空闲状态（无消费者时休眠，避免空转）
+
+        技术细节:
+        - poll超时: 500ms，避免长时间阻塞
+        - 批量大小: MAX_RETRIEVE_NUMBER(5000条)，提升吞吐量
+        - 线程安全: 使用consumers_lock保护消费者字典的并发访问
+        - 自动提交: Kafka自动提交offset，poll返回空不代表真实无数据
         """
+        # 步骤1: 确保消费者锁处于释放状态
+        # 防止线程启动时锁被意外持有，导致死锁
         if self.consumers_lock.locked():
             self.consumers_lock.release()
+
         while True:
+            # 步骤2: 获取消费者锁，保护self.consumers字典的并发访问
+            # 防止consumer_manager线程在poll过程中修改消费者列表
             self.consumers_lock.acquire()
-            has_record = False
+            has_record = False  # 标记本轮是否拉取到数据
+
+            # 步骤3: 遍历所有Kafka消费者，批量拉取事件
             for bootstrap_server, consumer in self.consumers.items():
-                # 设置timeout时间500ms
+                # 从Kafka拉取消息，超时500ms，最多拉取MAX_RETRIEVE_NUMBER(5000)条
+                # 返回格式: {TopicPartition: [ConsumerRecord, ...]}
                 data = consumer.poll(500, max_records=self.MAX_RETRIEVE_NUMBER)
                 if not data:
+                    # 当前消费者无数据，继续下一个
                     continue
 
                 has_record = True
                 events = []
 
+                # 步骤4: 展平数据结构，将所有分区的记录合并到events列表
+                # data.values()返回各分区的记录列表，extend合并为单一列表
                 for records in list(data.values()):
                     events.extend(records)
+
+                # 步骤5: 将事件分批推送到告警构建任务
+                # push_handle_task内部会按MAX_EVENT_NUMBER(500条)切分批次
                 self.push_handle_task(consumer.config["bootstrap_servers"], events)
                 logger.info(
                     "[run_poller]  alert event poller poll %s: count(%s)",
                     consumer.config["bootstrap_servers"],
                     len(events),
                 )
+
+            # 步骤6: 释放消费者锁，允许consumer_manager更新消费者列表
             self.consumers_lock.release()
 
+            # 步骤7: 检查退出条件
             if self.run_once or self._stop_signal:
                 logger.info("[run_poller] alert event poller got stop signal")
                 break
 
-            # gpt说：如果消费者启用了自动提交消费位移，那么Kafka会在消费者poll消息时自动提交消费位移在这种情况下，
-            # 如果消费者在第一次poll消息时没有消费完所有的消息，那么这些消息的消费位移就会被自动提交，导致第二次poll返回数据为空。
-            # 所以没有数据不代表真实的没有数据
+            # 步骤8: 处理空数据情况
+            # 注意: Kafka自动提交offset机制下，poll返回空不代表真实无数据
+            # 可能是消息已被自动提交但未完全消费，下次poll会继续拉取
             if not has_record and self.consumers:
                 logger.info(
                     "[run_poller]  alert event poller get no data from  %s", ",".join(list(self.consumers.keys()))
                 )
 
+            # 步骤9: 无消费者时休眠，避免CPU空转
             if not self.consumers:
-                # 没有consumer的情况下，沉睡10秒钟，减少调度
                 time.sleep(5)
                 logger.info("[run_poller] sleep(5 seconds) because of no consumer")
                 continue

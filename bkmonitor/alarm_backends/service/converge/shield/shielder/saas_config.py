@@ -45,45 +45,6 @@ class AlertShieldConfigShielder(BaseShielder):
 
     type = ShieldType.SAAS_CONFIG
 
-    def get_shield_objs_from_cache(self):
-        """
-         获取到该告警的屏蔽配置对象，获取成功则该告警已被设置屏蔽
-
-        从缓存获取alert近期命中的屏蔽配置ID列表，并过滤存在于当前获取的config_ids中的屏蔽配置。
-        过滤出的就是曾经匹配到过的告警配置，因为只有匹配到了才会被写入缓存。
-
-        补充：
-           告警只需要匹配到一个屏蔽配置，就可以进行屏蔽，所以只需要关心所否存在匹配的屏蔽配置。
-           也就是说如果有新增的屏蔽配置，这里没匹配到也不关心，后续会进行重新匹配
-
-        该告警缓存的屏蔽配置id列表，直到数据库中的对应的屏蔽配置被全部删除后，才会重新进行屏蔽匹配，和刷新缓存
-        """
-
-        key = self.shield_objs_cache_key(self.alert)
-        if key is None:
-            # 告警没有策略(第三方告警), 或者未设置过缓存 返回None
-            return None
-        client = ALERT_SHIELD_SNAPSHOT.client
-        #
-        config_ids = client.get(key)
-        if config_ids:
-            # 已经进行过屏蔽匹配了， 这里直接返回
-            config_ids: list[str] = json.loads(config_ids)
-            return [AlertShieldObj(config) for config in self.configs if str(config["id"]) in config_ids]
-        return None
-
-    def set_shield_objs_cache(self):
-        """
-        将匹配的屏蔽策略id 放进缓存
-        """
-        key = self.shield_objs_cache_key(self.alert)
-        if key is None:
-            return False
-        client = ALERT_SHIELD_SNAPSHOT.client
-        config_ids: list[str] = [str(shield_obj.config["id"]) for shield_obj in self.shield_objs]
-        client.set(key, json.dumps(config_ids), ex=ALERT_SHIELD_SNAPSHOT.ttl)
-        return True
-
     def __init__(self, alert: AlertDocument):
         """
         获取匹配当前告警的屏蔽配置列表，并保存在self.shield_objs中。
@@ -145,13 +106,52 @@ class AlertShieldConfigShielder(BaseShielder):
         # 设置屏蔽详情信息
         self.detail = extended_json.dumps({"message": _("因为告警屏蔽配置({})屏蔽当前处理").format(shield_config_ids)})
 
+    def get_shield_objs_from_cache(self):
+        """
+         获取到该告警的屏蔽配置对象，获取成功则该告警已被设置屏蔽
+
+        从缓存获取alert近期命中的屏蔽配置ID列表，并过滤存在于当前获取的config_ids中的屏蔽配置。
+        过滤出的就是曾经匹配到过的告警配置，因为只有匹配到了才会被写入缓存。
+
+        补充：
+           告警只需要匹配到一个屏蔽配置，就可以进行屏蔽，所以只需要关心所否存在匹配的屏蔽配置。
+           也就是说如果有新增的屏蔽配置，这里没匹配到也不关心，后续会进行重新匹配
+
+        该告警缓存的屏蔽配置id列表，直到数据库中的对应的屏蔽配置被全部删除后，才会重新进行屏蔽匹配，和刷新缓存
+        """
+
+        key = self.shield_objs_cache_key(self.alert)
+        if key is None:
+            # 告警没有策略(第三方告警), 或者未设置过缓存 返回None
+            return None
+        client = ALERT_SHIELD_SNAPSHOT.client
+        #
+        config_ids = client.get(key)
+        if config_ids:
+            # 已经进行过屏蔽匹配了， 这里直接返回
+            config_ids: list[str] = json.loads(config_ids)
+            return [AlertShieldObj(config) for config in self.configs if str(config["id"]) in config_ids]
+        return None
+
+    def set_shield_objs_cache(self):
+        """
+        将匹配的屏蔽策略id 放进缓存
+        """
+        key = self.shield_objs_cache_key(self.alert)
+        if key is None:
+            return False
+        client = ALERT_SHIELD_SNAPSHOT.client
+        config_ids: list[str] = [str(shield_obj.config["id"]) for shield_obj in self.shield_objs]
+        client.set(key, json.dumps(config_ids), ex=ALERT_SHIELD_SNAPSHOT.ttl)
+        return True
+
     def shield_objs_cache_key(self, alert):
         # 生成缓存键，如果没有策略ID则返回None
         if not alert.strategy_id:
             return None
         return ALERT_SHIELD_SNAPSHOT.get_key(strategy_id=self.alert.strategy_id, alert_id=self.alert.id)
 
-    def is_matched(self):
+    def is_matched(self) -> bool:
         # 检查是否匹配全局屏蔽或主机屏蔽
         if GlobalShielder().is_matched():
             self.is_global_shielder = True
@@ -298,27 +298,44 @@ class HostShielder(BaseShielder):
             return False
 
     def _is_matched(self):
+        """
+        判断告警是否匹配主机屏蔽规则
+
+        返回值:
+            bool: True表示告警应被屏蔽，False表示不屏蔽
+
+        该方法实现主机级别的告警屏蔽逻辑，包含：
+        1. 识别告警类型（主机告警/容器告警）
+        2. 提取主机IP和云区域ID信息
+        3. 查询主机配置状态（是否设置为不告警/不监控）
+        4. 根据主机状态决定是否屏蔽告警
+        """
+        # 场景1：主机类型告警
         if getattr(self.alert.event, "target_type", None) == "HOST":
+            # 主机告警直接从事件对象获取IP和云区域ID，不需要调用API
             using_api = False
             ip = str(getattr(self.alert.event, "ip", ""))
             bk_cloud_id = str(getattr(self.alert.event, "bk_cloud_id", "0"))
+        # 场景2：容器类型告警（通过bcs_cluster_id维度识别）
         elif "bcs_cluster_id" in getattr(self.alert.extra_info, "agg_dimensions", []):
-            # 容器可补全IP告警
+            # 容器告警需要从维度信息中提取IP和云区域ID
             dimension_dict = {dimension["key"]: dimension["value"] for dimension in self.alert.dimensions}
             ip = dimension_dict.get("ip", "")
             bk_cloud_id = dimension_dict.get("bk_cloud_id", None)
             # TODO(crayon) enrich 已经补充了 HostID 的维度，IP & 管控区域在动态主机场景下可能重复，直接用 HostID 更准
             # TODO(crayon) 下次修改，本次改动暂不引入新变更
             if not ip or bk_cloud_id is None:
-                # 如果IP 为空或者 不存在云区域ID，忽略
+                # 容器告警缺少必要的主机信息，无法判断屏蔽规则，直接放行
                 return False
-            # 容器场景告警生成时间和主机纳管时间相邻，增加 API 请求兜底
+            # 容器场景下告警生成时间和主机纳管时间可能相邻，启用API请求兜底
             using_api = True
         else:
-            # 不是host类型告警也不是容器相关的，忽略，不做判断
+            # 场景3：其他类型告警（非主机、非容器），不适用主机屏蔽规则
             return False
 
+        # 统一转换云区域ID为整数类型
         bk_cloud_id = int(bk_cloud_id or 0)
+        # 查询主机信息，优先使用内存缓存，容器场景启用API兜底
         host = HostManager.get(
             bk_tenant_id=str(self.alert.bk_tenant_id),
             ip=ip,
@@ -327,15 +344,20 @@ class HostShielder(BaseShielder):
             using_api=using_api,
         )
 
+        # 判断主机是否设置了屏蔽或不监控状态
         if host and any([host.is_shielding, host.ignore_monitoring]):
-            # 如果当前主机处于不监控（容器告警机器信息后期补全，所以在这里也进要行配置）或者不告警的状态，都统一屏蔽掉
+            # 主机在配置平台中设置了"不告警"或"不监控"状态，屏蔽该告警
+            # 容器告警的机器信息是后期补全的，所以也需要在这里进行配置检查
             self.detail = extended_json.dumps({"message": _("当前主机在配置平台中设置了无告警状态")})
             return True
         elif not host and using_api:
+            # 容器场景下未找到主机信息，记录警告日志但不屏蔽告警
+            # 避免因主机信息缺失导致误屏蔽
             logger.warning(
                 "[host not shield] alert(%s) strategy(%s) because of host(%s) not found",
                 self.alert.id,
                 self.alert.strategy_id,
                 HostManager.get_host_key(ip, bk_cloud_id),
             )
+        # 主机状态正常或未找到主机信息，不屏蔽告警
         return False

@@ -146,46 +146,62 @@ class BaseCommand(DjangoBaseCommand, protocol.AbstractLifecycleMixin, protocol.A
         super().execute(*args, **options)
 
     def handle(self, *args, **options):
-        """
-        主处理逻辑
-
-        参数:
-            *args: 位置参数
-            **options: 命令选项参数
-
-        核心流程:
-        1. 注册信号处理函数
-        2. 初始化生命周期钩子
-        3. 执行主循环
-        4. 处理异常和退出条件
-        """
         signal.signal(signal.SIGTERM, self._onsignal)
         signal.signal(signal.SIGINT, self._onsignal)
 
+        # 遍历命令行选项，将有效选项转换为实例属性
+        # 例如: --service-type=detect 会被设置为 self._SERVICE_TYPE_ = "detect"
         for option, value in six.iteritems(options):
+            # 过滤掉 Django 内置选项，只处理自定义选项
             if option not in ("no_color", "pythonpath", "settings", "traceback", "verbosity") and value is not None:
+                # 将选项名转换为大写并添加下划线前后缀，如 service_type -> _SERVICE_TYPE_
                 attr = f"_{option.upper()}_"
                 setattr(self, attr, options[option])
 
+        #
+        # Worker Lifecycle
+        #
+        #                     ....can_continue....
+        #                     v                  :
+        # +-----------+     +----------+       +---------+     +------------+
+        # | on_create | --> | on_start | ----> | on_stop | --> | on_destroy |
+        # +-----------+     +----------+       +---------+     +------------+
+        #
+
         self.on_create(*args)
 
+        # 主循环：持续运行直到满足退出条件
+        # can_continue() 检查是否收到关闭信号或发生异常
         while self.can_continue():
             try:
-                self.on_start(*args)
-                self.on_stop(*args)
+                # 执行一个完整的工作周期
+                self.on_start(*args)  # 启动钩子：执行具体业务逻辑（如处理告警、检测任务等）
+                self.on_stop(*args)  # 停止钩子：完成当前周期的收尾工作
             except Exception as e:
+                # 捕获业务逻辑异常，保存异常信息但不立即退出
+                # 保存异常类型和堆栈信息，用于后续重新抛出
                 self.__EXC_INFO__ = (e.__class__, None, sys.exc_info()[2])
             finally:
+                # 无论成功或失败，都更新循环计数器
                 self.__CYCLES__ += 1
+
+                # 检查是否达到最大循环次数限制
+                # 防止服务无限运行，适用于需要定期重启的场景
                 if self.__CYCLES__ >= self._MAX_CYCLES_:
                     logger.info("maximum cycles reached.")
                     break
+
+                # 检查是否达到最大运行时长限制
+                # 防止服务长时间运行导致的内存泄漏等问题
                 if time.time() - self.__UPTIME__ >= self._MAX_UPTIME_:
                     logger.info("maximum uptime reached.")
                     break
 
+        # 调用销毁钩子，执行资源清理逻辑（如关闭连接、释放资源等）
         self.on_destroy(*args)
 
+        # 如果主循环中捕获了异常，在清理完成后重新抛出
+        # 确保异常不会被吞没，便于上层调用者感知错误
         if self.__EXC_INFO__ is not None:
             six.reraise(*self.__EXC_INFO__)
 

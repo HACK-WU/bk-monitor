@@ -31,6 +31,8 @@ from alarm_backends.service.access.tasks import (
 
 from bkmonitor.utils.beater import MonitorBeater
 from bkmonitor.utils.common_utils import safe_int
+from alarm_backends.management.commands.run_discovery_service import Command as run_discovery_service
+from alarm_backends.management.commands.run_access import Command as run_access_service
 
 logger = logging.getLogger("access")
 REFRESH_STRATEGY_INFO = "refresh_agg_strategy_group_interval"
@@ -42,7 +44,7 @@ REFRESH_INTERVAL = 90
 
 
 class AccessBeater(MonitorBeater):
-    def __init__(self, name, targets, service, entries=None):
+    def __init__(self, name, targets, service: run_discovery_service | run_access_service, entries=None):
         super().__init__(name, entries)
         self.targets = targets or []
         self.max_access_data_period = 58
@@ -257,8 +259,11 @@ class AccessHandler(base.BaseHandler):
         异常:
             Exception: 当access_type未在类型映射中注册时抛出
         """
+
+        from alarm_backends.management.commands.run_discovery_service import Command
+
         access_type = option.get("access_type")
-        self.service = option.get("service")
+        self.service: Command = option.get("service")
         if access_type not in ACCESS_TYPE_TO_CLASS:
             raise Exception(f"Unknown Access Type({str(access_type)}).")
 
@@ -269,34 +274,32 @@ class AccessHandler(base.BaseHandler):
 
     def handle_data(self):
         """
-        处理周期性数据接入任务
-
-        前置条件:
-            self.service必须已初始化
+        启动数据接入调度器，周期性刷新策略和目标
 
         执行流程:
-        1. 初始化访问调度器(AccessBeater)
-        2. 注册策略分组刷新任务
+        1. 初始化调度器并立即刷新目标
+        2. 注册策略分组周期刷新任务
         3. 注册目标刷新任务
-        4. 启动调度器执行周期任务
+        4. 启动调度器循环
         """
         assert self.service is not None, "access data handler missing required argument: 'service'"
 
         access_beater = AccessBeater(name="access_beater", targets=self.targets, service=self.service)
 
-        # 1. 刷新策略分组周期及目标
+        # 立即刷新一次目标
         access_beater.refresh_targets()
-        # 2. 定时更新策略周期信息
+
+        # 注册周期任务：刷新策略分组周期信息
         access_beater.entries[REFRESH_STRATEGY_INFO] = ScheduleEntry(
             task=access_beater.refresh_agg_strategy_group_interval, schedule=REFRESH_INTERVAL, args=()
         )
 
-        # 3. 定时更新目标
+        # 注册周期任务：刷新目标
         access_beater.entries[REFRESH_TARGETS] = ScheduleEntry(
             task=access_beater.refresh_targets, schedule=REFRESH_INTERVAL, args=()
         )
 
-        # 4. 启动调度器
+        # 启动调度器（阻塞式循环）
         access_beater.beater()
 
     def handle_real_time(self):

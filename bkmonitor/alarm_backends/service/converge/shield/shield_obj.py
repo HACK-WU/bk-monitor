@@ -116,36 +116,42 @@ class ShieldObj:
 
     def _parse_dimension_config(self):
         """
-        将config_list转成condition_list 避免重复转换
-        :return: list[condition]
-        """
+        解析屏蔽配置的维度条件，构建匹配规则
 
-        # 获取到一个AND条件匹配器
+        执行流程:
+        1. 清洗维度配置，过滤无效数据
+        2. 根据屏蔽类型（维度/策略/节点/动态分组）解析匹配条件
+        3. 构建AND条件匹配器，用于告警维度匹配
+        """
+        # 初始化AND条件匹配器
         self.dimension_check = AndCondition()
-        # 清晰维度，并获取到新的维度配置
         clean_dimension = self._clean_dimension()
+
+        # 场景1: 按维度屏蔽（直接解析维度条件）
         if self.is_dimension_scope:
-            # 解析维度匹配条件，并添加到dimension_check中
             self._parse_dimension_conditions(clean_dimension)
             return
+
+        # 场景2: 按策略屏蔽（需要额外处理节点拓扑）
         if self.config["category"] == ShieldCategory.STRATEGY:
-            # 如果是按策略屏蔽，需要获取维度信息进行屏蔽配置之后，还需要额外添加一层屏蔽配置
             self._parse_dimension_conditions(clean_dimension)
 
-            # 如果是按照节点进行屏蔽，则需要判断是否是按照业务屏蔽的
+            # 按节点屏蔽时，排除纯业务级别的拓扑节点
             if self.config["scope_type"] == ScopeType.NODE:
                 bk_topo_node = clean_dimension.pop("bk_topo_node", [])
+                # 如果不是单一业务节点，则保留拓扑节点配置
                 if not (len(bk_topo_node) == 1 and bk_topo_node[0]["bk_obj_id"] == ScopeType.BIZ):
                     clean_dimension["bk_topo_node"] = bk_topo_node
 
-        # 解析动态分组配置
+        # 场景3: 按动态分组屏蔽（需要查询分组包含的主机）
         if self.config["scope_type"] == ScopeType.DYNAMIC_GROUP:
+            # 提取动态分组ID列表
             dynamic_group_ids = set()
             for dg in clean_dimension.pop("dynamic_group", []):
                 dynamic_group_ids.add(dg["dynamic_group_id"])
             dynamic_group_ids = list(dynamic_group_ids)
 
-            # 查询动态分组所属的主机
+            # 查询动态分组详情
             dynamic_groups = []
             if dynamic_group_ids:
                 bk_tenant_id = bk_biz_id_to_bk_tenant_id(self.config["bk_biz_id"])
@@ -153,13 +159,14 @@ class ShieldObj:
                     DynamicGroupManager.mget(bk_tenant_id=bk_tenant_id, dynamic_group_ids=dynamic_group_ids).values()
                 )
 
+            # 提取动态分组中的主机ID（默认包含0表示规则失效）
             bk_host_ids: set = {0}
             for dynamic_group in dynamic_groups:
                 if dynamic_group.get("bk_obj_id") == "host":
                     bk_host_ids.update(dynamic_group["bk_inst_ids"])
-            # 动态分组所属的主机为空，则表示屏蔽规则失效，依然需要将bk_host_id: [0] 设置到待匹配维度中
             clean_dimension["bk_host_id"] = list(bk_host_ids)
 
+        # 构建维度匹配条件
         for k, v in list(clean_dimension.items()):
             field = load_field_instance(k, v)
             self.dimension_check.add(EqualCondition(field))
@@ -414,6 +421,36 @@ class AlertShieldObj(ShieldObj):
     """
 
     def get_dimension(self, alert: AlertDocument):
+        """
+        提取告警的维度信息用于屏蔽匹配
+
+        执行流程:
+        1. 从告警文档中提取原始维度和标准维度
+        2. 补充策略ID、告警级别、拓扑节点等关键维度
+        3. 统一维度字段命名（兼容多种命名格式）
+        4. 扩展tags前缀的维度，提高匹配成功率
+
+        返回值示例:
+        {
+            "strategy_id": 123,
+            "level": 1,
+            "bk_biz_id": 2,
+            "bk_host_id": 100001,
+            "bk_topo_node": [{"bk_obj_id": "module", "bk_inst_id": 10}],
+            "metric_id": ["system.cpu.usage"],
+            "ip": "127.0.0.1",
+            "bk_target_ip": "127.0.0.1",
+            "bk_cloud_id": "0",
+            "bk_target_cloud_id": "0",
+            "service_instance_id": "5001",
+            "bk_target_service_instance_id": "5001",
+            "bk_service_instance_id": "5001",
+            "tags.device_name": "eth0",
+            "device_name": "eth0",  # 自动扩展的无前缀维度
+            "tags.disk": "/data",
+            "disk": "/data"  # 自动扩展的无前缀维度
+        }
+        """
         try:
             dimension = copy.deepcopy(alert.origin_alarm["data"]["dimensions"])
         except BaseException as error:
@@ -467,6 +504,7 @@ class AlertShieldObj(ShieldObj):
         if "bk_service_instance_id" not in dimension and "service_instance_id" in dimension:
             dimension["bk_service_instance_id"] = dimension["service_instance_id"]
 
+        # 扩展tags前缀的维度，同时保留原始维度和无前缀维度
         new_dimensions = {}
         tag_prefix = "tags."
         for key, value in dimension.items():

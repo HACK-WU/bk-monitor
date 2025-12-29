@@ -38,37 +38,48 @@ class ShieldStatusChecker(BaseChecker):
             self.push_actions()  # 推送这些动作
 
     def add_unshield_action(self, alert: Alert, notice_relation: dict = None):
-        # 没有关联通知配置，则不用通知
+        """
+        添加解除屏蔽通知动作
+
+        参数:
+            alert: 告警对象
+            notice_relation: 通知配置关联信息，包含config_id和relation_id
+
+        执行流程:
+        1. 校验通知配置有效性（config_id和relation_id必须存在）
+        2. 获取告警的历史处理记录，判断上次通知是否被屏蔽
+        3. 仅当上次通知被屏蔽时，才创建解除屏蔽通知动作
+        4. 更新告警的周期处理记录，记录本次通知状态
+        """
+        # 校验通知配置有效性
         if not notice_relation:
             return
 
-        # 获取关联的处理套餐
-        config_id = notice_relation.get("config_id")  # 获取配置ID
-        # 获取到关联的通知
+        config_id = notice_relation.get("config_id")
         relation_id = notice_relation.get("id")
-        # 如果关联的处理套餐和通知都没有获取到，则不用通知
         if not (config_id and relation_id):
             return
 
-        cycle_handle_record = alert.get_extra_info("cycle_handle_record", {})  # 获取告警的周期处理记录
-        # 获取当前关联的notice的处理记录
+        # 获取告警的历史处理记录
+        cycle_handle_record = alert.get_extra_info("cycle_handle_record", {})
         handle_record = cycle_handle_record.get(str(relation_id))
-        if not handle_record:  # 如果处理记录不存在
-            handle_record = (
-                alert.get_latest_interval_record(config_id=config_id, relation_id=str(relation_id)) or {}
-            )  # 从数据库获取最近一次的通知记录
+        if not handle_record:
+            # 从数据库获取最近一次的通知记录
+            handle_record = alert.get_latest_interval_record(config_id=config_id, relation_id=str(relation_id)) or {}
 
-        if handle_record and not handle_record.get("is_shielded"):  # 如果最近一次通知没有被屏蔽
+        # 仅当上次通知被屏蔽时，才发送解除屏蔽通知
+        if handle_record and not handle_record.get("is_shielded"):
             logger.info(
                 "[ignore unshielded action] alert(%s) strategy(%s) 最近一次通知没有被屏蔽, 无需发送接触屏蔽通知",
                 alert.id,
                 alert.strategy_id,
             )
-            return  # 直接返回，无需发送解除屏蔽通知
+            return
 
-        execute_times = handle_record.get("execute_times", 0)  # 获取执行次数
+        # 创建解除屏蔽通知动作
+        execute_times = handle_record.get("execute_times", 0)
         self.unshielded_actions.append(
-            {  # 将未屏蔽的动作添加到列表中
+            {
                 "strategy_id": alert.strategy_id,
                 "signal": alert.status.lower(),
                 "alert_ids": [alert.id],
@@ -79,7 +90,7 @@ class ShieldStatusChecker(BaseChecker):
             }
         )
 
-        # 更新告警通知处理记录
+        # 更新告警的周期处理记录
         cycle_handle_record.update(
             {
                 str(relation_id): {
@@ -90,38 +101,48 @@ class ShieldStatusChecker(BaseChecker):
                 }
             }
         )
-        alert.update_extra_info("cycle_handle_record", cycle_handle_record)  # 更新告警的额外信息
-        self.need_notify_alerts.append(alert.id)  # 将告警ID添加到需要通知的列表中
+        alert.update_extra_info("cycle_handle_record", cycle_handle_record)
+        self.need_notify_alerts.append(alert.id)
         logger.info("[push unshielded action] alert(%s) strategy(%s)", alert.id, alert.strategy_id)
 
     def check(self, alert: Alert):
-        shield_obj = AlertShieldConfigShielder(alert.to_document())  # 创建屏蔽对象
-        # 检查是否被需要屏蔽：如果存在屏蔽配置，或者被全局屏蔽，则需要被屏蔽
+        """
+        检测告警屏蔽状态并处理解除屏蔽通知
+
+        执行流程:
+        1. 检查告警是否匹配屏蔽规则
+        2. 处理解除屏蔽场景的通知逻辑
+        3. 更新告警的屏蔽状态和剩余时间
+        """
+        # 检查是否匹配屏蔽规则
+        shield_obj = AlertShieldConfigShielder(alert.to_document())
         match_shield = shield_obj.is_matched()
-        # 获取到关联的通知配置
         notice_relation = alert.strategy.get("notice", {}) if alert.strategy else None
 
-        # 不需要屏蔽则发送告警通知
+        # 处理解除屏蔽场景：告警从屏蔽状态变为非屏蔽时发送通知
         if not match_shield:
-            # 根据告警是否处于屏蔽中，进行不同的操作
-            if alert.is_shielded:  # 如果告警处于屏蔽中
-                if alert.is_recovering():  # 如果告警处于恢复期
-                    alert.update_extra_info("ignore_unshield_notice", True)  # 设置忽略解除屏蔽通知的标记
+            if alert.is_shielded:
+                if alert.is_recovering():
+                    # 恢复期的告警忽略解除屏蔽通知
+                    alert.update_extra_info("ignore_unshield_notice", True)
                     logger.info(
                         "[ignore push action] alert(%s) strategy(%s) 告警处于恢复期", alert.id, alert.strategy_id
                     )
-                else:  # 如果告警不处于恢复期
-                    self.add_unshield_action(alert, notice_relation)  # 推送解除屏蔽通知
-            else:  # 如果告警处于未屏蔽状态
-                if alert.get_extra_info("need_unshield_notice"):  # 如果需要通知
-                    self.add_unshield_action(alert, notice_relation)  # 发送一次通知
-                    alert.extra_info.pop("need_unshield_notice", False)  # 移除通知标记
+                else:
+                    # 推送解除屏蔽通知
+                    self.add_unshield_action(alert, notice_relation)
+            else:
+                # 处理延迟的解除屏蔽通知
+                if alert.get_extra_info("need_unshield_notice"):
+                    self.add_unshield_action(alert, notice_relation)
+                    alert.extra_info.pop("need_unshield_notice", False)
 
-        shield_left_time = shield_obj.get_shield_left_time()  # 获取剩余屏蔽时间
-        shield_ids = shield_obj.list_shield_ids()  # 获取屏蔽ID列表
-        alert.set("shield_id", shield_ids)  # 更新告警文档中的屏蔽ID
-        alert.set("is_shielded", match_shield)  # 更新告警文档中的屏蔽状态
-        alert.set("shield_left_time", shield_left_time)  # 更新告警文档中的剩余屏蔽时间
+        # 更新告警的屏蔽状态
+        shield_left_time = shield_obj.get_shield_left_time()
+        shield_ids = shield_obj.list_shield_ids()
+        alert.set("shield_id", shield_ids)
+        alert.set("is_shielded", match_shield)
+        alert.set("shield_left_time", shield_left_time)
 
     def push_actions(self):
         new_actions = []  # 存储需要推送的新动作

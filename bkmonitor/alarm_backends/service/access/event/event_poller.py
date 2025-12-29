@@ -110,14 +110,27 @@ class EventPoller:
 
     @always_retry(10)
     def kick_task(self):
+        """
+        周期性触发事件处理任务的调度循环
+
+        执行流程:
+        1. 每5秒检查一次Redis信号通道
+        2. 获取待处理的data_id列表
+        3. 为每个data_id异步投递处理任务
+        4. 清空本轮轮询统计信息
+        """
         check_time = time.time()
         while True:
+            # 步骤1: 等待5秒间隔，避免频繁轮询Redis
             if time.time() - check_time < 5.0:
                 time.sleep(1)
+
+            # 步骤2: 从Redis信号通道获取待处理的data_id集合
             client = key.EVENT_SIGNAL_KEY.client
             signal_channel = key.EVENT_SIGNAL_KEY.get_key()
             signals = client.smembers(signal_channel)
-            # send task
+
+            # 步骤3: 为每个data_id异步投递Celery任务
             for data_id in signals:
                 run_access_event_handler_v2.delay(data_id)
                 logger.info(
@@ -127,6 +140,8 @@ class EventPoller:
                     self.polled_info[data_id],
                     key.EVENT_LIST_KEY.get_key(data_id=data_id),
                 )
+
+            # 步骤4: 重置检查时间并清空轮询统计信息
             check_time = time.time()
             self.polled_info.clear()
 
