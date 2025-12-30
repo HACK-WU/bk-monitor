@@ -22,6 +22,7 @@ import tarfile
 import time
 from collections import namedtuple
 from distutils.version import StrictVersion
+from pathlib import Path
 from uuid import uuid4
 
 import yaml
@@ -91,7 +92,6 @@ from monitor_web.plugin.serializers import (
     SNMPTrapSerializer,
 )
 from monitor_web.plugin.signature import Signature
-from pathlib import Path
 from utils import count_md5
 
 logger = logging.getLogger(__name__)
@@ -391,12 +391,28 @@ class PluginRegisterResource(Resource):
             # 判断是否使用CEPH对象存储
             if (
                 settings.USE_CEPH
-                and os.getenv("UPLOAD_PLUGIN_VIA_COS", os.getenv("BKAPP_UPLOAD_PLUGIN_VIA_COS", "")) == "true"
+                and os.getenv(
+                    "UPLOAD_PLUGIN_VIA_COS",
+                    os.getenv("BKAPP_UPLOAD_PLUGIN_VIA_COS", ""),
+                )
+                == "true"
             ):
-                # CEPH存储模式：保存到默认存储并调用COS接口
-                default_storage.save(tar_name, tf)
+                # Django 4.2+ 的 validate_file_name 不允许绝对路径，需要转换为相对路径
+                # 直接从绝对路径中提取 plugin/ 之后的部分，如：/app/code/USERRES/plugin/xxx/xxx.tgz -> plugin/xxx/xxx.tgz
+                if os.path.isabs(tar_name):
+                    plugin_index = tar_name.find("plugin/")
+                    if plugin_index != -1:
+                        relative_path = tar_name[plugin_index:]
+                    else:
+                        # 如果不在 plugin/ 下，只使用文件名
+                        relative_path = os.path.basename(tar_name)
+                else:
+                    relative_path = tar_name
+                default_storage.save(relative_path, tf)
                 result = api.node_man.upload_cos(
-                    file_name=tf.name.split("/")[-1], download_url=default_storage.url(tar_name), md5=md5
+                    file_name=os.path.basename(tar_name),
+                    download_url=default_storage.url(relative_path),
+                    md5=md5,
                 )
             else:
                 # 普通存储模式：直接调用节点管理上传接口
