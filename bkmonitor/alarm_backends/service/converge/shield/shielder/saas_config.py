@@ -26,6 +26,7 @@ from alarm_backends.service.converge.shield.shield_obj import AlertShieldObj
 from bkmonitor.documents.alert import AlertDocument
 from bkmonitor.models import ActionInstance, time_tools
 from bkmonitor.utils import extended_json
+from bkmonitor.utils.common_utils import safe_int
 from constants.shield import ShieldType
 
 from .base import BaseShielder
@@ -334,7 +335,7 @@ class HostShielder(BaseShielder):
             return False
 
         # 统一转换云区域ID为整数类型
-        bk_cloud_id = int(bk_cloud_id or 0)
+        bk_cloud_id = safe_int(bk_cloud_id, 0)
         # 查询主机信息，优先使用内存缓存，容器场景启用API兜底
         host = HostManager.get(
             bk_tenant_id=str(self.alert.bk_tenant_id),
