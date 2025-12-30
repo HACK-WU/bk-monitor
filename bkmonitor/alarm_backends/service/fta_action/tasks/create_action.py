@@ -40,6 +40,7 @@ from constants.action import (
     ActionSignal,
     IntervalNotifyMode,
     UserGroupType,
+    VoiceNoticeMode,
 )
 from constants.alert import EventSeverity, EventStatus, HandleStage
 from core.errors.alarm_backends import LockError
@@ -1298,13 +1299,16 @@ class CreateActionProcessor:
                     receiver for receiver in receivers if receiver not in notify_info.get(notice_way, [])
                 ]
                 follow_notify_info[notice_way] = valid_receivers
-
-            # dict{"通知渠道": ["通知对象1","通知对象2"],}
-            inputs["notify_info"] = notify_info  # type: dict[str, list[str]]
-            inputs["follow_notify_info"] = follow_notify_info  # type: dict[str, list[str]]
-
-        # 执行二次确认处理
-        # 异常捕获确保不影响主流程
+            inputs["notify_info"] = notify_info
+            inputs["follow_notify_info"] = follow_notify_info
+            # 设置语音通知模式
+            voice_notice = (
+                action_config.get("execute_config", {})
+                .get("template_detail", {})
+                .get("voice_notice", VoiceNoticeMode.PARALLEL)
+            )
+            # 设置语音通知模式(默认为并行)
+            inputs["voice_notice_mode"] = voice_notice
         try:
             # TODO: 如果有更多的处理场景，需要将二次确认的处理提到更前端
             DoubleCheckHandler(alert).handle(inputs)

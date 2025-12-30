@@ -41,6 +41,7 @@ from constants.action import (
     ConvergeType,
     NoticeWay,
     UserGroupType,
+    VoiceNoticeMode,
 )
 from constants.alert import EVENT_SEVERITY, EventSeverity
 from core.errors.api import BKAPIError
@@ -483,8 +484,15 @@ class ActionInstance(AbstractRecordModel):
             # 过滤被排除的通知方式
             if notice_way in exclude_notice_ways:
                 continue
+            if notice_way == NoticeWay.VOICE:
+                # 判断通知模式
+                voice_notice_mode = self.inputs.get("voice_notice_mode", VoiceNoticeMode.PARALLEL)
+                if voice_notice_mode == VoiceNoticeMode.SERIAL:
+                    # 串行通知，将通知人员列表的列表 合并为一个通知人员列表 为单个列表(并去重)创建子任务
+                    # [["user1", "user2"], ["user3", "user2"]] -> [["user1", "user2", "user3"]]
+                    combined = [user for sublist in notice_receivers if isinstance(sublist, list) for user in sublist]
+                    notice_receivers = [list(dict.fromkeys(combined))]
 
-            # 为每个接收人创建独立的子任务
             for notice_receiver in notice_receivers:
                 if not notice_receiver:
                     continue
