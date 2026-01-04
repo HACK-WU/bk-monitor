@@ -218,11 +218,21 @@ class BaseActionProcessor:
         """
         raise NotImplementedError
 
+    @property
+    def plugin_key(self):
+        """
+        获取plugin_key(plugin_type)
+        """
+        plugin_key = self.action.action_plugin.get("plugin_key")
+        if not plugin_key:
+            plugin_key = self.action.action_plugin.get("plugin_type")
+        return plugin_key
+
     def can_func_call(self):
         """
         检查是否可以调用
         """
-        plugin_type = self.action.action_plugin.get("plugin_type")
+        plugin_type = self.plugin_key
         # 检查是否命中熔断规则
         logger.info(
             f"[circuit breaking] [{plugin_type}] begin action({self.action.id}) strategy({self.action.strategy_id})"
@@ -242,7 +252,7 @@ class BaseActionProcessor:
         :param skip_notice_check: 是否跳过通知类型检查，默认 True（执行阶段），False（通知阶段）
         :return: True 表示命中熔断规则，False 表示未命中
         """
-        plugin_type = plugin_type or self.action.action_plugin.get("plugin_type")
+        plugin_type = plugin_type or self.plugin_key
 
         # message_queue 类型在创建阶段已经检查过熔断，这里跳过
         if plugin_type == ActionPluginType.MESSAGE_QUEUE:
@@ -286,7 +296,7 @@ class BaseActionProcessor:
         :param plugin_type: 插件类型，默认使用 action 的插件类型
         :return: True 表示命中熔断规则，False 表示未命中
         """
-        plugin_type = plugin_type or self.action.action_plugin.get("plugin_type")
+        plugin_type = plugin_type or self.plugin_key
 
         # 创建熔断管理器实例
         circuit_breaking_manager = ActionCircuitBreakingManager()
@@ -320,7 +330,7 @@ class BaseActionProcessor:
 
         :return: True 表示命中熔断规则，False 表示未命中
         """
-        plugin_type = self.action.action_plugin.get("plugin_type")
+        plugin_type = self.plugin_key
 
         # message_queue 类型在创建阶段已经检查过熔断，这里跳过
         if plugin_type == ActionPluginType.MESSAGE_QUEUE:
@@ -599,7 +609,7 @@ class BaseActionProcessor:
             # STATUS_NOTIFY_DICT: 状态与通知步骤的映射关系
             try:
                 if (
-                    self.action.action_plugin.get("plugin_type")
+                    self.plugin_key
                     not in [
                         ActionPluginType.NOTICE,
                         ActionPluginType.WEBHOOK,
@@ -822,7 +832,7 @@ class BaseActionProcessor:
 
         # 步骤4.4: 发送执行结果通知（仅非通知类插件需要发送）
         # 通知类插件本身就是发送通知的，不需要再发送执行结果通知
-        if self.action.action_plugin.get("plugin_type") != ActionPluginType.NOTICE:
+        if self.plugin_key != ActionPluginType.NOTICE:
             # 根据任务结束状态发送对应的通知（成功通知或失败通知）
             # need_update_context=True 表示需要更新通知上下文数据
             notify_result = self.notify(STATUS_NOTIFY_DICT.get(to_status), need_update_context=True)
