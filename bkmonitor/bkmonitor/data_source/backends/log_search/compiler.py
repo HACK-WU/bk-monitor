@@ -83,71 +83,96 @@ class SQLCompiler(compiler.SQLCompiler):
             3. 对Q对象进行递归解析
             4. 组合所有子查询条件生成最终表达式
         """
+        # 步骤1: 初始化子查询列表，用于存储所有解析后的查询表达式
         sub_queries = []
+
+        # 步骤2: 遍历节点的所有子条件
         for child in node.children:
+            # 步骤2.1: 处理元组类型的条件 (field__method, value)
             if isinstance(child, tuple) and len(child) == 2:
+                # 步骤2.1.1: 解析字段名和操作符
+                # 例如: "host__eq" -> field="host", method="eq"
+                # 例如: "host" -> field="host", method="eq" (默认)
                 field = child[0].split("__")
                 if len(field) == 1 or "" in field:
+                    # 没有操作符后缀，使用默认的eq操作符
                     field = child[0]
                     method = "eq"
                 else:
+                    # 提取字段名和操作符: 最后一个元素是操作符，其余是字段名
                     field, method = field[:-1], field[-1]
                     field = "__".join(field)
 
+                # 步骤2.1.2: 统一值的格式为列表
                 if not isinstance(child[1], list):
                     values = [child[1]]
                 else:
                     values = child[1]
 
+                # 跳过空值列表
                 if not values:
                     continue
 
-                # 转义特殊字符
+                # 步骤2.1.3: 转义特殊字符（如引号、括号等）
                 values = [self.escape_char(value) for value in values]
 
-                # 映射操作符到查询语法模板
+                # 步骤2.1.4: 根据操作符映射到对应的查询语法模板
+                # 默认多个值之间使用OR连接
                 connector = "OR"
                 if method == "eq":
+                    # 等于: field: "value"
                     expr_template = '{}: "{}"'
                 elif method == "neq":
+                    # 不等于: NOT field: "value"，多个值使用AND连接
                     expr_template = 'NOT {}: "{}"'
                     connector = "AND"
                 elif method == "gt":
+                    # 大于: field: (value, *)，取最大值
                     expr_template = "{}: ({}, *)"
                     values = [max(values)]
                 elif method == "gte":
+                    # 大于等于: field: [value, *)，取最大值
                     expr_template = "{}: [{}, *)"
                     values = [max(values)]
                 elif method == "lt":
+                    # 小于: field: (*, value)，取最小值
                     expr_template = "{}: (*, {})"
                     values = [min(values)]
                 elif method == "lte":
+                    # 小于等于: field: (*, value]，取最小值
                     expr_template = "{}: (*, {}]"
                     values = [min(values)]
                 elif method == "include":
+                    # 包含: field: *value*（模糊匹配）
                     expr_template = "{}: *{}*"
                 elif method == "exclude":
+                    # 不包含: NOT field: *value*，多个值使用AND连接
                     expr_template = "NOT {}: *{}*"
                     connector = "AND"
                 else:
+                    # 不支持的操作符，跳过
                     continue
 
-                # 生成子查询表达式
+                # 步骤2.1.5: 生成子查询表达式
+                # 多个值使用connector连接（OR或AND）
                 sub_query_string = f" {connector} ".join(expr_template.format(field, value) for value in values)
+                # 多个值时需要用括号包裹
                 if len(values) > 1:
                     sub_query_string = f"({sub_query_string})"
 
                 sub_queries.append(sub_query_string)
 
-            # 递归处理嵌套的Q对象条件
+            # 步骤2.2: 递归处理嵌套的Q对象条件
             elif isinstance(child, Q):
                 sub_query_string = self._parse_filter(child)
                 if not sub_query_string:
                     continue
                 sub_queries.append(sub_query_string)
 
-        # 组合最终查询表达式
+        # 步骤3: 组合最终查询表达式
+        # 使用节点的connector（AND/OR）连接所有子查询
         query_string = f" {node.connector} ".join(sub_queries)
+        # 多个子查询时需要用括号包裹
         if len(sub_queries) > 1:
             query_string = f"({query_string})"
 
@@ -196,6 +221,7 @@ class SQLCompiler(compiler.SQLCompiler):
         8. 查询语句构建：合并原始查询字符串和过滤条件
         9. 分页参数处理：计算分页大小和起始位置
         """
+        # 步骤1: 租户ID处理 - 优先使用查询上下文中的租户ID，缺失时使用默认值
         bk_tenant_id = self.query.bk_tenant_id
         if not bk_tenant_id:
             logger.warning(
@@ -203,82 +229,109 @@ class SQLCompiler(compiler.SQLCompiler):
             )
             bk_tenant_id = DEFAULT_TENANT_ID
 
+        # 初始化结果字典，租户ID是必需参数
         result = {"bk_tenant_id": bk_tenant_id}
+
+        # 步骤2: 获取时间字段配置（如dtEventTimeStamp、time等）
         time_field = self._get_time_field()
 
-        # 0. parse select field(metric_field)
+        # 步骤3: 解析SELECT字段 - 提取聚合方法、指标字段和别名
+        # 例如: SELECT COUNT(*) AS total -> agg_method=COUNT, metric_field=*, metric_alias=total
         agg_method, metric_field, metric_alias = self._get_metric()
 
-        # 1. parse indices / index_set_id
+        # 步骤4: 解析索引配置 - 支持索引集ID或直接指定索引名称两种方式
         if self.query.index_set_id:
+            # 使用索引集ID（推荐方式，由日志平台管理）
             result["index_set_id"] = self.query.index_set_id
         elif self.query.table_name:
+            # 直接指定索引名称（需要同时指定时间字段）
             result["indices"] = self.query.table_name
             result["time_field"] = time_field
         else:
             raise Exception("SQL Error: Empty table name")
 
-        # 2. parse group by (agg_dimension)
+        # 步骤5: 解析GROUP BY子句 - 获取聚合间隔和维度字段
+        # 例如: GROUP BY time(1m), host -> agg_interval=1m, dimensions=[host]
         agg_interval, dimensions = self._get_dimensions()
         result["aggs"] = self._get_aggregations(agg_interval, dimensions, agg_method, metric_field, metric_alias)
 
-        # 3. parse filter (agg_condition)
+        # 步骤6: 解析过滤条件(agg_condition) - 转换为日志平台的filter格式
+        # 将内部条件格式 {key, method, value} 转换为 {field, operator, value}
         if self.query.agg_condition:
             query_filter = []
             for cond in self.query.agg_condition:
+                # 字段名映射: key -> field
                 new_cond = {
                     "field": cond.get("field", cond.get("key")),
                     "operator": cond.get("operator", cond.get("method")),
                     "value": cond["value"],
                 }
+                # 保留逻辑连接符(and/or)
                 if "condition" in cond:
                     new_cond["condition"] = cond["condition"]
                 query_filter.append(new_cond)
             result["filter"] = query_filter
 
-        # 4. parse where (get start_time/end_time from where node)
+        # 步骤7: 解析WHERE子句 - 提取时间范围并从where条件中移除
+        # 构建时间字段的所有可能形式: time__lt, time__lte, time__gt, time__gte
         time_field_list = [f"{time_field}__{method}" for method in ["lt", "lte", "gt", "gte"]]
+
+        # 从where.children中提取时间条件到字典
         where_dict = {}
         for i in self.query.where.children:
             if isinstance(i, tuple) and len(i) == 2:
                 where_dict[i[0]] = i[1]
+
+        # 从where.children中移除时间条件（避免重复处理）
         self.query.where.children = [
             i
             for i in self.query.where.children
             if not (isinstance(i, tuple) and len(i) == 2 and i[0] in time_field_list)
         ]
 
+        # 提取开始和结束时间（支持gte/lte/lt三种操作符）
         gte_field = f"{time_field}__gte"
         lte_field = f"{time_field}__lte"
         lt_field = f"{time_field}__lt"
         start_time = where_dict.get(gte_field)
-        end_time = where_dict.get(lte_field) or where_dict.get(lt_field)
+        end_time = where_dict.get(lte_field) or where_dict.get(lt_field)  # lte优先，其次lt
+
+        # 时间戳转换: 毫秒级转秒级（日志平台使用秒级时间戳）
         if start_time:
             result["start_time"] = start_time // 1000
         if end_time:
             result["end_time"] = end_time // 1000
 
-        # 5. parse keywords_query_string
+        # 步骤8: 构建查询字符串 - 合并原始查询字符串和过滤条件
         filter_string = self._parse_filter(self.query.where)
         if self.query.raw_query_string and self.query.raw_query_string != "*":
+            # 有原始查询字符串（如Lucene语法）
             if filter_string:
+                # 同时存在原始查询和过滤条件，使用AND连接
                 result["query_string"] = f"({self.query.raw_query_string}) AND {self._parse_filter(self.query.where)}"
             else:
+                # 只有原始查询字符串
                 result["query_string"] = self.query.raw_query_string
         elif filter_string:
+            # 只有过滤条件
             result["query_string"] = self._parse_filter(self.query.where)
 
-        # 6. set limit offset/size
+        # 步骤9: 设置分页参数
         if self.query.high_mark is not None:
+            # 计算分页大小: high_mark - low_mark
             result["size"] = self.query.high_mark - self.query.low_mark
         else:
+            # 默认返回1条记录
             result["size"] = 1
 
+        # 注释: 排序功能暂时禁用，默认按时间倒序
         # result["sort_list"] = [[time_field, "desc"]]
 
+        # 设置分页起始位置
         if self.query.offset is not None:
             result["start"] = self.query.offset
 
+        # 返回空字符串和查询参数字典（符合Django ORM编译器接口规范）
         return "", result
 
     def _get_metric(self):

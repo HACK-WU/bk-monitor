@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -8,9 +7,9 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from copy import deepcopy
 from functools import lru_cache
-from typing import Dict, Optional
 
 from django.conf import settings
 from django.utils.translation import gettext as _
@@ -23,7 +22,7 @@ from monitor_web.models.custom_report import CustomEventGroup
 
 
 @lru_cache(maxsize=1000)
-def get_org_id(bk_biz_id: int) -> Optional[int]:
+def get_org_id(bk_biz_id: int) -> int | None:
     """
     获取业务对应的Grafana组织ID
     :param bk_biz_id: 业务
@@ -141,7 +140,7 @@ def patch_home_panels():
     return panels
 
 
-def get_cookies_filter() -> Optional[Dict]:
+def get_cookies_filter() -> dict | None:
     """
     解析Cookies过滤字段
     HTTP_KEEPCOOKIES可能为空
@@ -165,34 +164,76 @@ def get_cookies_filter() -> Optional[Dict]:
 
 
 def remove_all_conditions(where_list: list) -> list:
-    """删除全选条件"""
-    # 全选标签
+    """
+    删除查询条件列表中的全选条件，并处理逻辑连接符
+
+    参数:
+        where_list: list - 查询条件列表，每个条件包含key、value、method、condition等字段
+            示例: [
+                {"key": "field1", "value": ["__BKMONITOR_ALL__"], "method": "eq"},
+                {"key": "field2", "value": ["value2"], "method": "eq", "condition": "and"}
+            ]
+
+    返回值:
+        list - 清理后的条件列表，如果整个表达式恒为True则返回空列表
+
+    该方法实现全选条件的智能清理，包含：
+    1. 识别并删除包含全选标签的无效条件
+    2. 处理删除条件后的逻辑连接符调整
+    3. 检测恒为True的表达式并返回空列表
+    4. 清理首个条件的逻辑连接符
+
+    逻辑说明:
+        - 全选标签(__BKMONITOR_ALL__)表示选择所有值，相当于无过滤条件
+        - 当全选条件使用肯定方法(eq/include/regex)时，该条件恒为True
+        - 删除恒为True的条件后需要调整逻辑连接符，避免语法错误
+        - 如果出现"True OR ..."的情况，整个表达式恒为True，返回空列表
+    """
+    # 全选标签常量
     select_all_tag = "__BKMONITOR_ALL__"
 
+    # 1. 空列表直接返回
     if not where_list:
         return []
 
+    # 2. 深拷贝避免修改原列表
     where_list = deepcopy(where_list)
     index = 0
+
+    # 3. 遍历条件列表，删除全选条件
     while index < len(where_list):
         where = where_list[index]
-        # 如果条件中包含全选标签,且方法为肯定的方法,则删除该条件
+
+        # 4. 判断是否为需要删除的全选条件
+        # 条件：包含全选标签 且 使用肯定方法(eq/include/regex)
         if select_all_tag not in where["value"] or where["method"] not in ["eq", "include", "regex"]:
+            # 不是全选条件，继续检查下一个
             index += 1
             continue
+
+        # 5. 删除当前全选条件
         where_list.pop(index)
 
-        # 由于删除了一个条件，所以index不变
+        # 6. 获取下一个条件（如果存在）
+        # 注意：删除后index位置已经是原来的下一个条件
         next_where = where_list[index] if index < len(where_list) else None
 
+        # 7. 处理逻辑连接符调整
+        # 如果删除的是第一个条件(index==0)或者删除的条件前面是OR连接
         if where.get("condition") == "or" or index == 0:
             if not next_where or next_where.get("condition") == "or":
-                # 如果当前条件为or,且下一个条件为or,则整个表达式恒为True,返回空列表
+                # 情况1: True OR ... = True (整个表达式恒为True)
+                # 或者删除后没有剩余条件，返回空列表表示无过滤
                 return []
             else:
-                # 如果当前条件为or,且下一个条件为and,则将下一个条件改为or
+                # 情况2: True AND next_condition = next_condition
+                # 但由于删除了True条件，需要将下一个条件的连接符改为or
+                # 这是因为原表达式可能是: prev OR True AND next
+                # 删除True后变为: prev OR next
                 next_where["condition"] = "or"
 
+    # 8. 清理第一个条件的逻辑连接符
+    # 第一个条件不应该有condition字段（没有前置条件可连接）
     if where_list:
         where_list[0].pop("condition", None)
 
@@ -202,13 +243,13 @@ def remove_all_conditions(where_list: list) -> list:
 def convert_to_microseconds(time_str: str) -> int:
     # 定义单位转换关系
     time_multipliers = {
-        'ns': 1e-3,  # 纳秒到微秒
-        'us': 1,  # 微秒到微秒
-        'µs': 1,  # 微秒到微秒 (有些地方会用µs表示)
-        'ms': 1e3,  # 毫秒到微秒
-        's': 1e6,  # 秒到微秒
-        'm': 60 * 1e6,  # 分钟到微秒
-        'h': 3600 * 1e6,  # 小时到微秒
+        "ns": 1e-3,  # 纳秒到微秒
+        "us": 1,  # 微秒到微秒
+        "µs": 1,  # 微秒到微秒 (有些地方会用µs表示)
+        "ms": 1e3,  # 毫秒到微秒
+        "s": 1e6,  # 秒到微秒
+        "m": 60 * 1e6,  # 分钟到微秒
+        "h": 3600 * 1e6,  # 小时到微秒
     }
 
     # 提取数字部分和单位部分
@@ -220,7 +261,7 @@ def convert_to_microseconds(time_str: str) -> int:
     raise ValueError("Unsupported time format")
 
 
-def is_global_k8s_event(params: Dict, bk_biz_id: int) -> bool:
+def is_global_k8s_event(params: dict, bk_biz_id: int) -> bool:
     """
     判断是否是全局k8s事件
     """

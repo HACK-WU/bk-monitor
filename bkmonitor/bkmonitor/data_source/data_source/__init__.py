@@ -334,35 +334,72 @@ def _operator_is_exist(key):
 
 def _filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]) -> list[dict]:
     """
-    将filter_dict解析为condition，filter_dict最多只有两层嵌套
+    将filter_dict和conditions合并转换为统一的条件列表格式
+
+    该函数处理复杂的过滤条件转换逻辑，支持多层嵌套和多种数据格式。
+    filter_dict最多支持两层嵌套，最终生成标准化的条件列表。
+
+    参数:
+        filter_dict: 过滤条件字典，支持以下格式：
+            - 简单值: {"field": "value"}
+            - 列表值: {"field": ["value1", "value2"]}
+            - 嵌套字典: {"field": {"subfield__eq": "value"}}
+            - 字典列表: {"field": [{"key1": "v1"}, {"key2": "v2"}]}
+        conditions: 原始条件列表，格式为 [{"key": "field", "value": ["v"], "method": "eq", "condition": "and"}]
+
+    返回:
+        list[dict]: 标准化条件列表，每个条件包含 key、value、method、condition 字段
+
+    执行流程:
+        1. 定义key解析函数（提取字段名和操作符）
+        2. 深拷贝输入参数避免副作用
+        3. 解析filter_dict为条件列表（处理字典、列表、简单值三种格式）
+        4. 解析原始conditions为条件组列表（按or分组）
+        5. 使用笛卡尔积合并所有条件组
+        6. 标准化条件连接符（组内and，组间or）
+        7. 清理首个条件的连接符并返回
     """
 
     def parse_key(_k: str):
+        """
+        解析字段key，提取字段名和操作符
+
+        支持格式: "field__eq" -> ("field", "eq")
+                 "field" -> ("field", "eq")
+        """
         _key: list[str] = _k.split("__")
         if len(_key) > 1 and _key[-2]:
             return "__".join(_key[:-1]), _key[-1]
         else:
             return "__".join(_key), "eq"
 
+    # 1. 深拷贝输入参数，避免修改原始数据
     filter_dict = copy.deepcopy(filter_dict)
     conditions = copy.deepcopy(conditions)
 
-    filter_conditions_list: list[list[dict]] = []
-    extend_conditions_list: list[list[list[dict]]] = []
+    # 2. 初始化条件列表容器
+    filter_conditions_list: list[list[dict]] = []  # 存储filter_dict解析出的条件组
+    extend_conditions_list: list[list[list[dict]]] = []  # 存储字典列表类型的扩展条件组
     filter_dict_list = [filter_dict]
+
+    # 3. 解析filter_dict为条件列表（处理三种数据格式）
     while filter_dict_list:
         filter_dict = filter_dict_list.pop()
         filter_conditions = []
         for key, value in filter_dict.items():
+            # 3.1 处理嵌套字典格式: {"field": {"subfield__eq": "value"}}
             if isinstance(value, dict):
                 for k, v in value.items():
                     k, method = parse_key(k)
                     v = v if isinstance(v, list) else [v]
                     v = [str(value) for value in v]
                     filter_conditions.append({"condition": "and", "key": k, "value": v, "method": method})
+            # 3.2 处理列表格式
             elif isinstance(value, list):
                 if not value:
                     continue
+                # 3.2.1 处理字典列表格式: {"field": [{"key1": "v1"}, {"key2": "v2"}]}
+                # 这种格式会生成OR关系的条件组
                 if isinstance(value[0], dict):
                     _conditions_list = []
                     for record in value:
@@ -374,10 +411,12 @@ def _filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]) -> lis
                             _conditions.append({"condition": "and", "key": k, "value": v, "method": method})
                         _conditions_list.append(_conditions)
                     extend_conditions_list.append(_conditions_list)
+                # 3.2.2 处理简单列表格式: {"field": ["value1", "value2"]}
                 else:
                     key, method = parse_key(key)
                     value = [str(v) for v in value]
                     filter_conditions.append({"condition": "and", "key": key, "value": value, "method": method})
+            # 3.3 处理简单值格式: {"field": "value"}
             else:
                 key, method = parse_key(key)
                 value = str(value)
@@ -386,9 +425,11 @@ def _filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]) -> lis
             continue
         filter_conditions_list.append(filter_conditions)
 
+    # 4. 解析原始conditions为条件组列表（按or连接符分组）
     conditions_list: list[list[dict]] = []
     _conditions = []
     for condition in conditions:
+        # 遇到or连接符时，将当前条件组保存并开始新组
         if condition.get("condition") == "or":
             if _conditions:
                 conditions_list.append(_conditions)
@@ -400,23 +441,30 @@ def _filter_dict_to_conditions(filter_dict: dict, conditions: list[dict]) -> lis
     if _conditions:
         conditions_list.append(_conditions)
 
+    # 5. 使用笛卡尔积合并所有条件组
     result = []
     if not filter_conditions_list:
         filter_conditions_list = [[]]
     if not conditions_list:
         conditions_list = [[]]
 
+    # 6. 生成所有可能的条件组合
     for conditions in product(filter_conditions_list, conditions_list, *extend_conditions_list):
         new_condition = []
         for condition in conditions:
             new_condition.extend(condition)
         new_condition = copy.deepcopy(new_condition)
+
+        # 6.1 组内条件统一使用and连接
         for condition in new_condition:
             condition["condition"] = "and"
+
+        # 6.2 组间条件使用or连接（第一个条件设置为or）
         if result and new_condition:
             new_condition[0]["condition"] = "or"
         result.extend(new_condition)
 
+    # 7. 清理首个条件的连接符（首个条件不需要连接符）
     if result and "condition" in result[0]:
         del result[0]["condition"]
 
@@ -1114,35 +1162,52 @@ class TimeSeriesDataSource(DataSource):
 
         返回:
             list[dict]: 标准化查询配置列表，每个字典对应一个指标的完整查询配置
+
+        执行流程:
+            1. 初始化条件结构和操作符映射表
+            2. 转换过滤条件为统一格式（field_list + condition_list）
+            3. 处理空值转换（None -> ""）
+            4. 遍历指标配置生成查询配置
+            5. 表名标准化处理（数据源适配、大小写转换、CMDB层级处理）
+            6. 构建基础查询配置框架
+            7. 处理指标聚合方法（分位数、标准聚合、时序聚合）
+            8. 解析并合并函数参数
+            9. 设置输出字段列表
         """
-        # 查询条件格式转换，融合filter_dic和条件语句
+        # 1. 初始化条件结构：field_list存储字段条件，condition_list存储逻辑连接符
         conditions = {"field_list": [], "condition_list": []}
+
+        # 定义操作符映射表：将原始操作符转换为统一查询操作符
         operator_mapping = {
-            "reg": "req",
-            "nreg": "nreq",
-            "include": "req",
-            "exclude": "nreq",
-            "eq": "contains",
-            "neq": "ncontains",
+            "reg": "req",  # 正则匹配
+            "nreg": "nreq",  # 正则不匹配
+            "include": "req",  # 包含
+            "exclude": "nreq",  # 不包含
+            "eq": "contains",  # 等于
+            "neq": "ncontains",  # 不等于
         }
 
-        # 将原始过滤条件转换为统一字段条件格式
-        # 处理操作符映射和值格式标准化
+        # 2. 转换过滤条件：将filter_dict和where条件合并转换为统一格式
         for condition in _filter_dict_to_conditions(self.filter_dict, self.where):
+            # 添加逻辑连接符（第一个条件除外）
             if conditions["field_list"]:
                 conditions["condition_list"].append(condition.get("condition", "and"))
 
+            # 统一值格式为列表，并转换为字符串
             value = condition["value"] if isinstance(condition["value"], list) else [condition["value"]]
             value = [str(v) for v in value]
+
+            # 映射操作符
             operator = operator_mapping.get(condition["method"], condition["method"])
 
-            # 对包含类操作符进行正则转义处理
+            # 对包含类操作符的值进行正则转义，避免特殊字符导致正则错误
             if operator in ["include", "exclude"]:
                 value = [re.escape(v) for v in value]
 
+            # 添加字段条件
             conditions["field_list"].append({"field_name": condition["key"], "value": value, "op": operator})
 
-        # 处理空值转换
+        # 3. 处理空值转换：将None转换为空字符串（数据库查询兼容性）
         for con in conditions["field_list"]:
             if None in con["value"]:
                 con["value"].remove(None)
@@ -1150,55 +1215,57 @@ class TimeSeriesDataSource(DataSource):
 
         query_list = []
 
-        # 遍历指标配置生成独立查询配置
+        # 4. 遍历指标配置，为每个指标生成独立的查询配置
         for metric in self.metrics:
-            # 数据表名标准化处理
+            # 5. 表名标准化处理
             if self.data_source_label == DataSourceLabel.BK_DATA:
+                # 计算平台数据源保持原表名
                 table = self.table
             elif self.table == f"{APM_METRIC_DATA_LABEL}.__default__":
-                # APM data_label 大小写敏感，且需要去掉 __default__ 前缀。
+                # APM指标特殊处理：大小写敏感，去掉__default__后缀
                 table = APM_METRIC_DATA_LABEL
             else:
+                # 其他数据源统一转小写
                 table = self.table.lower()
 
-            # 特殊表名后缀处理逻辑
+            # CMDB层级查询特殊处理：去掉_cmdb_level后缀
             if settings.IS_ACCESS_BK_DATA and self.is_cmdb_level_query(
                 where=self.where, filter_dict=self.filter_dict, group_by=self.group_by
             ):
                 table, _, _ = table.partition("_cmdb_level")
 
-            # 构建基础查询配置框架
+            # 6. 构建基础查询配置框架
             query: dict[str, Any] = {
-                "table_id": self.data_label or table,
-                "time_aggregation": {},
-                "field_name": metric["field"],
-                "reference_name": (metric.get("alias") or metric["field"]).lower(),
-                "dimensions": self.group_by,
-                "driver": "influxdb",
-                "time_field": self.time_field,
-                "conditions": conditions,
-                "function": [],
-                "offset": f"{abs(self.time_offset // 1000)}s" if self.time_shift else "",
-                "offset_forward": self.time_offset > 0,
+                "table_id": self.data_label or table,  # 数据表标识
+                "time_aggregation": {},  # 时间聚合配置
+                "field_name": metric["field"],  # 指标字段名
+                "reference_name": (metric.get("alias") or metric["field"]).lower(),  # 引用名（别名或字段名）
+                "dimensions": self.group_by,  # 分组维度
+                "driver": "influxdb",  # 查询驱动
+                "time_field": self.time_field,  # 时间字段
+                "conditions": conditions,  # 查询条件
+                "function": [],  # 函数列表
+                "offset": f"{abs(self.time_offset // 1000)}s" if self.time_shift else "",  # 时间偏移量
+                "offset_forward": self.time_offset > 0,  # 偏移方向
             }
 
-            # 指标聚合方法映射与时间聚合配置
+            # 7. 处理指标聚合方法
             if metric.get("method") and metric["method"] != AGG_METHOD_REAL_TIME:
                 method = metric["method"].lower()
 
-                # 分位数方法特殊处理逻辑
+                # 7.1 分位数方法特殊处理（如p50、p95、p99）
                 cp_agg_method = CpAggMethods.get(method)
                 if cp_agg_method:
                     query["time_aggregation"]["vargs_list"] = cp_agg_method.vargs_list
                     query["time_aggregation"]["position"] = cp_agg_method.position
                     method = cp_agg_method.method
 
-                # 标准聚合方法映射
+                # 7.2 标准聚合方法映射
                 if method.lower() in AggMethods:
                     method_mapping = {"avg": "mean"}
                     method = AggMethods[method].method
                 else:
-                    # 时序聚合函数特殊处理
+                    # 7.3 时序聚合函数特殊处理（如rate_over_time、increase_over_time）
                     method_mapping = {"avg": "mean", "count": "sum"}
                     query["time_aggregation"].update(
                         {
@@ -1210,18 +1277,19 @@ class TimeSeriesDataSource(DataSource):
                 # 构建时间聚合函数配置
                 time_aggregation_func = {"method": method_mapping.get(method, method), "dimensions": self.group_by}
 
+                # 添加分位数参数（如果存在）
                 if query["time_aggregation"].get("vargs_list"):
                     time_aggregation_func["vargs_list"] = query["time_aggregation"]["vargs_list"]
 
                 query["function"].append(time_aggregation_func)
 
-            # 函数参数解析与合并
+            # 8. 解析并合并函数参数（如rate、increase等）
             time_aggregation, functions = self._parse_function_params()
             if time_aggregation:
                 query["time_aggregation"].update(time_aggregation)
             query["function"].extend(functions)
 
-            # 保留必要输出字段
+            # 9. 设置输出字段列表：时间、指标值、分组维度
             query["keep_columns"] = ["_time", query["reference_name"], *self.group_by]
             query_list.append(query)
 
@@ -1382,31 +1450,63 @@ class BkMonitorTimeSeriesDataSource(TimeSeriesDataSource):
 
     @classmethod
     def is_cmdb_level_query(cls, where: list = None, filter_dict: dict = None, group_by: list[str] = None):
+        """
+        判断查询是否涉及CMDB层级维度，需要转到计算平台执行
+
+        参数:
+            where: list - 查询条件列表，格式为 [{"key": "field_name", "method": "eq", "value": [...]}]
+            filter_dict: dict - 过滤条件字典，支持多种格式：
+                - 简单键值对: {"field": "value"}
+                - 字典值: {"field": {"key": "value"}}
+                - 字典列表: {"field": [{"key1": "value1"}, {"key2": "value2"}]}
+            group_by: list[str] - 分组字段列表
+
+        返回值:
+            bool - 如果查询涉及CMDB层级维度（bk_obj_id/bk_inst_id）则返回True，否则返回False
+
+        该方法通过检查查询中使用的字段，判断是否包含CMDB拆分维度：
+        1. 从filter_dict中提取所有过滤字段
+        2. 从where条件中提取所有查询字段
+        3. 从group_by中提取所有分组字段
+        4. 检查是否与SPLIT_DIMENSIONS（bk_obj_id/bk_inst_id）有交集
+        """
+        # 1. 初始化参数默认值
         where = where or []
         filter_dict = filter_dict or {}
         group_by = group_by or []
 
+        # 2. 收集所有涉及的字段
         fields = set()
-        # 解析filter_dict，取出实际的过滤字段
+
+        # 3. 从filter_dict中提取过滤字段
         for key, value in filter_dict.items():
+            # 跳过空值
             if not value:
                 continue
 
+            # 将单个字典转换为列表格式统一处理
             if isinstance(value, dict):
                 value = [value]
 
-            # 如果值是字典类型，则取字典字段作为key
+            # 处理字典列表格式：提取字典中的所有键作为字段名
+            # 例如：{"target": [{"bk_obj_id": "host", "bk_inst_id": "1"}]}
             if isinstance(value, list) and isinstance(value[0], dict):
                 for v in value:
                     if not isinstance(v, dict):
                         continue
                     fields.update(v)
             else:
+                # 处理简单键值对格式：直接使用key作为字段名
                 fields.add(key)
 
+        # 4. 从where条件中提取查询字段
         fields.update(condition["key"] for condition in where)
+
+        # 5. 从group_by中提取分组字段
         fields.update(group_by)
-        # 只要字段中包含有bk_obj_id 或者 bk_inst_id则转到计算平台查询
+
+        # 6. 判断是否包含CMDB拆分维度（bk_obj_id或bk_inst_id）
+        # 如果包含这些维度，需要转到计算平台查询
         return fields & set(SPLIT_DIMENSIONS)
 
     @classmethod
@@ -1804,85 +1904,103 @@ class LogSearchLogDataSource(LogSearchTimeSeriesDataSource):
     def to_unify_query_config(self) -> list[dict]:
         """
         生成日志查询相关的统一查询配置
+
+        该方法根据指标配置生成适用于UnifyQuery的查询配置列表，支持三种查询场景：
+        1. 聚合查询（有group_by）：生成带维度分组的聚合查询配置
+        2. 非聚合查询（无group_by但有聚合方法）：生成全局聚合查询配置
+        3. 原始日志查询（无聚合方法）：生成原始日志检索配置
+
+        返回:
+            list[dict]: 查询配置列表，每个配置对应一个指标的查询参数
+
+        执行流程:
+            1. 构建基础查询配置模板
+            2. 遍历每个指标生成对应的查询配置
+            3. 根据聚合方法判断查询类型
+            4. 处理聚合查询场景（设置字段、维度、聚合函数）
+            5. 处理原始日志查询场景
+            6. 返回查询配置列表
         """
+        # 1. 构建基础查询配置模板
         base_query: dict[str, Any] = {
-            "driver": "influxdb",
-            "data_source": "bklog",
-            "table_id": self.table,
-            "reference_name": "",
-            "field_name": "",
-            "time_field": self.time_field or self.DEFAULT_TIME_FIELD,
-            "dimensions": [],
-            "conditions": {"field_list": [], "condition_list": []},
-            "function": [],
-            "time_aggregation": {},
-            "keep_columns": [],
-            "offset": "",
-            "offset_forward": False,
+            "driver": "influxdb",  # 查询驱动类型
+            "data_source": "bklog",  # 数据源标识
+            "table_id": self.table,  # 日志索引表ID
+            "reference_name": "",  # 查询结果引用名称
+            "field_name": "",  # 查询字段名
+            "time_field": self.time_field or self.DEFAULT_TIME_FIELD,  # 时间字段
+            "dimensions": [],  # 分组维度列表
+            "conditions": {"field_list": [], "condition_list": []},  # 查询条件
+            "function": [],  # 聚合函数列表
+            "time_aggregation": {},  # 时间聚合配置
+            "keep_columns": [],  # 保留的列
+            "offset": "",  # 时间偏移
+            "offset_forward": False,  # 是否向前偏移
         }
 
         query_list: list[dict[str, Any]] = []
 
+        # 2. 遍历每个指标生成对应的查询配置
         for metric in self.metrics:
             query: dict[str, Any] = copy.deepcopy(base_query)
             method: str = metric.get("method", "").lower()
 
-            # 判断是否有聚合方法
+            # 3. 判断是否有聚合方法（排除实时查询方法）
             has_method = method and method != AGG_METHOD_REAL_TIME
 
             if has_method:
-                # 有聚合方法的场景（query_reference 或 query_data）
+                # 4. 聚合查询场景：配置字段、维度和聚合函数
                 query["field_name"] = metric["field"]
                 query["reference_name"] = (metric.get("alias") or metric["field"]).lower()
 
-                # 设置维度（关键：根据 group_by 决定是 query_reference 还是 query_data）
+                # 设置分组维度（有group_by为聚合查询，无group_by为全局聚合）
                 query["dimensions"] = self.group_by
 
-                # 处理聚合方法
+                # 初始化聚合方法
                 func_method: str = method
 
-                # 处理分位数方法
+                # 处理分位数等特殊聚合方法
                 if method in CpAggMethods:
                     cp_agg_method = CpAggMethods[method]
                     func_method = cp_agg_method.method
                     query["time_aggregation"]["position"] = cp_agg_method.position
                     query["time_aggregation"]["vargs_list"] = cp_agg_method.vargs_list
 
-                # 关键判断：如果有 group_by 说明是聚合查询
+                # 特殊处理：聚合查询中的count方法需要外层sum聚合
                 if self.group_by and method == "count":
-                    # 聚合查询场景下外层要 sum 进行聚合
                     func_method = "sum"
 
+                # 配置时间聚合参数
                 query["time_aggregation"].update({"function": f"{method}_over_time", "window": f"{self.interval}s"})
 
-                # 添加聚合函数
+                # 添加聚合函数配置
                 function: dict[str, Any] = {
                     "method": func_method,
                     "dimensions": self.group_by,
                 }
 
-                # 处理分位数方法的 vargs_list
+                # 为分位数方法添加参数列表
                 if method in CpAggMethods:
                     function["vargs_list"] = CpAggMethods[method].vargs_list
 
                 query["function"].append(function)
 
-                # 解析额外的函数参数
+                # 解析并添加额外的函数参数（如TopK、排序等）
                 if self.group_by and self.functions:
                     time_aggregation, functions = _parse_function_params(self.functions, self.group_by)
                     query["function"].extend(functions)
                     if time_aggregation:
                         query["time_aggregation"].update(time_aggregation)
             else:
-                # 无聚合方法的场景（原始日志查询 query_raw）
+                # 5. 原始日志查询场景：不设置字段和维度
                 query["field_name"] = ""
                 query["reference_name"] = metric.get("alias") or "a"
                 query["dimensions"] = []
 
             query_list.append(query)
 
+        # 6. 兜底处理：如果没有指标配置，返回默认的原始日志查询配置
         if not query_list:
-            # 如果没有query_list，返回默认配置（原始日志查询）
             query: dict[str, Any] = copy.deepcopy(base_query)
             query["reference_name"] = getattr(self, "reference_name", "a") or "a"
             query_list.append(query)

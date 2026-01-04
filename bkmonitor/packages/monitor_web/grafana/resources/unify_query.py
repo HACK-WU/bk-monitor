@@ -261,73 +261,122 @@ class RankProcessor:
 
     @classmethod
     def process_params(cls, params: dict) -> dict:
+        """
+        处理包含top/bottom排序函数的查询参数，预先计算TopK/BottomK维度组合
+
+        参数:
+            params: dict - 查询参数字典，包含以下关键字段：
+                - query_configs: list - 查询配置列表
+                - bk_biz_id: int - 业务ID
+                - start_time: int - 开始时间（秒级时间戳）
+                - end_time: int - 结束时间（秒级时间戳）
+                - slimit: int - 序列数量限制
+                - not_time_align: bool - 是否不进行时间对齐
+
+        返回值:
+            dict - 处理后的查询参数，在filter_dict中添加rank字段存储TopK维度组合
+
+        该方法实现TopK/BottomK查询的预处理流程，包含：
+        1. 识别并提取top/bottom排序函数
+        2. 从函数列表中移除排序函数（避免重复处理）
+        3. 构建预查询获取所有维度数据
+        4. 自动调整查询间隔以优化性能
+        5. 按维度聚合数据并排序
+        6. 提取前N个维度组合作为过滤条件
+        7. 清理目标过滤条件
+        """
+        # 1. 遍历所有查询配置
         for query_config in params["query_configs"]:
+            # 跳过没有函数的查询配置
             if not query_config["functions"]:
                 continue
 
+            # 2. 查找top/bottom排序函数
             for f in query_config["functions"]:
                 if f["id"] in ["top", "bottom"]:
                     function = f
                     break
             else:
+                # 没有找到排序函数，继续处理下一个查询配置
                 continue
 
-            # 过滤排序函数
+            # 3. 从函数列表中移除排序函数（后续通过rank过滤实现）
             query_config["functions"] = [f for f in query_config["functions"] if f["id"] not in ["top", "bottom"]]
 
+            # 4. 获取TopK/BottomK的N值
             n = int(function["params"][0]["value"])
 
-            # 按均值查出所有维度的值
+            # 5. 构建数据源对象用于预查询
             data_source_class = load_data_source(query_config["data_source_label"], query_config["data_type_label"])
             data_source = data_source_class(bk_biz_id=params["bk_biz_id"], **query_config)
+
+            # 6. 自动调整查询间隔以优化性能
+            # 从大到小尝试不同的间隔值，选择合适的粒度
             for i in [43200, 7200, 3600, 600, 300, 120, 60]:
+                # 间隔不能小于数据源原始间隔
                 if i < data_source.interval:
                     break
 
+                # 确保时间范围内至少有20个数据点
                 if (params["end_time"] - params["start_time"]) / 20 > i:
                     data_source.interval = i
                     break
+
+            # 7. 只查询第一个指标（用于排序计算）
             data_source.metrics = [data_source.metrics[0].copy()]
+
+            # 8. 创建统一查询对象
             query = UnifyQuery(
                 bk_biz_id=params["bk_biz_id"],
                 data_sources=[data_source],
                 expression=query_config["metrics"][0]["alias"],
             )
 
+            # 9. 执行预查询获取所有维度数据
             points = query.query_data(
-                start_time=params["start_time"] * 1000,
+                start_time=params["start_time"] * 1000,  # 转换为毫秒级时间戳
                 end_time=params["end_time"] * 1000,
                 limit=1000,
                 slimit=params["slimit"],
                 not_time_align=params.get("not_time_align", False),
             )
 
+            # 10. 获取指标字段名（优先使用别名）
             metric_field = data_source.metrics[0].get("alias") or data_source.metrics[0]["field"]
-            # 按维度将值合并后进行排序
+
+            # 11. 按维度聚合数据（累加所有时间点的值）
             dimension_values = defaultdict(int)
             for point in points:
+                # 提取维度信息（排除时间、结果值和指标字段）
                 dimensions = tuple(
                     (key, value) for key, value in point.items() if key not in ["_time_", "_result_", metric_field]
                 )
+                # 累加该维度组合的所有数据点值
                 if point["_result_"] is not None:
                     dimension_values[dimensions] += point["_result_"]
+
+            # 12. 转换为列表并排序
             dimension_value_list = [(dimensions, value) for dimensions, value in dimension_values.items()]
+            # top函数降序排列，bottom函数升序排列
             dimension_value_list.sort(key=lambda x: x[1], reverse=function["id"] == "top")
 
-            # 取前n个维度进行过滤
+            # 13. 提取前N个维度组合作为过滤条件
             rank_filter = []
             for dimension_value in dimension_value_list:
-                # 存在维度值为空的情况，跳过
+                # 跳过维度值为空的情况
                 if not dimension_value[0]:
                     continue
+                # 将维度元组转换为字典格式
                 rank_filter.append({key: value for key, value in dimension_value[0]})
+                # 达到N个后停止
                 if len(rank_filter) >= n:
                     break
 
+            # 14. 将TopK维度组合添加到过滤条件中
             if rank_filter:
                 query_config["filter_dict"]["rank"] = rank_filter
 
-            # 去除目标过滤
+            # 15. 清理目标过滤条件（避免与rank过滤冲突）
             if "target" in data_source.filter_dict:
                 del data_source.filter_dict["target"]
 
@@ -787,28 +836,66 @@ class UnifyQueryRawResource(ApiAuthResource):
         ]
 
     def perform_request(self, params):
-        # cookies filter
+        """
+        执行统一查询请求的核心方法
+
+        参数:
+            params: dict - 查询参数字典，包含以下关键字段：
+                - query_configs: list - 查询配置列表，每个配置包含数据源、指标、过滤条件等
+                - bk_biz_id: int - 业务ID
+                - start_time: int - 查询开始时间（秒级时间戳）
+                - end_time: int - 查询结束时间（秒级时间戳）
+                - expression: str - 表达式，用于多指标计算
+                - functions: list - 函数列表，用于数据聚合处理
+                - limit: int - 返回数据点数量限制
+                - slimit: int - 返回序列数量限制
+                - time_alignment: bool - 是否进行时间对齐
+                - with_metric: bool - 是否返回指标元信息
+                - post_query_filter_dict: dict - 数据查询后的过滤条件
+
+        返回值:
+            dict - 包含以下字段：
+                - series: list - 查询结果数据点列表
+                - metrics: list - 指标元信息列表
+
+        该方法实现完整的统一查询流程，包含：
+        1. Cookie过滤器注入：将用户Cookie过滤条件添加到查询配置中
+        2. 拨测指标特殊处理：处理拨测类型的特殊指标
+        3. 指标元信息查询：获取指标的详细元数据（单位、时间字段等）
+        4. 查询配置预处理：补全时间字段、自动计算查询间隔、清理全选条件
+        5. 目标实例查询：获取查询目标的实例信息
+        6. 维度排序处理：处理top/bottom维度排序需求
+        7. 查询类型处理：处理instant查询等特殊查询类型
+        8. 数据源构建：根据配置构建各个数据源实例
+        9. TopK维度组合：获取指定数量的topk维度组合条件
+        10. 统一查询执行：调用UnifyQuery执行实际的数据查询
+        11. 数据后过滤：根据post_query_filter_dict进行数据过滤
+        12. 时间对比处理：处理时间对比数据
+        """
+        # 1. 注入Cookie过滤条件到所有查询配置中
         cookies_filter = get_cookies_filter()
         if cookies_filter:
             for query_config in params["query_configs"]:
                 query_config["filter_dict"]["cookies"] = cookies_filter
 
-        # 拨测指标处理
+        # 2. 处理拨测类型的特殊指标
         self.handle_special_uptime_check_metric(params["query_configs"])
 
-        # 指标信息查询
+        # 3. 查询指标的元信息（包括单位、时间字段等）
         metrics = self.get_metric_info(params)
 
-        # 配置预处理
+        # 4. 查询配置预处理
         for query_config in params["query_configs"]:
+            # 清除旧的时间字段配置
             query_config.pop("time_field", None)
 
-            # 补全时间字段
+            # 根据指标元信息补全时间字段
             for metric in metrics:
                 if not query_config["metrics"]:
                     continue
 
                 metric_field = query_config["metrics"][0]["field"]
+                # 通过数据源标签、数据类型标签、表名/数据标签/索引集ID和指标字段匹配
                 if (
                     (
                         metric["result_table_id"] == query_config.get("table", "")
@@ -822,38 +909,45 @@ class UnifyQueryRawResource(ApiAuthResource):
                     query_config["time_field"] = metric["extend_fields"].get("time_field")
                     break
 
+            # 自动计算查询间隔（interval为auto时根据时间范围自动计算）
             if query_config["interval"] == "auto":
                 query_config["interval"] = get_auto_interval(60, params["start_time"], params["end_time"])
-            # 删除全选条件
+
+            # 删除where条件中的全选条件（避免无效过滤）
             query_config["where"] = remove_all_conditions(query_config["where"])
 
-        # 查询目标实例
+        # 5. 查询目标实例信息，如果没有目标实例则直接返回空结果
         if not self.get_target_instance(params):
             return {"series": [], "metrics": metrics}
 
-        # 维度top/bottom排序
+        # 6. 处理维度top/bottom排序需求
         params = RankProcessor.process_params(params)
+
+        # 7. 处理查询类型（如instant查询需要调整时间范围和间隔）
         params = QueryTypeProcessor.process_params(params)
 
-        # 数据查询
+        # 8. 构建数据源实例列表
         data_sources = []
         time_alignment: bool = params.get("time_alignment", True)
         for query_config_index, query_config in enumerate(params["query_configs"]):
+            # 根据数据源标签和数据类型标签加载对应的数据源类
             data_source_class = load_data_source(query_config["data_source_label"], query_config["data_type_label"])
             if not time_alignment:
                 query_config["time_alignment"] = time_alignment
             data_source = data_source_class(bk_biz_id=params["bk_biz_id"], **query_config)
+
+            # 同步group_by字段到查询配置
             if hasattr(data_source, "group_by"):
                 query_config["group_by"] = data_source.group_by
 
-            # 先获取指定数量的topk维度组合条件，后续将基于这些维度组合条件进行查询
-            # 目前只支持ui数据源的指标，如果有多个指标，只获取第一个指标的topk数量的维度组合条件，并将这些条件拼接回第一个指标的查询条件中
-            # 计算平台数据不参与
+            # 9. 获取TopK维度组合条件（仅对第一个查询配置且非计算平台数据源生效）
+            # 先查询出topk数量的维度组合，后续查询将基于这些维度组合进行
             if query_config_index == 0 and query_config["data_source_label"] != DataSourceLabel.BK_DATA:
                 self.get_dimension_combination(data_source, params)
 
             data_sources.append(data_source)
 
+            # 统计查询次数（用于监控和统计）
             try:
                 unify_query_count(
                     data_type_label=query_config["data_type_label"],
@@ -864,6 +958,7 @@ class UnifyQueryRawResource(ApiAuthResource):
                 logger.exception("failed to count unify query")
                 continue
 
+        # 10. 创建统一查询对象
         query = UnifyQuery(
             bk_biz_id=params["bk_biz_id"],
             data_sources=data_sources,
@@ -872,12 +967,14 @@ class UnifyQueryRawResource(ApiAuthResource):
         )
         safe_push_to_gateway(registry=OPERATION_REGISTRY)
 
+        # 11. 根据查询方法类型选择对应的查询函数（默认为query_data）
         query_method_map: dict[str, Callable[[Any], list[dict]]] = {
             "query_data": query.query_data,
             "query_reference": query.query_reference,
         }
         query_method: Callable[[Any], list[dict]] = query_method_map.get(params.get("query_method"), query.query_data)
 
+        # 12. 执行数据查询（时间戳转换为毫秒级）
         points = query_method(
             start_time=params["start_time"] * 1000,
             end_time=params["end_time"] * 1000,
@@ -888,13 +985,15 @@ class UnifyQueryRawResource(ApiAuthResource):
             not_time_align=params.get("not_time_align", False),
         )
 
-        # 如果存在数据后过滤条件，则进行过滤
+        # 13. 数据后过滤：根据聚合后的条件进行二次过滤
         if params.get("post_query_filter_dict"):
             condition_filter = load_agg_condition_instance(params["post_query_filter_dict"])
             points = [point for point in points if condition_filter.is_match(point)]
 
-        # 数据预处理
+        # 14. 时间对比数据处理：如果有时间对比需求，查询对比时间段的数据并合并
         points = TimeCompareProcessor.process_origin_data(params, points)
+
+        # 15. 根据参数决定是否返回指标元信息
         metrics = metrics if params["with_metric"] else []
         return {
             "series": points,
