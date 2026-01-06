@@ -12,7 +12,7 @@ import logging
 from collections import defaultdict
 
 from django.conf import settings
-from django.db.models.sql import AND, OR
+from django.db.models.sql.where import AND, OR
 from django.utils.functional import cached_property
 
 from alarm_backends.core.control.mixins import CheckMixin, DetectMixin, DoubleCheckMixin
@@ -236,7 +236,7 @@ class Item(DetectMixin, CheckMixin, DoubleCheckMixin):
 
         参数:
             dimensions: dict, 数据记录的维度信息
-                示例: {"bk_target_ip": "10.0.0.1", "bk_target_cloud_id": "0", "device_name": "eth0"}
+                示例: {"bk_target_ip": "127.0.0.1", "bk_target_cloud_id": "0", "device_name": "eth0"}
 
         返回值:
             bool: True 表示维度匹配所有条件，False 表示不匹配

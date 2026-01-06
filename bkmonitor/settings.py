@@ -71,3 +71,23 @@ if RUN_MODE == "DEVELOP":  # noqa
         from local_settings import *  # noqa
     except ImportError:
         pass
+
+# Django 4.2+ 不再官方支持 Mysql 5.7，但目前 Django 仅是对 5.7 做了软性的不兼容改动，
+# 在没有使用 8.0 特异的功能时，对 5.7 版本的使用无影响，为兼容存量的 Mysql 5.7 DB 做此 Patch
+try:
+    from django.db.backends.mysql.features import DatabaseFeatures
+    from django.utils.functional import cached_property
+
+    class PatchFeatures:
+        """Patched Django Features"""
+
+        @cached_property
+        def minimum_database_version(self):
+            if self.connection.mysql_is_mariadb:  # type: ignore[attr-defined] # noqa
+                return 10, 4
+            return 5, 7
+
+    DatabaseFeatures.minimum_database_version = PatchFeatures.minimum_database_version  # noqa
+except ImportError:
+    # 如果导入失败，可能是 Django 版本不支持或配置未加载，忽略错误
+    pass
