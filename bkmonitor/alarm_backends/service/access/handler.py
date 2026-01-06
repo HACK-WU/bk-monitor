@@ -344,6 +344,51 @@ class AccessHandler(base.BaseHandler):
         执行流程:
         1. 导入事件轮询器(EventPoller)
         2. 启动事件处理流程
+
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                         事件数据处理流程                                       │
+        ├─────────────────────────────────────────────────────────────────────────────┤
+        │                                                                             │
+        │   Kafka Topic                                                               │
+        │       │                                                                     │
+        │       ▼                                                                     │
+        │   EventPoller.poll_once()   ← 从 Kafka 拉取消息                               │
+        │       │                                                                     │
+        │       ▼                                                                     │
+        │   EventPoller.push_to_redis()                                               │
+        │       │                                                                     │
+        │       ├──► Redis List: access.event.{data_id}   ← 存储事件数据                │
+        │       │                                                                     │
+        │       └──► Redis Set: access.event.signal       ← 发送信号通知                │
+        │                           │                                                 │
+        │                           ▼                                                 │
+        │   kick_task() 子线程检测到信号                                                 │
+        │       │                                                                     │
+        │       ▼                                                                     │
+        │   run_access_event_handler_v2.delay(data_id)   ← 投递 Celery 异步任务         │
+        │       │                                                                     │
+        │       ▼                                                                     │
+        │   AccessCustomEventGlobalProcessV2.process()   ← 消费者                      │
+        │       │                                                                     │
+        │       ├──► _pull_from_redis()   从 Redis 拉取事件数据                          │
+        │       │                                                                     │
+        │       ├──► _instantiate_by_event_type()  根据类型实例化事件对象                 │
+        │       │        ├─ AgentEvent        (Agent心跳)                             │
+        │       │        ├─ DiskFullEvent     (磁盘写满)                               │
+        │       │        ├─ OOMEvent          (OOM事件)                               │
+        │       │        ├─ CorefileEvent     (Corefile)                              │
+        │       │        ├─ PingEvent         (Ping异常)                              │
+        │       │        └─ GseCustomStrEventRecord (自定义事件)                        │
+        │       │                                                                     │
+        │       ├──► 策略匹配 & 过滤                                                    │
+        │       │                                                                     │
+        │       └──► push()  推送异常点到检测队列                                        │
+        │                │                                                            │
+        │                ▼                                                            │
+        │           后续告警处理流程 (detect → trigger → alert → action)                 │
+        │                                                                             │
+        └─────────────────────────────────────────────────────────────────────────────┘
+
         """
         from alarm_backends.service.access.event.event_poller import EventPoller
 

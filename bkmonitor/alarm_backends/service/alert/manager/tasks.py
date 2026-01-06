@@ -36,6 +36,9 @@ DEFAULT_CHECK_INTERVAL = 60
 def check_abnormal_alert():
     """
     拉取异常告警，对这些告警进行状态管理
+
+    后台定时任务：
+        alarm_backends.service.alert.manager.tasks.check_abnormal_alert * * * * * cluster
     """
     search = (
         AlertDocument.search(all_indices=True)

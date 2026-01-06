@@ -798,66 +798,130 @@ class Alert:
     @classmethod
     def from_event(cls, event: Event, circuit_breaking_manager=None):
         """
-        将事件创建为新的告警对象
+        将事件(Event)转换为新的告警(Alert)对象
+
+        参数:
+            event: Event对象，包含异常检测产生的事件数据
+                - dedupe_md5: 去重标识，相同md5的事件会聚合到同一告警
+                - strategy_id: 关联的策略ID
+                - severity: 告警级别（1-致命, 2-预警, 3-提醒）
+                - status: 事件状态（ABNORMAL/RECOVERED/CLOSED）
+            circuit_breaking_manager: 熔断管理器，用于检查是否触发熔断规则（可选）
+
+        返回值:
+            Alert: 新创建的告警对象，包含以下状态标记：
+                - _is_new=True: 标记为新告警
+                - _refresh_db=True: 需要写入数据库
+                - _status_changed=True: 状态已变更
+
+        数据流向:
+        ┌─────────────────────────────────────────────────────────────────────────┐
+        │                      from_event 告警创建流程                             │
+        ├─────────────────────────────────────────────────────────────────────────┤
+        │                                                                         │
+        │  输入: Event (异常事件)                                                  │
+        │       ↓                                                                 │
+        │  Step1: 构建告警基础数据字典                                             │
+        │       ├── dedupe_md5, strategy_id (用于去重和关联)                       │
+        │       ├── create_time, begin_time, latest_time (时间信息)               │
+        │       ├── severity, status, alert_name (告警属性)                       │
+        │       └── event, extra_info, labels (详情和扩展信息)                     │
+        │       ↓                                                                 │
+        │  Step2: 补全维度信息                                                     │
+        │       ├── 提取agg_dimensions (聚合维度)                                  │
+        │       ├── 添加dedupe_keys中的维度 (排除默认字段)                          │
+        │       └── 添加additional_dimensions (额外维度)                           │
+        │       ↓                                                                 │
+        │  Step3: 设置告警状态                                                     │
+        │       ├── set_next_status(CLOSED, CLOSE_WINDOW_SIZE)                    │
+        │       └── 设置标记: _is_new, _refresh_db, _status_changed               │
+        │       ↓                                                                 │
+        │  Step4: 记录告警产生日志 (AlertLog.OpType.CREATE)                        │
+        │       ↓                                                                 │
+        │  Step5: 流控检查                                                         │
+        │       ├── 熔断检查 → 触发则标记is_blocked=True                           │
+        │       └── QoS检查 → 触发则标记is_blocked=True                            │
+        │       ↓                                                                 │
+        │  输出: Alert (新告警对象)                                                │
+        │                                                                         │
+        └─────────────────────────────────────────────────────────────────────────┘
         """
         create_time = int(time.time())
+
+        # Step1: 构建告警基础数据字典
+        # 从Event中提取关键字段，初始化Alert的核心属性
         data = {
-            "bk_tenant_id": event.bk_tenant_id,
-            "dedupe_md5": event.dedupe_md5,
-            "create_time": create_time,
-            "update_time": create_time,
-            "end_time": None,
-            "begin_time": event.time,
-            "latest_time": event.time,
-            "first_anomaly_time": event.anomaly_time,
-            "severity": event.severity,
-            "event": event.to_dict(),
-            "status": event.status,
-            "alert_name": event.alert_name,
-            "strategy_id": event.strategy_id,
-            "labels": event.extra_info.get("strategy", {}).get("labels", []),
-            "dimensions": [],
-            # extra_info 和 event["extra_info"] 一样
-            "extra_info": event.extra_info or {},
-            "is_blocked": False,
+            "bk_tenant_id": event.bk_tenant_id,  # 租户ID（多租户隔离）
+            "dedupe_md5": event.dedupe_md5,  # 去重标识：相同md5的事件聚合到同一告警
+            "create_time": create_time,  # 告警创建时间（当前时间戳）
+            "update_time": create_time,  # 告警更新时间（初始等于创建时间）
+            "end_time": None,  # 告警结束时间（新告警为None，关闭时填充）
+            "begin_time": event.time,  # 告警开始时间（首个事件的时间）
+            "latest_time": event.time,  # 最近事件时间（用于判断告警是否恢复）
+            "first_anomaly_time": event.anomaly_time,  # 首次异常时间
+            "severity": event.severity,  # 告警级别：1-致命, 2-预警, 3-提醒
+            "event": event.to_dict(),  # 关联事件的完整数据（序列化为字典）
+            "status": event.status,  # 告警状态：ABNORMAL/RECOVERED/CLOSED
+            "alert_name": event.alert_name,  # 告警名称（来自策略配置）
+            "strategy_id": event.strategy_id,  # 关联策略ID（0表示无策略告警）
+            "labels": event.extra_info.get("strategy", {}).get("labels", []),  # 策略标签
+            "dimensions": [],  # 维度列表（后续填充）
+            "extra_info": event.extra_info or {},  # 扩展信息（策略详情等）
+            "is_blocked": False,  # 流控标记（初始为False）
         }
 
-        # 补全维度信息
+        # Step2: 提取聚合维度
+        # 从dedupe_keys中提取以"tags."开头的字段作为聚合维度
+        # 例如: ["tags.ip", "tags.bk_cloud_id"] -> ["ip", "bk_cloud_id"]
         data["extra_info"]["agg_dimensions"] = [key[5:] for key in event.dedupe_keys if key.startswith("tags.")]
 
+        # 实例化Alert对象并关联数据源信息
         alert = cls(data)
         alert.update_data_id_info(event)
 
-        # 补全维度信息
+        # Step2续: 补全维度详细信息
+        # 遍历去重字段，添加到告警维度列表（排除默认去重字段和无数据标签）
         for index, key in enumerate(event.dedupe_keys):
             if key in DEFAULT_DEDUPE_FIELDS or key == f"tags.{NO_DATA_TAG_DIMENSION}":
-                # 默认去重字段不计入维度
+                # 默认去重字段（如strategy_id）不计入维度，避免冗余
                 continue
+            # 添加维度：key, value, display_key, display_value
             alert.add_dimension(
                 key, event.get_field(key), event.get_tag_display_key(key), event.get_tag_display_value(key)
             )
-        # 如果有 additional_dimensions，则添加到维度中
+
+        # 如果事件包含额外维度信息，一并添加到告警维度中
         if "additional_dimensions" in event.extra_info:
             for key, value in event.extra_info["additional_dimensions"].items():
                 alert.add_dimension(key, value)
 
+        # Step3: 设置告警状态和标记
+        # set_next_status: 设置下次状态检查的目标状态和时间窗口
+        # CLOSE_WINDOW_SIZE默认为1440分钟（24小时），即24小时无新事件则关闭
         alert.set_next_status(EventStatus.CLOSED, cls.CLOSE_WINDOW_SIZE)
-        alert._refresh_db = True
-        alert._is_new = True
-        alert._status_changed = True
-        alert.last_event = event
+        alert._refresh_db = True  # 标记需要写入数据库
+        alert._is_new = True  # 标记为新创建的告警
+        alert._status_changed = True  # 标记状态已变更（触发后续处理）
+        alert.last_event = event  # 记录最后关联的事件
+
+        # Step4: 记录告警产生日志
         alert.add_log(
-            op_type=AlertLog.OpType.CREATE,
-            event_id=event.id,
-            description=event.description,
-            time=event.time,
+            op_type=AlertLog.OpType.CREATE,  # 操作类型：告警产生
+            event_id=event.id,  # 关联事件ID
+            description=event.description,  # 事件描述
+            time=event.time,  # 事件时间
         )
 
-        # 熔断检查：对新创建的告警进行熔断判定
+        # Step5: 流控检查（两级检查机制）
+        # 先执行熔断检查，如果未触发熔断再执行QoS检查
+
+        # 5.1 熔断检查：对新创建的告警进行熔断判定
+        # 熔断规则由用户配置，用于在告警风暴时保护系统
         circuit_breaking_blocked = False
         if circuit_breaking_manager:
             circuit_breaking_blocked = alert.check_circuit_breaking(circuit_breaking_manager)
             if circuit_breaking_blocked:
+                # 触发熔断：更新流控状态并记录日志
                 alert.update_qos_status(True)
                 alert.add_log(
                     op_type=AlertLog.OpType.ALERT_QOS,
@@ -870,10 +934,12 @@ class Alert:
                     f"is blocked by circuit breaking rules"
                 )
 
-        # QoS检查：如果未被熔断规则流控，再进行QoS检查
+        # 5.2 QoS检查：如果未被熔断规则流控，再进行QoS检查
+        # QoS检查基于系统级配置，防止单个策略产生过多告警
         if not circuit_breaking_blocked:
             qos_result = alert.qos_check()
             if qos_result["is_blocked"]:
+                # QoS触发：更新流控状态并记录日志
                 alert.update_qos_status(True)
                 alert.add_log(
                     op_type=AlertLog.OpType.ALERT_QOS,

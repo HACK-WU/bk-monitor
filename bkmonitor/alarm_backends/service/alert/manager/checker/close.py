@@ -409,30 +409,60 @@ class CloseStatusChecker(BaseChecker):
 
     def check_priority(self, alert: Alert, latest_strategy):
         """
-        检查告警优先级
+        检查告警优先级，判断是否需要关闭当前告警
+
+        该方法实现告警优先级检查逻辑，当存在更高优先级的告警时关闭当前告警
+
+        参数:
+            alert: Alert对象，当前待检查的告警
+            latest_strategy: dict，最新的策略配置信息
+
+        返回值:
+            bool: True表示已关闭告警，False表示无需关闭
+
+        执行流程:
+            1. 检查策略是否配置了优先级和优先级分组
+            2. 从告警事件ID中提取维度MD5标识
+            3. 查询该维度下的最新优先级信息
+            4. 计算策略的最大聚合间隔时间
+            5. 判断是否存在更高优先级且未过期的告警
+            6. 如果存在更高优先级告警则关闭当前告警
         """
+        # 获取策略的优先级配置和优先级分组标识
         priority = latest_strategy.get("priority")
         priority_group_key = latest_strategy.get("priority_group_key")
+
+        # 基础检查：策略必须配置优先级、优先级分组，且告警必须有top_event
         if priority is None or not priority_group_key or not alert.top_event:
             return False
 
+        # 从告警事件ID中提取维度MD5（事件ID格式：dimension_md5.timestamp）
         dimension_md5 = alert.top_event["event_id"].split(".")[0]
+
+        # 创建优先级检查器并查询该维度下的最新优先级信息
         checker = PriorityChecker(priority_group_key=priority_group_key)
         result = checker.get_priority_by_dimensions(dimension_md5)
         if not result:
             return False
 
+        # 解析查询结果：格式为"优先级:时间戳"
         latest_priority, latest_timestamp = result.split(":")
 
-        interval = 60
+        # 计算策略的最大聚合间隔时间（用于判断优先级信息是否过期）
+        interval = 60  # 默认60秒
         for item in latest_strategy["items"]:
             for query_config in item["query_configs"]:
                 if "agg_interval" in query_config and query_config["agg_interval"] > interval:
                     interval = query_config["agg_interval"]
 
+        # 判断条件：
+        # 1. 最新优先级信息是否过期（时间戳 + 5倍聚合间隔 < 当前时间）
+        # 2. 最新优先级是否小于等于当前告警优先级
+        # 如果任一条件满足，说明没有更高优先级的告警，无需关闭
         if float(latest_timestamp) + interval * 5 < time.time() or int(latest_priority) <= priority:
             return False
 
+        # 存在更高优先级的告警，关闭当前告警
         self.close(alert, _("存在更高优先级的告警，告警关闭"))
         return True
 

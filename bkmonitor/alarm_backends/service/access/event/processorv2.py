@@ -76,6 +76,23 @@ class BaseAccessEventProcess(BaseAccessProcess, QoSMixin):
         2. 记录每个维度的最后检测点时间戳
         3. 批量执行Redis操作以提高性能
         4. 更新检测点缓存并设置过期时间
+
+        ┌─────────────────────────────────────────────────────────────────┐
+        │                    push_to_check_result()                       │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+        ┌─────────────────────────────────────────────────────────────────┐
+        │  Redis Key: CHECK_RESULT_{strategy_id}_{item_id}_{md5}_{level}  │
+        │  内容: {"timestamp|ANOMALY": event_time, ...}                    │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                      ┌───────────────┴───────────────┐
+                      ▼                               ▼
+        ┌─────────────────────────┐     ┌─────────────────────────────────┐
+        │    Detect 检测模块        │    │       Trigger 触发模块            │
+        │  读取检测结果，聚合判断     │     │  根据last_checkpoint判断告警恢复   │
+        └─────────────────────────┘     └─────────────────────────────────┘
         """
         # Redis Pipeline对象，用于批量执行Redis命令，提高性能
         redis_pipeline = None
@@ -314,36 +331,68 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
 
     def _instantiate_by_event_type(self, raw_data):
         """
-        根据事件类型实例化数据
-        :param raw_data: 原始数据
-        :return: 实例化后的数据
+        根据事件类型实例化对应的事件记录对象
+
+        参数:
+            raw_data: dict, 原始事件数据，包含告警信息
+                - GSE基础告警格式: {"value": [{"extra": {"type": 6, ...}, ...}], ...}
+                - 自定义事件格式: {"data_id": xxx, ...}
+
+        返回值:
+            事件记录对象实例，可能的类型包括:
+            - PingEvent: Ping异常事件 (type=8)
+            - AgentEvent: Agent心跳丢失事件 (type=2)
+            - CorefileEvent: Corefile异常事件 (type=7)
+            - DiskFullEvent: 磁盘写满事件 (type=6)
+            - DiskReadonlyEvent: 磁盘只读事件 (type=3)
+            - OOMEvent: OOM内存溢出事件 (type=9)
+            - GseCustomStrEventRecord: 自定义字符型事件 (type=100)
+            - GseProcessEventRecord: 进程托管事件 (type=101)
+            - None: 未知类型或未开启的告警类型
+
+        该方法实现事件类型的路由分发，包含：
+        1. 从原始数据中解析告警类型（优先从value字段获取，否则根据data_id判断）
+        2. 检查告警类型是否在已开启的白名单中
+        3. 部分事件类型（Ping/Agent）需要额外检查功能开关
+        4. 根据类型实例化对应的事件记录类
         """
 
-        # 获取告警类型
+        # Step 1: 获取告警类型
+        # GSE基础告警数据结构: value字段包含告警详情列表，从中提取type
+        # 自定义事件数据结构: 无value字段，需要通过data_id判断类型
         alarms = raw_data.get("value")
         if alarms:
             alarm_type = alarms[0]["extra"]["type"]
         else:
             alarm_type = self.fetch_custom_event_alarm_type(raw_data)
 
-        # 根据告警类型分配实例化方法
+        # Step 2: 根据告警类型路由到对应的事件类进行实例化
+        # 只处理白名单中的事件类型，其他类型直接忽略（返回None）
         if alarm_type in self.OPENED_WHITE_LIST:
+            # Ping异常事件: 需要检查ENABLE_PING_ALARM开关
             if alarm_type == self.TYPE_PING:
                 if settings.ENABLE_PING_ALARM:
                     return PingEvent(raw_data, self.strategies)
+            # Agent心跳丢失事件: 需要检查ENABLE_AGENT_ALARM开关
             elif alarm_type == self.TYPE_AGENT:
                 if settings.ENABLE_AGENT_ALARM:
                     return AgentEvent(raw_data, self.strategies)
+            # Corefile异常事件: 进程崩溃产生的core dump文件
             elif alarm_type == self.TYPE_COREFILE:
                 return CorefileEvent(raw_data, self.strategies)
+            # 磁盘写满事件: 磁盘使用率超过阈值
             elif alarm_type == self.TYPE_DISK_FULL:
                 return DiskFullEvent(raw_data, self.strategies)
+            # 磁盘只读事件: 磁盘变为只读状态
             elif alarm_type == self.TYPE_DISK_READONLY:
                 return DiskReadonlyEvent(raw_data, self.strategies)
+            # OOM事件: 系统内存溢出导致进程被杀
             elif alarm_type == self.TYPE_OOM:
                 return OOMEvent(raw_data, self.strategies)
+            # 自定义字符型事件: 用户通过SDK/API上报的自定义事件
             elif alarm_type == self.TYPE_GSE_CUSTOM_STR_EVENT:
                 return GseCustomStrEventRecord(raw_data, self.strategies)
+            # 进程托管事件: GSE进程托管模块上报的进程状态变化事件
             elif alarm_type == self.TYPE_GSE_PROCESS_EVENT:
                 return GseProcessEventRecord(raw_data, self.strategies)
 

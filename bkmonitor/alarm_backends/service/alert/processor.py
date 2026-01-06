@@ -35,37 +35,90 @@ class BaseAlertProcessor:
     @staticmethod
     def list_alerts_content_from_cache(events: list[Event]) -> list[Alert]:
         """
-        根据 策略ID和dedupe_md5 从 Redis 缓存中批量获取
-        :param events: 告警关联事件信息
-        :return:
+        根据事件列表从Redis缓存中批量获取关联的告警对象
+
+        参数:
+            events (list[Event]): 告警关联事件列表，每个事件包含strategy_id和dedupe_md5
+
+        返回值:
+            list[Alert]: 从缓存中成功解析的告警对象列表
+
+        数据流向图:
+        ```
+        ┌─────────────────────────────────────────────────────────────────────────┐
+        │               list_alerts_content_from_cache 数据流                      │
+        ├─────────────────────────────────────────────────────────────────────────┤
+        │                                                                         │
+        │  输入: events (Event列表)                                                │
+        │       ↓                                                                 │
+        │  ┌─────────────────────────────────────────┐                            │
+        │  │ Step1: 按strategy_id分组事件的dedupe_md5 │                            │
+        │  │        {strategy_id: [md5_1, md5_2...]} │                            │
+        │  └─────────────────┬───────────────────────┘                            │
+        │                    ↓                                                    │
+        │  ┌─────────────────────────────────────────┐                            │
+        │  │ Step2: 构建Redis缓存Key列表              │                            │
+        │  │        格式: alert.dedupe.{strategy_id} │                            │
+        │  │              .{dedupe_md5}              │                            │
+        │  └─────────────────┬───────────────────────┘                            │
+        │                    ↓                                                    │
+        │  ┌─────────────────────────────────────────┐                            │
+        │  │ Step3: 逐个从Redis获取告警数据           │  ←── Redis缓存             │
+        │  │        (不能用mget，因分布在不同集群)     │                            │
+        │  └─────────────────┬───────────────────────┘                            │
+        │                    ↓                                                    │
+        │  ┌─────────────────────────────────────────┐                            │
+        │  │ Step4: JSON解析并实例化Alert对象         │                            │
+        │  │        跳过空值，记录解析失败的日志       │                            │
+        │  └─────────────────┬───────────────────────┘                            │
+        │                    ↓                                                    │
+        │  输出: alerts (Alert列表)                                                │
+        │                                                                         │
+        └─────────────────────────────────────────────────────────────────────────┘
+        ```
+
+        说明:
+        - 告警缓存按strategy_id路由到不同Redis集群，因此不能使用mget批量获取
+        - dedupe_md5是告警去重的唯一标识，由告警维度信息计算得出
+        - 该方法主要用于告警构建时查找已存在的告警，实现告警聚合
         """
+        # 空事件列表直接返回
         if not events:
             return []
 
+        # Step1: 按策略ID对事件的dedupe_md5进行分组
+        # 目的是后续按策略ID构建对应的缓存Key
         strategy_dedupe_md5_dict = defaultdict(list)
         for event in events:
+            # strategy_id为空时使用0作为默认值（适用于无策略的系统事件）
             strategy_dedupe_md5_dict[event.strategy_id or 0].append(event.dedupe_md5)
+
+        # Step2: 构建所有需要查询的Redis缓存Key
         cache_keys = []
         dedupe_md5_list = []
         for strategy_id, md5_list in strategy_dedupe_md5_dict.items():
+            # 缓存Key格式: alert.dedupe.{strategy_id}.{dedupe_md5}
             cache_keys.extend(
                 [ALERT_DEDUPE_CONTENT_KEY.get_key(strategy_id=strategy_id, dedupe_md5=md5) for md5 in md5_list]
             )
             dedupe_md5_list.extend(md5_list)
 
-        # 这里不能用 mget 进行优化，因为告警按 strategy_id 分组路由到不同的 redis 集群
+        # Step3: 从Redis逐个获取告警数据
+        # 注意: 这里不能用mget进行优化，因为告警按strategy_id分组路由到不同的Redis集群
         alert_data = [ALERT_DEDUPE_CONTENT_KEY.client.get(cache_key) for cache_key in cache_keys]
 
+        # Step4: 解析JSON数据并实例化Alert对象
         alerts = []
-
-        # 对告警内容进行解析，记录在 mapping 中
         for index, alert in enumerate(alert_data):
+            # 跳过缓存中不存在的告警（新告警场景）
             if not alert:
                 continue
             try:
+                # 将JSON字符串解析为字典，并创建Alert实例
                 alert = json.loads(alert)
                 alerts.append(Alert(alert))
             except Exception as e:
+                # 解析失败时记录警告日志，不影响其他告警的处理
                 dedupe_md5 = cache_keys[index]
                 logger.warning("dedupe_md5(%s) loads alert failed: %s, origin data: %s", dedupe_md5, e, alert)
         return alerts
