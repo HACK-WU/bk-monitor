@@ -112,18 +112,55 @@ class GseCustomStrEventRecord(EventRecord):
         return host
 
     def full(self):
+        """
+        填充事件记录的完整信息，并按策略克隆生成多个事件记录对象
+
+        返回值:
+            List[GseCustomStrEventRecord]: 克隆的事件记录列表，每个匹配的策略对应一个记录
+            空列表表示：主机不存在、维度填充失败或无匹配策略
+
+        执行流程:
+            1. 根据告警数据获取主机对象 -> 获取业务ID
+            2. 填充dimensions维度信息（IP、云区域、主机ID、拓扑节点、Agent版本）
+            3. 查找业务下配置了该事件类型的策略
+            4. 为每个匹配策略克隆一个新的事件记录对象
+
+        数据流向图:
+            raw_data (原始告警)
+                │
+                ▼
+            get_host() ──────► 获取 Host 对象
+                │
+                ▼
+            填充 dimensions:
+            ├── bk_target_ip      (主机内网IP)
+            ├── bk_target_cloud_id (云区域ID)
+            ├── bk_host_id        (主机ID)
+            ├── bk_topo_node      (拓扑节点列表)
+            └── agent_version     (v1/v2)
+                │
+                ▼
+            遍历业务策略 ──────► 筛选匹配 METRIC_ID 的策略
+                │
+                ▼
+            为每个策略克隆 EventRecord ──────► 返回 new_record_list
+        """
         alarm = self.raw_data
 
+        # 步骤1: 获取主机对象，用于填充业务ID和维度信息
         host_obj = self.get_host(alarm)
         if not host_obj:
             return []
 
+        # 步骤2: 从主机对象获取业务ID并写入告警数据
         biz_id = int(host_obj.bk_biz_id)
         alarm["_biz_id_"] = biz_id
 
+        # 初始化或获取dimensions字典，用于存储事件维度信息
         dimensions = alarm.setdefault("dimensions", {})
 
-        # 判断agent版本，增加agent_version维度
+        # 步骤3: 判断Agent版本，增加agent_version维度
+        # v2版本的agent_id不包含冒号，v1版本格式为 "云区域ID:IP"
         if "_agent_id_" in alarm:
             agent_id = alarm["_agent_id_"]
             if agent_id and ":" not in agent_id:
@@ -131,30 +168,42 @@ class GseCustomStrEventRecord(EventRecord):
             else:
                 dimensions["agent_version"] = "v1"
 
+        # 步骤4: 从主机对象填充目标维度信息
         try:
-            dimensions["bk_target_ip"] = host_obj.bk_host_innerip
-            dimensions["bk_target_cloud_id"] = host_obj.bk_cloud_id
-            dimensions["bk_host_id"] = host_obj.bk_host_id
+            dimensions["bk_target_ip"] = host_obj.bk_host_innerip  # 主机内网IP
+            dimensions["bk_target_cloud_id"] = host_obj.bk_cloud_id  # 云区域ID
+            dimensions["bk_host_id"] = host_obj.bk_host_id  # 主机ID
+            # 填充拓扑节点列表：从主机的拓扑链路中提取所有节点ID并去重排序
+            # topo_link 结构: {module_id: [TopoNode, TopoNode, ...], ...}
+            # 最终结果示例: ["biz|2", "set|5", "module|6"]
             if host_obj.topo_link:
                 dimensions["bk_topo_node"] = sorted({node.id for node in chain(*list(host_obj.topo_link.values()))})
         except Exception as e:
             logger.exception(f"{self.__class__.__name__} full error {alarm}, {e}")
             return []
 
+        # 步骤5: 根据业务ID获取该业务下的所有策略
+        # strategies 结构: {biz_id: {strategy_id: Strategy, ...}, ...}
         new_record_list = []
         strategies = self.strategies.get(int(biz_id))
         if not strategies:
             logger.warning("abandon custom event(%s), because not strategy", self.raw_data)
             return []
 
+        # 步骤6: 遍历策略，为每个配置了该事件类型的策略克隆一个新的EventRecord
+        # 这样同一个事件可以被多个策略同时处理
         for strategy_id, strategy_obj in list(strategies.items()):
-            # 针对每条策略， 只要是配置了该事件的策略，都克隆一个新的event record 对象。
+            # 检查策略是否配置了当前事件的METRIC_ID (bk_monitor.gse_custom_event)
+            # strategy_obj.items[0].metric_ids 包含该策略监控的所有指标ID
             if not strategy_obj.items or self.METRIC_ID not in strategy_obj.items[0].metric_ids:
                 continue
+
+            # 克隆告警数据并绑定策略对象
             new_alarm = {}
             new_alarm.update(alarm)
             new_alarm["strategy"] = strategy_obj
 
+            # 创建新的EventRecord实例，继承当前类型
             new_record_list.append(self.__class__(new_alarm, self.strategies))
         return new_record_list
 

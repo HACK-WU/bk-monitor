@@ -599,7 +599,32 @@ class CompositeProcessor:
 
     def process_single_strategy(self):
         """
-        单告警策略（监控特有）
+        单告警策略处理（监控特有）
+
+        根据告警的当前状态与缓存状态对比，决定是否需要发送动作信号（通知/恢复/关闭等）。
+        使用分布式锁确保同一告警不会被并发处理。
+
+        返回值:
+            action: 创建的动作对象，如果没有创建动作则返回 None
+
+        执行步骤:
+            1. 校验告警是否有关联策略或适配规则，无则跳过
+            2. 获取分布式锁，防止并发处理同一告警
+            3. 对比缓存状态与当前状态，决定需要发送的信号类型
+            4. 根据信号类型创建并推送动作
+            5. 更新告警检测结果缓存
+
+        信号决策逻辑（cached_result 表示缓存中的告警级别）:
+            ┌─────────────────┬──────────────────┬────────────────────────────┐
+            │ 缓存状态        │ 当前告警状态      │ 发送的信号                  │
+            ├─────────────────┼──────────────────┼────────────────────────────┤
+            │ 有缓存          │ RECOVERED        │ RECOVERED (恢复)            │
+            │ 有缓存          │ CLOSED           │ CLOSED (关闭)               │
+            │ 无缓存          │ ABNORMAL         │ NO_DATA/ABNORMAL (新告警)   │
+            │ 有缓存+已确认    │ ABNORMAL         │ ACK (确认信号)              │
+            │ 有缓存+级别升高  │ ABNORMAL         │ ABNORMAL (告警升级)         │
+            │ 有缓存+未处理    │ ABNORMAL         │ NO_DATA/ABNORMAL (补发)     │
+            └─────────────────┴──────────────────┴────────────────────────────┘
         """
         strategy_id = self.alert.strategy_id
         if not (strategy_id or self.alert.get_extra_info("matched_rule_info")):
@@ -607,54 +632,65 @@ class CompositeProcessor:
             return
 
         try:
+            # 使用分布式锁确保同一告警的处理串行化
             with service_lock(ALERT_DETECT_KEY_LOCK, alert_id=self.alert.id):
+                # 获取该告警上一次的检测结果缓存（存储的是告警级别 severity）
                 cache_key = ALERT_DETECT_RESULT.get_key(alert_id=self.alert.id)
                 cached_result = ALERT_DETECT_RESULT.client.get(cache_key)
 
                 signal = None
 
+                # ============ 信号决策逻辑 ============
+
                 if cached_result and not self.alert_status == EventStatus.ABNORMAL:
-                    # 当前有异常，但告警已经是非异常状态，需要发信号
+                    # 场景1: 缓存中有告警记录，但当前状态已非异常 -> 需要发送恢复/关闭信号
                     if self.alert_status == EventStatus.RECOVERED:
                         signal = ActionSignal.RECOVERED
                     else:
                         signal = ActionSignal.CLOSED
+
                 elif not cached_result and self.alert_status == EventStatus.ABNORMAL:
-                    # 当前无异常，但告警是异常状态，需要发信号
+                    # 场景2: 缓存中无记录，但当前是异常状态 -> 新产生的告警，需要发送异常信号
                     if self.alert.is_no_data():
-                        # 无数据告警
                         signal = ActionSignal.NO_DATA
                     else:
                         signal = ActionSignal.ABNORMAL
+
                 elif cached_result and self.alert_status == EventStatus.ABNORMAL and self.alert.is_ack_signal:
-                    # 如果缓存中存在告警，且当前的告警已经确认并没有发送通知，则属于告警确认的情况，需要发一个确认任务信号
+                    # 场景3: 缓存存在 + 异常状态 + 已确认但未发送通知 -> 发送确认信号
                     signal = ActionSignal.ACK
+
                 elif (
                     cached_result
                     and self.alert_status == EventStatus.ABNORMAL
                     and self.alert.severity < int(cached_result)
                 ):
-                    # 如果缓存中存在告警，且当前的告警级别比缓存中的级别要高，则属于告警升级的情况，需要发一个异常信号
+                    # 场景4: 缓存存在 + 异常状态 + 当前级别更高(数值更小) -> 告警升级，重新发送异常信号
+                    # 注意: severity 数值越小表示级别越高（1=致命, 2=预警, 3=提醒）
                     signal = ActionSignal.ABNORMAL
+
                 elif cached_result and self.alert_status == EventStatus.ABNORMAL:
-                    # 如果当前缓存已经存在，但是并没有处理过的情况下， 需要重新发送执行信号
+                    # 场景5: 缓存存在 + 异常状态 + 未处理过 -> 可能因QOS丢失，需要补发信号
                     check_signal = ActionSignal.NO_DATA if self.alert.is_no_data() else ActionSignal.ABNORMAL
+                    # 检查是否已经发送过处理信号
                     is_send_handle_signal = ALERT_FIRST_HANDLE_RECORD.client.get(
                         ALERT_FIRST_HANDLE_RECORD.get_key(
                             strategy_id=strategy_id, alert_id=self.alert.id, signal=check_signal
                         )
                     )
                     if not (self.alert.is_handled or is_send_handle_signal):
-                        # 如果没有处理过或者已经发送了处理信号，直接忽略
+                        # 告警未被处理过且未发送过处理信号
                         if int(time.time()) - self.alert.create_time >= settings.QOS_DROP_ACTION_WINDOW:
-                            # 这类没有处理过的数据，一般有可能是因为QOS引起的，所以可以延迟一点再发送, 否则相同的周期内，会有重复的自增记录
+                            # 延迟一段时间再补发，避免与正常流程在同一周期内重复
+                            # 这类情况通常是因为QOS限流导致动作被丢弃
                             signal = check_signal
+
+                # ============ 动作推送逻辑 ============
 
                 action = None
                 if signal:
-                    # 推送动作信号
                     if signal != ActionSignal.ABNORMAL and not strategy_id:
-                        # 如果是第三方分派的情况下，忽略非异常信号的通知
+                        # 第三方分派的告警（无策略ID），只处理异常信号，忽略恢复/关闭等信号
                         logger.info(
                             "[composite ignore] alert(%s) signal(%s) source(%s), no strategy_id",
                             signal,
@@ -662,14 +698,14 @@ class CompositeProcessor:
                             self.alert.top_event.get("plugin_id", ""),
                         )
                     else:
+                        # 使用 Redis SETNX 确保同一信号只处理一次（幂等性保证）
                         first_handle_key = ALERT_FIRST_HANDLE_RECORD.get_key(
                             strategy_id=self.alert.strategy_id or 0, alert_id=self.alert.id, signal=signal
                         )
                         if ALERT_FIRST_HANDLE_RECORD.client.set(
                             first_handle_key, 1, nx=True, ex=ALERT_FIRST_HANDLE_RECORD.ttl
                         ):
-                            # 只有第一次设置成功，才可以进行消息推送
-                            # todo 优化
+                            # 只有首次设置成功才推送消息，避免重复通知
                             self.add_action(
                                 strategy_id=strategy_id,
                                 signal=signal,
@@ -677,22 +713,25 @@ class CompositeProcessor:
                                 severity=self.alert.severity,
                                 dimensions=self.alert.dimensions,
                             )
-                            # 这里没必要再执行一次，因为已经设置成功了
-                            # ALERT_FIRST_HANDLE_RECORD.client.expire(first_handle_key, ALERT_FIRST_HANDLE_RECORD.ttl)
                             action = self.actions[-1]
+                        # 推送动作到消息队列
                         self.push_actions()
 
-                # 推送动作成功后，将本次结果写入缓存
+                # ============ 缓存更新逻辑 ============
+
                 if self.alert_status == EventStatus.ABNORMAL:
+                    # 异常状态：更新缓存，记录当前告警级别
                     ALERT_DETECT_RESULT.client.set(cache_key, self.alert.severity, ALERT_DETECT_RESULT.ttl)
                 else:
+                    # 非异常状态：清除缓存
                     ALERT_DETECT_RESULT.client.delete(cache_key)
                     self.clear_composite_detect_cache()
 
                 return action
 
         except LockError:
-            # 加锁失败，重新发布任务
+            # 获取分布式锁失败，说明有其他进程正在处理该告警
+            # 延迟重试，避免处理丢失
             from alarm_backends.service.composite.tasks import (
                 check_action_and_composite,
             )
@@ -704,7 +743,7 @@ class CompositeProcessor:
                     "alert_status": self.alert_status,
                     "retry_times": self.retry_times,
                 },
-                countdown=1,
+                countdown=1,  # 延迟1秒后重试
             )
 
     def is_composite_strategy(self):

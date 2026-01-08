@@ -1802,6 +1802,32 @@ class SearchEventResource(ApiAuthResource):
         return result
 
     def perform_request(self, validated_request_data):
+        """
+        执行告警关联事件的搜索请求
+
+        参数:
+            validated_request_data: dict, 经过序列化器校验的请求数据，包含:
+                - alert_id: 告警ID
+                - record_history: 是否记录搜索历史
+                - show_dsl: 是否返回ES查询DSL
+                - show_raw: 是否展示原始事件（不做策略类型适配）
+                - page/page_size: 分页参数
+                - 其他EventSearchSerializer定义的查询参数
+
+        返回值:
+            dict: 搜索结果，包含 total(总数) 和 events(事件列表)
+
+        处理流程:
+            1. 提取请求参数，获取告警文档
+            2. 根据告警策略类型选择不同的搜索方式:
+               - 关联策略(composite): 查询关联的子告警并适配为事件格式
+               - 自愈事件策略(fta_event): 查询关联的自愈事件
+               - 普通策略: 直接按dedupe_md5查询原始事件
+            3. 可选记录搜索历史（用于搜索收藏功能）
+
+        数据流:
+            请求参数 → 获取AlertDocument → 策略类型判断 → 对应Handler查询 → 返回事件列表
+        """
         alert_id = validated_request_data["alert_id"]
         record_history = validated_request_data.pop("record_history")
         show_dsl = validated_request_data.pop("show_dsl")
@@ -1814,10 +1840,13 @@ class SearchEventResource(ApiAuthResource):
             enabled=record_history and validated_request_data.get("query_string"),
         ):
             if alert.is_composite_strategy and not validated_request_data["show_raw"]:
+                # 关联策略告警: 查询被关联的子告警，并将其适配为事件格式展示
                 result = self.search_composite_alerts(alert, validated_request_data, show_dsl)
             elif alert.is_fta_event_strategy and not validated_request_data["show_raw"]:
+                # 自愈事件策略告警: 查询关联的自愈事件数据
                 result = self.search_fta_alerts(alert, validated_request_data, show_dsl)
             else:
+                # 普通策略告警: 直接通过dedupe_md5查询原始事件
                 handler = EventQueryHandler(
                     dedupe_md5=alert.dedupe_md5,
                     start_time=alert.begin_time,

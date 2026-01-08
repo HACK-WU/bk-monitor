@@ -300,7 +300,12 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
         else:
             self.topic = topic
 
-        self.strategies = {}
+        # {
+        #   "业务ID"： {
+        #       "策略ID": Strategy
+        #   }
+        # }
+        self.strategies: dict[int, dict[int, Strategy]] = {}
 
         # gse基础事件、自定义字符型、进程托管事件策略ID列表缓存
         gse_base_event_strategy = StrategyCacheManager.get_gse_alarm_strategy_ids()
@@ -397,12 +402,77 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
                 return GseProcessEventRecord(raw_data, self.strategies)
 
     def _pull_from_redis(self, max_records=MAX_RETRIEVE_NUMBER):
+        """
+        从Redis队列拉取待处理的告警事件列表
+
+        参数:
+            max_records: 单次拉取的最大记录数，默认为MAX_RETRIEVE_NUMBER
+
+        返回值:
+            List[str]: 告警事件列表，每个元素为序列化的事件JSON字符串
+
+        数据流向图:
+            ┌─────────────────────────────────────────────────────────────────────┐
+            │                _pull_from_redis() 从Redis拉取告警事件                  │
+            ├─────────────────────────────────────────────────────────────────────┤
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 1. 检查队列总长度                                                ││
+            │  │    total_events = client.llen(data_channel)                     ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 2. 队列长度是否超过1亿?                                          ││
+            │  │    if total_events > 10**7:                                    ││
+            │  │        delete(channel) ──► 清空队列，返回[]                     ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 3. 计算本次拉取数量                                              ││
+            │  │    offset = min(total_events, max_records)                      ││
+            │  │    ──► 取队列长度和最大拉取数的最小值                             ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 4. 从Redis右侧拉取offset条记录                                   ││
+            │  │    lrange(data_channel, -offset, -1)                           ││
+            │  │    ──► 负索引表示从右向左拉取最新数据                            ││
+            │  │    ──► 处理UnicodeDecodeError异常                               ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 5. 删除已拉取的记录                                              ││
+            │  │    ltrim(data_channel, 0, -offset-1)                           ││
+            │  │    ──► 保留左侧未拉取的记录                                      ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  ┌─────────────────────────────────────────────────────────────────┐│
+            │  │ 6. 队列长度是否达到单次处理上限?                                 ││
+            │  │    if offset == MAX_RETRIEVE_NUMBER:                           ││
+            │  │        run_access_event_handler_v2.delay(data_id)               ││
+            │  │        ──► 立即投递下一次处理任务                                ││
+            │  └─────────────────────────────────────────────────────────────────┘│
+            │                         │                                           ││
+            │                         ▼                                           ││
+            │  └─────────────────────────────┬───────────────────────────────────┘│
+            │                                  │                                  │
+            │                                  ▼                                  │
+            │                    返回拉取的records列表                             │
+            └─────────────────────────────────────────────────────────────────────┘
+        """
+        # 获取Redis中该data_id的告警事件列表通道
         data_channel = key.EVENT_LIST_KEY.get_key(data_id=self.data_id)
         client = key.DATA_LIST_KEY.client
 
+        # 获取队列中当前的事件总数量
         total_events = client.llen(data_channel)
+
         # 如果队列中事件数量超过1亿条，则记录日志，并进行清理
-        # 有损，但需要保证整体服务依赖redis稳定
+        # 有损策略：在Redis压力过大时，宁可丢弃数据也要保证整体服务稳定
         if total_events > 10**7:
             logger.warning(
                 f"[access event] data_id({self.data_id}) has {total_events} events, cleaning up! drop all events."
@@ -410,14 +480,64 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
             client.delete(data_channel)
             return []
 
+        # 计算本次实际拉取的记录数：取队列长度和最大拉取数的最小值
         offset = min([total_events, max_records])
         if offset == 0:
             logger.info(f"[access event] data_id({self.data_id}) 暂无待检测事件")
             return []
 
         try:
+            # 从Redis列表右侧拉取offset条记录（最新的事件）
+            # lrange的负索引表示从右向左计数，-1表示最后一个元素，-offset表示倒数第offset个元素
+            #
+            # records 数据结构: List[bytes]
+            # 示例:
+            # [
+            #     # GSE基础告警 - Agent心跳丢失 (type=2)
+            #     b'{
+            #         "_time_": "2019-10-17 13:53:53",
+            #         "_type_": 2,
+            #         "_bizid_": 2,
+            #         "_cloudid_": 0,
+            #         "_server_": "127.0.0.1",
+            #         "_host_": "127.0.0.1",
+            #         "_agent_id_": "0:127.0.0.1",
+            #         "_title_": "AGENT心跳丢失",
+            #         "value": [{"extra": {"type": 2, "biz_id": 2}}]
+            #     }',
+            #
+            #     # GSE基础告警 - 磁盘写满 (type=6)
+            #     b'{
+            #         "_time_": "2019-10-17 13:54:00",
+            #         "_type_": 6,
+            #         "_bizid_": 2,
+            #         "_cloudid_": 0,
+            #         "_server_": "127.0.0.1",
+            #         "_host_": "127.0.0.1",
+            #         "_title_": "磁盘写满",
+            #         "_extra_": {"disk": "/", "free": 7, "used_percent": 93},
+            #         "value": [{"extra": {"type": 6, "biz_id": 2, "disk": "/"}}]
+            #     }',
+            #
+            #     # 自定义事件
+            #     b'{
+            #         "data_id": 10010,
+            #         "time": 1704700000,
+            #         "event_content": "自定义事件内容",
+            #         "dimensions": {"ip": "127.0.0.1", "app": "nginx"}
+            #     }'
+            # ]
+            #
+            # 说明：
+            # - records 是一个列表，每个元素是 bytes 类型（Redis返回的字节数据）
+            # - 每个bytes元素是序列化的JSON字符串（需要后续用json.loads解析）
+            # - GSE基础告警格式：包含 _time_, _type_, _bizid_, _cloudid_, _server_, _host_ 等字段
+            #   以及 value 数组，其中 extra.type 字段标识告警类型（2=Agent, 6=磁盘写满等）
+            # - 自定义事件格式：包含 data_id, time, event_content, dimensions 等字段
             records = client.lrange(data_channel, -offset, -1)
         except UnicodeDecodeError as e:
+            # 处理Redis数据解码失败的情况
+            # 删除最后offset条异常数据，并递归重新拉取
             logger.error(
                 "drop events: data_id(%s) topic(%s) poll alarm list(%s) from redis failed: %s",
                 self.data_id,
@@ -429,14 +549,20 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
             return self._pull_from_redis(max_records=max_records)
 
         logger.info("data_id(%s) topic(%s) poll alarm list(%s) from redis", self.data_id, self.topic, len(records))
+
+        # 如果成功拉取到数据，则删除这些已拉取的记录
+        # ltrim保留索引0到-offset-1的记录，即删除了右侧offset条记录
         if records:
             client.ltrim(data_channel, 0, -offset - 1)
+
+        # 如果本次拉取量达到单次处理上限，说明队列中还有大量待处理事件
+        # 立即投递下一次处理任务，避免堆积
         if offset == MAX_RETRIEVE_NUMBER:
-            # 队列中时间量级超过单次处理上限。
             logger.info("data_id(%s) topic(%s) run_access_event_handler_v2 immediately", self.data_id, self.topic)
             from alarm_backends.service.access.tasks import run_access_event_handler_v2
 
             run_access_event_handler_v2.delay(self.data_id)
+
         return records
 
     def get_pull_type(self):
