@@ -19,6 +19,7 @@ from alarm_backends.core.control.strategy import Strategy
 from alarm_backends.core.i18n import i18n
 from alarm_backends.core.lock.service_lock import service_lock
 from alarm_backends.core.processor.base import BaseAbnormalPushProcessor
+from alarm_backends.core.storage.redis_cluster import get_node_by_strategy_id
 from alarm_backends.service.detect import DataPoint
 from core.prometheus import metrics
 
@@ -140,12 +141,20 @@ class DetectProcess(BaseAbnormalPushProcessor):
             ).observe(max_latency)
         anomaly_count = self.push_abnormal_data(self.outputs, self.strategy_id)
         if anomaly_count > 1000:
+            # 获取 Redis 节点信息（带异常处理）
+            try:
+                cache_node = get_node_by_strategy_id(int(self.strategy_id))
+                redis_node = cache_node.node_alias or f"{cache_node.host}:{cache_node.port}"
+            except Exception:
+                redis_node = "unknown"  # 异常情况下使用默认值
+
             # 记录异常数据量较大的策略信息
             metrics.PROCESS_OVER_FLOW.labels(
                 module="detect",
                 strategy_id=self.strategy_id,
                 bk_biz_id=self.strategy.bk_biz_id,
                 strategy_name=self.strategy.name,
+                redis_node=redis_node,
             ).inc(anomaly_count)
         if any(self.inputs.values()):
             logger.info(f"[detect] strategy({self.strategy_id}) 异常检测完成: 异常记录数({anomaly_count})")

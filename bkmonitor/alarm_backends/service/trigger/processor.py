@@ -15,6 +15,7 @@ import time
 from alarm_backends.core.alert.adapter import MonitorEventAdapter
 from alarm_backends.core.cache.key import ANOMALY_LIST_KEY, ANOMALY_SIGNAL_KEY
 from alarm_backends.core.control.strategy import Strategy
+from alarm_backends.core.storage.redis_cluster import get_node_by_strategy_id
 from alarm_backends.service.trigger.checker import AnomalyChecker
 from core.errors.alarm_backends import StrategyNotFound
 from core.prometheus import metrics
@@ -223,11 +224,19 @@ class TriggerProcessor:
 
         # Step 4: 单批次事件量超过1000，记录溢出指标（用于容量预警）
         if len(events) > 1000:
+            # 获取 Redis 节点信息（带异常处理）
+            try:
+                cache_node = get_node_by_strategy_id(self.strategy_id)
+                redis_node = cache_node.node_alias or f"{cache_node.host}:{cache_node.port}"
+            except Exception:
+                redis_node = "unknown"  # 异常情况下使用默认值
+
             metrics.PROCESS_OVER_FLOW.labels(
                 module="trigger",
                 strategy_id=self.strategy_id,
                 bk_biz_id=self.strategy.bk_biz_id,
                 strategy_name=self.strategy.name,
+                redis_node=redis_node,
             ).inc(len(events))
 
     def push(self):
@@ -282,7 +291,7 @@ class TriggerProcessor:
               "cpu_usage": 91.5
             },
             "dimensions": {
-              "ip": "10.0.1.100",
+              "ip": "127.0.0.1",
               "bk_cloud_id": "0"
             },
             "time": 1569246480
@@ -336,7 +345,7 @@ class TriggerProcessor:
             "record_id": "55a76cf628e46c04a052f4e19bdb9dbf.1569246480",
             "value": 91.5,
             "values": {"timestamp": 1569246480, "cpu_usage": 91.5},
-            "dimensions": {"ip": "10.0.1.100", "bk_cloud_id": "0"},
+            "dimensions": {"ip": "127.0.0.1", "bk_cloud_id": "0"},
             "time": 1569246480
           },
           "anomaly": {                                # 各级别异常信息
