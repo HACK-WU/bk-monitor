@@ -1539,10 +1539,6 @@ class GetStrategyListV2Resource(Resource):
         target_strategy_mapping = target_strategy_mapping_future.result()
         strategy_shield_info = strategy_shield_info_future.result()
 
-        metric_info = metric_info_future.result()
-        target_strategy_mapping = target_strategy_mapping_future.result()
-        strategy_shield_info = strategy_shield_info_future.result()
-
         # 为每个策略配置补充告警统计信息
         for strategy_config in strategy_configs:
             # 补充告警数量
