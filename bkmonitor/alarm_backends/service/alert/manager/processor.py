@@ -157,6 +157,8 @@ class AlertManager(BaseAlertProcessor):
 
         # 清理主机缓存
         clear_mem_cache("host_cache")
+        clear_mem_cache("service_instance_cache")
+        # #### 需要检测的告警，处理结束
 
         # 处理终止状态的告警（直接更新ES）
         if alerts_to_update_directly:
