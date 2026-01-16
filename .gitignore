@@ -201,12 +201,6 @@ bkcodeai.json
 .ruff_cache/
 
 .cursor/
-grafana_migrate/grafana
-grafana_migrate/monitor
-grafana_migrate/parse_result.json
-test2.py
-test.json
-hello.py
 
 .codebuddy
 
@@ -215,9 +209,4 @@ hello.py
 ### PreCI ###
 .codecc
 
-test1.py
-test3.py
-my_scripts/data.json
-my_scripts/simplified_data.json
-my_scripts/summary_daily/config.json
-my_scripts/summary_daily/daily_summary_output.txt
+.codebuddy
