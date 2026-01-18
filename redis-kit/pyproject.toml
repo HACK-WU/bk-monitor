@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redis-kit"
+version = "1.0.0"
+description = "A reusable Redis caching framework for Python"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "BlueKing Monitor Team", email = "contactus_bk@tencent.com"}
+]
+maintainers = [
+    {name = "BlueKing Monitor Team", email = "contactus_bk@tencent.com"}
+]
+keywords = ["redis", "cache", "distributed-lock", "delay-queue", "routing"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Database",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "redis>=4.0.0",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=5.0"]
+metrics = ["prometheus-client>=0.14.0"]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "fakeredis>=2.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+    "types-redis>=4.0.0",
+]
+all = [
+    "redis-kit[yaml]",
+    "redis-kit[metrics]",
+]
+
+[project.urls]
+Homepage = "https://github.com/TencentBlueKing/bk-monitor"
+Documentation = "https://github.com/TencentBlueKing/bk-monitor"
+Repository = "https://github.com/TencentBlueKing/bk-monitor"
+Changelog = "https://github.com/TencentBlueKing/bk-monitor/blob/master/CHANGELOG.md"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["redis_kit*"]
+
+[tool.black]
+line-length = 120
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+    | \.hg
+    | \.mypy_cache
+    | \.tox
+    | \.venv
+    | _build
+    | buck-out
+    | build
+    | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_first_party = ["redis_kit"]
+skip = [".git", ".venv", "build", "dist"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+exclude = ["build", "dist", ".venv"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --cov=redis_kit --cov-report=term-missing"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.coverage.run]
+source = ["redis_kit"]
+branch = true
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
