@@ -51,87 +51,171 @@ def load_detector_cls(_type) -> type["BasicAlgorithmsCollection"]:
 
 class DetectMixin:
     def detect(self, data_points):
+        """
+        对数据点执行异常检测，支持多级别、多算法组合检测
+
+        参数:
+            data_points: list[DataPoint], 待检测的数据点列表
+
+        返回值:
+            list[dict]: 检测到的异常结果列表，每个元素包含异常信息
+            返回数据格式示例:
+            [
+                {
+                    "data": {
+                        "record_id": "d41d8cd98f00b204e9800998ecf8427e.1609430400",
+                        "value": 95.5,
+                        "values": {"time": 1609430400, "value": 95.5},
+                        "dimensions": {"ip": "10.0.0.1", "bk_cloud_id": "0"},
+                        "time": 1609430400
+                    },
+                    "anomaly": {
+                        "1": {  # level=1 致命级别的异常信息
+                            "anomaly_message": "当前值(95.5%) >= 90%",
+                            "anomaly_id": "d41d8cd98f00b204e9800998ecf8427e.1609430400.1.100",
+                            "anomaly_time": "2021-01-01 00:00:00"
+                        },
+                        "2": {  # level=2 预警级别的异常信息(可选，同一数据点可能触发多个级别)
+                            "anomaly_message": "当前值(95.5%) >= 80%",
+                            "anomaly_id": "d41d8cd98f00b204e9800998ecf8427e.1609430400.2.100",
+                            "anomaly_time": "2021-01-01 00:00:00"
+                        }
+                    },
+                    "strategy_snapshot_key": "bkmonitor.strategies.100.1609430400"
+                }
+            ]
+
+        该方法执行以下步骤:
+        1. 按告警级别(level)对算法配置进行分组
+        2. 按级别顺序遍历，为每个级别初始化检测器(detector)
+        3. 单算法直接调用detect_records；多算法根据连接符(and/or)组合检测
+        4. 更新检测点位并汇总异常结果
+
+        检测流程图:
+        ┌─────────────────────────────────────────────────────────────┐
+        │                      data_points                            │
+        │                          │                                  │
+        │    ┌─────────────────────┼─────────────────────┐            │
+        │    ▼                     ▼                     ▼            │
+        │ Level 1              Level 2              Level 3           │
+        │ (致命)               (预警)               (提醒)             │
+        │    │                     │                     │            │
+        │    ▼                     ▼                     ▼            │
+        │ [Detector1]         [Detector1]          [Detector1]        │
+        │ [Detector2]  ──►    [Detector2]  ──►     [Detector2]        │
+        │  (and/or)            (and/or)             (and/or)          │
+        │    │                     │                     │            │
+        │    └─────────────────────┼─────────────────────┘            │
+        │                          ▼                                  │
+        │                 detected_result_dict                        │
+        └─────────────────────────────────────────────────────────────┘
+
+        """
         if not data_points:
             return []
 
+        # ========== 步骤1: 按告警级别分组算法配置 ==========
+        # algorithm_group: {level: [config1, config2, ...]}
+        # level值: 1=致命, 2=预警, 3=提醒
         algorithm_group = defaultdict(list)
         for _config in self.algorithms:
             level = int(_config["level"])
             algorithm_group[level].append(_config)
 
+        # 按级别排序，确保按优先级顺序检测
         levels = sorted(algorithm_group.keys())
 
-        # 初始化检测结果
+        # 初始化检测结果: {record_id: {level: anomaly_info, ...}, ...}
         detected_result_dict = OrderedDict()
 
+        # ========== 步骤2: 按级别遍历执行检测 ==========
         for level in levels:
-            # 同级别算法连接符(and/or)
+            # 获取同级别算法的连接符: "and"(所有算法都满足) 或 "or"(任一算法满足)
             algorithm_connector = self.algorithm_connectors[level]
 
+            # ---------- 步骤2.1: 初始化当前级别的所有检测器 ----------
             detector_list = []
             for detect_config in algorithm_group[level]:
-                algorithm_type = detect_config["type"]
-                algorithm_unit = detect_config.get("unit_prefix", "")
-                algorithm_config = detect_config.get("config", {})
-                detector_cls = load_detector_cls(algorithm_type)
+                algorithm_type = detect_config["type"]  # 算法类型，如: Threshold, YearRound, RingRatio 等
+                algorithm_unit = detect_config.get("unit_prefix", "")  # 单位前缀，用于数值转换
+                algorithm_config = detect_config.get("config", {})  # 算法具体配置参数
+                detector_cls = load_detector_cls(algorithm_type)  # 动态加载检测器类
 
                 # 使用白名单方式提取控制参数
-                # 只提取 EXTRA_CONFIG_KEYS 中定义的参数
+                # 只提取 EXTRA_CONFIG_KEYS 中定义的参数(如: intelligent_detect等)
                 extra_config = {k: algorithm_config[k] for k in EXTRA_CONFIG_KEYS if k in algorithm_config}
 
+                # 实例化检测器
                 detector = detector_cls(algorithm_config, algorithm_unit, extra_config=extra_config)
 
-                # 判断算法是否需要查询历史数据
+                # 判断算法是否需要查询历史数据(如: 环比、同比算法)
                 if hasattr(detector, "history_point_fetcher"):
                     detector.query_history_points(data_points)
 
-                    # 如果是事件类数据，历史数据需要补充0值
+                    # 如果是事件/日志类数据，历史数据需要补充0值
+                    # 因为事件类数据可能没有上报，需要用0填充缺失点
                     if {DataTypeLabel.LOG, DataTypeLabel.EVENT} & self.data_type_labels:
                         detector.set_default(0)
 
                 # 判断是否需要对使用SDK异常检测的策略进行分组预检测
+                # 预检测用于批量处理，提升智能检测算法的性能
                 if hasattr(detector, "pre_detect"):
                     detector.pre_detect(data_points)
 
                 detector_list.append(detector)
 
+            # ========== 步骤3: 执行异常检测 ==========
             if len(detector_list) == 1:
+                # ---------- 单算法检测: 直接调用detect_records批量检测 ----------
                 anomaly_records = detector_list[0].detect_records(data_points, level)
             else:
-                # 组合策略
+                # ---------- 多算法组合检测: 根据连接符(and/or)组合多个检测器的结果 ----------
                 anomaly_records = []
                 for data_point in data_points:
-                    ap = None
-                    prefix = suffix = ""
+                    ap = None  # 当前数据点的异常点对象(AnomalyPoint)
+                    prefix = suffix = ""  # 异常消息的前缀和后缀模板
+
                     for d in detector_list:
                         try:
+                            # 对单个数据点执行检测
                             single_ret = d.detect(data_point)
 
+                            # 处理检测结果为空的情况
                             # != "or" 兼容connector未配置或配错的情况，默认都使用and
                             if not single_ret:
                                 if algorithm_connector != "or":
+                                    # AND模式: 任一算法不满足则整体不满足，跳出循环
                                     ap = None
                                     break
                                 else:
+                                    # OR模式: 当前算法不满足，继续检查下一个算法
                                     continue
 
+                            # 生成异常点对象，auto_format=False 表示不自动格式化消息
                             single_ap = d.gen_anomaly_point(data_point, single_ret, level, auto_format=False)
+
+                            # 获取异常消息模板(仅首次)
                             if not prefix:
                                 prefix, suffix = d.anomaly_message_template_tuple(data_point)
-                                # print(prefix, suffix)
+
+                            # 合并多个算法的异常消息
                             if ap:
+                                # 已有异常点，拼接新的异常消息
                                 ap.anomaly_message += _(" 同时 ") + single_ap.anomaly_message
                             else:
+                                # 首个异常点，直接赋值
                                 ap = single_ap
 
-                            # 如果算法为or，则只需要一个算法匹配即可立即退出
+                            # OR模式: 只需要一个算法匹配即可立即退出
                             if algorithm_connector == "or":
                                 break
                         except Exception:
+                            # 异常处理: AND模式下任一算法异常则整体失败
                             if algorithm_connector != "or":
                                 ap = None
                                 break
 
+                    # 如果检测到异常，组装完整的异常消息并记录
                     if ap:
                         ap.anomaly_message = prefix + ap.anomaly_message + suffix
                         logger.info(
@@ -139,9 +223,13 @@ class DetectMixin:
                         )
                         anomaly_records.append(ap)
 
+            # ========== 步骤4: 更新检测点位和汇总结果 ==========
+            # 更新检测点位checkpoint，用于无数据检测和断点续传
             self._update_monitor_d_checkpoint(data_points, anomaly_records, level)
 
+            # 汇总当前级别的异常结果到 detected_result_dict
             for ar in anomaly_records:
+                # 按record_id分组，同一数据点可能在多个级别都检测到异常
                 collection = detected_result_dict.setdefault(ar.data_point.record_id, {})
                 collection.update(self._update_anomaly_info_with_point(ar, level, collection))
 

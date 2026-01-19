@@ -97,7 +97,7 @@ class BaseAccessEventProcess(BaseAccessProcess, QoSMixin):
         # Redis Pipeline对象，用于批量执行Redis命令，提高性能
         redis_pipeline = None
         # 存储每个维度的最后检测点时间戳，key为(md5_dimension, strategy_id, item_id, level)元组
-        last_checkpoints = {}
+        last_checkpoints: dict[tuple, int] = {}
 
         # 遍历所有事件记录
         for event_record in self.record_list:
@@ -123,7 +123,7 @@ class BaseAccessEventProcess(BaseAccessProcess, QoSMixin):
                     # 1. 缓存异常检测结果：格式为 "时间戳|ANOMALY" -> 事件时间
                     # 用于记录该维度在某个时间点发生了异常
                     name = f"{timestamp}|{ANOMALY_LABEL}"
-                    kwargs = {name: event_record.event_time}
+                    kwargs = {name: timestamp}
                     check_result.add_check_result_cache(**kwargs)
 
                     # 2. 记录该维度的最后检测点时间戳
@@ -171,13 +171,55 @@ class BaseAccessEventProcess(BaseAccessProcess, QoSMixin):
         参数:
             output_client: 可选的Redis客户端，用于测试或特殊场景
 
-        该方法实现完整的事件推送流程，包含：
-        1. QoS流控检查，防止事件洪泛
-        2. 将事件结果推送到检测结果缓存
-        3. 按维度分组去重，避免重复事件
-        4. 优先级检查，确保高优先级事件优先处理
-        5. 按策略ID和监控项ID分组，批量推送到Redis队列
-        6. 发送异常信号，触发后续检测流程
+        返回值:
+            None
+
+        执行步骤:
+            1. 调用 check_qos() 执行QoS流控检查，过滤超阈值的告警，防止事件洪泛
+            2. 调用 push_to_check_result() 将事件推送到检测结果缓存，用于告警恢复判断
+            3. 按 md5_dimension 分组检测重复事件，记录警告日志
+            4. 调用 PriorityChecker.check_records() 为事件标记优先级
+            5. 双层遍历(事件记录→监控项)，过滤 is_retains=True 且 inhibitions=False 的事件
+            6. 按 {strategy_id: {item_id: [event_str]}} 结构组织待推送数据
+            7. 使用 Redis Pipeline 批量执行 lpush 和 expire 命令，推送到 ANOMALY_LIST 队列
+            8. 将异常信号推送到 ANOMALY_SIGNAL 队列，触发检测模块消费
+
+        数据流线图:
+            ┌─────────────────────────────────────────────────────────────────┐
+            │                         push() 方法                              │
+            ├─────────────────────────────────────────────────────────────────┤
+            │                                                                 │
+            │  self.record_list ──► check_qos() ──► push_to_check_result()   │
+            │         │                                                       │
+            │         ▼                                                       │
+            │  ┌─────────────────────────────────────────────────────────┐   │
+            │  │ 按 md5_dimension 分组，检测重复事件                       │   │
+            │  └─────────────────────────────────────────────────────────┘   │
+            │         │                                                       │
+            │         ▼                                                       │
+            │  PriorityChecker.check_records() ──► 标记优先级                 │
+            │         │                                                       │
+            │         ▼                                                       │
+            │  ┌─────────────────────────────────────────────────────────┐   │
+            │  │ 双层遍历: record_list → items                            │   │
+            │  │   过滤条件: is_retains[item_id] and not inhibitions      │   │
+            │  │   组织结构: {strategy_id: {item_id: [event_str]}}        │   │
+            │  └─────────────────────────────────────────────────────────┘   │
+            │         │                                                       │
+            │         ▼                                                       │
+            │  ┌─────────────────────────────────────────────────────────┐   │
+            │  │ Redis Pipeline 批量操作:                                 │   │
+            │  │   lpush(ANOMALY_LIST_{strategy_id}_{item_id}, events)   │   │
+            │  │   expire(queue_key, ttl)                                 │   │
+            │  └─────────────────────────────────────────────────────────┘   │
+            │         │                                                       │
+            │         ▼                                                       │
+            │  ┌─────────────────────────────────────────────────────────┐   │
+            │  │ 推送异常信号到 ANOMALY_SIGNAL 队列                        │   │
+            │  │   信号格式: "{strategy_id}.{item_id}"                    │   │
+            │  └─────────────────────────────────────────────────────────┘   │
+            │                                                                 │
+            └─────────────────────────────────────────────────────────────────┘
         """
         # 执行QoS流控检查，防止事件过载
         self.check_qos()
@@ -217,12 +259,14 @@ class BaseAccessEventProcess(BaseAccessProcess, QoSMixin):
         # 第二步：使用Redis Pipeline批量推送事件到队列
         # Pipeline可以减少网络往返次数，提高性能
         anomaly_signal_list = []
+        # ANOMALY_LIST_KEY 的数据，后续会被trigger消费
         client = output_client or key.ANOMALY_LIST_KEY.client
         pipeline = client.pipeline()
         for strategy_id, item_to_event_record in list(pending_to_push.items()):
             # 统计当前策略的事件总数，用于监控指标
             record_count = sum([len(records) for records in item_to_event_record.values()])
             metrics.ACCESS_PROCESS_PUSH_DATA_COUNT.labels(metrics.TOTAL_TAG, "event").inc(record_count)
+
             # 遍历每个监控项，将事件推送到对应的队列
             for item_id, event_list in list(item_to_event_record.items()):
                 # 生成队列Key: ANOMALY_LIST_{strategy_id}_{item_id}
@@ -401,7 +445,7 @@ class AccessCustomEventGlobalProcessV2(BaseAccessEventProcess):
             elif alarm_type == self.TYPE_GSE_PROCESS_EVENT:
                 return GseProcessEventRecord(raw_data, self.strategies)
 
-    def _pull_from_redis(self, max_records=MAX_RETRIEVE_NUMBER):
+    def _pull_from_redis(self, max_records=MAX_RETRIEVE_NUMBER) -> list[bytes]:
         """
         从Redis队列拉取待处理的告警事件列表
 

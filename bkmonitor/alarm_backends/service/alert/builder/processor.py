@@ -38,7 +38,7 @@ class AlertBuilder(BaseAlertProcessor):
         circuit_breaking_manager = AlertBuilderCircuitBreakingManager()
         self.circuit_breaking_manager = circuit_breaking_manager
 
-    def get_unexpired_events(self, events: list[Event]):
+    def get_unexpired_events(self, events: list[Event]) -> list[Event]:
         """
         先判断关联事件是否已经过期
         """
@@ -270,9 +270,9 @@ class AlertBuilder(BaseAlertProcessor):
         """
         # 步骤1: 丰富事件上下文信息
         events = self.enrich_events(events)
-        # 步骤2: 保存事件到ES，返回成功保存的事件
+        # 步骤2: 保存事件到ES(EventDocument)，返回成功保存的事件
         events = self.save_events(events)
-        # 步骤3: 事件去重聚合为告警，更新Redis缓存
+        # 步骤3: 事件去重聚合为告警，更新Redis缓存和AlertDocument
         alerts = self.dedupe_events_to_alerts(events)
         return alerts
 
@@ -366,7 +366,7 @@ class AlertBuilder(BaseAlertProcessor):
         """
         if not events:
             return []
-        dedupe_events = []
+        dedupe_events: list[Event] = []
         # 步骤1: 内存去重，过滤已丢弃和重复ID的事件
         exist_uids = set()
         for event in events:

@@ -12,12 +12,17 @@ import logging
 
 import arrow
 
+from typing import TYPE_CHECKING
+
 from alarm_backends import constants
 from alarm_backends.core.cache.cmdb import HostManager
 from alarm_backends.core.control.item import Item
 from alarm_backends.service.access import base
-from alarm_backends.service.access.data.records import DataRecord
 from bkmonitor.utils.common_utils import safe_int
+
+if TYPE_CHECKING:
+    from alarm_backends.service.access.data.records import DataRecord
+    from alarm_backends.service.access.event.records.base import EventRecord
 
 logger = logging.getLogger("access.data")
 
@@ -41,36 +46,65 @@ class ExpireFilter(base.Filter):
 class RangeFilter(base.Filter):
     """
     策略目标过滤器
+
+    根据策略配置的监控目标范围（agg_condition）过滤数据记录。
+    每条数据可能关联多个监控策略（items），每个策略有独立的目标范围配置。
     """
 
-    def filter(self, record):
+    def filter(self, record: DataRecord | EventRecord):
         """
-        1. 在范围内，则不过滤掉，返回False
-        2. 不在范围内，则过滤掉，返回True
+        根据策略目标范围过滤监控数据记录
 
-        注意：每个item的范围是不一致的，只有当所有的item都被过滤掉后，才返回True
+        参数:
+            record: DataRecord / EventRecord 监控数据记录对象，包含维度信息和关联的策略列表
 
-        :param record: DataRecord / EventRecord
+        返回值:
+            始终返回 False，表示记录不被整体过滤
+            - 原因1：数据可能多策略共用，不同策略有不同的过滤条件
+            - 原因2：即使所有策略都不匹配，也需保留记录供无数据告警使用
+
+        过滤规则:
+            1. 维度在策略范围内 → 不过滤，返回 False
+            2. 维度不在策略范围内 → 过滤，返回 True
+
+        处理流程:
+            1. 获取记录的维度信息和关联的策略列表
+            2. 遍历每个策略项（item），检查是否已被前置过滤器过滤
+            3. 调用 item.is_range_match() 判断维度是否匹配策略目标范围
+            4. 更新 record.is_retains 字典，标记每个策略的保留状态
+
+        数据流:
+            record.dimensions ──┐
+                                ├──► item.is_range_match() ──► is_match
+            item.agg_condition ─┘
+                                              │
+                                              ▼
+                              record.is_retains[item_id] = is_match
         """
-
+        # 获取记录的维度信息（如 bk_target_ip、bk_target_cloud_id 等）
         dimensions = record.dimensions
+        # 获取记录关联的所有策略项（一条数据可能被多个策略使用）
         items: list[Item] = record.items
+
         for item in items:
             item_id = item.id
+            # 跳过已被前置过滤器过滤的策略项，节省处理时间
             if not record.is_retains[item_id]:
-                # 如果被前面的filter过滤了，没有被保留下来，这里就直接跳过，节省时间
                 continue
 
+            # 检查维度是否匹配策略配置的目标范围（agg_condition）
             is_match = item.is_range_match(dimensions)
             is_filtered = not is_match
+
             if is_filtered:
                 logger.debug(
                     f"Discard the alarm ({record.raw_data}) because it not match strategy({item.strategy.id}) item({item_id}) agg_condition"
                 )
 
+            # 更新该策略项的保留状态：匹配则保留，不匹配则过滤
             record.is_retains[item_id] = not is_filtered
 
-        # 数据保留下来，因为数据可能多策略共用，不同策略有不同的过滤条件。同时都被过滤的情况下，也保留下来（给无数据告警使用）
+        # 始终返回 False：记录整体保留，各策略项的过滤状态已记录在 is_retains 中
         return False
 
 
@@ -79,7 +113,7 @@ class HostStatusFilter(base.Filter):
     主机状态过滤器
     """
 
-    def filter(self, record: DataRecord):
+    def filter(self, record: DataRecord | EventRecord):
         """
         根据主机运营状态过滤监控数据记录
 

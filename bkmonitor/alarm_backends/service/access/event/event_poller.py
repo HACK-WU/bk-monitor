@@ -386,7 +386,7 @@ class EventPoller:
         # 步骤3: 进入主循环，持续拉取和推送事件数据
         while not self.should_exit:
             try:
-                topic_data = {}
+                topic_data: dict[str, list] = {}
 
                 # 步骤3a: 从Kafka批量拉取消息
                 messages = self.poll_once()

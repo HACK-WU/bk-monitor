@@ -103,29 +103,98 @@ class MonitorEventAdapter:
     def adapt(self, status=None, description=None, time=None) -> dict:
         """
         将 Trigger 生产的数据适配为自愈事件
+
+        参数:
+            status: str, 可选，事件状态(ABNORMAL/RECOVERED等)，默认为ABNORMAL
+            description: str, 可选，自定义告警描述，默认使用异常消息
+            time: int, 可选，事件时间戳，默认使用原始数据时间
+
+        返回值:
+            dict, 标准化的告警事件字典，包含以下关键字段:
+                - event_id: 事件唯一标识
+                - alert_name: 告警名称
+                - severity: 告警级别(1/2/3)
+                - tags: 维度标签列表
+                - target/target_type: 告警目标及类型
+                - metric: 相关指标列表
+                - extra_info: 原始告警数据快照
+
+        该方法实现告警事件标准化流程，包含:
+            1. 提取告警级别和目标信息
+            2. 处理无数据告警的特殊名称
+            3. 构建维度标签(tags)列表
+            4. 收集关联的指标ID和名称
+            5. 组装完整的告警事件结构
+
+        数据流线图:
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 1: 提取基础信息                                            │
+            │  - severity: 从trigger中获取告警级别                             │
+            │  - target/target_type: 从维度中提取告警目标                       │
+            │  - data_dimensions: 提取数据维度字典                             │
+            └─────────────────────────────────────────────────────────────────┘
+                                            │
+                                            ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 2: 处理告警名称                                            │
+            │  - 无数据告警: 添加 "[无数据]" 前缀                               │
+            │  - 普通告警: 使用策略名称                                         │
+            └─────────────────────────────────────────────────────────────────┘
+                                            │
+                                            ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 3: 构建维度标签(tags)                                      │
+            │  - 基础维度: data_dimensions → [{key, value}, ...]              │
+            │  - 附加维度: additional_dimensions                               │
+            │  - 上下文标签: 白名单过滤后的context字段                          │
+            └─────────────────────────────────────────────────────────────────┘
+                                            │
+                                            ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 4: 收集关联指标                                            │
+            │  - metric_id: 查询配置中的指标ID                                 │
+            │  - item name: 监控项名称                                         │
+            │  - promql: PromQL查询语句(如有)                                  │
+            └─────────────────────────────────────────────────────────────────┘
+                                            │
+                                            ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 5: 组装告警事件                                            │
+            │  - 基础字段: event_id, alert_name, severity, status...          │
+            │  - 来源标识: plugin_id, strategy_id, bk_biz_id                  │
+            │  - 去重配置: dedupe_keys (基于维度key)                           │
+            │  - 扩展信息: extra_info (含原始告警数据快照)                      │
+            └─────────────────────────────────────────────────────────────────┘
         """
+        # Step 1: 提取告警级别
         severity = self.record["trigger"]["level"]
         now_time = int(time_mod.time())
+
+        # 从策略和维度信息中提取告警目标(如IP、服务实例等)
         target_type, target, data_dimensions = self.extract_target(
             self.strategy, self.record["data"]["dimensions"], self.record["data"].get("dimension_fields")
         )
+
+        # Step 2: 处理无数据告警的特殊名称，添加前缀标识
         if NO_DATA_TAG_DIMENSION in data_dimensions:
-            # 无数据告警的名称需要做特殊处理
             alert_name = _("[无数据] {alert_name}").format(alert_name=self.strategy["name"])
         else:
             alert_name = self.strategy["name"]
 
-        # event.tags 主要用于页面检索
+        # Step 3: 构建维度标签列表，用于页面检索和告警去重
+        # 提取附加维度(如自定义标签)，单独处理
         additional_dimensions = data_dimensions.pop("__additional_dimensions", {})
         tags = [{"key": key, "value": value} for key, value in data_dimensions.items()]
         if additional_dimensions:
             tags += [{"key": key, "value": value} for key, value in additional_dimensions.items()]
 
+        # 从上下文中提取白名单内的特殊标签
         for k, v in self.record.get("context", {}).items():
             if k not in self.SPECIAL_ALERT_TAG_KEY_WHITELIST:
                 continue
-
             tags.append({"key": k, "value": v})
+
+        # Step 4: 收集所有关联的指标信息(metric_id、名称、promql)
         metric = [conf["metric_id"] for item in self.strategy["items"] for conf in item.get("query_configs", [])]
         metric += [item["name"] for item in self.strategy["items"]]
         metric += [
@@ -134,29 +203,32 @@ class MonitorEventAdapter:
             for conf in item.get("query_configs", [])
             if conf.get("promql")
         ]
+
+        # Step 5: 组装标准化的告警事件结构
         event = {
+            # 事件唯一标识，来源于异常检测生成的anomaly_id
             "event_id": self.record["anomaly"][str(severity)]["anomaly_id"],
-            "plugin_id": settings.MONITOR_EVENT_PLUGIN_ID,  # 来源固定为监控
+            "plugin_id": settings.MONITOR_EVENT_PLUGIN_ID,  # 来源固定为监控平台
             "strategy_id": self.strategy["id"],
             "alert_name": alert_name,
             "description": description or self.record["anomaly"][str(severity)]["anomaly_message"],
-            "severity": int(severity),
+            "severity": int(severity),  # 告警级别: 1-致命, 2-预警, 3-提醒
             "tags": tags,
-            "target_type": target_type,
-            "target": target,
+            "target_type": target_type,  # 目标类型: IP/SERVICE/TOPO等
+            "target": target,  # 告警目标实例标识
             "status": status or EventStatus.ABNORMAL,
-            "metric": list(dict.fromkeys(metric)),
-            "category": self.strategy["scenario"],
+            "metric": list(dict.fromkeys(metric)),  # 去重后的指标列表
+            "category": self.strategy["scenario"],  # 监控场景分类
             "data_type": self.strategy["items"][0]["query_configs"][0]["data_type_label"],
-            # 基于事件维度，生成唯一告警指纹。 实例化 Event内存对象，执行 clean 会补充默认字段: DEFAULT_DEDUPE_FIELDS
-            # 这里事件维度的 key 统一补充 tags. 前缀
+            # 去重字段配置: 基于维度key生成，用于告警收敛
             "dedupe_keys": [f"tags.{key}" for key in data_dimensions.keys()],
-            "time": time or self.record["data"]["time"],
+            "time": time or self.record["data"]["time"],  # 事件发生时间
             "anomaly_time": EventIDParser(self.record["trigger"]["anomaly_ids"][0]).source_time,
-            "bk_ingest_time": now_time,
-            "bk_clean_time": now_time,
+            "bk_ingest_time": now_time,  # 事件接入时间
+            "bk_clean_time": now_time,  # 事件清洗时间
             "bk_biz_id": self.strategy["bk_biz_id"],
             "bk_tenant_id": bk_biz_id_to_bk_tenant_id(self.strategy["bk_biz_id"]),
+            # 扩展信息: 保存原始告警数据快照，供后续分析和展示使用
             "extra_info": {
                 "additional_dimensions": additional_dimensions,
                 "origin_alarm": {

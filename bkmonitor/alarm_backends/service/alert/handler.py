@@ -31,6 +31,10 @@ from bkmonitor.models import EventPluginInstance
 from bkmonitor.utils.consul import BKConsul
 from bkmonitor.utils.thread_backend import InheritParentThread
 from core.drf_resource import api
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from kafka.consumer.fetcher import ConsumerRecord
 
 logger = logging.getLogger("alert.poller")
 
@@ -492,7 +496,7 @@ class AlertHandler(base.BaseHandler):
                     continue
 
                 has_record = True
-                events = []
+                events: list[ConsumerRecord] = []
 
                 # 步骤4: 展平数据结构，将所有分区的记录合并到events列表
                 # data.values()返回各分区的记录列表，extend合并为单一列表
@@ -542,7 +546,7 @@ class AlertHandler(base.BaseHandler):
         self.redis_client.delete(offset_key)
         return offset
 
-    def push_handle_task(self, bootstrap_server, events):
+    def push_handle_task(self, bootstrap_server, events: "ConsumerRecord"):
         # 分批次推送至告警生成任务
         for event_index in range(0, len(events), self.max_event_number):
             # 分发处理任务

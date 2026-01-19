@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -9,19 +8,23 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-
 import json
 import logging
 import time
-from typing import Dict
+from typing import TYPE_CHECKING
+
+from alarm_backends.service.access.data.records import DataRecord
 
 logger = logging.getLogger("access")
+
+if TYPE_CHECKING:
+    from alarm_backends.service.access.event.records.base import EventRecord
 
 
 ####################################
 #           Base Filter            #
 ####################################
-class Filter(object):
+class Filter:
     def filter(self, record):
         """
         Determine if the specified record is to be handled.
@@ -29,13 +32,13 @@ class Filter(object):
         return False
 
 
-class Filterer(object):
+class Filterer:
     def __init__(self):
-        super(Filterer, self).__init__()
+        super().__init__()
         self.filters = []
 
     def add_filter(self, f):
-        if not (f in self.filters):
+        if f not in self.filters:
             self.filters.append(f)
 
     def remove_filter(self, f):
@@ -52,7 +55,7 @@ class Filterer(object):
 ####################################
 #           Base Fuller            #
 ####################################
-class Fuller(object):
+class Fuller:
     def full(self, record):
         """
         Supplement some dimension information.
@@ -60,13 +63,13 @@ class Fuller(object):
         pass
 
 
-class Fullerer(object):
+class Fullerer:
     def __init__(self):
-        super(Fullerer, self).__init__()
+        super().__init__()
         self.fullers = []
 
     def add_fuller(self, f):
-        if not (f in self.fullers):
+        if f not in self.fullers:
             self.fullers.append(f)
 
     def remove_fuller(self, f):
@@ -86,8 +89,8 @@ class BaseRecord(Filterer):
     A Record instance represents an data record being handled.
     """
 
-    def __init__(self, raw_data: Dict):
-        super(BaseRecord, self).__init__()
+    def __init__(self, raw_data: dict):
+        super().__init__()
         self.raw_data = raw_data
         self.data = {}
 
@@ -122,9 +125,9 @@ class BaseAccessProcess(Filterer, Fullerer):
     """
 
     def __init__(self, *args, **kwargs):
-        super(BaseAccessProcess, self).__init__()
+        super().__init__()
 
-        self.record_list = []
+        self.record_list: list[EventRecord | DataRecord] = []
         self.pull_duration = 0
 
     def __str__(self):
@@ -142,20 +145,20 @@ class BaseAccessProcess(Filterer, Fullerer):
         except Exception as e:
             logger.exception(e)
             exc = e
-        logger.info(f"--end {self} cost: {time.time()-start}")
+        logger.info(f"--end {self} cost: {time.time() - start}")
         return exc
 
     def pull(self):
         """
         Pull raw data and generate record.
         """
-        raise NotImplementedError("pull must be implemented " "by BaseAccessProcess subclasses")
+        raise NotImplementedError("pull must be implemented by BaseAccessProcess subclasses")
 
     def push(self):
         """
         Push record to Queue.
         """
-        raise NotImplementedError("push must be implemented " "by BaseAccessProcess subclasses")
+        raise NotImplementedError("push must be implemented by BaseAccessProcess subclasses")
 
     def handle(self):
         record_list = []

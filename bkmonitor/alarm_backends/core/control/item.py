@@ -115,9 +115,9 @@ class Item(DetectMixin, CheckMixin, DoubleCheckMixin):
         return records
 
     @cached_property
-    def target_condition_obj(self):
+    def target_condition_obj(self) -> TargetCondition | None:
         if not self.target or not self.target[0]:
-            return
+            return None
         return TargetCondition(bk_biz_id=self.strategy.bk_biz_id, target=self.target)
 
     @cached_property
@@ -231,18 +231,42 @@ class Item(DetectMixin, CheckMixin, DoubleCheckMixin):
                 return load_condition_instance([and_cond])
 
     def is_range_match(self, dimensions):
-        # 1. 匹配监控目标
+        """
+        判断维度是否匹配策略配置的目标范围
+
+        参数:
+            dimensions: dict, 数据记录的维度信息
+                示例: {"bk_target_ip": "10.0.0.1", "bk_target_cloud_id": "0", "device_name": "eth0"}
+
+        返回值:
+            bool: True 表示维度匹配所有条件，False 表示不匹配
+
+        该方法执行三层条件匹配（AND关系）：
+        1. 监控目标匹配 - 检查数据是否来自策略配置的目标主机/实例
+        2. 监控条件匹配 - 检查数据是否满足策略配置的 where 过滤条件
+        3. 额外内置条件匹配 - 检查数据是否满足磁盘/网络等特殊场景的内置过滤条件
+
+        匹配流程:
+            dimensions ──► target_condition_obj.is_match() ──► is_match
+                                      │
+                                      ▼ (AND)
+                       agg_condition_obj.is_match() ──► is_match
+                                      │
+                                      ▼ (AND)
+                  extra_agg_condition_obj.is_match() ──► is_match
+        """
+        # 1. 匹配监控目标（如主机IP、云区域、服务实例等）
         is_match = True
         target_condition_obj = self.target_condition_obj
         if target_condition_obj:
             is_match = target_condition_obj.is_match(dimensions)
 
-        # 2. 匹配监控条件(即where条件)
+        # 2. 匹配监控条件（策略配置的 where 条件，如 device_name="eth0"）
         agg_condition_target_obj = self.agg_condition_obj
         if agg_condition_target_obj:
             is_match = is_match and agg_condition_target_obj.is_match(dimensions)
 
-        # 3. 匹配额外的内置监控条件(针对磁盘、网络做的特殊处理)
+        # 3. 匹配额外的内置监控条件（针对磁盘、网络等场景的特殊过滤规则）
         extra_agg_condition_target_obj = self.extra_agg_condition_obj
         if extra_agg_condition_target_obj:
             is_match = is_match and extra_agg_condition_target_obj.is_match(dimensions)

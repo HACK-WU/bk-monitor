@@ -19,6 +19,11 @@ from alarm_backends import constants
 from alarm_backends.service.access.base import Filterer
 from bkmonitor.utils.common_utils import count_md5
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from alarm_backends.core.control.strategy import Strategy  # noqa
+
 logger = logging.getLogger("access.event")
 
 
@@ -72,11 +77,11 @@ class EventRecord(Filterer):
 
     @cached_property
     def _strategy_id(self):
-        return self.raw_data["strategy"].id
+        return self.raw_data["strategy"].id  # type: Strategy.id
 
     @cached_property
     def bk_tenant_id(self) -> str:
-        return self.raw_data["strategy"].bk_tenant_id
+        return self.raw_data["strategy"].bk_tenant_id  # type: Strategy.bk_tenant_id
 
     @cached_property
     def _item_id(self):
@@ -85,12 +90,12 @@ class EventRecord(Filterer):
 
     @cached_property
     def _item(self):
-        items = self.raw_data["strategy"].items
+        items = self.raw_data["strategy"].items  # type: Strategy.items
         return items[0] if items else None
 
     @cached_property
     def scenario(self):
-        return self.raw_data["strategy"].scenario
+        return self.raw_data["strategy"].scenario  # type: Strategy.scenario
 
     @cached_property
     def items(self):
@@ -101,11 +106,11 @@ class EventRecord(Filterer):
 
     @cached_property
     def bk_biz_id(self):
-        return self.raw_data["strategy"].bk_biz_id
+        return self.raw_data["strategy"].bk_biz_id  # type: Strategy.bk_biz_id
 
     @cached_property
     def level(self):
-        item_list = self.raw_data["strategy"].items
+        item_list = self.raw_data["strategy"].items  # type: Strategy.items
         if item_list:
             return item_list[0].algorithms[0]["level"]
         return -1
@@ -147,6 +152,13 @@ class EventRecord(Filterer):
         return {}
 
     def clean_dimension_fields(self):
+        """
+        dimension_fields: 维度字段
+        ["bk_target_ip", "bk_target_cloud_id", "agent_version"]
+            或者
+         ["bk_target_ip", "bk_target_cloud_id"]
+        :return:
+        """
         if "agent_version" in self.dimensions:
             return ["bk_target_ip", "bk_target_cloud_id", "agent_version"]
         return ["bk_target_ip", "bk_target_cloud_id"]

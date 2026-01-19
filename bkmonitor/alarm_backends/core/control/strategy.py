@@ -307,34 +307,89 @@ class Strategy:
     def get_trigger_configs(strategy: dict) -> dict[str, dict]:
         """
         获取不同级别算法的触发配置
-        :return {
-            "1": {
-                "check_windows_size": 5,
-                "trigger_count": 3,
+
+        参数:
+            strategy: 策略配置字典，包含 items(监控项列表) 和 detects(检测配置列表)
+                items结构: [{"algorithms": [{"type": "算法类型"}, ...], ...}, ...]
+                detects结构: [{"level": 1, "trigger_config": {"check_window": 5, "count": 3, "uptime": {...}}}, ...]
+
+        返回值:
+            dict[str, dict]: 告警级别到触发配置的映射字典
+            {
+                "1": {                        # 告警级别(字符串): 1-致命, 2-预警, 3-提醒
+                    "check_window_size": 5,   # 检测窗口大小(周期数)
+                    "trigger_count": 3,       # 触发阈值(满足条件的次数)
+                    "uptime": {...}           # 生效时间配置(可选)
+                },
+                ...
             }
-        }
+
+        执行步骤:
+            1. 判断策略是否为纯AIOPS算法策略
+            2. 遍历detects配置，按级别构建触发配置
+            3. AIOPS算法使用固定配置(window=5, count=1)，普通算法使用用户配置
+
+        数据流线图:
+            ┌─────────────────────────────────────────────────────────────────┐
+            │                     输入: strategy 策略配置                       │
+            └─────────────────────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 1: 判断是否为纯AIOPS算法策略                                │
+            │  遍历 strategy["items"][*]["algorithms"][*]["type"]              │
+            │  检查是否全部属于 AlgorithmModel.AIOPS_ALGORITHMS                 │
+            │                                                                 │
+            │  AIOPS算法包括: 智能异常检测、时序预测、离群检测等                   │
+            └─────────────────────────────────────────────────────────────────┘
+                                         │
+                     ┌───────────────────┴───────────────────┐
+                     ▼                                       ▼
+            ┌─────────────────────┐               ┌─────────────────────┐
+            │  is_aiops = True    │               │  is_aiops = False   │
+            │  (纯AIOPS算法策略)   │               │  (包含传统算法)      │
+            └─────────────────────┘               └─────────────────────┘
+                     │                                       │
+                     ▼                                       ▼
+            ┌─────────────────────┐               ┌─────────────────────┐
+            │  固定触发配置:       │               │  用户自定义配置:     │
+            │  check_window = 5   │               │  从detect中读取     │
+            │  trigger_count = 1  │               │  check_window/count │
+            └─────────────────────┘               └─────────────────────┘
+                     │                                       │
+                     └───────────────────┬───────────────────┘
+                                         ▼
+            ┌─────────────────────────────────────────────────────────────────┐
+            │  Step 2-3: 遍历 detects 列表，按 level 构建触发配置字典            │
+            │  返回: {"1": {...}, "2": {...}, "3": {...}}                      │
+            └─────────────────────────────────────────────────────────────────┘
         """
+        # Step 1: 判断是否为纯AIOPS算法策略
         is_aiops_algorithm = False
         items = strategy.get("items", [])
         if items:
+            # 收集所有算法类型，判断是否属于AIOPS算法集合
             is_aiops_list = [
                 algorithm["type"] in AlgorithmModel.AIOPS_ALGORITHMS
                 for item in items
                 for algorithm in item.get("algorithms") or []
             ]
-            # is_aiops_list不为空时，算法类型全部都是AIOPS算法时，设置is_aiops_algorithm为True
+            # 仅当算法列表非空且全部为AIOPS算法时，标记为纯AIOPS策略
             is_aiops_algorithm = all(is_aiops_list) and len(is_aiops_list) > 0
 
+        # Step 2-3: 遍历检测配置，按告警级别构建触发配置
         trigger_config = {}
         for detect in strategy.get("detects") or []:
-            # 如果只有AIOPS算法，则写死 check_window_size 为 5，trigger_count 为 1
             if is_aiops_algorithm:
+                # AIOPS算法使用固定配置: 窗口5周期内触发1次即告警
+                # 原因: AIOPS算法本身已包含复杂的异常判断逻辑，无需额外的触发条件
                 trigger_config[str(detect["level"])] = {
                     "check_window_size": 5,
                     "trigger_count": 1,
                     "uptime": detect["trigger_config"].get("uptime"),
                 }
             else:
+                # 传统算法使用用户配置的触发条件
                 trigger_config[str(detect["level"])] = {
                     "check_window_size": int(detect["trigger_config"]["check_window"]),
                     "trigger_count": int(detect["trigger_config"]["count"]),

@@ -11,16 +11,19 @@ specific language governing permissions and limitations under the License.
 import json
 import time
 
-from kafka.consumer.fetcher import ConsumerRecord
+from typing import TYPE_CHECKING
 
 from alarm_backends.core.alert import Event
 from alarm_backends.service.alert.builder.processor import AlertBuilder
 from alarm_backends.service.scheduler.app import app
 from core.prometheus import metrics
 
+if TYPE_CHECKING:
+    from kafka.consumer.fetcher import ConsumerRecord
+
 
 @app.task(ignore_result=True, queue="celery_alert_builder")
-def run_alert_builder(topic_data_id, bootstrap_server, events: list[ConsumerRecord]):
+def run_alert_builder(topic_data_id, bootstrap_server, events: list["ConsumerRecord"]):
     """
     告警事件构建任务，将Kafka原始事件转换为告警对象并处理
 

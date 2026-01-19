@@ -193,17 +193,36 @@ class BaseAccessDataProcess(base.BaseAccessProcess):
 
     def _push(self, item, record_list, output_client=None, data_list_key=None):
         """
-        :summary: 推送单个item的数据到检测队列或无数据待检测队列
-        :param item
-        :param record_list
-        :param output_client
-        :param data_list_key：数据队列，默认为 key.DATA_LIST_KEY
+        推送单个item的数据到检测队列或无数据待检测队列
+
+        参数:
+            item: Item对象，包含策略和查询配置信息
+            record_list: list[DataRecord]，待推送的数据记录列表
+            output_client: Redis客户端对象，为None时使用data_list_key的默认客户端
+            data_list_key: Redis队列key配置，默认为key.DATA_LIST_KEY(检测队列)，
+                          也可传入key.NO_DATA_LIST_KEY(无数据检测队列)
+
+        异常:
+            Exception: 当队列积压超过50万条时抛出，表示detect模块处理能力不足
+
+        该方法执行以下步骤:
+        1. 构建输出队列key，格式: {prefix}.{strategy_id}.{item_id}
+        2. 检查队列积压情况，超过阈值(50万)则抛出异常丢弃数据
+        3. 使用pipeline分批推送数据(每批10000条)，提升写入效率
+        4. 设置队列过期时间，取默认ttl和聚合周期*5的较大值
+        5. 更新推送数据计数指标，记录日志或统计信息
         """
+        # 确定使用的队列key配置和Redis客户端
         data_list_key = data_list_key or key.DATA_LIST_KEY
         client = output_client or data_list_key.client
+
+        # 构建输出队列key: 按策略ID和item ID区分不同的检测队列
         output_key = data_list_key.get_key(strategy_id=item.strategy.strategy_id, item_id=item.id)
+
+        # 队列积压检查: 获取当前队列长度
         queue_length = client.llen(output_key)
-        # 超过最大检测长度10倍(50w)说明detect模块处理能力不足,数据将被丢弃。
+        # 超过最大检测长度10倍(50w)说明detect模块处理能力不足,数据将被丢弃
+        # 这是一种保护机制，防止内存无限增长
         if queue_length > settings.SQL_MAX_LIMIT * 10:
             msg = (
                 f"Critical: strategy({item.strategy.strategy_id}), item({item.id})"
@@ -213,46 +232,86 @@ class BaseAccessDataProcess(base.BaseAccessProcess):
             )
             raise Exception(msg)
 
+        # 使用pipeline批量写入Redis，提升性能
+        # transaction=False: 不使用事务，允许部分成功，性能更好
         pipeline = client.pipeline(transaction=False)
         _offset = 0
+        # 分批推送，每批最多10000条记录，避免单次lpush数据量过大
         while _offset < len(record_list):
-            chunk_records = record_list[_offset : _offset + 10000]
+            chunk_records: list[DataRecord] = record_list[_offset : _offset + 10000]
+            # 将DataRecord序列化为JSON后推入队列
             pipeline.lpush(output_key, *[json.dumps(record.data) for record in chunk_records])
             _offset += 10000
+
+        # 设置队列过期时间: 取默认ttl和聚合周期*5的较大值
         # 避免监控周期大于默认key过期时间，引起数据丢失
         agg_interval = min(query_config["agg_interval"] for query_config in item.query_configs)
         pipeline.expire(output_key, max([data_list_key.ttl, agg_interval * 5]))
         pipeline.execute()
+
+        # 更新Prometheus指标: 记录推送的数据条数
         metrics.ACCESS_PROCESS_PUSH_DATA_COUNT.labels(strategy_id=metrics.TOTAL_TAG, type="data").inc(len(record_list))
 
-        # 非批量任务，记录日志
+        # 日志记录: 区分批量任务和普通任务
         if not self.sub_task_id:
+            # 非批量任务: 直接输出日志
             logger.info(
                 f"output_key({output_key}) "
                 f"strategy({item.strategy.strategy_id}), item({item.id}), "
                 f"push records({len(record_list)})."
             )
         else:
+            # 批量任务: 将统计信息存入process_counts，由上层统一汇总输出
             self.process_counts.setdefault("push_data", {})
             self.process_counts["push_data"][str(item.id)] = {
                 "output_key": output_key,
                 "count": len(record_list),
             }
 
-    def push(self, records: list | None = None, output_client=None):
+    def push(self, records: list[DataRecord] | None = None, output_client=None):
         """
-        推送格式化后的数据到 detect 和 nodata 中(按单个策略，单个item项，写入不同的队列)
+        推送格式化后的数据到 detect 和 nodata 队列中
+
+        参数:
+            records: list[DataRecord] | None, 待推送的数据记录列表，为None时使用self.record_list
+            output_client: Redis客户端对象，为None时使用默认客户端
+
+        该方法执行以下步骤:
+        1. 去除重复数据（通过 is_duplicate 标记）
+        2. 执行优先级检查（高优先级策略抑制低优先级策略）
+        3. 按 item_id 分组，筛选出未被过滤且未被抑制的记录
+        4. 遍历每个 item，推送数据到检测队列和降噪队列
+        5. 对启用无数据告警的 item，推送全量数据到无数据处理队列
+        6. 发送数据处理信号通知 detect 模块
+
+        数据流向:
+            records ──► 去重 ──► 优先级检查 ──► 按item分组筛选
+                                                    │
+                    ┌───────────────────────────────┘
+                    ▼
+            ┌───────────────┐    ┌───────────────┐    ┌───────────────┐
+            │  检测队列      │    │  降噪队列      │    │  无数据队列    │
+            │ (DETECT_KEY)  │    │ (noise_data)  │    │ (NO_DATA_KEY) │
+            └───────────────┘    └───────────────┘    └───────────────┘
+                    │
+                    ▼
+            ┌───────────────┐
+            │  信号队列      │
+            │ (SIGNAL_KEY)  │
+            └───────────────┘
         """
         if records is None:
             records = self.record_list
 
-        # 去除重复数据
+        # 步骤1: 去除重复数据，避免同一数据被重复处理
         records: list[DataRecord] = [record for record in records if not record.is_duplicate]
 
-        # 优先级检查
+        # 步骤2: 优先级检查，高优先级策略会抑制低优先级策略的数据
         PriorityChecker.check_records(records)
 
-        # 按item_id分组
+        # 步骤3: 按 item_id 分组，构建待推送数据结构
+        # pending_to_push: {item_id: [满足条件的DataRecord列表]}
+        # item_id_to_item: {item_id: Item对象} 用于后续获取item信息
         pending_to_push: dict[int, list[DataRecord]] = {}
         item_id_to_item: dict[int, Item] = {}
         for record in records:
@@ -261,19 +320,22 @@ class BaseAccessDataProcess(base.BaseAccessProcess):
                 pending_to_push.setdefault(item_id, [])
                 item_id_to_item[item_id] = item
 
+                # 仅当记录未被过滤(is_retains)且未被抑制(inhibitions)时，才加入推送列表
                 if record.is_retains[item_id] and not record.inhibitions[item_id]:
                     pending_to_push[item_id].append(record)
 
+        # 步骤4: 遍历每个item，执行数据推送
         strategy_ids = set()
         for item_id, record_list in list(pending_to_push.items()):
             item = item_id_to_item[item_id]
             if record_list:
+                # 收集有数据的策略ID，用于后续发送信号
                 strategy_ids.add(item.strategy.id)
 
-                # 推送到检测队列
+                # 推送到检测队列，供 detect 模块进行告警检测
                 self._push(item, record_list, output_client)
 
-                # 推送降噪基数至redis队列
+                # 推送降噪基数至redis队列，用于告警降噪计算
                 try:
                     self._push_noise_data(item, record_list)
                 except BaseException as e:
@@ -285,15 +347,18 @@ class BaseAccessDataProcess(base.BaseAccessProcess):
                 item.strategy.id,
                 item.id,
             )
-            # 推送无数据处理
+            # 步骤5: 推送无数据处理（注意：这里推送的是全量records，而非筛选后的record_list）
+            # 无数据告警需要知道所有数据点，以便判断哪些目标没有上报数据
             if item.no_data_config["is_enabled"]:
                 self._push(item, records, output_client, key.NO_DATA_LIST_KEY)
 
-        # 推送数据处理信号
+        # 步骤6: 推送数据处理信号，通知 detect 模块有新数据需要处理
         if records:
             client = output_client or key.DATA_SIGNAL_KEY.client
             if strategy_ids:
+                # 将策略ID推入信号队列，detect 模块会根据信号拉取数据进行检测
                 client.lpush(key.DATA_SIGNAL_KEY.get_key(), *list(strategy_ids))
+            # 设置过期时间，防止队列无限增长
             client.expire(key.DATA_SIGNAL_KEY.get_key(), key.DATA_SIGNAL_KEY.ttl)
 
 
@@ -1077,7 +1142,7 @@ class AccessRealTimeDataProcess(BaseAccessDataProcess):
             if end_time - start_time < 60:
                 time.sleep(60 - (end_time - start_time))
 
-    def flat(self, bootstrap_servers: str, record: ConsumerRecord):
+    def flat(self, bootstrap_servers: str, record: ConsumerRecord) -> list[DataRecord]:
         """
         扁平化
         1. 数据结构转换
@@ -1259,7 +1324,7 @@ class AccessRealTimeDataProcess(BaseAccessDataProcess):
                     except Exception as e:
                         logger.warning("%s loads alarm(%s) failed: %s", record.topic, record.value, e)
 
-                record_list = []
+                record_list: list[DataRecord] = []
                 for r in records:
                     # 补充维度：比如：业务、集群、模块等信息
                     self.full(r)

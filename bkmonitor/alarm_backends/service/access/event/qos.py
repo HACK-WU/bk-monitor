@@ -14,6 +14,10 @@ from django.conf import settings
 
 from alarm_backends.core.cache import key
 from bkmonitor.utils.common_utils import count_md5
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from alarm_backends.service.access.event.records.base import EventRecord
 
 logger = logging.getLogger("access.qos")
 
@@ -54,11 +58,45 @@ class QoSMixin:
         返回值:
             bool: True表示QoS控制已启用，False表示未启用
 
-        该方法实现告警流控机制，包含：
-        1. 检查QoS控制开关是否启用
-        2. 对每个事件记录按维度进行计数统计
-        3. 超过阈值的告警会被丢弃，防止告警风暴
-        4. 未超过阈值的告警保留到新列表中
+        执行步骤:
+            1. 获取Redis客户端，检查QoS控制开关是否启用
+            2. 遍历所有事件记录(self.record_list)
+            3. 对每个事件的监控项(items)进行遍历
+            4. 跳过已被过滤(is_retains=False)或抑制(inhibitions=True)的事件
+            5. 根据(业务ID+策略ID+监控项ID+目标IP+告警级别)生成维度哈希
+            6. 使用Redis hincrby原子递增该维度的告警计数
+            7. 计数超过QOS_DROP_ALARM_THREADHOLD阈值则丢弃告警
+            8. 未超过阈值的告警保留到新列表，最终更新self.record_list
+
+        数据流线图:
+            ```
+            record_list ──► 遍历event_record
+                              │
+                              ▼
+                        遍历items(监控项)
+                              │
+                              ▼
+                      ┌───────────────┐
+                      │ 已过滤/抑制?  │──是──► 跳过
+                      └───────────────┘
+                              │否
+                              ▼
+                    生成dimensions_md5哈希
+                              │
+                              ▼
+                    Redis hincrby递增计数
+                              │
+                              ▼
+                      ┌───────────────┐
+                      │ 超过阈值?     │──是──► 记录日志，丢弃
+                      └───────────────┘
+                              │否
+                              ▼
+                    添加到new_record_list
+                              │
+                              ▼
+                    更新self.record_list
+            ```
         """
         # 获取Redis客户端，用于QoS计数统计
         client = check_client or key.QOS_CONTROL_KEY.client
@@ -66,6 +104,7 @@ class QoSMixin:
         if not client.exists(key.QOS_CONTROL_KEY.get_key()):
             return False
 
+        self.record_list: list[EventRecord]
         # 存储通过QoS检查的事件记录
         new_record_list = []
         # 遍历所有事件记录进行QoS检查
@@ -78,6 +117,7 @@ class QoSMixin:
                 # 跳过已被过滤或抑制的事件
                 if not event_record.is_retains[item_id] or event_record.inhibitions[item_id]:
                     continue
+
                 # 生成告警维度的唯一哈希值
                 dimensions_md5 = self.hash_alarm_by_match_info(event_record, strategy_id, item_id)
                 try:
