@@ -98,6 +98,10 @@ class EventRecord(Filterer):
         return self.raw_data["strategy"].scenario  # type: Strategy.scenario
 
     @cached_property
+    def strategy(self):
+        return self.raw_data["strategy"]
+
+    @cached_property
     def items(self):
         """
         事件类只有一个item，故这里直接返回一个list，包装self._item
