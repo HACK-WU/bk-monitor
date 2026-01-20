@@ -13,12 +13,11 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from alarm_backends.service.access.data.records import DataRecord
-
 logger = logging.getLogger("access")
 
 if TYPE_CHECKING:
     from alarm_backends.service.access.event.records.base import EventRecord
+    from alarm_backends.service.access.data.records import DataRecord
 
 
 ####################################

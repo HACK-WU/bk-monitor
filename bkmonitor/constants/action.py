@@ -9,10 +9,14 @@ specific language governing permissions and limitations under the License.
 """
 
 import json
+from typing import TypeAlias
 
 from django.utils.translation import gettext_lazy as _lazy
 
 GLOBAL_BIZ_ID = 0
+
+action_instance_id: TypeAlias = int
+converge_instance_id: TypeAlias = int
 
 
 class AssignMode:

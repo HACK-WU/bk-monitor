@@ -109,7 +109,7 @@ from constants.data_source import KubernetesResultTableLabel
 from core.errors.alarm_backends import EmptyAssigneeError
 from packages.fta_web.action.resources import AlertDocument
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(databases=["default", "monitor_api", "backend_alert"])
 
 
 def register_builtin_plugins():
@@ -651,7 +651,7 @@ def converge_actions(instances, action_type=ConvergeType.ACTION, is_enabled=True
 
 
 class TestActionProcessor(TransactionTestCase):
-    databases = {"monitor_api", "default"}
+    databases = {"default", "backend_alert", "monitor_api"}
 
     def setUp(self):
         CONVERGE_LIST_KEY.client.flushall()
@@ -2279,10 +2279,26 @@ class TestActionProcessor(TransactionTestCase):
         ).format(
             host=settings.BK_MONITOR_HOST,
             route_path=base64.b64encode(b"#/performance/detail/127.0.0.1-0").decode("utf8"),
-            related_info=related_info,
+            related_info=self.alert_info,
             current_time=context.alarm.begin_time.strftime(settings.DATETIME_FORMAT),
             dimension_string="\\n> {}\\n> {}\\n> {}\\n\n".format(*self.dimensions_string_list),
         )
+        print(expected_content)
+
+        expected_content = (
+            "**首次异常: **{{action_instance_content}}\n"
+            "**最近异常: **{{current_time}}\n"
+            "**内容: **新告警, None\n"
+            "**所属空间: **[2]蓝鲸 (业务)\n"
+            "**目标: **[127.0.0.1]({host}route/?bizId=2&route_path={route_path})\n"
+            "**维度: **{{dimension_string}}\n"
+            "**关联信息: **集群() 模块()\\n> {related_info}\\n\n"
+            "**关联指标: **0 个指标,0 个维度\n"
+            "**维度下钻: **异常维度 2，异常维度值 2"
+        )
+        result = Jinja2Renderer.render(context.DEFAULT_TEMPLATE, context_dict)
+        print(result)
+
         self.assertEqual(user_content, expected_content)
 
     def test_render_related_info(self):

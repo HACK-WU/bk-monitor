@@ -8,6 +8,8 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+from __future__ import annotations
+
 import logging
 
 import arrow
@@ -51,7 +53,7 @@ class RangeFilter(base.Filter):
     每条数据可能关联多个监控策略（items），每个策略有独立的目标范围配置。
     """
 
-    def filter(self, record: DataRecord | EventRecord):
+    def filter(self, record: "DataRecord" | "EventRecord"):  # noqa
         """
         根据策略目标范围过滤监控数据记录
 

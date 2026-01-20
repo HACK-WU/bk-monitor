@@ -10,14 +10,17 @@ specific language governing permissions and limitations under the License.
 
 import logging
 import time
-from typing import Literal
+from typing import Literal, TypeAlias
 
 from django.db import OperationalError
 
 from alarm_backends.constants import CONST_HALF_MINUTE
 from alarm_backends.service.scheduler.app import app
 from core.prometheus import metrics
-from constants.action import action_instance_id, converge_instance_id
+
+
+action_instance_id: TypeAlias = int
+converge_instance_id: TypeAlias = int
 
 logger = logging.getLogger("fta_action.converge")
 
