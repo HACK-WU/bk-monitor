@@ -107,12 +107,6 @@ def patch_home_panels():
 </div>
 <br>
 <div>
-    <a href="{settings.SITE_URL}grafana/dashboards/folder/new"><H3>"""
-                + _("你可以通过创建目录来管理仪表盘。")
-                + f"""</H3></a>
-</div>
-<br>
-<div>
     <a href="{settings.SITE_URL}grafana/dashboard/import"><H3>"""
                 + _("你可以直接导入，如果本地有仪表盘文件")
                 + f"""</H3></a>
