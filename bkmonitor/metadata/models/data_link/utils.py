@@ -147,6 +147,9 @@ def compose_bkdata_data_id_name(data_name: str, strategy: str | None = None) -> 
         chinese_pinyin = "".join(lazy_pinyin(chinese_characters))
         refine_data_name += chinese_pinyin
 
+    # 去除空格
+    refine_data_name = refine_data_name.replace(" ", "")
+
     # 将减号替换为下划线
     refine_data_name = refine_data_name.replace("-", "_")
 
