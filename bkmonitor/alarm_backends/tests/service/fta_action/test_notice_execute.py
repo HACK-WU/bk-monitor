@@ -2280,7 +2280,7 @@ class TestActionProcessor(TransactionTestCase):
             host=settings.BK_MONITOR_HOST,
             route_path=base64.b64encode(b"#/performance/detail/127.0.0.1-0").decode("utf8"),
             related_info=self.alert_info,
-            current_time=context.alarm.begin_time.strftime(settings.DATETIME_FORMAT),
+            current_time=context.alarm.begin_time,
             dimension_string="\\n> {}\\n> {}\\n> {}\\n\n".format(*self.dimensions_string_list),
         )
         print(expected_content)
