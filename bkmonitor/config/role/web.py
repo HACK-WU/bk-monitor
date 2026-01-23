@@ -14,7 +14,6 @@ import os
 from blueapps.conf.log import get_logging_config_dict
 from blueapps.patch.log import get_paas_v2_logging_config_dict
 
-
 from ..tools.environment import (
     DJANGO_CONF_MODULE,
     ENVIRONMENT,
@@ -80,9 +79,9 @@ INSTALLED_APPS += (
 # 切换session的backend后， 需要设置该中间件，确保新的 csrftoken 被设置到新的session中
 ensure_csrf_cookie = "django.views.decorators.csrf._EnsureCsrfCookie"
 # 切换backend一段时候后， 再使用如下配置进行csrf保护
-csrf_protect = "django.middleware.csrf.CsrfViewMiddleware"
 
 MIDDLEWARE = (
+    "corsheaders.middleware.CorsMiddleware",
     "bkmonitor.middlewares.pyinstrument.ProfilerMiddleware",
     "bkmonitor.middlewares.prometheus.MetricsBeforeMiddleware",  # 必须放到最前面
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -220,10 +219,10 @@ CACHES["default"] = CACHES["db"]
 def django_redis_cache_config():
     """
     获取Django Redis缓存所需环境变量的生成器函数。
-    
+
     该函数依次检查REDIS_PASSWORD、REDIS_HOST、REDIS_PORT、REDIS_DB
     四个环境变量，优先查找带DJANGO_前缀的版本，若未找到则查找原始名称。
-    
+
     参数:
         无
     返回值:
