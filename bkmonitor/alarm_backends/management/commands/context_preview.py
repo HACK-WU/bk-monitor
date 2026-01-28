@@ -14,14 +14,35 @@ from django.core.management.base import BaseCommand
 from alarm_backends.core.context import ActionContext
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument
 from bkmonitor.models import ActionInstance
+from bkmonitor.utils.template import Jinja2Renderer, NoticeRowRenderer
 
 logger = logging.getLogger("fta_action.run")
+
+# 尝试导入 elasticsearch_dsl 的类型
+try:
+    from elasticsearch_dsl.utils import AttrList, AttrDict
+except ImportError:
+    # 如果导入失败，定义占位符类用于类型检查
+    class AttrList(list):
+        pass
+
+    class AttrDict(dict):
+        pass
 
 
 class Command(BaseCommand):
     """告警上下文变量预览命令.
 
     预览告警通知模板中可用的上下文变量及其结构。
+
+    架构设计
+    --------
+    本命令采用分层设计，将数据获取、格式化、输出等逻辑分离：
+
+    - 数据层：_get_action_instance, _get_alert_documents
+    - 转换层：_normalize_es_dsl_object（统一处理elasticsearch_dsl对象）
+    - 格式化层：_serialize_value, _format_value_for_template, _format_detailed_value
+    - 输出层：_output_* 系列方法
 
     一致性保证
     ------------
@@ -100,57 +121,35 @@ class Command(BaseCommand):
         python manage.py context_preview 12345 --variable "strategy.item.query_configs[0]"
         python manage.py context_preview 12345 --variable "strategy.item.query_configs.0"  # 等价于 [0]
         python manage.py context_preview 12345 --variable "alarm.dimensions['ip'].display_value"
-
-    执行流程
-    --------
-
-    ::
-
-        ┌─────────────────────────────────────────────────────────────────┐
-        │                         命令入口: handle()                        │
-        └─────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-        ┌─────────────────────────────────────────────────────────────────┐
-        │  1. 获取动作实例: _get_action_instance(alert_id, action_id)      │
-        │     ├─ 指定 action_id → 从数据库查询 ActionInstance               │
-        │     └─ 未指定 action_id → 从 ES 查找最新通知动作                   │
-        └─────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-        ┌─────────────────────────────────────────────────────────────────┐
-        │  2. 获取告警文档: _get_alert_documents(action_instance, alert_id) │
-        │     ├─ 从 action_instance.alerts 提取告警 ID                      │
-        │     ├─ 若为空 → 使用 fallback_alert_id                            │
-        │     └─ 从 ES 批量获取 AlertDocument                              │
-        └─────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-        ┌─────────────────────────────────────────────────────────────────┐
-        │  3. 构建上下文: ActionContext(action, alerts)                     │
-        │     └─ 调用 context.get_dictionary() 获取上下文字典               │
-        └─────────────────────────────────────────────────────────────────┘
-                                      │
-                                      ▼
-        ┌─────────────────────────────────────────────────────────────────┐
-        │                        4. 输出结果                                │
-        │                                                                   │
-        │     ┌─ 指定 --variable ─→ _output_single_variable()              │
-        │     │                  输出单个变量详情                            │
-        │     │                                                             │
-        │     ├─ 指定 --format json ─→ _output_json_format()               │
-        │     │                        输出 JSON 格式                       │
-        │     │                                                             │
-        │     └─ 默认 ─→ _output_template_format()                         │
-        │                 输出模板变量列表                                   │
-        └─────────────────────────────────────────────────────────────────┘
     """
 
-    def add_arguments(self, parser):
-        """定义命令行参数.
+    @staticmethod
+    def _normalize_es_dsl_object(obj):
+        """将elasticsearch_dsl的数据结构转换为标准Python类型.
 
-        :param parser: argparse 解析器对象
+        统一处理AttrList和AttrDict对象，避免在多处重复相同逻辑。
+
+        :param obj: 待转换对象
+        :return: 标准Python类型（list或dict）
         """
+        if isinstance(obj, AttrList):
+            return list(obj)
+        if isinstance(obj, AttrDict):
+            # 使用to_dict()方法转换，这是AttrDict的标准方法
+            try:
+                return obj.to_dict()
+            except (AttributeError, TypeError):
+                # 如果to_dict()不可用，fallback到其他方式
+                try:
+                    return dict(obj.items())
+                except (AttributeError, TypeError):
+                    try:
+                        return {k: obj[k] for k in obj.keys()}
+                    except (AttributeError, TypeError):
+                        return dict(obj)
+        return obj
+
+    def add_arguments(self, parser):
         parser.add_argument("alert_id", type=int, help="告警 ID")
         parser.add_argument("--action-id", type=int, help="动作实例 ID（可选）")
         parser.add_argument(
@@ -162,17 +161,6 @@ class Command(BaseCommand):
         parser.add_argument("--format", type=str, default="template", choices=["template", "json"], help="输出格式")
 
     def handle(self, alert_id, *args, **options):
-        """命令入口方法，执行上下文变量预览.
-
-        执行流程：
-        1. 获取动作实例（通知类型的动作）
-        2. 获取关联的告警文档
-        3. 创建 ActionContext 并获取上下文字典
-        4. 根据参数输出变量信息
-
-        :param alert_id: 告警 ID
-        :param options: 命令行选项
-        """
         action_id = options.get("action_id")
         variable = options.get("variable")
         depth = min(options.get("depth", 2), 3)  # 最大深度3
@@ -201,7 +189,7 @@ class Command(BaseCommand):
 
             # 4. 如果指定了变量，只查询该变量
             if variable:
-                self._output_single_variable(context_dict, variable, alert_id, action_instance)
+                self._output_single_variable(context_dict, variable, alert_id, action_instance, context)
                 return
 
             # 5. 否则输出所有变量
@@ -299,7 +287,12 @@ class Command(BaseCommand):
         return alert_docs
 
     def _output_header(self, alert_id, action_instance, alert_count):
-        """输出头部信息"""
+        """输出头部信息.
+
+        :param alert_id: 告警ID
+        :param action_instance: 动作实例
+        :param alert_count: 关联告警数
+        """
         self.stdout.write(self.style.SUCCESS("\n" + "=" * 80))
         self.stdout.write(self.style.SUCCESS("告警上下文变量预览"))
         self.stdout.write(self.style.SUCCESS("=" * 80 + "\n"))
@@ -309,184 +302,175 @@ class Command(BaseCommand):
         self.stdout.write(f"关联告警数: {alert_count}")
         self.stdout.write("\n" + "-" * 80 + "\n")
 
+    def _serialize_value(self, obj, depth=0, max_depth=2):
+        """序列化对象为JSON可序列化的格式.
+
+        统一的值序列化逻辑，用于JSON格式输出。
+
+        :param obj: 要序列化的对象
+        :param depth: 当前递归深度
+        :param max_depth: 最大递归深度
+        :return: 可JSON序列化的对象
+        """
+        if depth >= max_depth:
+            return f"<{type(obj).__name__}>"
+
+        # 规范化elasticsearch_dsl对象
+        obj = self._normalize_es_dsl_object(obj)
+
+        if isinstance(obj, str | int | float | bool | type(None)):
+            return obj
+
+        if isinstance(obj, dict):
+            return {k: self._serialize_value(v, depth + 1, max_depth) for k, v in list(obj.items())[:20]}
+
+        if isinstance(obj, list | tuple):
+            if len(obj) == 0:
+                return []
+
+            # 对于简单类型列表，直接返回值；对于复杂类型，递归处理前5个
+            if isinstance(obj[0], str | int | float | bool | type(None)):
+                # 简单类型，返回前10个值
+                result = obj[:10]
+                if len(obj) > 10:
+                    result = list(result) + [f"... ({len(obj) - 10} more items, total: {len(obj)})"]
+                return result
+            else:
+                # 复杂类型，序列化前5个
+                result = [self._serialize_value(item, depth + 1, max_depth) for item in obj[:5]]
+                if len(obj) > 5:
+                    result.append(f"... ({len(obj) - 5} more items, total: {len(obj)})")
+                return result
+
+        # 对象类型
+        try:
+            result = {"_type": type(obj).__name__}
+            attrs = [attr for attr in dir(obj) if not attr.startswith("_")]
+            for attr in attrs[:15]:
+                try:
+                    value = getattr(obj, attr)
+                    if not callable(value):
+                        result[attr] = self._serialize_value(value, depth + 1, max_depth)
+                except Exception:
+                    pass
+            return result
+        except Exception:
+            return f"<{type(obj).__name__}>"
+
     def _output_json_format(self, context_dict, max_depth):
-        """以 JSON 格式输出上下文变量.
+        """JSON格式输出.
 
-        将上下文字典序列化为 JSON 格式，支持嵌套对象的递归处理。
-        对于复杂对象，会提取其公开属性进行序列化。
-
-        :param context_dict: 上下文字典，由 ActionContext.get_dictionary() 返回
-        :param max_depth: 最大递归深度，防止无限递归
+        :param context_dict: 上下文字典
+        :param max_depth: 最大递归深度
         """
         import json
 
-        def serialize_object(obj, depth=0):
-            """递归序列化对象为 JSON 可序列化的格式.
-
-            处理规则：
-            - 基本类型（str/int/float/bool/None）：直接返回
-            - 字典：序列化前20个键值对
-            - 列表/元组：简单类型返回前10个，复杂类型递归处理前5个
-            - 对象：提取公开属性（非 _ 开头、非 callable）前15个
-
-            :param obj: 要序列化的对象
-            :param depth: 当前递归深度
-            :return: JSON 可序列化的值
-            """
-            if depth >= max_depth:
-                return f"<{type(obj).__name__}>"
-
-            if isinstance(obj, str | int | float | bool | type(None)):
-                return obj
-
-            if isinstance(obj, dict):
-                return {k: serialize_object(v, depth + 1) for k, v in list(obj.items())[:20]}
-
-            if isinstance(obj, list | tuple):
-                if len(obj) == 0:
-                    return []
-
-                # 对于简单类型列表，直接返回值；对于复杂类型，递归处理前5个
-                if isinstance(obj[0], str | int | float | bool | type(None)):
-                    # 简单类型，返回前10个值
-                    result = obj[:10]
-                    if len(obj) > 10:
-                        result = list(result) + [f"... ({len(obj) - 10} more items, total: {len(obj)})"]
-                    return result
-                else:
-                    # 复杂类型，序列化前5个
-                    result = [serialize_object(item, depth + 1) for item in obj[:5]]
-                    if len(obj) > 5:
-                        result.append(f"... ({len(obj) - 5} more items, total: {len(obj)})")
-                    return result
-
-            # 对象类型
-            try:
-                result = {"_type": type(obj).__name__}
-                attrs = [attr for attr in dir(obj) if not attr.startswith("_")]
-                for attr in attrs[:15]:
-                    try:
-                        value = getattr(obj, attr)
-                        if not callable(value):
-                            result[attr] = serialize_object(value, depth + 1)
-                    except Exception:
-                        pass
-                return result
-            except Exception:
-                return f"<{type(obj).__name__}>"
-
         serialized = {}
         for key, value in sorted(context_dict.items()):
-            serialized[key] = serialize_object(value, depth=0)
+            serialized[key] = self._serialize_value(value, depth=0, max_depth=max_depth)
 
         json_str = json.dumps(serialized, indent=2, ensure_ascii=False)
         self.stdout.write(json_str)
         self.stdout.write("\n" + "=" * 80 + "\n")
 
-    def _output_template_format(self, context_dict, max_depth):
-        """以模板风格输出所有可用的上下文变量.
+    def _format_value_for_template(self, obj, depth=0, max_depth=2):
+        """格式化值用于模板风格显示.
 
-        输出格式为 Jinja2 模板变量形式，如：
-        {{ target.business.bk_biz_name }} -> '蓝鲸'
+        统一的模板格式化逻辑，用于模板风格输出。
+
+        :param obj: 要格式化的对象
+        :param depth: 当前递归深度
+        :param max_depth: 最大递归深度
+        :return: 格式化后的字符串
+        """
+        if depth >= max_depth:
+            return f"<{type(obj).__name__}>"
+
+        # 规范化elasticsearch_dsl对象
+        obj = self._normalize_es_dsl_object(obj)
+
+        # 基本类型
+        if isinstance(obj, str | int | float | bool | type(None)):
+            return repr(obj)
+
+        # 列表类型（包括AttrList，已转换为list）
+        if isinstance(obj, list | tuple):
+            if len(obj) == 0:
+                return "[]"
+
+            # 如果是简单类型列表，直接显示前5个
+            if isinstance(obj[0], str | int | float | bool | type(None)):
+                items = [repr(item) for item in obj[:5]]
+                if len(obj) > 5:
+                    items.append(f"... ({len(obj) - 5} more)")
+                return f"[{', '.join(items)}]"
+            else:
+                return f"[{type(obj[0]).__name__} × {len(obj)}]"
+
+        # 字典类型
+        if isinstance(obj, dict):
+            if len(obj) == 0:
+                return "{}"
+
+            items = list(obj.items())
+
+            # 尝试将所有键值对格式化，看看总长度
+            pairs = []
+            for k, v in items:
+                # 格式化值
+                if isinstance(v, str):
+                    v_repr = repr(v)
+                elif isinstance(v, int | float | bool | type(None)):
+                    v_repr = repr(v)
+                elif isinstance(v, list | tuple):
+                    if len(v) == 0:
+                        v_repr = "[]"
+                    elif len(v) <= 2 and all(isinstance(x, str | int | float | bool | type(None)) for x in v):
+                        v_repr = repr(v)
+                    else:
+                        v_repr = f"[{len(v)} items]"
+                elif isinstance(v, dict):
+                    v_repr = f"{{{len(v)} items}}"
+                else:
+                    v_repr = f"<{type(v).__name__}>"
+
+                # 截断过长的值
+                if len(v_repr) > 50:
+                    v_repr = v_repr[:47] + "..."
+
+                pairs.append(f"'{k}': {v_repr}")
+
+            # 拼接所有键值对
+            dict_content = ", ".join(pairs)
+
+            # 如果总长度超过150字符，只显示前几个
+            if len(dict_content) > 150:
+                # 只显示前3个键值对
+                short_pairs = pairs[:3]
+                short_pairs.append(f"... +{len(items) - 3} more")
+                return f"{{{', '.join(short_pairs)}}}"
+            else:
+                # 完整显示
+                return f"{{{dict_content}}}"
+
+        # 对象类型 - 返回类型名
+        return f"<{type(obj).__name__}>"
+
+    def _output_template_format(self, context_dict, max_depth):
+        """模板风格输出 - 显示所有可用的模板变量.
 
         :param context_dict: 上下文字典
         :param max_depth: 最大递归深度
         """
 
-        def format_value(obj, depth=0):
-            """格式化值用于模板风格显示.
-
-            根据类型生成简洁的值表示：
-            - 基本类型：使用 repr()
-            - 列表：显示前5个元素或元素类型和数量
-            - 字典：显示键值对摘要
-            - 对象：显示类型名
-
-            :param obj: 要格式化的对象
-            :param depth: 当前递归深度
-            :return: 格式化后的字符串
-            """
-            if depth >= max_depth:
-                return f"<{type(obj).__name__}>"
-
-            # 基本类型
-            if isinstance(obj, str | int | float | bool | type(None)):
-                return repr(obj)
-
-            # 列表类型
-            if isinstance(obj, list | tuple):
-                if len(obj) == 0:
-                    return "[]"
-
-                # 如果是简单类型列表，直接显示前5个
-                if isinstance(obj[0], str | int | float | bool | type(None)):
-                    items = [repr(item) for item in obj[:5]]
-                    if len(obj) > 5:
-                        items.append(f"... ({len(obj) - 5} more)")
-                    return f"[{', '.join(items)}]"
-                else:
-                    return f"[{type(obj[0]).__name__} × {len(obj)}]"
-
-            # 字典类型
-            if isinstance(obj, dict):
-                if len(obj) == 0:
-                    return "{}"
-
-                items = list(obj.items())
-
-                # 尝试将所有键值对格式化，看看总长度
-                pairs = []
-                for k, v in items:
-                    # 格式化值
-                    if isinstance(v, str):
-                        v_repr = repr(v)
-                    elif isinstance(v, int | float | bool | type(None)):
-                        v_repr = repr(v)
-                    elif isinstance(v, list | tuple):
-                        if len(v) == 0:
-                            v_repr = "[]"
-                        elif len(v) <= 2 and all(isinstance(x, str | int | float | bool | type(None)) for x in v):
-                            v_repr = repr(v)
-                        else:
-                            v_repr = f"[{len(v)} items]"
-                    elif isinstance(v, dict):
-                        v_repr = f"{{{len(v)} items}}"
-                    else:
-                        v_repr = f"<{type(v).__name__}>"
-
-                    # 截断过长的值
-                    if len(v_repr) > 50:
-                        v_repr = v_repr[:47] + "..."
-
-                    pairs.append(f"'{k}': {v_repr}")
-
-                # 拼接所有键值对
-                dict_content = ", ".join(pairs)
-
-                # 如果总长度超过150字符，只显示前几个
-                if len(dict_content) > 150:
-                    # 只显示前3个键值对
-                    short_pairs = pairs[:3]
-                    short_pairs.append(f"... +{len(items) - 3} more")
-                    return f"{{{', '.join(short_pairs)}}}"
-                else:
-                    # 完整显示
-                    return f"{{{dict_content}}}"
-
-            # 对象类型 - 返回类型名
-            return f"<{type(obj).__name__}>"
-
         def collect_variables(obj, prefix="", depth=0, variables=None):
-            """递归收集对象的所有可访问属性作为模板变量.
+            """递归收集所有可用的模板变量.
 
-            遍历对象的公开属性，对于简单类型直接记录，
-            对于复杂对象递归展开其属性。
-
-            :param obj: 要遍历的对象
+            :param obj: 要收集的对象
             :param prefix: 变量路径前缀
             :param depth: 当前递归深度
-            :param variables: 已收集的变量列表
-            :return: 变量列表，每个元素为 (var_path, value_str) 元组
+            :param variables: 变量列表（累积结果）
+            :return: 变量列表
             """
             if variables is None:
                 variables = []
@@ -511,7 +495,7 @@ class Command(BaseCommand):
 
                             if isinstance(value, str | int | float | bool | type(None) | list | tuple | dict):
                                 # 简单类型、列表、字典：直接显示，不递归
-                                variables.append((var_path, format_value(value, depth)))
+                                variables.append((var_path, self._format_value_for_template(value, depth, max_depth)))
                             else:
                                 # 其他对象类型：递归展开属性
                                 collect_variables(value, var_path, depth + 1, variables)
@@ -546,18 +530,177 @@ class Command(BaseCommand):
         self.stdout.write(f"\n总计 {len(all_variables)} 个可用变量")
         self.stdout.write("\n" + "=" * 80 + "\n")
 
-    def _output_single_variable(self, context_dict, variable_path, alert_id, action_instance):
-        """查询单个模板变量的值并详细输出.
+    def _format_detailed_value(self, obj, indent=0, max_depth=5):
+        """详细格式化值 - 完全展开，不省略任何元素.
 
-        支持多种变量访问格式，与 Jinja2 模板语法保持一致：
-        - 点号访问：target.business.bk_biz_name
-        - 方括号索引：list[0]、dict['key']
-        - 混合使用：item.query_configs[0]['metric_id']
+        用于单个变量查询时的详细输出。
+
+        :param obj: 要格式化的对象
+        :param indent: 当前缩进级别
+        :param max_depth: 最大递归深度（防止无限递归）
+        :return: 格式化后的行列表
+        """
+        prefix = "  " * indent
+        lines = []
+
+        # 防止无限递归
+        if indent >= max_depth:
+            lines.append(f"{prefix}<max depth reached>")
+            return lines
+
+        # 规范化elasticsearch_dsl对象（在格式化前转换）
+        obj = self._normalize_es_dsl_object(obj)
+
+        # 基本类型
+        if isinstance(obj, str | int | float | bool | type(None)):
+            lines.append(f"{prefix}{repr(obj)}")
+            return lines
+
+        # 列表类型 - 完全展开所有元素（包括已转换的AttrList）
+        if isinstance(obj, list | tuple):
+            if len(obj) == 0:
+                lines.append(f"{prefix}[]")
+                return lines
+
+            lines.append(f"{prefix}[")
+            # 显示所有元素，不省略
+            for i, item in enumerate(obj):
+                # 先规范化元素（将AttrDict/AttrList转换为标准类型）
+                item = self._normalize_es_dsl_object(item)
+
+                if isinstance(item, str | int | float | bool | type(None)):
+                    lines.append(f"{prefix}  {repr(item)},")
+                elif isinstance(item, dict):
+                    # 字典元素：递归展开
+                    if len(item) == 0:
+                        lines.append(f"{prefix}  {{}},")
+                    else:
+                        lines.append(f"{prefix}  {{")
+                        # 递归显示所有键值对
+                        for k, v in item.items():
+                            # 规范化值
+                            v = self._normalize_es_dsl_object(v)
+                            if isinstance(v, str | int | float | bool | type(None)):
+                                lines.append(f"{prefix}    '{k}': {repr(v)},")
+                            else:
+                                # 递归格式化嵌套结构
+                                nested_lines = self._format_detailed_value(v, indent + 2, max_depth)
+                                # 将第一行的键名合并
+                                if nested_lines:
+                                    first_line = nested_lines[0].lstrip()
+                                    lines.append(f"{prefix}    '{k}': {first_line}")
+                                    # 添加其余行（调整缩进）
+                                    for nested_line in nested_lines[1:]:
+                                        lines.append(f"{prefix}      {nested_line.lstrip()}")
+                                else:
+                                    lines.append(f"{prefix}    '{k}': <{type(v).__name__}>,")
+                        lines.append(f"{prefix}  }},")
+                elif isinstance(item, list | tuple):
+                    # 嵌套列表：递归展开（已在循环开始时规范化）
+                    nested_lines = self._format_detailed_value(item, indent + 1, max_depth)
+                    if nested_lines:
+                        # 嵌套列表的第一行已经有正确的缩进（indent + 1），直接添加
+                        # 最后一行如果是`]`或`总计:`，需要添加逗号
+                        for idx, nested_line in enumerate(nested_lines):
+                            if idx == len(nested_lines) - 1:
+                                # 最后一行：如果是`]`或`总计:`，添加逗号
+                                stripped = nested_line.strip()
+                                if stripped.endswith("]") or stripped.startswith("总计"):
+                                    lines.append(nested_line + ",")
+                                else:
+                                    lines.append(nested_line)
+                            else:
+                                lines.append(nested_line)
+                    else:
+                        # 空列表
+                        lines.append(f"{prefix}  [],")
+                else:
+                    lines.append(f"{prefix}  <{type(item).__name__}>,")
+
+            lines.append(f"{prefix}]")
+            lines.append(f"{prefix}总计: {len(obj)} 个元素")
+            return lines
+
+        # 字典类型 - 完全展开所有键值对（包括AttrDict，已转换为dict）
+        if isinstance(obj, dict):
+            if len(obj) == 0:
+                lines.append(f"{prefix}{{}}")
+                return lines
+
+            lines.append(f"{prefix}{{")
+            # 显示所有键值对，不省略
+            for key, value in obj.items():
+                # 规范化值（处理嵌套的elasticsearch_dsl对象）
+                value = self._normalize_es_dsl_object(value)
+                # 格式化值
+                if isinstance(value, str | int | float | bool | type(None)):
+                    value_repr = repr(value)
+                    if len(value_repr) > 100:
+                        value_repr = value_repr[:97] + "..."
+                    lines.append(f"{prefix}  {key}: {value_repr}")
+                elif isinstance(value, dict):
+                    # 嵌套字典：递归展开
+                    nested_lines = self._format_detailed_value(value, indent + 2, max_depth)
+                    if nested_lines:
+                        # 第一行是`{`，需要加上key前缀
+                        first_line = nested_lines[0].lstrip()
+                        lines.append(f"{prefix}  {key}: {first_line}")
+                        # 添加其余行
+                        for nested_line in nested_lines[1:]:
+                            lines.append(nested_line)
+                    else:
+                        lines.append(f"{prefix}  {key}: {{}}")
+                elif isinstance(value, list | tuple):
+                    # 嵌套列表：递归展开（包括AttrList，已转换为list）
+                    nested_lines = self._format_detailed_value(value, indent + 2, max_depth)
+                    if nested_lines:
+                        # 第一行是`[`，需要加上key前缀
+                        first_line = nested_lines[0].lstrip()
+                        lines.append(f"{prefix}  {key}: {first_line}")
+                        # 添加其余行
+                        for nested_line in nested_lines[1:]:
+                            lines.append(nested_line)
+                    else:
+                        lines.append(f"{prefix}  {key}: []")
+                else:
+                    value_repr = f"<{type(value).__name__}>"
+                    lines.append(f"{prefix}  {key}: {value_repr}")
+
+            lines.append(f"{prefix}}}")
+            return lines
+
+        # 对象类型
+        lines.append(f"{prefix}<{type(obj).__name__}>")
+        try:
+            attrs = [attr for attr in dir(obj) if not attr.startswith("_")]
+            # 显示所有属性，不省略
+            for attr in attrs:
+                try:
+                    value = getattr(obj, attr)
+                    if not callable(value):
+                        if isinstance(value, str | int | float | bool | type(None)):
+                            value_repr = repr(value)
+                            if len(value_repr) > 100:
+                                value_repr = value_repr[:97] + "..."
+                            lines.append(f"{prefix}  .{attr}: {value_repr}")
+                        else:
+                            # 对于复杂类型，显示类型信息
+                            lines.append(f"{prefix}  .{attr}: <{type(value).__name__}>")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return lines
+
+    def _output_single_variable(self, context_dict, variable_path, alert_id, action_instance, context=None):
+        """查询并输出单个模板变量的值.
 
         :param context_dict: 上下文字典
-        :param variable_path: 变量路径字符串
-        :param alert_id: 告警 ID
-        :param action_instance: 动作实例对象
+        :param variable_path: 变量路径
+        :param alert_id: 告警ID
+        :param action_instance: 动作实例
+        :param context: ActionContext对象（用于渲染模板）
         """
         # 保存原始输入用于显示
         original_input = variable_path.strip()
@@ -593,7 +736,7 @@ class Command(BaseCommand):
 
             :param obj: 要访问的对象
             :param path: 变量路径
-            :return: (value, error_message) 元组，成功时 error_message 为 None
+            :return: (value, error_message) 元组
             """
             import re
 
@@ -684,160 +827,6 @@ class Command(BaseCommand):
 
             return current, None
 
-        def format_detailed_value(obj, indent=0, max_depth=5):
-            """详细格式化值 - 完全展开所有元素.
-
-            生成可读的多行格式输出，适用于单个变量的详细查看。
-            与 format_value 不同，此函数不省略任何元素。
-
-            :param obj: 要格式化的对象
-            :param indent: 当前缩进级别（每级2空格）
-            :param max_depth: 最大递归深度（防止无限递归）
-            :return: 格式化后的行列表
-            """
-            prefix = "  " * indent
-            lines = []
-
-            # 防止无限递归
-            if indent >= max_depth:
-                lines.append(f"{prefix}<max depth reached>")
-                return lines
-
-            # 基本类型
-            if isinstance(obj, str | int | float | bool | type(None)):
-                lines.append(f"{prefix}{repr(obj)}")
-                return lines
-
-            # 列表类型 - 完全展开所有元素
-            if isinstance(obj, list | tuple):
-                if len(obj) == 0:
-                    lines.append(f"{prefix}[]")
-                    return lines
-
-                lines.append(f"{prefix}[")
-                # 显示所有元素，不省略
-                for i, item in enumerate(obj):
-                    if isinstance(item, str | int | float | bool | type(None)):
-                        lines.append(f"{prefix}  {repr(item)},")
-                    elif isinstance(item, dict):
-                        # 字典元素：递归展开
-                        if len(item) == 0:
-                            lines.append(f"{prefix}  {{}},")
-                        else:
-                            lines.append(f"{prefix}  {{")
-                            # 递归显示所有键值对
-                            for k, v in item.items():
-                                if isinstance(v, str | int | float | bool | type(None)):
-                                    lines.append(f"{prefix}    '{k}': {repr(v)},")
-                                else:
-                                    # 递归格式化嵌套结构
-                                    nested_lines = format_detailed_value(v, indent + 2, max_depth)
-                                    # 将第一行的键名合并
-                                    if nested_lines:
-                                        first_line = nested_lines[0].lstrip()
-                                        lines.append(f"{prefix}    '{k}': {first_line}")
-                                        # 添加其余行（调整缩进）
-                                        for nested_line in nested_lines[1:]:
-                                            lines.append(f"{prefix}      {nested_line.lstrip()}")
-                                    else:
-                                        lines.append(f"{prefix}    '{k}': <{type(v).__name__}>,")
-                            lines.append(f"{prefix}  }},")
-                    elif isinstance(item, list | tuple):
-                        # 嵌套列表：递归展开
-                        nested_lines = format_detailed_value(item, indent + 1, max_depth)
-                        if nested_lines:
-                            # 嵌套列表的第一行已经有正确的缩进（indent + 1），直接添加
-                            # 最后一行如果是 `]` 或 `总计:`，需要添加逗号
-                            for idx, nested_line in enumerate(nested_lines):
-                                if idx == len(nested_lines) - 1:
-                                    # 最后一行：如果是 `]` 或 `总计:`，添加逗号
-                                    stripped = nested_line.strip()
-                                    if stripped.endswith("]") or stripped.startswith("总计"):
-                                        lines.append(nested_line + ",")
-                                    else:
-                                        lines.append(nested_line)
-                                else:
-                                    lines.append(nested_line)
-                        else:
-                            # 空列表
-                            lines.append(f"{prefix}  [],")
-                    else:
-                        lines.append(f"{prefix}  <{type(item).__name__}>,")
-
-                lines.append(f"{prefix}]")
-                lines.append(f"{prefix}总计: {len(obj)} 个元素")
-                return lines
-
-            # 字典类型 - 完全展开所有键值对
-            if isinstance(obj, dict):
-                if len(obj) == 0:
-                    lines.append(f"{prefix}{{}}")
-                    return lines
-
-                lines.append(f"{prefix}{{")
-                # 显示所有键值对，不省略
-                for key, value in obj.items():
-                    # 格式化值
-                    if isinstance(value, str | int | float | bool | type(None)):
-                        value_repr = repr(value)
-                        if len(value_repr) > 100:
-                            value_repr = value_repr[:97] + "..."
-                        lines.append(f"{prefix}  {key}: {value_repr}")
-                    elif isinstance(value, dict):
-                        # 嵌套字典：递归展开
-                        nested_lines = format_detailed_value(value, indent + 2, max_depth)
-                        if nested_lines:
-                            # 第一行是 `{`，需要加上 key 前缀
-                            first_line = nested_lines[0].lstrip()
-                            lines.append(f"{prefix}  {key}: {first_line}")
-                            # 添加其余行
-                            for nested_line in nested_lines[1:]:
-                                lines.append(nested_line)
-                        else:
-                            lines.append(f"{prefix}  {key}: {{}}")
-                    elif isinstance(value, list | tuple):
-                        # 嵌套列表：递归展开
-                        nested_lines = format_detailed_value(value, indent + 2, max_depth)
-                        if nested_lines:
-                            # 第一行是 `[`，需要加上 key 前缀
-                            first_line = nested_lines[0].lstrip()
-                            lines.append(f"{prefix}  {key}: {first_line}")
-                            # 添加其余行
-                            for nested_line in nested_lines[1:]:
-                                lines.append(nested_line)
-                        else:
-                            lines.append(f"{prefix}  {key}: []")
-                    else:
-                        value_repr = f"<{type(value).__name__}>"
-                        lines.append(f"{prefix}  {key}: {value_repr}")
-
-                lines.append(f"{prefix}}}")
-                return lines
-
-            # 对象类型
-            lines.append(f"{prefix}<{type(obj).__name__}>")
-            try:
-                attrs = [attr for attr in dir(obj) if not attr.startswith("_")]
-                # 显示所有属性，不省略
-                for attr in attrs:
-                    try:
-                        value = getattr(obj, attr)
-                        if not callable(value):
-                            if isinstance(value, str | int | float | bool | type(None)):
-                                value_repr = repr(value)
-                                if len(value_repr) > 100:
-                                    value_repr = value_repr[:97] + "..."
-                                lines.append(f"{prefix}  .{attr}: {value_repr}")
-                            else:
-                                # 对于复杂类型，显示类型信息
-                                lines.append(f"{prefix}  .{attr}: <{type(value).__name__}>")
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            return lines
-
         # 输出头部
         self.stdout.write(self.style.SUCCESS("=" * 80))
         self.stdout.write(self.style.SUCCESS("模板变量查询"))
@@ -866,7 +855,43 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("\n变量值:\n"))
 
         # 详细输出值
-        for line in format_detailed_value(value):
+        for line in self._format_detailed_value(value):
             self.stdout.write(line)
+
+        # 如果变量包含点号（如 content.receivers），显示基于处理套餐逻辑的渲染结果
+        if "." in variable_path and context is not None:
+            try:
+                # 构建模板字符串
+                template_str = f"{{{{ {variable_path} }}}}"
+
+                # 获取 context 字典（与处理套餐的 get_context() 逻辑一致）
+                render_context = context.get_dictionary()
+
+                # 模拟处理套餐的 jinja_render 逻辑（与 CommonActionProcessor.jinja_render 完全一致）
+                # 1. 先渲染 user_content（如果有 default_content_template）
+                user_content = Jinja2Renderer.render(render_context.get("default_content_template", ""), render_context)
+                alarm_content = NoticeRowRenderer.render(user_content, render_context)
+                render_context["user_content"] = alarm_content
+
+                # 2. 渲染模板值（与处理套餐的渲染逻辑完全一致）
+                rendered_result = Jinja2Renderer.render(template_str, render_context)
+
+                plugin_type = action_instance.action_plugin.get("plugin_type")
+                plugin_type_name = plugin_type if plugin_type else "未知"
+
+                self.stdout.write("\n" + "-" * 80)
+                self.stdout.write(self.style.SUCCESS("📝 模板渲染结果（基于处理套餐实际渲染逻辑）:"))
+                self.stdout.write(self.style.SUCCESS(f"套餐类型: {plugin_type_name}"))
+                self.stdout.write(self.style.SUCCESS(f"模板: {template_str}"))
+                self.stdout.write(self.style.SUCCESS(f"渲染结果: {repr(rendered_result)}"))
+                self.stdout.write("-" * 80)
+            except Exception as e:
+                # 渲染失败时，记录详细错误信息，不影响主流程
+                import traceback
+
+                self.stdout.write("\n" + "-" * 80)
+                self.stdout.write(self.style.WARNING(f"⚠️  渲染失败: {str(e)}"))
+                self.stdout.write(self.style.WARNING(f"错误详情: {traceback.format_exc()}"))
+                self.stdout.write("-" * 80)
 
         self.stdout.write("\n" + "=" * 80 + "\n")
