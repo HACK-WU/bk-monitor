@@ -13,11 +13,11 @@ import csv
 import io
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.utils.translation import gettext as _
-from django.utils import timezone
 from jinja2.sandbox import SandboxedEnvironment as Environment
 
 from alarm_backends.core.context import logger
@@ -26,7 +26,6 @@ from bkm_space.api import SpaceApi
 from bkm_space.utils import bk_biz_id_to_space_uid
 from bkmonitor.models import Report
 from bkmonitor.report.utils import get_data_range
-from bkmonitor.utils.time_tools import format_user_time
 from constants.new_report import (
     LogColShowTypeEnum,
     YearOnYearChangeEnum,
@@ -291,13 +290,6 @@ class ClusteringReportHandler(BaseReportHandler):
         except Exception as e:  # pylint:disable=broad-except
             logger.exception(f"get space info error: {e}")
 
-        # 获取业务时区，用于格式化生成时间
-        # 对于报表订阅，生成时间使用业务时区，确保同一业务下所有订阅者看到一致的时间
-        from alarm_backends.core.i18n import i18n
-
-        i18n.set_biz(self.report.bk_biz_id)
-        timezone_name = i18n.get_timezone()
-
         render_params = {
             "bk_biz_id": self.report.bk_biz_id,
             "title": content_config["title"],
@@ -312,7 +304,7 @@ class ClusteringReportHandler(BaseReportHandler):
             "group_by": scenario_config.get("group_by", []),
             "percentage": 1 or round(max([i["percentage"] for i in result]), 2),
             "clustering_fields": clustering_config["clustering_fields"],
-            "time": format_user_time(timezone.now(), timezone_name=timezone_name, _format="%Y-%m-%d %H:%M%z"),
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "is_link_enabled": content_config.get("is_link_enabled", True),
             "generate_attachment": scenario_config.get("generate_attachment", False),
             "is_show_new_pattern": scenario_config.get("is_show_new_pattern", False),
