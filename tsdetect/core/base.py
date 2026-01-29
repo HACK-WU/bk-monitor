@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 TsDetect 数据点基类
 
@@ -8,10 +7,10 @@ TsDetect 数据点基类
 import hashlib
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from tsdetect.core.interfaces import IDataPoint
 from tsdetect.core.exceptions import InvalidDataPoint
+from tsdetect.core.interfaces import IDataPoint
 
 if TYPE_CHECKING:
     from tsdetect.core.algorithms import BaseAlgorithm
@@ -20,55 +19,56 @@ if TYPE_CHECKING:
 class BaseDataPoint(IDataPoint):
     """
     数据点基类
-    
+
     提供数据点的基本实现，支持动态属性访问。
     """
-    
+
     # 检测必需的属性列表
-    context_fields: List[str] = ["value", "timestamp", "unit"]
-    
-    def __init__(self, data: Dict[str, Any], **kwargs):
+    context_fields: list[str] = ["value", "timestamp", "unit"]
+
+    def __init__(self, data: dict[str, Any], **kwargs):
         """
         初始化数据点
-        
+
         Args:
             data: 数据字典，必须包含 value, timestamp 等字段
             **kwargs: 额外属性
         """
         self._raw_data = data
         self._extra = kwargs
-        
+
         # 动态设置属性
         for key, val in data.items():
             if not key.startswith("_"):
                 setattr(self, key, val)
-        
+
         # 设置额外属性
         for key, val in kwargs.items():
             if not key.startswith("_"):
                 setattr(self, key, val)
-        
+
         # 验证必需字段
         self._validate()
-    
+
     def _validate(self):
         """验证数据点必需字段"""
         for field in self.context_fields:
-            if not hasattr(self, field) and field not in ("unit",):
-                raise InvalidDataPoint(
-                    f"DataPoint missing required field: {field}",
-                    field=field
-                )
-    
+            if field in ("unit",):  # unit 可选
+                continue
+            # 检查 _raw_data 中是否有该字段，且值不为 None
+            val = self._raw_data.get(field)
+            if val is None:
+                raise InvalidDataPoint(f"DataPoint missing required field: {field}", field=field)
+
     @property
     def value(self) -> float:
         """获取数据点值"""
         return float(getattr(self, "_value", 0) or self._raw_data.get("value", 0))
-    
+
     @value.setter
     def value(self, val):
         self._value = val
-    
+
     @property
     def timestamp(self) -> int:
         """获取时间戳"""
@@ -77,75 +77,75 @@ class BaseDataPoint(IDataPoint):
         if ts is None:
             ts = self._raw_data.get("timestamp") or self._raw_data.get("time")
         return int(ts) if ts else 0
-    
+
     @timestamp.setter
     def timestamp(self, val):
         self._timestamp = val
-    
+
     @property
     def time(self) -> int:
         """时间戳别名"""
         return self.timestamp
-    
+
     @time.setter
     def time(self, val):
         self._timestamp = val
-    
+
     @property
     def unit(self) -> str:
         """获取单位"""
         return getattr(self, "_unit", "") or self._raw_data.get("unit", "")
-    
+
     @unit.setter
     def unit(self, val):
         self._unit = val
-    
+
     @property
-    def dimensions(self) -> Dict[str, Any]:
+    def dimensions(self) -> dict[str, Any]:
         """获取维度信息"""
         return getattr(self, "_dimensions", {}) or self._raw_data.get("dimensions", {})
-    
+
     @dimensions.setter
     def dimensions(self, val):
         self._dimensions = val
-    
+
     @property
-    def values(self) -> Dict[str, Any]:
+    def values(self) -> dict[str, Any]:
         """获取所有指标值"""
         return getattr(self, "_values", {}) or self._raw_data.get("values", {})
-    
+
     @values.setter
     def values(self, val):
         self._values = val
-    
+
     @property
     def record_id(self) -> str:
         """
         获取记录唯一标识
-        
+
         格式：{dimensions_md5}.{timestamp}
         """
         # 优先使用预设的 record_id
         preset_id = self._raw_data.get("record_id")
         if preset_id:
             return preset_id
-        
+
         # 生成 record_id
         dims_str = json.dumps(self.dimensions, sort_keys=True)
         dims_hash = hashlib.md5(dims_str.encode()).hexdigest()
         return f"{dims_hash}.{self.timestamp}"
-    
-    def as_dict(self) -> Dict[str, Any]:
+
+    def as_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return dict(self._raw_data)
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """获取属性值"""
         return getattr(self, key, default)
-    
+
     def __str__(self) -> str:
         return f"{self.record_id}:{self.value}"
-    
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} record_id={self.record_id} value={self.value}>"
 
@@ -153,26 +153,26 @@ class BaseDataPoint(IDataPoint):
 class SimpleDataPoint(BaseDataPoint):
     """
     简单数据点实现
-    
+
     适用于独立使用场景，无需额外依赖。
     """
-    
+
     def __init__(
         self,
-        data: Optional[Dict[str, Any]] = None,
-        value: Optional[float] = None,
-        timestamp: Optional[int] = None,
+        data: dict[str, Any] | None = None,
+        value: float | None = None,
+        timestamp: int | None = None,
         unit: str = "",
-        dimensions: Optional[Dict[str, Any]] = None,
-        **kwargs
+        dimensions: dict[str, Any] | None = None,
+        **kwargs,
     ):
         """
         初始化简单数据点
-        
+
         支持两种初始化方式：
         1. 传入 data 字典
         2. 传入独立参数
-        
+
         Args:
             data: 数据字典
             value: 数据值
@@ -183,7 +183,7 @@ class SimpleDataPoint(BaseDataPoint):
         """
         if data is None:
             data = {}
-        
+
         # 合并参数到 data
         if value is not None:
             data["value"] = value
@@ -193,28 +193,28 @@ class SimpleDataPoint(BaseDataPoint):
             data["unit"] = unit
         if dimensions is not None:
             data["dimensions"] = dimensions
-        
+
         super().__init__(data, **kwargs)
 
 
 class BaseAnomalyPoint:
     """
     异常数据点基类
-    
+
     包含检测到的异常信息。
     """
-    
+
     def __init__(
         self,
         data_point: IDataPoint,
         detector: "BaseAlgorithm",
         anomaly_message: str = "",
         anomaly_id: str = "",
-        context: Optional[Dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ):
         """
         初始化异常数据点
-        
+
         Args:
             data_point: 原始数据点
             detector: 检测到异常的算法对象
@@ -228,43 +228,43 @@ class BaseAnomalyPoint:
         self.anomaly_id = anomaly_id or self._generate_anomaly_id()
         self.anomaly_time = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         self.context = context or {}
-        self.child_detectors: List["BaseAlgorithm"] = []
+        self.child_detectors: list[BaseAlgorithm] = []
         self.strategy_snapshot_key = ""
-    
+
     def _generate_anomaly_id(self) -> str:
         """
         生成异常唯一标识
-        
+
         格式：{record_id}.{detector_name}.{timestamp}
         """
         detector_name = getattr(self.detector, "__class__", type(self.detector)).__name__
         return f"{self.data_point.record_id}.{detector_name}"
-    
+
     @property
     def value(self) -> float:
         """获取数据点值"""
         return self.data_point.value
-    
+
     @property
     def timestamp(self) -> int:
         """获取时间戳"""
         return self.data_point.timestamp
-    
+
     @property
-    def dimensions(self) -> Dict[str, Any]:
+    def dimensions(self) -> dict[str, Any]:
         """获取维度信息"""
         return self.data_point.dimensions
-    
+
     @property
     def is_anomaly(self) -> bool:
         """是否为异常"""
         return True
-    
+
     def add_child_detector(self, detector: "BaseAlgorithm"):
         """添加子检测器"""
         self.child_detectors.append(detector)
-    
-    def as_dict(self) -> Dict[str, Any]:
+
+    def as_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {
             "data": self.data_point.as_dict(),
@@ -276,9 +276,9 @@ class BaseAnomalyPoint:
             "detector": type(self.detector).__name__,
             "context": self.context,
         }
-    
+
     def __str__(self) -> str:
         return f"Anomaly({self.data_point.record_id}): {self.anomaly_message}"
-    
+
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} id={self.anomaly_id}>"

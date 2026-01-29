@@ -25,7 +25,7 @@ def get_metrics(scenario) -> list:
     获取指标
     """
     metrics_generator = import_string(f"{get_metrics.__module__}.{scenario}.get_metrics")
-    metrics: List[Category] = metrics_generator()
+    metrics: list[Category] = metrics_generator()
     metrics_list = []
     for category in metrics:
         category_dict = category._asdict()
