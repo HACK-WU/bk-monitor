@@ -93,20 +93,20 @@ except ImportError:
     pass
 
 # 融合 bk-monitor-base Django 配置：主项目优先，仅补齐缺失项
-# try:
-#     from bk_monitor_base.config.django import merge_django_settings
-#
-#     merge_django_settings(globals())
-#
-#     # 暂时排除metadata app
-#     globals()["INSTALLED_APPS"] = tuple(app for app in globals()["INSTALLED_APPS"] if app != "bk_monitor_base.metadata")
-# except ImportError as e:
-#     logging.exception(e)
-#     raise ImportError(f"Could not import bk-monitor-base settings merger: {e}")
-#
-#
-# from bk_monitor_base.infras.constant import OLD_MONITOR_SAAS_DB_NAME, OLD_MONITOR_BACKEND_DB_NAME
-#
-# # 数据库配置初始化
-# globals()["DATABASES"][OLD_MONITOR_SAAS_DB_NAME] = globals()["DATABASES"]["default"].copy()
-# globals()["DATABASES"][OLD_MONITOR_BACKEND_DB_NAME] = globals()["DATABASES"]["monitor_api"].copy()
+try:
+    from bk_monitor_base.config.django import merge_django_settings
+
+    merge_django_settings(globals())
+
+    # 暂时排除metadata app
+    globals()["INSTALLED_APPS"] = tuple(app for app in globals()["INSTALLED_APPS"] if app != "bk_monitor_base.metadata")
+except ImportError as e:
+    logging.exception(e)
+    raise ImportError(f"Could not import bk-monitor-base settings merger: {e}")
+
+
+from bk_monitor_base.infras.constant import OLD_MONITOR_SAAS_DB_NAME, OLD_MONITOR_BACKEND_DB_NAME
+
+# 数据库配置初始化
+globals()["DATABASES"][OLD_MONITOR_SAAS_DB_NAME] = globals()["DATABASES"]["default"].copy()
+globals()["DATABASES"][OLD_MONITOR_BACKEND_DB_NAME] = globals()["DATABASES"]["monitor_api"].copy()
