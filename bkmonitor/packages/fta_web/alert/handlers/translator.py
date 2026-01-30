@@ -10,6 +10,7 @@ specific language governing permissions and limitations under the License.
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import reduce
 
 from django.db.models import Q
@@ -21,6 +22,7 @@ from bkmonitor.utils.request import get_request_tenant_id
 from constants.action import ActionPluginType, ActionSignal
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import resource
+from common.decorators import db_safe_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -71,18 +73,42 @@ class MetricTranslator(AbstractTranslator):
         self.bk_biz_ids = list(set(bk_biz_ids or []) & {0})
         super().__init__(*args, **kwargs)
 
+    @db_safe_wrapper
+    def _execute_single_query(self, query: Q, tenant_id: str) -> list:
+        """
+        执行单个查询
+        每个独立查询使用精确条件，能更好地利用复合索引
+        使用 db_safe_wrapper 确保多线程环境下数据库连接安全
+        """
+        try:
+            metrics_queryset = MetricListCache.objects.filter(bk_tenant_id=tenant_id).filter(query)
+            if self.bk_biz_ids:
+                metrics_queryset = metrics_queryset.filter(bk_biz_id__in=self.bk_biz_ids)
+            # 只查询必要的字段
+            return list(
+                metrics_queryset.only(
+                    "data_source_label",
+                    "data_type_label",
+                    "result_table_id",
+                    "metric_field",
+                    "metric_field_name",
+                    "related_id",
+                    "extend_fields",
+                    "data_label",
+                )
+            )
+        except Exception as e:
+            # 捕获并静默处理查询异常：返回空列表以跳过该指标的翻译，避免异常传播影响其他并发查询
+            logger.warning("MetricListCache query failed: %s", str(e))
+            return []
+
     def translate(self, values: list[str]) -> dict:
-        """
-        根据给定的指标ID列表查询对应的指标信息，并转换为特定格式的查询数据结构。
+        if not values:
+            return {}
 
-        参数:
-            values (List[str]): 需要转换的指标ID列表，每个ID为字符串格式
+        tenant_id = get_request_tenant_id()
 
-        返回值:
-            Dict: 字典结构，键为原始指标ID，值为对应的指标字段名称。若未找到对应指标，则值与键相同
-        """
-        # 获取所有指标缓存对象
-        metrics = MetricListCache.objects.filter(bk_tenant_id=get_request_tenant_id())
+        # 解析所有metric_id并构建查询条件
         queries = []
 
         # 解析并转换指标ID为查询条件
@@ -105,17 +131,41 @@ class MetricTranslator(AbstractTranslator):
         if not queries:
             return {}
 
-        # 合并查询条件并执行过滤
-        metrics = metrics.filter(reduce(lambda x, y: x | y, queries))
+        all_metrics = []
+        if len(queries) <= 20:
+            # OR 查询条件较少，使用单次 OR 查询
+            metrics_queryset = MetricListCache.objects.filter(bk_tenant_id=tenant_id).filter(
+                reduce(lambda x, y: x | y, queries)
+            )
+            if self.bk_biz_ids:
+                metrics_queryset = metrics_queryset.filter(bk_biz_id__in=self.bk_biz_ids)
 
-        # 按业务ID进行二次过滤（如果存在业务ID限制）
-        if self.bk_biz_ids:
-            metrics = metrics.filter(bk_biz_id__in=self.bk_biz_ids)
+            all_metrics = list(
+                metrics_queryset.only(
+                    "data_source_label",
+                    "data_type_label",
+                    "result_table_id",
+                    "metric_field",
+                    "metric_field_name",
+                    "related_id",
+                    "extend_fields",
+                    "data_label",
+                )
+            )
+        else:
+            # OR 查询条件较多，拆分为并发查询
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                future_to_query = {
+                    executor.submit(self._execute_single_query, query, tenant_id): query for query in queries
+                }
+
+                for future in as_completed(future_to_query):
+                    all_metrics.extend(future.result())
 
         metric_translations = {}
 
         # 构建指标翻译映射表
-        for metric in metrics:
+        for metric in all_metrics:
             query_data = {
                 "data_source_label": metric.data_source_label,
                 "data_type_label": metric.data_type_label,
@@ -137,9 +187,8 @@ class MetricTranslator(AbstractTranslator):
 
             # 生成标准化指标ID并建立翻译映射
             metric_id = get_metric_id(**query_data)
-            metric_translations.update({metric_id: metric.metric_field_name})
+            metric_translations[metric_id] = metric.metric_field_name
 
-        # 返回最终翻译结果，未匹配的指标ID保留原始值
         return {value: metric_translations.get(value, value) for value in values}
 
 
