@@ -767,6 +767,333 @@ class IssueBuilder:
         if historical_issue:
             return True, historical_issue.id
         return False, None
+    
+    def _create_new_issue(self, dedupe_md5: str) -> Issue:
+        """
+        创建新的 Issue
+        
+        参数:
+            dedupe_md5: 聚合指纹，用于唯一标识 Issue
+        
+        返回:
+            Issue: 新创建的 Issue 对象
+        
+        创建流程:
+            1. 获取基础告警信息
+            2. 检测是否为回归问题
+            3. 计算时间范围
+            4. 构建维度统计
+            5. 创建 Issue 记录
+            6. 创建告警关联关系
+            7. 创建 ES 文档
+            8. 更新缓存
+            9. 记录活动日志
+        """
+        # 1. 获取基础信息
+        first_alert = self.alerts[0]
+        strategy_name = first_alert.strategy.get("name", "未知策略") if first_alert.strategy else "无策略告警"
+        
+        # 2. 检测回归问题
+        is_regression, historical_issue_id = self.detect_regression(dedupe_md5)
+        
+        # 3. 计算时间范围
+        now = timezone.now()
+        alert_times = [alert.begin_time for alert in self.alerts]
+        first_occur_time = datetime.fromtimestamp(min(alert_times), tz=timezone.utc)
+        last_occur_time = datetime.fromtimestamp(max(alert_times), tz=timezone.utc)
+        
+        # 4. 构建维度统计信息
+        dimension_stats = self._build_dimension_stats()
+        
+        # 5. 构建影响范围
+        impact_scope = self._build_impact_scope()
+        
+        # 6. 创建 Issue 记录
+        issue = Issue.objects.create(
+            # 基础信息
+            name=self._generate_issue_name(strategy_name, first_alert),
+            dedupe_md5=dedupe_md5,
+            strategy_id=self.strategy_id,
+            status=IssueStatus.PENDING_REVIEW,
+            priority=IssuePriority.MEDIUM,  # 默认中优先级
+            
+            # 负责人信息（初始为空）
+            assignee=None,
+            assignee_type=None,
+            
+            # 时间信息
+            first_occur_time=first_occur_time,
+            last_occur_time=last_occur_time,
+            created_at=now,
+            updated_at=now,
+            
+            # 统计信息
+            alert_count=len(self.alerts),
+            event_count=sum(alert.event_count for alert in self.alerts),
+            
+            # 聚合维度信息
+            aggregation_dimensions=self._get_aggregation_dimensions(),
+            dimension_stats=dimension_stats,
+            
+            # 影响范围
+            impact_scope=impact_scope,
+            affected_hosts=self._get_affected_hosts(),
+            affected_services=self._get_affected_services(),
+            
+            # 回归问题标识
+            is_regression=is_regression,
+            historical_issue_id=historical_issue_id,
+            
+            # 标签（从告警复制）
+            labels=first_alert.labels or [],
+            
+            # 业务信息
+            bk_biz_id=first_alert.bk_biz_id,
+            tenant_id=first_alert.bk_tenant_id or DEFAULT_TENANT_ID,
+        )
+        
+        # 7. 创建告警关联关系
+        self._create_alert_relations(issue)
+        
+        # 8. 创建 ES 文档
+        self._create_issue_document(issue)
+        
+        # 9. 更新缓存
+        self._update_cache(issue)
+        
+        # 10. 记录创建活动
+        self._record_creation_activity(issue, is_regression, historical_issue_id)
+        
+        # 11. 如果是回归问题，记录关联
+        if is_regression and historical_issue_id:
+            self._record_regression_relation(issue, historical_issue_id)
+        
+        logger.info(
+            "[IssueBuilder] Created new issue(%s) for strategy(%s), "
+            "alerts(%s), is_regression(%s)",
+            issue.id,
+            self.strategy_id,
+            len(self.alerts),
+            is_regression
+        )
+        
+        return issue
+    
+    def _generate_issue_name(self, strategy_name: str, alert: AlertDocument) -> str:
+        """生成 Issue 名称"""
+        # 优先使用告警名称
+        if alert.alert_name:
+            return alert.alert_name
+        
+        # 使用策略名称 + 关键维度
+        key_dims = []
+        if alert.dimensions:
+            dim_dict = {d.get("key"): d.get("value") for d in alert.dimensions}
+            # 提取关键维度
+            for key in ["service_name", "app_name", "namespace", "cluster_id"]:
+                if dim_dict.get(key):
+                    key_dims.append(str(dim_dict[key]))
+        
+        if key_dims:
+            return f"{strategy_name} - {'/'.join(key_dims[:2])}"
+        
+        return strategy_name
+    
+    def _get_aggregation_dimensions(self) -> list[dict]:
+        """获取聚合维度配置"""
+        issue_config = self.strategy_config.get("notice", {}).get("issue_config", {})
+        dimensions = issue_config.get("aggregation_dimensions", [])
+        
+        # 获取第一个告警的维度值
+        if not self.alerts:
+            return []
+        
+        alert = self.alerts[0]
+        alert_dimensions = {d.get("key"): d.get("value") for d in (alert.dimensions or [])}
+        
+        result = []
+        for dim_key in dimensions:
+            result.append({
+                "key": dim_key,
+                "value": alert_dimensions.get(dim_key, ""),
+                "display_key": dim_key,
+                "display_value": alert_dimensions.get(dim_key, "")
+            })
+        
+        return result
+    
+    def _build_dimension_stats(self) -> dict:
+        """构建维度统计信息"""
+        stats = {
+            "hosts": {},
+            "cloud_ids": {},
+            "services": {},
+            "custom": {}
+        }
+        
+        for alert in self.alerts:
+            # 统计主机
+            if alert.ip:
+                host_key = f"{alert.ip}:{alert.bk_cloud_id or '0'}"
+                stats["hosts"][host_key] = stats["hosts"].get(host_key, 0) + 1
+            
+            # 统计云区域
+            if alert.bk_cloud_id:
+                cloud_id = str(alert.bk_cloud_id)
+                stats["cloud_ids"][cloud_id] = stats["cloud_ids"].get(cloud_id, 0) + 1
+            
+            # 从维度中提取服务信息
+            if alert.dimensions:
+                dim_dict = {d.get("key"): d.get("value") for d in alert.dimensions}
+                
+                if dim_dict.get("service_name"):
+                    svc = dim_dict["service_name"]
+                    stats["services"][svc] = stats["services"].get(svc, 0) + 1
+                
+                # 自定义维度统计（如 cluster_id、bcs_cluster_id）
+                for key in ["cluster_id", "bcs_cluster_id", "namespace"]:
+                    if dim_dict.get(key):
+                        if key not in stats["custom"]:
+                            stats["custom"][key] = {}
+                        val = dim_dict[key]
+                        stats["custom"][key][val] = stats["custom"][key].get(val, 0) + 1
+        
+        return stats
+    
+    def _build_impact_scope(self) -> str:
+        """构建影响范围描述"""
+        scopes = []
+        
+        hosts = set()
+        services = set()
+        
+        for alert in self.alerts:
+            if alert.ip:
+                hosts.add(alert.ip)
+            if alert.dimensions:
+                dim_dict = {d.get("key"): d.get("value") for d in alert.dimensions}
+                if dim_dict.get("service_name"):
+                    services.add(dim_dict["service_name"])
+        
+        if hosts:
+            scopes.append(f"主机: {len(hosts)}台")
+        if services:
+            scopes.append(f"服务: {len(services)}个")
+        
+        return "; ".join(scopes) if scopes else "影响范围待确认"
+    
+    def _get_affected_hosts(self) -> list[str]:
+        """获取受影响的主机列表"""
+        hosts = set()
+        for alert in self.alerts:
+            if alert.ip:
+                hosts.add(alert.ip)
+            if alert.bk_host_id:
+                hosts.add(str(alert.bk_host_id))
+        return list(hosts)
+    
+    def _get_affected_services(self) -> list[str]:
+        """获取受影响的服务列表"""
+        services = set()
+        for alert in self.alerts:
+            if alert.dimensions:
+                dim_dict = {d.get("key"): d.get("value") for d in alert.dimensions}
+                if dim_dict.get("service_name"):
+                    services.add(dim_dict["service_name"])
+        return list(services)
+    
+    def _create_alert_relations(self, issue: Issue):
+        """创建 Issue 与告警的关联关系"""
+        relations = []
+        for alert in self.alerts:
+            relations.append(IssueAlertRelation(
+                issue_id=issue.id,
+                alert_id=alert.id,
+                alert_time=datetime.fromtimestamp(alert.begin_time, tz=timezone.utc),
+                severity=alert.severity,
+                is_primary=(alert == self.alerts[0])  # 第一个告警标记为主要告警
+            ))
+        
+        IssueAlertRelation.objects.bulk_create(relations)
+    
+    def _create_issue_document(self, issue: Issue):
+        """创建 ES Issue 文档"""
+        document = IssueDocument(
+            id=issue.id,
+            name=issue.name,
+            status=issue.status,
+            priority=issue.priority,
+            assignee=issue.assignee,
+            strategy_id=issue.strategy_id,
+            bk_biz_id=issue.bk_biz_id,
+            first_occur_time=int(issue.first_occur_time.timestamp()),
+            last_occur_time=int(issue.last_occur_time.timestamp()),
+            alert_count=issue.alert_count,
+            is_regression=issue.is_regression,
+            labels=issue.labels,
+            aggregation_dimensions=issue.aggregation_dimensions,
+            dimension_stats=issue.dimension_stats,
+            impact_scope=issue.impact_scope,
+            created_at=int(issue.created_at.timestamp()),
+            updated_at=int(issue.updated_at.timestamp()),
+        )
+        document.save()
+    
+    def _update_cache(self, issue: Issue):
+        """更新 Issue 缓存"""
+        cache_key = ISSUE_CONTENT_KEY.get_key(issue_id=issue.id)
+        cache_data = {
+            "id": issue.id,
+            "name": issue.name,
+            "status": issue.status,
+            "priority": issue.priority,
+            "assignee": issue.assignee,
+            "strategy_id": issue.strategy_id,
+            "dedupe_md5": issue.dedupe_md5,
+            "alert_count": issue.alert_count,
+            "last_occur_time": int(issue.last_occur_time.timestamp()),
+        }
+        ISSUE_CONTENT_KEY.client.set(cache_key, json.dumps(cache_data), ex=ISSUE_CONTENT_KEY.ttl)
+        
+        # 同时更新 dedupe_md5 索引缓存
+        dedupe_key = f"issue:dedupe:{issue.dedupe_md5}"
+        ISSUE_CONTENT_KEY.client.set(dedupe_key, issue.id, ex=ISSUE_CACHE_TTL)
+    
+    def _record_creation_activity(self, issue: Issue, is_regression: bool, historical_issue_id: int | None):
+        """记录 Issue 创建活动"""
+        content = f"Issue 自动创建，包含 {len(self.alerts)} 个告警"
+        if is_regression:
+            content += f"，检测到回归问题（历史 Issue: {historical_issue_id}）"
+        
+        IssueActivity.objects.create(
+            issue_id=issue.id,
+            activity_type=IssueActivityType.CREATED,
+            operator="system",
+            content=content,
+            new_value={
+                "alert_count": len(self.alerts),
+                "first_alert_id": self.alerts[0].id,
+                "is_regression": is_regression,
+                "historical_issue_id": historical_issue_id
+            }
+        )
+    
+    def _record_regression_relation(self, issue: Issue, historical_issue_id: int):
+        """记录回归问题关联"""
+        IssueExternalRelation.objects.create(
+            issue_id=issue.id,
+            relation_type=IssueRelationType.HISTORICAL,
+            external_system="issue",
+            external_id=str(historical_issue_id),
+            description=f"回归自历史 Issue #{historical_issue_id}",
+            created_at=timezone.now()
+        )
+    
+    def save(self, issue: Issue):
+        """保存 Issue（供外部调用）"""
+        issue.save()
+        self._update_cache(issue)
+        self._create_issue_document(issue)
 ```
 
 ### 5.2 状态流转机制

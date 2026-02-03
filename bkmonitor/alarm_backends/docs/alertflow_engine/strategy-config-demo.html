@@ -1,0 +1,1090 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>告警策略配置 - AlertFlow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .card-shadow { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+        .hover-lift { transition: transform 0.2s, box-shadow 0.2s; }
+        .hover-lift:hover { transform: translateY(-2px); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1); }
+        .metric-card { border-left: 4px solid transparent; transition: all 0.3s; }
+        .metric-card:hover { border-left-color: #667eea; background: #f8fafc; }
+        .metric-card.selected { border-left-color: #667eea; background: #f8fafc; border-color: #667eea; }
+        .notification-channel { transition: all 0.2s; }
+        .notification-channel.active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .algorithm-option { transition: all 0.2s; }
+        .algorithm-option.selected { border-color: #667eea; background: #f3f0ff; }
+        .threshold-level { transition: all 0.2s; }
+        .threshold-level:hover { transform: translateX(4px); }
+        .preview-panel { background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%); }
+        .code-block { font-family: 'Fira Code', monospace; }
+        .section-card { border-left: 3px solid transparent; transition: all 0.3s; }
+        .section-card:hover { border-left-color: #667eea; }
+        .sticky-preview { position: sticky; top: 80px; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <header class="gradient-bg text-white shadow-lg sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center space-x-4">
+                    <div class="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center">
+                        <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold">AlertFlow 策略配置</h1>
+                        <p class="text-sm text-white/70">一站式告警规则定义</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <button onclick="previewConfig()" class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition flex items-center space-x-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                        </svg>
+                        <span>预览配置</span>
+                    </button>
+                    <button onclick="saveStrategy()" class="px-4 py-2 bg-white text-purple-600 rounded-lg text-sm font-semibold hover:bg-gray-100 transition flex items-center space-x-2">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        <span>保存策略</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Main Configuration Form -->
+            <div class="lg:col-span-2 space-y-6">
+                <!-- Section 1: Basic Info -->
+                <section class="section-card bg-white rounded-xl card-shadow p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center">
+                            <span class="w-8 h-8 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center mr-3 text-sm">01</span>
+                            基础信息
+                        </h2>
+                        <span class="text-xs text-gray-400">配置策略的基本属性</span>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">策略名称 <span class="text-red-500">*</span></label>
+                            <input type="text" id="strategyName" placeholder="例如：生产环境 CPU 高负载告警" 
+                                class="w-full px-4 py-3 border border-gray-200 rounded-lg transition"
+                                onchange="updatePreview()">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">所属业务</label>
+                            <select id="bizId" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                <option value="">选择业务...</option>
+                                <option value="2" selected>蓝鲸监控平台</option>
+                                <option value="3">配置平台 (CMDB)</option>
+                                <option value="4">作业平台</option>
+                                <option value="5">标准运维</option>
+                            </select>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">策略类型</label>
+                            <select id="strategyType" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                <option value="metric" selected>指标监控</option>
+                                <option value="log">日志监控</option>
+                                <option value="event">事件监控</option>
+                                <option value="uptime">可用性监控</option>
+                            </select>
+                        </div>
+
+                        <div class="col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">策略说明</label>
+                            <textarea id="strategyDesc" rows="2" placeholder="描述该告警策略的用途和触发条件..."
+                                class="w-full px-4 py-3 border border-gray-200 rounded-lg transition resize-none"
+                                onchange="updatePreview()"></textarea>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 2: Data Source -->
+                <section class="section-card bg-white rounded-xl card-shadow p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center">
+                            <span class="w-8 h-8 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center mr-3 text-sm">02</span>
+                            数据源配置
+                        </h2>
+                        <span class="text-xs text-gray-400">选择监控数据来源</span>
+                    </div>
+
+                    <!-- Metric Source Selection -->
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div class="metric-card p-4 border rounded-lg cursor-pointer hover-lift selected" onclick="selectMetricSource(this, 'system')">
+                                <div class="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center mb-3">
+                                    <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-medium text-gray-800">系统指标</h4>
+                                <p class="text-xs text-gray-500 mt-1">CPU、内存、磁盘等</p>
+                            </div>
+                            <div class="metric-card p-4 border rounded-lg cursor-pointer hover-lift" onclick="selectMetricSource(this, 'application')">
+                                <div class="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center mb-3">
+                                    <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-medium text-gray-800">应用性能</h4>
+                                <p class="text-xs text-gray-500 mt-1">APM 链路追踪指标</p>
+                            </div>
+                            <div class="metric-card p-4 border rounded-lg cursor-pointer hover-lift" onclick="selectMetricSource(this, 'custom')">
+                                <div class="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center mb-3">
+                                    <svg class="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-medium text-gray-800">自定义指标</h4>
+                                <p class="text-xs text-gray-500 mt-1">业务自定义上报</p>
+                            </div>
+                            <div class="metric-card p-4 border rounded-lg cursor-pointer hover-lift" onclick="selectMetricSource(this, 'log')">
+                                <div class="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center mb-3">
+                                    <svg class="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                                    </svg>
+                                </div>
+                                <h4 class="font-medium text-gray-800">日志数据</h4>
+                                <p class="text-xs text-gray-500 mt-1">日志关键字匹配</p>
+                            </div>
+                        </div>
+
+                        <!-- Metric Details -->
+                        <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">指标名称</label>
+                                    <select id="metricId" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                        <option value="">选择指标...</option>
+                                        <option value="system.cpu.usage" selected>CPU 使用率</option>
+                                        <option value="system.memory.usage">内存使用率</option>
+                                        <option value="system.disk.usage">磁盘使用率</option>
+                                        <option value="system.load.load1">1分钟负载</option>
+                                        <option value="system.network.bytes_sent">网络发送速率</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">聚合方式</label>
+                                    <select id="aggMethod" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                        <option value="avg" selected>平均值 (AVG)</option>
+                                        <option value="max">最大值 (MAX)</option>
+                                        <option value="min">最小值 (MIN)</option>
+                                        <option value="sum">求和 (SUM)</option>
+                                        <option value="count">计数 (COUNT)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">聚合周期</label>
+                                    <select id="aggInterval" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                        <option value="60">1 分钟</option>
+                                        <option value="300" selected>5 分钟</option>
+                                        <option value="600">10 分钟</option>
+                                        <option value="1800">30 分钟</option>
+                                        <option value="3600">1 小时</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">监控对象</label>
+                                    <select id="targetType" class="w-full px-4 py-3 border border-gray-200 rounded-lg transition" onchange="updatePreview()">
+                                        <option value="host" selected>主机</option>
+                                        <option value="service">服务实例</option>
+                                        <option value="pod">容器 Pod</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dimension Filters -->
+                        <div class="mt-4">
+                            <label class="block text-sm font-medium text-gray-700 mb-2">维度筛选</label>
+                            <div class="flex flex-wrap gap-2">
+                                <span class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm flex items-center">
+                                    bk_biz_id = 2
+                                    <button class="ml-2 hover:text-purple-900" onclick="removeDimension(this)">&times;</button>
+                                </span>
+                                <span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm flex items-center">
+                                    bk_cloud_id = 0
+                                    <button class="ml-2 hover:text-blue-900" onclick="removeDimension(this)">&times;</button>
+                                </span>
+                                <button onclick="addDimension()" class="px-3 py-1 border border-dashed border-gray-300 rounded-full text-sm text-gray-500 hover:border-purple-500 hover:text-purple-500 transition">
+                                    + 添加维度
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 3: Detection Rules -->
+                <section class="section-card bg-white rounded-xl card-shadow p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center">
+                            <span class="w-8 h-8 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center mr-3 text-sm">03</span>
+                            检测规则
+                        </h2>
+                        <span class="text-xs text-gray-400">配置告警触发条件</span>
+                    </div>
+
+                    <!-- Algorithm Selection -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">检测算法</label>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div class="algorithm-option p-3 border-2 border-purple-500 rounded-lg cursor-pointer selected" onclick="selectAlgorithm(this, 'threshold')">
+                                <div class="font-medium text-gray-800">阈值检测</div>
+                                <div class="text-xs text-gray-500 mt-1">固定阈值触发</div>
+                            </div>
+                            <div class="algorithm-option p-3 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300" onclick="selectAlgorithm(this, 'anomaly')">
+                                <div class="font-medium text-gray-800">智能异常</div>
+                                <div class="text-xs text-gray-500 mt-1">AI 自动检测</div>
+                            </div>
+                            <div class="algorithm-option p-3 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300" onclick="selectAlgorithm(this, 'baseline')">
+                                <div class="font-medium text-gray-800">基线检测</div>
+                                <div class="text-xs text-gray-500 mt-1">偏离历史基线</div>
+                            </div>
+                            <div class="algorithm-option p-3 border-2 border-gray-200 rounded-lg cursor-pointer hover:border-purple-300" onclick="selectAlgorithm(this, 'trend')">
+                                <div class="font-medium text-gray-800">趋势检测</div>
+                                <div class="text-xs text-gray-500 mt-1">变化率触发</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Threshold Configuration -->
+                    <div id="thresholdConfig" class="space-y-4">
+                        <div class="flex items-center justify-between">
+                            <label class="text-sm font-medium text-gray-700">告警级别配置</label>
+                            <button onclick="addThresholdLevel()" class="text-sm text-purple-600 hover:text-purple-700 font-medium flex items-center">
+                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                                添加级别
+                            </button>
+                        </div>
+
+                        <div id="thresholdLevels" class="space-y-3">
+                            <!-- Level 3 (High) -->
+                            <div class="threshold-level p-4 bg-red-50 border-l-4 border-red-500 rounded-r-lg">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <span class="w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-xs font-bold mr-2">P1</span>
+                                        <span class="font-medium text-red-700">致命</span>
+                                    </div>
+                                    <button class="text-red-400 hover:text-red-600" onclick="removeThresholdLevel(this)">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div class="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">比较符</label>
+                                        <select class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-op" onchange="updatePreview()">
+                                            <option value=">=">>=</option>
+                                            <option value=">">></option>
+                                            <option value="<="><=</option>
+                                            <option value="<"><</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">阈值</label>
+                                        <input type="number" value="95" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-value" onchange="updatePreview()">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">触发次数</label>
+                                        <input type="number" value="1" min="1" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-count" onchange="updatePreview()">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Level 2 (Medium) -->
+                            <div class="threshold-level p-4 bg-orange-50 border-l-4 border-orange-500 rounded-r-lg">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <span class="w-6 h-6 bg-orange-500 text-white rounded-full flex items-center justify-center text-xs font-bold mr-2">P2</span>
+                                        <span class="font-medium text-orange-700">预警</span>
+                                    </div>
+                                    <button class="text-orange-400 hover:text-orange-600" onclick="removeThresholdLevel(this)">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div class="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">比较符</label>
+                                        <select class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-op" onchange="updatePreview()">
+                                            <option value=">=">>=</option>
+                                            <option value=">">></option>
+                                            <option value="<="><=</option>
+                                            <option value="<"><</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">阈值</label>
+                                        <input type="number" value="80" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-value" onchange="updatePreview()">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">触发次数</label>
+                                        <input type="number" value="3" min="1" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-count" onchange="updatePreview()">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Level 1 (Low) -->
+                            <div class="threshold-level p-4 bg-yellow-50 border-l-4 border-yellow-500 rounded-r-lg">
+                                <div class="flex items-center justify-between mb-3">
+                                    <div class="flex items-center">
+                                        <span class="w-6 h-6 bg-yellow-500 text-white rounded-full flex items-center justify-center text-xs font-bold mr-2">P3</span>
+                                        <span class="font-medium text-yellow-700">提醒</span>
+                                    </div>
+                                    <button class="text-yellow-400 hover:text-yellow-600" onclick="removeThresholdLevel(this)">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                                        </svg>
+                                    </button>
+                                </div>
+                                <div class="grid grid-cols-3 gap-4">
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">比较符</label>
+                                        <select class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-op" onchange="updatePreview()">
+                                            <option value=">=">>=</option>
+                                            <option value=">">></option>
+                                            <option value="<="><=</option>
+                                            <option value="<"><</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">阈值</label>
+                                        <input type="number" value="60" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-value" onchange="updatePreview()">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">触发次数</label>
+                                        <input type="number" value="5" min="1" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-count" onchange="updatePreview()">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Visual Threshold Bar -->
+                        <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                            <label class="block text-sm font-medium text-gray-700 mb-3">阈值可视化</label>
+                            <div class="relative h-8 bg-gray-200 rounded-full overflow-hidden">
+                                <div class="absolute left-0 top-0 h-full bg-yellow-400" style="width: 60%;"></div>
+                                <div class="absolute left-0 top-0 h-full bg-orange-400" style="width: 80%;"></div>
+                                <div class="absolute left-0 top-0 h-full bg-red-500" style="width: 95%;"></div>
+                                <div class="absolute inset-0 flex items-center justify-between px-4 text-xs font-medium text-white">
+                                    <span>0%</span>
+                                    <span class="ml-[55%]">60%</span>
+                                    <span class="ml-[15%]">80%</span>
+                                    <span>95%</span>
+                                </div>
+                            </div>
+                            <div class="flex justify-between mt-2 text-xs text-gray-500">
+                                <span class="flex items-center"><span class="w-2 h-2 bg-yellow-400 rounded-full mr-1"></span>提醒</span>
+                                <span class="flex items-center"><span class="w-2 h-2 bg-orange-400 rounded-full mr-1"></span>预警</span>
+                                <span class="flex items-center"><span class="w-2 h-2 bg-red-500 rounded-full mr-1"></span>致命</span>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 4: Notification -->
+                <section class="section-card bg-white rounded-xl card-shadow p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center">
+                            <span class="w-8 h-8 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center mr-3 text-sm">04</span>
+                            通知配置
+                        </h2>
+                        <span class="text-xs text-gray-400">配置告警通知方式</span>
+                    </div>
+
+                    <!-- Notification Channels -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">通知渠道</label>
+                        <div class="grid grid-cols-4 gap-4">
+                            <div class="notification-channel active p-4 border-2 border-purple-500 rounded-lg text-center cursor-pointer" onclick="toggleChannel(this, 'weixin')">
+                                <svg class="w-8 h-8 mx-auto mb-2" fill="currentColor" viewBox="0 0 24 24">
+                                    <path d="M8.5 13.5A1.5 1.5 0 007 15v3a1.5 1.5 0 001.5 1.5h7A1.5 1.5 0 0017 18v-3a1.5 1.5 0 00-1.5-1.5h-7z"/>
+                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+                                </svg>
+                                <div class="font-medium text-sm">企业微信</div>
+                            </div>
+                            <div class="notification-channel p-4 border-2 border-gray-200 rounded-lg text-center cursor-pointer" onclick="toggleChannel(this, 'sms')">
+                                <svg class="w-8 h-8 mx-auto mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/>
+                                </svg>
+                                <div class="font-medium text-sm text-gray-600">短信</div>
+                            </div>
+                            <div class="notification-channel p-4 border-2 border-gray-200 rounded-lg text-center cursor-pointer" onclick="toggleChannel(this, 'voice')">
+                                <svg class="w-8 h-8 mx-auto mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+                                </svg>
+                                <div class="font-medium text-sm text-gray-600">语音电话</div>
+                            </div>
+                            <div class="notification-channel p-4 border-2 border-gray-200 rounded-lg text-center cursor-pointer" onclick="toggleChannel(this, 'email')">
+                                <svg class="w-8 h-8 mx-auto mb-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                                </svg>
+                                <div class="font-medium text-sm text-gray-600">邮件</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recipients -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">接收人配置</label>
+                        <div class="space-y-4">
+                            <div class="flex items-center space-x-4 p-4 border rounded-lg hover:border-purple-300 transition cursor-pointer" onclick="selectRecipient('user')">
+                                <input type="radio" name="recipientType" value="user" id="recipientUser" class="w-4 h-4 text-purple-600" onchange="updatePreview()">
+                                <div class="flex-1">
+                                    <label for="recipientUser" class="font-medium text-gray-800 cursor-pointer">指定用户</label>
+                                    <p class="text-sm text-gray-500">选择具体用户接收告警通知</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center space-x-4 p-4 border-2 border-purple-200 rounded-lg bg-purple-50" onclick="selectRecipient('duty')">
+                                <input type="radio" name="recipientType" value="duty" id="recipientDuty" class="w-4 h-4 text-purple-600" checked onchange="updatePreview()">
+                                <div class="flex-1">
+                                    <label for="recipientDuty" class="font-medium text-gray-800 cursor-pointer">值班组</label>
+                                    <p class="text-sm text-gray-500">按排班表自动通知值班人员</p>
+                                </div>
+                                <select id="dutyGroup" class="px-3 py-2 border border-gray-200 rounded-lg text-sm" onchange="updatePreview()">
+                                    <option value="oncall_ops">运维值班组</option>
+                                    <option value="oncall_dev">开发值班组</option>
+                                    <option value="oncall_dba">DBA值班组</option>
+                                </select>
+                            </div>
+                            <div class="flex items-center space-x-4 p-4 border rounded-lg hover:border-purple-300 transition cursor-pointer" onclick="selectRecipient('role')">
+                                <input type="radio" name="recipientType" value="role" id="recipientRole" class="w-4 h-4 text-purple-600" onchange="updatePreview()">
+                                <div class="flex-1">
+                                    <label for="recipientRole" class="font-medium text-gray-800 cursor-pointer">角色组</label>
+                                    <p class="text-sm text-gray-500">通知指定角色下的所有成员</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Notification Template -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-3">通知模板</label>
+                        <div class="space-y-3">
+                            <div class="p-4 border-2 border-purple-500 rounded-lg cursor-pointer bg-purple-50" onclick="selectTemplate('standard')">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-medium text-gray-800">标准模板</div>
+                                        <div class="text-sm text-gray-500 mt-1">包含告警级别、指标值、触发时间</div>
+                                    </div>
+                                    <input type="radio" name="template" value="standard" class="w-4 h-4 text-purple-600" checked onchange="updatePreview()">
+                                </div>
+                            </div>
+                            <div class="p-4 border rounded-lg hover:border-purple-300 cursor-pointer transition" onclick="selectTemplate('simple')">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-medium text-gray-800">简洁模板</div>
+                                        <div class="text-sm text-gray-500 mt-1">仅包含核心告警信息</div>
+                                    </div>
+                                    <input type="radio" name="template" value="simple" class="w-4 h-4 text-purple-600" onchange="updatePreview()">
+                                </div>
+                            </div>
+                            <div class="p-4 border rounded-lg hover:border-purple-300 cursor-pointer transition" onclick="selectTemplate('detailed')">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <div class="font-medium text-gray-800">详细模板</div>
+                                        <div class="text-sm text-gray-500 mt-1">包含完整上下文和处理建议</div>
+                                    </div>
+                                    <input type="radio" name="template" value="detailed" class="w-4 h-4 text-purple-600" onchange="updatePreview()">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Section 5: Advanced Options -->
+                <section class="section-card bg-white rounded-xl card-shadow p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-lg font-bold text-gray-800 flex items-center">
+                            <span class="w-8 h-8 bg-purple-100 text-purple-600 rounded-lg flex items-center justify-center mr-3 text-sm">05</span>
+                            高级选项
+                        </h2>
+                        <span class="text-xs text-gray-400">收敛、恢复等高级配置</span>
+                    </div>
+
+                    <!-- Convergence -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <label class="text-sm font-medium text-gray-700">告警收敛</label>
+                                <p class="text-xs text-gray-400 mt-0.5">相同维度告警在窗口期内只发送一次</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="convergeEnabled" class="sr-only peer" checked onchange="toggleSection('convergeConfig', this.checked); updatePreview()">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            </label>
+                        </div>
+                        <div id="convergeConfig" class="p-4 bg-gray-50 rounded-lg">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">收敛窗口（分钟）</label>
+                                    <input type="number" id="convergeWindow" value="5" min="1" max="1440" 
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" onchange="updatePreview()">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">收敛维度</label>
+                                    <div class="flex flex-wrap gap-2 mt-1">
+                                        <label class="flex items-center space-x-1 text-sm">
+                                            <input type="checkbox" checked class="rounded text-purple-600 converge-dim" value="ip" onchange="updatePreview()">
+                                            <span>IP</span>
+                                        </label>
+                                        <label class="flex items-center space-x-1 text-sm">
+                                            <input type="checkbox" checked class="rounded text-purple-600 converge-dim" value="strategy_id" onchange="updatePreview()">
+                                            <span>策略ID</span>
+                                        </label>
+                                        <label class="flex items-center space-x-1 text-sm">
+                                            <input type="checkbox" class="rounded text-purple-600 converge-dim" value="level" onchange="updatePreview()">
+                                            <span>告警级别</span>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Recovery -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <label class="text-sm font-medium text-gray-700">自动恢复</label>
+                                <p class="text-xs text-gray-400 mt-0.5">指标恢复正常后自动发送恢复通知</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="recoveryEnabled" class="sr-only peer" checked onchange="toggleSection('recoveryConfig', this.checked); updatePreview()">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            </label>
+                        </div>
+                        <div id="recoveryConfig" class="p-4 bg-gray-50 rounded-lg">
+                            <div class="space-y-3">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">恢复检测周期（个）</label>
+                                    <input type="number" id="recoveryCycles" value="2" min="1" max="10" 
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" onchange="updatePreview()">
+                                </div>
+                                <label class="flex items-center space-x-2">
+                                    <input type="checkbox" id="sendRecoveryNotice" checked class="rounded text-purple-600" onchange="updatePreview()">
+                                    <span class="text-sm text-gray-700">发送恢复通知</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Shield -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <label class="text-sm font-medium text-gray-700">屏蔽规则</label>
+                                <p class="text-xs text-gray-400 mt-0.5">在特定时段或条件下自动屏蔽告警</p>
+                            </div>
+                            <button onclick="addShieldRule()" class="text-sm text-purple-600 hover:text-purple-700 font-medium flex items-center">
+                                <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                                </svg>
+                                添加规则
+                            </button>
+                        </div>
+                        <div id="shieldRules" class="space-y-2">
+                            <div class="p-4 bg-gray-50 rounded-lg border border-dashed border-gray-300 text-center empty-shield">
+                                <svg class="w-12 h-12 mx-auto text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                                </svg>
+                                <p class="text-sm text-gray-500">暂无屏蔽规则</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Circuit Breaker -->
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <label class="text-sm font-medium text-gray-700">熔断保护</label>
+                                <p class="text-xs text-gray-400 mt-0.5">告警风暴时自动熔断，保护通知渠道</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="circuitBreakerEnabled" class="sr-only peer" onchange="toggleSection('circuitBreakerConfig', this.checked); updatePreview()">
+                                <div class="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+                            </label>
+                        </div>
+                        <div id="circuitBreakerConfig" class="p-4 bg-gray-50 rounded-lg hidden">
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">触发阈值（告警数/分钟）</label>
+                                    <input type="number" id="circuitThreshold" value="100" min="1" 
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" onchange="updatePreview()">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">熔断时长（分钟）</label>
+                                    <input type="number" id="circuitDuration" value="10" min="1" 
+                                        class="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm" onchange="updatePreview()">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Save Button -->
+                <div class="flex justify-end pt-4 pb-8">
+                    <button onclick="saveStrategy()" class="px-8 py-4 gradient-bg text-white rounded-xl font-semibold hover:opacity-90 transition flex items-center space-x-2 text-lg shadow-lg">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                        </svg>
+                        <span>保存策略</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview Panel -->
+            <div class="lg:col-span-1">
+                <div class="sticky-preview space-y-6">
+                    <!-- Real-time Preview -->
+                    <div class="preview-panel rounded-xl overflow-hidden card-shadow">
+                        <div class="px-4 py-3 bg-gray-800 border-b border-gray-700 flex items-center justify-between">
+                            <span class="text-sm font-medium text-gray-300 flex items-center">
+                                <span class="w-2 h-2 bg-green-400 rounded-full mr-2 animate-pulse"></span>
+                                实时配置预览
+                            </span>
+                            <button onclick="copyConfig()" class="text-xs text-gray-400 hover:text-white transition" title="复制配置">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="p-4 max-h-[600px] overflow-y-auto">
+                            <pre id="configPreview" class="code-block text-xs text-green-400 whitespace-pre-wrap"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Quick Info -->
+                    <div class="bg-white rounded-xl card-shadow p-4">
+                        <h3 class="font-semibold text-gray-800 mb-4">配置概览</h3>
+                        <div class="space-y-3 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">策略名称</span>
+                                <span id="previewName" class="text-gray-800 font-medium truncate max-w-[150px]">-</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">检测算法</span>
+                                <span id="previewAlgorithm" class="text-gray-800 font-medium">阈值检测</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">告警级别</span>
+                                <span id="previewLevels" class="text-gray-800 font-medium">3 个</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-500">通知渠道</span>
+                                <span id="previewChannels" class="text-gray-800 font-medium">1 个</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tips -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <div class="flex items-start">
+                            <svg class="w-5 h-5 text-blue-500 mt-0.5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                            </svg>
+                            <div>
+                                <h4 class="text-sm font-medium text-blue-800">配置提示</h4>
+                                <p class="text-xs text-blue-600 mt-1">完成配置后，策略将在 30 秒内生效。建议先在测试环境验证检测逻辑。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal for Full Preview -->
+    <div id="previewModal" class="fixed inset-0 bg-black/50 hidden z-50 flex items-center justify-center">
+        <div class="bg-white rounded-xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] overflow-hidden">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-bold text-gray-800">完整配置预览</h3>
+                <button onclick="closePreview()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto max-h-[60vh]">
+                <pre id="fullConfigPreview" class="code-block text-sm text-gray-800 bg-gray-50 p-4 rounded-lg overflow-x-auto"></pre>
+            </div>
+            <div class="px-6 py-4 border-t bg-gray-50 flex justify-end space-x-3">
+                <button onclick="closePreview()" class="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium">关闭</button>
+                <button onclick="downloadConfig()" class="px-4 py-2 gradient-bg text-white rounded-lg font-medium hover:opacity-90">
+                    下载配置
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            updatePreview();
+        });
+
+        function selectMetricSource(element, type) {
+            document.querySelectorAll('.metric-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            element.classList.add('selected');
+            updatePreview();
+        }
+
+        function selectAlgorithm(element, type) {
+            document.querySelectorAll('.algorithm-option').forEach(opt => {
+                opt.classList.remove('selected');
+                opt.classList.remove('border-purple-500');
+                opt.classList.add('border-gray-200');
+            });
+            element.classList.remove('border-gray-200');
+            element.classList.add('border-purple-500', 'selected');
+            updatePreview();
+        }
+
+        function toggleChannel(element, channel) {
+            element.classList.toggle('active');
+            
+            const icon = element.querySelector('svg');
+            const text = element.querySelector('.font-medium');
+            
+            if (element.classList.contains('active')) {
+                element.classList.add('border-purple-500');
+                element.classList.remove('border-gray-200');
+                icon.classList.remove('text-gray-400');
+                text.classList.remove('text-gray-600');
+            } else {
+                element.classList.remove('border-purple-500');
+                element.classList.add('border-gray-200');
+                icon.classList.add('text-gray-400');
+                text.classList.add('text-gray-600');
+            }
+            updatePreview();
+        }
+
+        function selectRecipient(type) {
+            document.getElementById('recipient' + type.charAt(0).toUpperCase() + type.slice(1)).checked = true;
+            
+            // Update visual selection
+            document.querySelectorAll('input[name="recipientType"]').forEach(radio => {
+                const container = radio.closest('.flex');
+                if (radio.checked) {
+                    container.classList.add('border-purple-500', 'bg-purple-50');
+                    container.classList.remove('border-gray-200');
+                } else {
+                    container.classList.remove('border-purple-500', 'bg-purple-50');
+                    container.classList.add('border-gray-200');
+                }
+            });
+            updatePreview();
+        }
+
+        function selectTemplate(type) {
+            document.querySelector('input[name="template"][value="' + type + '"]').checked = true;
+            updatePreview();
+        }
+
+        function toggleSection(sectionId, show) {
+            const section = document.getElementById(sectionId);
+            if (section) {
+                section.classList.toggle('hidden', !show);
+            }
+        }
+
+        function addThresholdLevel() {
+            const levels = document.getElementById('thresholdLevels');
+            const levelCount = levels.children.length + 1;
+            
+            if (levelCount > 5) {
+                alert('最多支持 5 个告警级别');
+                return;
+            }
+            
+            const colors = ['yellow', 'orange', 'red', 'purple', 'gray'];
+            const color = colors[levelCount - 1] || 'gray';
+            
+            const newLevel = document.createElement('div');
+            newLevel.className = `threshold-level p-4 bg-${color}-50 border-l-4 border-${color}-500 rounded-r-lg`;
+            newLevel.innerHTML = `
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center">
+                        <span class="w-6 h-6 bg-${color}-500 text-white rounded-full flex items-center justify-center text-xs font-bold mr-2">P${levelCount}</span>
+                        <span class="font-medium text-${color}-700">自定义级别</span>
+                    </div>
+                    <button class="text-${color}-400 hover:text-${color}-600" onclick="removeThresholdLevel(this)">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="grid grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-xs text-gray-600 mb-1">比较符</label>
+                        <select class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-op" onchange="updatePreview()">
+                            <option value=">=">>=</option>
+                            <option value=">">></option>
+                            <option value="<="><=</option>
+                            <option value="<"><</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-600 mb-1">阈值</label>
+                        <input type="number" value="50" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-value" onchange="updatePreview()">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-600 mb-1">触发次数</label>
+                        <input type="number" value="3" min="1" class="w-full px-3 py-2 border border-gray-200 rounded text-sm threshold-count" onchange="updatePreview()">
+                    </div>
+                </div>
+            `;
+            levels.appendChild(newLevel);
+            updatePreview();
+        }
+
+        function removeThresholdLevel(btn) {
+            const level = btn.closest('.threshold-level');
+            const levels = document.getElementById('thresholdLevels');
+            if (levels.children.length > 1) {
+                level.remove();
+                updatePreview();
+            } else {
+                alert('至少需要保留一个告警级别');
+            }
+        }
+
+        function addDimension() {
+            const dimension = prompt('请输入维度名称（如：bk_cloud_id）:');
+            if (dimension) {
+                const value = prompt('请输入维度值:');
+                if (value) {
+                    const container = document.querySelector('.flex.flex-wrap.gap-2');
+                    const span = document.createElement('span');
+                    span.className = 'px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm flex items-center';
+                    span.innerHTML = `
+                        ${dimension} = ${value}
+                        <button class="ml-2 hover:text-purple-900" onclick="removeDimension(this)">&times;</button>
+                    `;
+                    container.insertBefore(span, container.lastElementChild);
+                    updatePreview();
+                }
+            }
+        }
+
+        function removeDimension(btn) {
+            btn.parentElement.remove();
+            updatePreview();
+        }
+
+        function addShieldRule() {
+            const rules = document.getElementById('shieldRules');
+            const emptyMsg = rules.querySelector('.empty-shield');
+            if (emptyMsg) emptyMsg.remove();
+            
+            const rule = document.createElement('div');
+            rule.className = 'p-4 bg-gray-50 rounded-lg border flex items-center justify-between';
+            rule.innerHTML = `
+                <div class="flex items-center space-x-3">
+                    <span class="w-2 h-2 bg-gray-400 rounded-full"></span>
+                    <span class="text-sm text-gray-700">屏蔽规则示例</span>
+                </div>
+                <button onclick="this.parentElement.remove()" class="text-gray-400 hover:text-red-500">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            `;
+            rules.appendChild(rule);
+        }
+
+        function updatePreview() {
+            const config = generateConfig();
+            document.getElementById('configPreview').textContent = JSON.stringify(config, null, 2);
+            
+            // Update quick info
+            document.getElementById('previewName').textContent = config.strategy.name || '-';
+            
+            const algoMap = {
+                'threshold': '阈值检测',
+                'anomaly': '智能异常',
+                'baseline': '基线检测',
+                'trend': '趋势检测'
+            };
+            document.getElementById('previewAlgorithm').textContent = algoMap[config.strategy.detect_rule.algorithm] || '阈值检测';
+            document.getElementById('previewLevels').textContent = config.strategy.detect_rule.thresholds.length + ' 个';
+            document.getElementById('previewChannels').textContent = config.strategy.notification.channels.length + ' 个';
+        }
+
+        function generateConfig() {
+            const strategyName = document.getElementById('strategyName')?.value || '未命名策略';
+            const bizId = document.getElementById('bizId')?.value || '';
+            const strategyType = document.getElementById('strategyType')?.value || 'metric';
+            const metricId = document.getElementById('metricId')?.value || '';
+            const aggMethod = document.getElementById('aggMethod')?.value || 'avg';
+            const aggInterval = parseInt(document.getElementById('aggInterval')?.value || '300');
+            const convergeEnabled = document.getElementById('convergeEnabled')?.checked ?? true;
+            const convergeWindow = parseInt(document.getElementById('convergeWindow')?.value || '5');
+            const recoveryEnabled = document.getElementById('recoveryEnabled')?.checked ?? true;
+            const recoveryCycles = parseInt(document.getElementById('recoveryCycles')?.value || '2');
+            const sendRecoveryNotice = document.getElementById('sendRecoveryNotice')?.checked ?? true;
+
+            // Get algorithm
+            let algorithm = 'threshold';
+            document.querySelectorAll('.algorithm-option').forEach((opt, idx) => {
+                if (opt.classList.contains('selected')) {
+                    const types = ['threshold', 'anomaly', 'baseline', 'trend'];
+                    algorithm = types[idx] || 'threshold';
+                }
+            });
+
+            // Get thresholds
+            const thresholds = [];
+            const levels = ['致命', '预警', '提醒', '通知', '记录'];
+            document.querySelectorAll('.threshold-level').forEach((level, idx) => {
+                const op = level.querySelector('.threshold-op')?.value || '>=';
+                const val = parseFloat(level.querySelector('.threshold-value')?.value || '0');
+                const count = parseInt(level.querySelector('.threshold-count')?.value || '1');
+                thresholds.push({
+                    level: 3 - idx,
+                    level_name: levels[idx] || `级别${idx + 1}`,
+                    operator: op,
+                    value: val,
+                    consecutive_count: count
+                });
+            });
+
+            // Get active notification channels
+            const activeChannels = [];
+            document.querySelectorAll('.notification-channel').forEach((ch, idx) => {
+                if (ch.classList.contains('active')) {
+                    const channels = ['weixin', 'sms', 'voice', 'email'];
+                    activeChannels.push(channels[idx]);
+                }
+            });
+
+            // Get recipient type
+            const recipientType = document.querySelector('input[name="recipientType"]:checked')?.value || 'duty';
+            const dutyGroup = document.getElementById('dutyGroup')?.value || 'oncall_ops';
+
+            // Get template
+            const template = document.querySelector('input[name="template"]:checked')?.value || 'standard';
+
+            // Get converge dimensions
+            const convergeDims = [];
+            document.querySelectorAll('.converge-dim:checked').forEach(cb => {
+                convergeDims.push(cb.value);
+            });
+
+            return {
+                strategy: {
+                    id: "strategy_" + Date.now(),
+                    name: strategyName,
+                    biz_id: parseInt(bizId) || 0,
+                    strategy_type: strategyType,
+                    data_source: {
+                        type: "metric",
+                        metric_id: metricId || "system.cpu.usage",
+                        aggregation_method: aggMethod,
+                        aggregation_interval: aggInterval,
+                        dimensions: ["bk_biz_id", "bk_cloud_id", "ip"]
+                    },
+                    detect_rule: {
+                        algorithm: algorithm,
+                        thresholds: thresholds
+                    },
+                    notification: {
+                        channels: activeChannels.length > 0 ? activeChannels : ["weixin"],
+                        receivers: {
+                            type: recipientType,
+                            duty_group: recipientType === "duty" ? dutyGroup : undefined
+                        },
+                        template: template
+                    },
+                    converge: {
+                        enabled: convergeEnabled,
+                        window: convergeWindow * 60,
+                        dimensions: convergeDims.length > 0 ? convergeDims : ["ip", "strategy_id"]
+                    },
+                    recovery: {
+                        enabled: recoveryEnabled,
+                        detect_cycles: recoveryCycles,
+                        send_notification: sendRecoveryNotice
+                    },
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                }
+            };
+        }
+
+        function previewConfig() {
+            const config = generateConfig();
+            document.getElementById('fullConfigPreview').textContent = JSON.stringify(config, null, 2);
+            document.getElementById('previewModal').classList.remove('hidden');
+        }
+
+        function closePreview() {
+            document.getElementById('previewModal').classList.add('hidden');
+        }
+
+        function copyConfig() {
+            const config = generateConfig();
+            navigator.clipboard.writeText(JSON.stringify(config, null, 2)).then(() => {
+                // Show toast
+                const toast = document.createElement('div');
+                toast.className = 'fixed bottom-4 right-4 bg-gray-800 text-white px-4 py-2 rounded-lg shadow-lg z-50';
+                toast.textContent = '配置已复制到剪贴板';
+                document.body.appendChild(toast);
+                setTimeout(() => toast.remove(), 2000);
+            });
+        }
+
+        function downloadConfig() {
+            const config = generateConfig();
+            const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `strategy_${config.strategy.id}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function saveStrategy() {
+            const config = generateConfig();
+            console.log('Saving strategy:', config);
+            
+            const toast = document.createElement('div');
+            toast.className = 'fixed top-20 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center';
+            toast.innerHTML = `
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>
+                策略保存成功！ID: ${config.strategy.id}
+            `;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+    </script>
+</body>
+</html>
