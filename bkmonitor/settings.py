@@ -11,7 +11,6 @@ specific language governing permissions and limitations under the License.
 import logging
 import os
 import sys
-from pathlib import Path
 
 import monkey
 from config.tools.environment import ENVIRONMENT, ROLE
@@ -23,7 +22,7 @@ except ImportError:
 
     pymysql.install_as_MySQLdb()
 
-BASE_DIR = str(Path(__file__).resolve().parent)
+
 # settings加载顺序 config.default -> blueapps.patch -> config.{env} -> config.role.{role}
 
 patch_module = ["json", "shutil", "furl", "re"]
@@ -100,13 +99,11 @@ try:
 
     # 暂时排除metadata app
     globals()["INSTALLED_APPS"] = tuple(app for app in globals()["INSTALLED_APPS"] if app != "bk_monitor_base.metadata")
+
+    from bk_monitor_base.infras.constant import OLD_MONITOR_BACKEND_DB_NAME, OLD_MONITOR_SAAS_DB_NAME
+
+    # 数据库配置初始化
+    globals()["DATABASES"][OLD_MONITOR_SAAS_DB_NAME] = globals()["DATABASES"]["default"].copy()
+    globals()["DATABASES"][OLD_MONITOR_BACKEND_DB_NAME] = globals()["DATABASES"]["monitor_api"].copy()
 except ImportError as e:
-    logging.exception(e)
-    raise ImportError(f"Could not import bk-monitor-base settings merger: {e}")
-
-
-from bk_monitor_base.infras.constant import OLD_MONITOR_SAAS_DB_NAME, OLD_MONITOR_BACKEND_DB_NAME
-
-# 数据库配置初始化
-globals()["DATABASES"][OLD_MONITOR_SAAS_DB_NAME] = globals()["DATABASES"]["default"].copy()
-globals()["DATABASES"][OLD_MONITOR_BACKEND_DB_NAME] = globals()["DATABASES"]["monitor_api"].copy()
+    print(f"import bk-monitor-base and load settings failed, error: {e}")
