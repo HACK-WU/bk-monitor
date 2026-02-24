@@ -100,9 +100,57 @@ class Command(BaseCommand):
         python manage.py context_preview 12345 --variable "strategy.item.query_configs[0]"
         python manage.py context_preview 12345 --variable "strategy.item.query_configs.0"  # 等价于 [0]
         python manage.py context_preview 12345 --variable "alarm.dimensions['ip'].display_value"
+
+    执行流程
+    --------
+
+    ::
+
+        ┌─────────────────────────────────────────────────────────────────┐
+        │                         命令入口: handle()                        │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+        ┌─────────────────────────────────────────────────────────────────┐
+        │  1. 获取动作实例: _get_action_instance(alert_id, action_id)      │
+        │     ├─ 指定 action_id → 从数据库查询 ActionInstance               │
+        │     └─ 未指定 action_id → 从 ES 查找最新通知动作                   │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+        ┌─────────────────────────────────────────────────────────────────┐
+        │  2. 获取告警文档: _get_alert_documents(action_instance, alert_id) │
+        │     ├─ 从 action_instance.alerts 提取告警 ID                      │
+        │     ├─ 若为空 → 使用 fallback_alert_id                            │
+        │     └─ 从 ES 批量获取 AlertDocument                              │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+        ┌─────────────────────────────────────────────────────────────────┐
+        │  3. 构建上下文: ActionContext(action, alerts)                     │
+        │     └─ 调用 context.get_dictionary() 获取上下文字典               │
+        └─────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+        ┌─────────────────────────────────────────────────────────────────┐
+        │                        4. 输出结果                                │
+        │                                                                   │
+        │     ┌─ 指定 --variable ─→ _output_single_variable()              │
+        │     │                  输出单个变量详情                            │
+        │     │                                                             │
+        │     ├─ 指定 --format json ─→ _output_json_format()               │
+        │     │                        输出 JSON 格式                       │
+        │     │                                                             │
+        │     └─ 默认 ─→ _output_template_format()                         │
+        │                 输出模板变量列表                                   │
+        └─────────────────────────────────────────────────────────────────┘
     """
 
     def add_arguments(self, parser):
+        """定义命令行参数.
+
+        :param parser: argparse 解析器对象
+        """
         parser.add_argument("alert_id", type=int, help="告警 ID")
         parser.add_argument("--action-id", type=int, help="动作实例 ID（可选）")
         parser.add_argument(
@@ -114,6 +162,17 @@ class Command(BaseCommand):
         parser.add_argument("--format", type=str, default="template", choices=["template", "json"], help="输出格式")
 
     def handle(self, alert_id, *args, **options):
+        """命令入口方法，执行上下文变量预览.
+
+        执行流程：
+        1. 获取动作实例（通知类型的动作）
+        2. 获取关联的告警文档
+        3. 创建 ActionContext 并获取上下文字典
+        4. 根据参数输出变量信息
+
+        :param alert_id: 告警 ID
+        :param options: 命令行选项
+        """
         action_id = options.get("action_id")
         variable = options.get("variable")
         depth = min(options.get("depth", 2), 3)  # 最大深度3
@@ -251,11 +310,29 @@ class Command(BaseCommand):
         self.stdout.write("\n" + "-" * 80 + "\n")
 
     def _output_json_format(self, context_dict, max_depth):
-        """JSON格式输出"""
+        """以 JSON 格式输出上下文变量.
+
+        将上下文字典序列化为 JSON 格式，支持嵌套对象的递归处理。
+        对于复杂对象，会提取其公开属性进行序列化。
+
+        :param context_dict: 上下文字典，由 ActionContext.get_dictionary() 返回
+        :param max_depth: 最大递归深度，防止无限递归
+        """
         import json
 
         def serialize_object(obj, depth=0):
-            """序列化对象为JSON可序列化的格式"""
+            """递归序列化对象为 JSON 可序列化的格式.
+
+            处理规则：
+            - 基本类型（str/int/float/bool/None）：直接返回
+            - 字典：序列化前20个键值对
+            - 列表/元组：简单类型返回前10个，复杂类型递归处理前5个
+            - 对象：提取公开属性（非 _ 开头、非 callable）前15个
+
+            :param obj: 要序列化的对象
+            :param depth: 当前递归深度
+            :return: JSON 可序列化的值
+            """
             if depth >= max_depth:
                 return f"<{type(obj).__name__}>"
 
@@ -307,10 +384,28 @@ class Command(BaseCommand):
         self.stdout.write("\n" + "=" * 80 + "\n")
 
     def _output_template_format(self, context_dict, max_depth):
-        """模板风格输出 - 显示所有可用的模板变量"""
+        """以模板风格输出所有可用的上下文变量.
+
+        输出格式为 Jinja2 模板变量形式，如：
+        {{ target.business.bk_biz_name }} -> '蓝鲸'
+
+        :param context_dict: 上下文字典
+        :param max_depth: 最大递归深度
+        """
 
         def format_value(obj, depth=0):
-            """格式化值用于模板风格显示"""
+            """格式化值用于模板风格显示.
+
+            根据类型生成简洁的值表示：
+            - 基本类型：使用 repr()
+            - 列表：显示前5个元素或元素类型和数量
+            - 字典：显示键值对摘要
+            - 对象：显示类型名
+
+            :param obj: 要格式化的对象
+            :param depth: 当前递归深度
+            :return: 格式化后的字符串
+            """
             if depth >= max_depth:
                 return f"<{type(obj).__name__}>"
 
@@ -382,7 +477,17 @@ class Command(BaseCommand):
             return f"<{type(obj).__name__}>"
 
         def collect_variables(obj, prefix="", depth=0, variables=None):
-            """递归收集所有可用的模板变量"""
+            """递归收集对象的所有可访问属性作为模板变量.
+
+            遍历对象的公开属性，对于简单类型直接记录，
+            对于复杂对象递归展开其属性。
+
+            :param obj: 要遍历的对象
+            :param prefix: 变量路径前缀
+            :param depth: 当前递归深度
+            :param variables: 已收集的变量列表
+            :return: 变量列表，每个元素为 (var_path, value_str) 元组
+            """
             if variables is None:
                 variables = []
 
@@ -442,7 +547,18 @@ class Command(BaseCommand):
         self.stdout.write("\n" + "=" * 80 + "\n")
 
     def _output_single_variable(self, context_dict, variable_path, alert_id, action_instance):
-        """查询并输出单个模板变量的值"""
+        """查询单个模板变量的值并详细输出.
+
+        支持多种变量访问格式，与 Jinja2 模板语法保持一致：
+        - 点号访问：target.business.bk_biz_name
+        - 方括号索引：list[0]、dict['key']
+        - 混合使用：item.query_configs[0]['metric_id']
+
+        :param context_dict: 上下文字典
+        :param variable_path: 变量路径字符串
+        :param alert_id: 告警 ID
+        :param action_instance: 动作实例对象
+        """
         # 保存原始输入用于显示
         original_input = variable_path.strip()
 
@@ -477,7 +593,7 @@ class Command(BaseCommand):
 
             :param obj: 要访问的对象
             :param path: 变量路径
-            :return: (value, error_message) 元组
+            :return: (value, error_message) 元组，成功时 error_message 为 None
             """
             import re
 
@@ -569,11 +685,15 @@ class Command(BaseCommand):
             return current, None
 
         def format_detailed_value(obj, indent=0, max_depth=5):
-            """详细格式化值 - 完全展开，不省略任何元素
+            """详细格式化值 - 完全展开所有元素.
+
+            生成可读的多行格式输出，适用于单个变量的详细查看。
+            与 format_value 不同，此函数不省略任何元素。
 
             :param obj: 要格式化的对象
-            :param indent: 当前缩进级别
+            :param indent: 当前缩进级别（每级2空格）
             :param max_depth: 最大递归深度（防止无限递归）
+            :return: 格式化后的行列表
             """
             prefix = "  " * indent
             lines = []
