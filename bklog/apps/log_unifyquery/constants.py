@@ -91,3 +91,5 @@ ADVANCED_OP_MAP = {
     OperatorEnum.IS_TRUE["operator"]: {"operator": "eq", "condition": "or"},
     OperatorEnum.IS_FALSE["operator"]: {"operator": "eq", "condition": "or"},
 }
+
+SEARCH_AFTER_KEY = "search_after"
