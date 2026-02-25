@@ -1784,7 +1784,7 @@ class BaseIndexSetHandler:
                 }
                 if query_alias_settings := index_set.query_alias_settings:
                     for table_info_item in doris_params["table_info"]:
-                        table_info_item["query_alias_settings"] = query_alias_settings
+                        table_info_item["query_alias_settings"] = copy.deepcopy(query_alias_settings)
                 # Doris接入
                 multi_execute_func.append(
                     result_key=index_set.index_set_id,
