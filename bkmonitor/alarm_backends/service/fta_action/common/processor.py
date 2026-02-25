@@ -455,11 +455,9 @@ class ActionProcessor(BaseActionProcessor):
         # request_data_mapping示例: {"operator": "admin", "timeout": 300}
         # 用于添加固定的请求参数或覆盖默认值
         inputs.update(request_schema.get("request_data_mapping", {}))
-
-        # ========== Step 5: 实例化资源类并发起请求 ==========
-        # 使用init_kwargs初始化资源类（如设置超时时间、重试次数等）
-        # 调用request方法发起实际的API请求
-        # 将响应结果包装在data字典的response字段中
+        if request_schema.get("render_inputs", False):
+            # 对由 jmespath/静态映射生成的 inputs 可选执行二次 Jinja 渲染。
+            inputs = self.jinja_render(inputs)
         data = {"response": request_class(**request_schema.get("init_kwargs", {})).request(**inputs)}
 
         # ========== Step 6: 解码和转换响应输出 ==========
