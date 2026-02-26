@@ -211,5 +211,5 @@ worktrees/
 
 ### PreCI ###
 .codecc
-
+.vscode/
 .codebuddy
