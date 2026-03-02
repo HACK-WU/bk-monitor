@@ -51,7 +51,7 @@ INSTALLED_APPS += (
     "django_elasticsearch_dsl",
     "rest_framework",
     "django_filters",
-    "drf_yasg",
+    "drf_spectacular",
     "bkmonitor",
     "healthz",
     "metadata",
@@ -179,7 +179,9 @@ TEMPLATES = [
     },
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [os.path.join(PROJECT_ROOT, "django_templates")],
+        "DIRS": [
+            os.path.join(PROJECT_ROOT, "django_templates"),
+        ],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -337,6 +339,16 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.BasicAuthentication",
         "bkm_ipchooser.authentication.CsrfExemptSessionAuthentication",
     ),
+    # 使用 drf-spectacular 的容错 AutoSchema
+    "DEFAULT_SCHEMA_CLASS": "core.drf_resource.contrib.spectacular.FaultTolerantAutoSchema",
+}
+
+# drf-spectacular 配置
+SPECTACULAR_SETTINGS = {
+    "TITLE": "BkMonitor API",
+    "VERSION": "1.0.0",
+    "DESCRIPTION": "蓝鲸监控平台 API 文档",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 #

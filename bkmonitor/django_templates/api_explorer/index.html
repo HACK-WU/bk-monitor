@@ -1,0 +1,1975 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Explorer - APIResource 外部接口文档</title>
+    <style>
+        :root {
+            --primary-color: #3a8ee6;
+            --primary-hover: #2d7ad6;
+            --primary-light: #ecf5ff;
+            --bg-color: #f5f7fa;
+            --bg-white: #ffffff;
+            --text-primary: #303133;
+            --text-secondary: #606266;
+            --text-placeholder: #c0c4cc;
+            --border-color: #e4e7ed;
+            --border-light: #f0f0f0;
+            --method-get: #67c23a;
+            --method-post: #409eff;
+            --method-put: #e6a23c;
+            --method-delete: #f56c6c;
+            --method-patch: #e91e63;
+            --success-color: #67c23a;
+            --error-color: #f56c6c;
+            --warning-color: #e6a23c;
+            --info-color: #909399;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                         'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text-primary);
+            background-color: var(--bg-color);
+        }
+
+        code, pre, .json-editor {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+            font-size: 13px;
+        }
+
+        /* Header */
+        .header {
+            height: 60px;
+            background-color: var(--bg-white);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            justify-content: space-between;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo {
+            font-size: 24px;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .search-container {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        /* 搜索框样式调整 */
+        .search-wrapper {
+            position: relative;
+            width: 280px;
+        }
+
+        .search-input {
+            width: 100%;
+            padding: 8px 12px 8px 36px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .search-input:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.2);
+        }
+
+        .search-input::placeholder {
+            color: var(--text-placeholder);
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-placeholder);
+            font-size: 14px;
+        }
+
+        /* Toggle Switch */
+        .search-scope-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--primary-color);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
+
+        .toggle-label {
+            min-width: 80px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--primary-hover);
+        }
+
+        .btn-secondary {
+            background-color: var(--bg-white);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--bg-color);
+        }
+
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+
+        /* Method Filter */
+        .method-filter {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .method-filter-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .method-filter-btns {
+            display: flex;
+            gap: 6px;
+        }
+
+        .method-filter-btn {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.2s;
+            opacity: 0.6;
+        }
+
+        .method-filter-btn:hover {
+            opacity: 0.9;
+        }
+
+        .method-filter-btn.active {
+            opacity: 1;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .method-filter-btn.all {
+            background-color: #f0f2f5;
+            color: var(--text-secondary);
+            border-color: var(--border-color);
+        }
+
+        .method-filter-btn.all.active {
+            background-color: var(--primary-color);
+            color: #fff;
+            border-color: var(--primary-color);
+        }
+
+        .method-filter-btn.get {
+            background-color: #e8f5e9;
+            color: var(--method-get);
+        }
+
+        .method-filter-btn.get.active {
+            background-color: var(--method-get);
+            color: #fff;
+        }
+
+        .method-filter-btn.post {
+            background-color: #e3f2fd;
+            color: var(--method-post);
+        }
+
+        .method-filter-btn.post.active {
+            background-color: var(--method-post);
+            color: #fff;
+        }
+
+        .method-filter-btn.put {
+            background-color: #fff3e0;
+            color: var(--method-put);
+        }
+
+        .method-filter-btn.put.active {
+            background-color: var(--method-put);
+            color: #fff;
+        }
+
+        .method-filter-btn.delete {
+            background-color: #ffebee;
+            color: var(--method-delete);
+        }
+
+        .method-filter-btn.delete.active {
+            background-color: var(--method-delete);
+            color: #fff;
+        }
+
+        /* Layout */
+        .container {
+            display: flex;
+            margin-top: 60px;
+            height: calc(100vh - 60px);
+            overflow: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            min-width: 280px;
+            background-color: var(--bg-white);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+        }
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .sidebar-header p {
+            font-size: 12px;
+            opacity: 0.85;
+        }
+
+        .sidebar-filter {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .filter-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background-color: var(--bg-white);
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .filter-input::placeholder {
+            color: var(--text-placeholder);
+        }
+
+        .filter-input:focus {
+            border-color: var(--primary-color);
+        }
+
+        .module-list-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 0;
+        }
+
+        .module-list {
+            list-style: none;
+        }
+
+        .module-item {
+            cursor: pointer;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+        }
+
+        .module-item:hover {
+            background-color: var(--bg-color);
+        }
+
+        .module-item.active {
+            background-color: var(--primary-light);
+            color: var(--primary-color);
+        }
+
+        .module-icon {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 10px;
+            font-size: 14px;
+            background-color: #f0f2f5;
+        }
+
+        .module-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .module-name {
+            font-size: 14px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        .module-item.active .module-name {
+            color: var(--primary-color);
+        }
+
+        .module-count {
+            font-size: 12px;
+            color: #909399;
+            background-color: #f0f2f5;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 8px;
+        }
+
+        .module-item.active .module-count {
+            background-color: var(--primary-color);
+            color: #fff;
+        }
+
+        .module-display-name {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .api-list-container {
+            background-color: var(--bg-white);
+            border-radius: 4px;
+            padding: 20px;
+        }
+
+        .list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .list-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* API Card */
+        .api-card {
+            border: 1px solid var(--border-light);
+            border-radius: 4px;
+            padding: 16px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .api-card:hover {
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+            border-color: var(--primary-color);
+        }
+
+        .api-card-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .method-badge {
+            padding: 4px 8px;
+            border-radius: 3px;
+            color: var(--text-white);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .method-get { background-color: var(--method-get); }
+        .method-post { background-color: var(--method-post); }
+        .method-put { background-color: var(--method-put); }
+        .method-delete { background-color: var(--method-delete); }
+
+        .api-name {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .api-label {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-bottom: 4px;
+        }
+
+        .api-url {
+            color: var(--text-placeholder);
+            font-size: 12px;
+            font-family: 'Monaco', 'Consolas', monospace;
+        }
+
+        .api-meta {
+            display: flex;
+            gap: 10px;
+            margin-top: 8px;
+            font-size: 12px;
+        }
+
+        .meta-tag {
+            padding: 2px 6px;
+            border-radius: 3px;
+            background-color: var(--bg-color);
+            color: var(--text-secondary);
+        }
+
+        .meta-tag.has { color: var(--success-color); }
+        .meta-tag.none { color: var(--text-placeholder); }
+
+        /* Detail Panel */
+        .detail-panel {
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 600px;
+            height: calc(100vh - 60px);
+            background-color: var(--bg-white);
+            box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+            transform: translateX(100%);
+            transition: transform 0.3s;
+            z-index: 50;
+            overflow-y: auto;
+        }
+
+        .detail-panel.visible {
+            transform: translateX(0);
+        }
+
+        .detail-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            background-color: var(--bg-white);
+            z-index: 10;
+        }
+
+        .detail-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .close-btn {
+            cursor: pointer;
+            font-size: 24px;
+            color: var(--text-secondary);
+            background: none;
+            border: none;
+        }
+
+        .close-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .detail-content {
+            padding: 20px;
+        }
+
+        .detail-section {
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: 100px 1fr;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .info-label {
+            color: var(--text-secondary);
+        }
+
+        .info-value {
+            color: var(--text-primary);
+            word-break: break-all;
+        }
+
+        /* Params Table */
+        .params-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .params-table th,
+        .params-table td {
+            padding: 10px 12px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .params-table th {
+            background-color: var(--bg-color);
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .required-mark {
+            color: var(--error-color);
+            margin-left: 4px;
+        }
+
+        /* Invoke Panel */
+        .invoke-panel {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .invoke-panel.visible {
+            display: flex;
+        }
+
+        .invoke-content {
+            background-color: var(--bg-white);
+            width: 90%;
+            max-width: 900px;
+            max-height: 90vh;
+            border-radius: 8px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .invoke-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .invoke-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        .json-editor-container {
+            margin-bottom: 16px;
+        }
+
+        .json-editor {
+            width: 100%;
+            min-height: 200px;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            resize: vertical;
+            outline: none;
+        }
+
+        .json-editor:focus {
+            border-color: var(--primary-color);
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .response-container {
+            margin-top: 20px;
+        }
+
+        .response-status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .response-status.success {
+            background-color: #f0f9ff;
+            border: 1px solid var(--success-color);
+            color: var(--success-color);
+        }
+
+        .response-status.error {
+            background-color: #fef0f0;
+            border: 1px solid var(--error-color);
+            color: var(--error-color);
+        }
+
+        .response-body {
+            background-color: #f8f9fa;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+
+        .response-body pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Copy Button */
+        .response-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .btn-copy {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 16px;
+            background-color: var(--primary-color);
+            color: var(--text-white);
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-copy:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-copy:active {
+            transform: translateY(0);
+        }
+
+        .btn-copy.copied {
+            background-color: var(--success-color);
+        }
+
+        .btn-copy .copy-icon {
+            font-size: 16px;
+        }
+
+        /* Loading */
+        .loading {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: #909399;
+        }
+
+        .spinner {
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 4px;
+            background-color: var(--bg-white);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+            z-index: 2000;
+            animation: slideIn 0.3s;
+        }
+
+        .toast-success {
+            border-left: 4px solid var(--success-color);
+        }
+
+        .toast-error {
+            border-left: 4px solid var(--error-color);
+        }
+
+        .toast-info {
+            border-left: 4px solid var(--info-color);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+            color: #909399;
+        }
+
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state-text {
+            font-size: 14px;
+            text-align: center;
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-placeholder);
+        }
+
+        /* Confirmation Modal */
+        .confirm-modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .confirm-modal.visible {
+            display: flex;
+        }
+
+        .confirm-dialog {
+            background: var(--bg-white);
+            border-radius: 8px;
+            padding: 24px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            animation: modalSlideIn 0.3s ease-out;
+        }
+
+        @keyframes modalSlideIn {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .confirm-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .confirm-icon {
+            font-size: 32px;
+        }
+
+        .confirm-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .confirm-body {
+            margin-bottom: 20px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        .confirm-info {
+            background-color: var(--bg-color);
+            padding: 12px;
+            border-radius: 4px;
+            margin-top: 12px;
+            font-size: 13px;
+        }
+
+        .confirm-info-item {
+            display: flex;
+            margin-bottom: 6px;
+        }
+
+        .confirm-info-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .confirm-info-label {
+            font-weight: 600;
+            min-width: 80px;
+            color: var(--text-primary);
+        }
+
+        .confirm-info-value {
+            color: var(--text-secondary);
+        }
+
+        .confirm-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        .btn-danger {
+            background-color: #f56c6c;
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            background-color: #f45454;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <span class="logo">🔍</span>
+            <h1 class="title">API Explorer - 外部接口</h1>
+        </div>
+        <div class="method-filter">
+            <span class="method-filter-label">快捷过滤：</span>
+            <div class="method-filter-btns" id="methodFilterBtns">
+                <span class="method-filter-btn all active" data-method="">全部</span>
+                <span class="method-filter-btn get" data-method="GET">GET</span>
+                <span class="method-filter-btn post" data-method="POST">POST</span>
+                <span class="method-filter-btn put" data-method="PUT">PUT</span>
+                <span class="method-filter-btn delete" data-method="DELETE">DELETE</span>
+            </div>
+        </div>
+        <div class="search-container">
+            <div class="search-wrapper">
+                <span class="search-icon">🔍</span>
+                <input
+                    type="text"
+                    class="search-input"
+                    id="searchInput"
+                    placeholder="搜索外部 API（支持路径和描述）..."
+                >
+            </div>
+            <div class="search-scope-toggle">
+                <span class="toggle-label" id="searchScopeLabel">当前模块</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="searchAllToggle">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            <button class="btn btn-primary" id="searchBtn">搜索</button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <div class="container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1>APIResource 外部接口</h1>
+                <p>共 <span id="totalModules">0</span> 个模块，<span id="totalCount">0</span> 个外部 API</p>
+            </div>
+            <div class="sidebar-filter">
+                <input
+                    type="text"
+                    class="filter-input"
+                    id="moduleFilterInput"
+                    placeholder="搜索 API 模块..."
+                >
+            </div>
+            <div class="module-list-container">
+                <ul class="module-list" id="moduleList">
+                    <li class="module-item active" data-module="">
+                        <span class="module-icon">📦</span>
+                        <div class="module-info">
+                            <span class="module-name">全部</span>
+                        </div>
+                        <span class="module-count" id="allModuleCount">0</span>
+                    </li>
+                </ul>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="api-list-container">
+                <div class="list-header">
+                    <h2 class="list-title" id="listTitle">📋 外部 API 列表 (0 个接口)</h2>
+                </div>
+                <div id="apiList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <div>加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Detail Panel -->
+    <div class="detail-panel" id="detailPanel">
+        <div class="detail-header">
+            <h3 class="detail-title">📖 API 详情</h3>
+            <button class="close-btn" id="closeDetailBtn">&times;</button>
+        </div>
+        <div class="detail-content" id="detailContent">
+            <!-- 动态填充 -->
+        </div>
+    </div>
+
+    <!-- Invoke Panel -->
+    <div class="invoke-panel" id="invokePanel">
+        <div class="invoke-content">
+            <div class="invoke-header">
+                <h3 class="detail-title">🚀 在线调用</h3>
+                <button class="close-btn" id="closeInvokeBtn">&times;</button>
+            </div>
+            <div class="invoke-body">
+                <div class="detail-section">
+                    <div class="section-title">📝 请求参数 (JSON)</div>
+                    <div class="json-editor-container">
+                        <textarea class="json-editor" id="paramsEditor">{}</textarea>
+                    </div>
+                    <div class="editor-actions">
+                        <button class="btn btn-secondary btn-small" id="generateTemplateBtn">生成模板</button>
+                        <button class="btn btn-secondary btn-small" id="formatJsonBtn">格式化</button>
+                        <button class="btn btn-secondary btn-small" id="clearParamsBtn">清空</button>
+                    </div>
+                </div>
+                <div style="text-align: center; margin: 20px 0;">
+                    <button class="btn btn-primary" id="invokeBtn">▶ 发送请求</button>
+                </div>
+                <div class="response-container" id="responseContainer" style="display: none;">
+                    <div class="detail-section">
+                        <div class="response-header">
+                            <div class="section-title">📊 响应结果</div>
+                            <button class="btn-copy" id="copyResponseBtn">
+                                <span class="copy-icon">📋</span>
+                                <span class="copy-text">一键复制</span>
+                            </button>
+                        </div>
+                        <div id="responseStatus"></div>
+                        <div class="response-body">
+                            <pre id="responseBody"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div class="confirm-modal" id="confirmModal">
+        <div class="confirm-dialog">
+            <div class="confirm-header">
+                <span class="confirm-icon">⚠️</span>
+                <h3 class="confirm-title">确认操作</h3>
+            </div>
+            <div class="confirm-body">
+                <p>您即将发送一个<strong>非 GET 请求</strong>，此操作可能会修改服务器数据。</p>
+                <div class="confirm-info">
+                    <div class="confirm-info-item">
+                        <span class="confirm-info-label">请求方法:</span>
+                        <span class="confirm-info-value" id="confirmMethod"></span>
+                    </div>
+                    <div class="confirm-info-item">
+                        <span class="confirm-info-label">接口名称:</span>
+                        <span class="confirm-info-value" id="confirmApiName"></span>
+                    </div>
+                    <div class="confirm-info-item">
+                        <span class="confirm-info-label">模块:</span>
+                        <span class="confirm-info-value" id="confirmModule"></span>
+                    </div>
+                </div>
+                <p style="margin-top: 16px; font-weight: 500;">请确认是否继续执行？</p>
+            </div>
+            <div class="confirm-actions">
+                <button class="btn btn-secondary" id="confirmCancelBtn">取消</button>
+                <button class="btn btn-danger" id="confirmOkBtn">确认发送</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局状态
+        const AppState = {
+            endpoints: {},
+            endpointsInfo: [],
+            initialized: false,
+            modules: [],
+            allModules: [], // 保存完整模块列表用于筛选
+            currentModule: null,
+            apiList: [],
+            apiListData: null, // 保存原始 API 列表数据用于前端过滤
+            searchKeyword: '',
+            searchAllModules: false, // 是否搜索全部模块
+            moduleFilterKeyword: '', // 模块筛选关键词
+            methodFilter: '', // HTTP 方法过滤
+            darkMode: false, // 深色模式
+            selectedAPI: null,
+            apiDetail: null,
+            invokePanel: {
+                visible: false,
+                params: '{}',
+                loading: false,
+                response: null
+            }
+        };
+
+        // API 请求函数
+        async function request(url, options = {}) {
+            const defaultOptions = {
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            };
+
+            try {
+                const response = await fetch(url, { ...defaultOptions, ...options });
+
+                // 检查响应类型
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    // 如果不是 JSON 响应,可能是错误页面
+                    if (response.status === 403) {
+                        throw new Error('API Explorer 仅在开发/测试环境可用，请检查环境配置');
+                    } else if (response.status === 404) {
+                        throw new Error('接口不存在，请检查 URL 配置是否正确');
+                    } else {
+                        throw new Error(`服务器返回非 JSON 响应 (HTTP ${response.status})，请检查路由配置`);
+                    }
+                }
+
+                const data = await response.json();
+
+                if (!data.result) {
+                    throw new Error(data.message || '请求失败');
+                }
+
+                return data.data;
+            } catch (error) {
+                console.error('API 请求失败:', error);
+                // 不在这里显示 toast，让调用方处理
+                throw error;
+            }
+        }
+
+        // 初始化端点配置
+        function initEndpoints(endpoints, endpointsInfo) {
+            AppState.endpoints = endpoints;
+            AppState.endpointsInfo = endpointsInfo;
+            AppState.initialized = true;
+        }
+
+        // 获取接口 URL
+        function getEndpointUrl(name) {
+            if (!AppState.initialized) {
+                throw new Error('请先调用 api_index 接口初始化');
+            }
+            return AppState.endpoints[name];
+        }
+
+        // 获取 API 元信息
+        async function fetchApiIndex() {
+            // 构建 api_index 的 URL
+            const baseUrl = window.location.pathname.replace(/\/$/, '');
+            const apiIndexUrl = baseUrl + '/api_info/';
+            const data = await request(apiIndexUrl);
+            initEndpoints(data.endpoints, data.endpoints_info);
+            return data;
+        }
+
+        // 获取模块列表
+        async function fetchModules(search = '') {
+            const baseUrl = getEndpointUrl('module_list');
+            const url = search ? `${baseUrl}?search=${encodeURIComponent(search)}` : baseUrl;
+            return request(url);
+        }
+
+        // 获取 API 目录
+        async function fetchCatalog(module = '', search = '') {
+            const baseUrl = getEndpointUrl('api_list');
+            const params = new URLSearchParams();
+            if (module) params.append('module', module);
+            if (search) params.append('search', search);
+            const queryString = params.toString();
+            const url = queryString ? `${baseUrl}?${queryString}` : baseUrl;
+            return request(url);
+        }
+
+        // 获取 API 详情
+        async function fetchAPIDetail(module, apiName) {
+            const baseUrl = getEndpointUrl('api_detail');
+            return request(`${baseUrl}?module=${encodeURIComponent(module)}&api_name=${encodeURIComponent(apiName)}`);
+        }
+
+        // 调用 API
+        async function invokeAPI(module, apiName, params) {
+            const url = getEndpointUrl('api_invoke');
+            return request(url, {
+                method: 'POST',
+                body: JSON.stringify({ module, api_name: apiName, params }),
+            });
+        }
+
+        // 渲染模块列表
+        function renderModules(modules, preserveSelection = false) {
+            const moduleList = document.getElementById('moduleList');
+            const totalCount = modules.reduce((sum, m) => sum + m.api_count, 0);
+
+            document.getElementById('totalCount').textContent = totalCount;
+            document.getElementById('totalModules').textContent = modules.length;
+            document.getElementById('allModuleCount').textContent = totalCount;
+
+            // 保存当前选中的模块
+            const currentSelection = preserveSelection ? AppState.currentModule : null;
+
+            const items = modules.map(module => `
+                <li class="module-item ${currentSelection === module.name ? 'active' : ''}" data-module="${module.name}">
+                    <span class="module-icon">📁</span>
+                    <div class="module-info">
+                        <span class="module-name">${module.name}</span>
+                        <div class="module-display-name">${module.display_name}</div>
+                    </div>
+                    <span class="module-count">${module.api_count}</span>
+                </li>
+            `).join('');
+
+            // 保留 "全部" 选项并更新模块列表
+            const allItem = moduleList.querySelector('[data-module=""]');
+            if (currentSelection === '' || currentSelection === null) {
+                allItem.classList.add('active');
+            } else {
+                allItem.classList.remove('active');
+            }
+
+            // 移除旧的模块项（保留"全部"）
+            const oldItems = moduleList.querySelectorAll('.module-item:not([data-module=""])');
+            oldItems.forEach(item => item.remove());
+
+            // 添加新的模块项
+            moduleList.insertAdjacentHTML('beforeend', items);
+
+            // 绑定点击事件
+            moduleList.querySelectorAll('.module-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const moduleName = item.dataset.module;
+                    selectModule(moduleName);
+                });
+            });
+        }
+
+        // 筛选模块列表（纯前端）
+        function filterModules(keyword) {
+            AppState.moduleFilterKeyword = keyword.toLowerCase();
+
+            if (!keyword) {
+                // 无筛选关键词，显示所有模块
+                renderModules(AppState.allModules, true);
+                return;
+            }
+
+            // 根据关键词筛选模块
+            const filtered = AppState.allModules.filter(module => {
+                return module.name.toLowerCase().includes(keyword) ||
+                       module.display_name.toLowerCase().includes(keyword);
+            });
+
+            renderModules(filtered, true);
+        }
+
+        // 选择模块
+        async function selectModule(moduleName) {
+            AppState.currentModule = moduleName;
+
+            // 更新高亮
+            document.querySelectorAll('.module-item').forEach(item => {
+                item.classList.toggle('active', item.dataset.module === moduleName);
+            });
+
+            // 加载 API 列表
+            showLoading();
+            try {
+                const data = await fetchCatalog(moduleName, AppState.searchKeyword);
+                renderAPIList(data);
+            } catch (error) {
+                showError('加载 API 列表失败');
+            }
+        }
+
+        // 渲染 API 列表
+        function renderAPIList(data) {
+            // 保存原始数据用于前端过滤
+            AppState.apiListData = data;
+
+            // 应用方法过滤
+            renderFilteredAPIList();
+        }
+
+        // 渲染过滤后的 API 列表
+        function renderFilteredAPIList() {
+            const data = AppState.apiListData;
+            if (!data) return;
+
+            const apiListEl = document.getElementById('apiList');
+            const listTitleEl = document.getElementById('listTitle');
+
+            const apis = [];
+            data.modules.forEach(module => {
+                module.apis.forEach(api => {
+                    // 应用方法过滤
+                    if (!AppState.methodFilter || api.method.toUpperCase() === AppState.methodFilter) {
+                        apis.push(api);
+                    }
+                });
+            });
+
+            const filteredTotal = apis.length;
+            const totalLabel = AppState.methodFilter
+                ? `📋 外部 API 列表 (${filteredTotal}/${data.total} 个接口)`
+                : `📋 外部 API 列表 (${data.total} 个接口)`;
+            listTitleEl.textContent = totalLabel;
+
+            if (apis.length === 0) {
+                apiListEl.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📭</div>
+                        <div>${AppState.methodFilter ? '没有匹配的 ' + AppState.methodFilter + ' 接口' : '暂无 API'}</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const items = apis.map(api => `
+                <div class="api-card" data-module="${api.module}" data-api="${api.name}">
+                    <div class="api-card-header">
+                        <span class="method-badge method-${api.method.toLowerCase()}">${api.method}</span>
+                        <span class="api-name">${api.name}</span>
+                    </div>
+                    <div class="api-label">${api.label}</div>
+                    <div class="api-url">${api.action || api.full_url}</div>
+                    <div class="api-meta">
+                        <span class="meta-tag ${api.has_request_serializer ? 'has' : 'none'}">
+                            ${api.has_request_serializer ? '✓' : '✗'} Request
+                        </span>
+                        <span class="meta-tag ${api.has_response_serializer ? 'has' : 'none'}">
+                            ${api.has_response_serializer ? '✓' : '✗'} Response
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+
+            apiListEl.innerHTML = items;
+
+            // 绑定点击事件
+            apiListEl.querySelectorAll('.api-card').forEach(card => {
+                card.addEventListener('click', () => {
+                    const module = card.dataset.module;
+                    const apiName = card.dataset.api;
+                    showAPIDetail(module, apiName);
+                });
+            });
+        }
+
+        // 设置方法过滤
+        function setMethodFilter(method) {
+            AppState.methodFilter = method;
+
+            // 更新按钮状态
+            document.querySelectorAll('.method-filter-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.method === method);
+            });
+
+            // 重新渲染列表
+            renderFilteredAPIList();
+        }
+
+        // 显示 API 详情
+        async function showAPIDetail(module, apiName) {
+            AppState.selectedAPI = { module, api_name: apiName };
+
+            const detailPanel = document.getElementById('detailPanel');
+            const detailContent = document.getElementById('detailContent');
+
+            detailContent.innerHTML = '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+            detailPanel.classList.add('visible');
+
+            try {
+                const detail = await fetchAPIDetail(module, apiName);
+                AppState.apiDetail = detail;
+                renderAPIDetail(detail);
+            } catch (error) {
+                detailContent.innerHTML = '<div class="empty-state"><div class="empty-icon">❌</div><div>加载失败</div></div>';
+            }
+        }
+
+        // 渲染 API 详情
+        function renderAPIDetail(detail) {
+            const detailContent = document.getElementById('detailContent');
+
+            const requestParams = detail.request_params && detail.request_params.length > 0
+                ? `
+                    <table class="params-table">
+                        <thead>
+                            <tr>
+                                <th>参数名</th>
+                                <th>类型</th>
+                                <th>必填</th>
+                                <th>说明</th>
+                                <th>默认值</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${detail.request_params.map(param => `
+                                <tr>
+                                    <td><code>${param.name}</code>${param.required ? '<span class="required-mark">*</span>' : ''}</td>
+                                    <td>${param.type}</td>
+                                    <td>${param.required ? '✓' : ''}</td>
+                                    <td>${param.description || '-'}</td>
+                                    <td>${param.default !== null && param.default !== undefined ? param.default : '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `
+                : '<div style="color: var(--text-secondary);">无参数定义</div>';
+
+            const responseParams = detail.response_params && detail.response_params.length > 0
+                ? `
+                    <table class="params-table">
+                        <thead>
+                            <tr>
+                                <th>字段名</th>
+                                <th>类型</th>
+                                <th>说明</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${detail.response_params.map(param => `
+                                <tr>
+                                    <td><code>${param.name}</code></td>
+                                    <td>${param.type}</td>
+                                    <td>${param.description || '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                `
+                : '<div style="color: var(--text-secondary);">无参数定义</div>';
+
+            detailContent.innerHTML = `
+                <div class="detail-section">
+                    <div class="section-title">基本信息</div>
+                    <div class="info-grid">
+                        <div class="info-label">模块:</div>
+                        <div class="info-value">${detail.module}</div>
+                        <div class="info-label">接口:</div>
+                        <div class="info-value">${detail.api_name}</div>
+                        <div class="info-label">类名:</div>
+                        <div class="info-value">${detail.class_name}</div>
+                        <div class="info-label">方法:</div>
+                        <div class="info-value">
+                            <span class="method-badge method-${detail.method.toLowerCase()}">${detail.method}</span>
+                        </div>
+                        <div class="info-label">URL:</div>
+                        <div class="info-value" style="font-family: monospace; font-size: 12px;">${detail.full_url}</div>
+                    </div>
+                    ${detail.doc ? `<div style="margin-top: 12px; padding: 10px; background: var(--bg-color); border-radius: 4px;">${detail.doc}</div>` : ''}
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-title">📥 请求参数</div>
+                    ${requestParams}
+                </div>
+
+                <div class="detail-section">
+                    <div class="section-title">📤 响应参数</div>
+                    ${responseParams}
+                </div>
+
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-primary" id="openInvokeBtn">🚀 立即调用</button>
+                </div>
+            `;
+
+            // 绑定调用按钮
+            document.getElementById('openInvokeBtn').addEventListener('click', openInvokePanel);
+        }
+
+        // 打开调用面板
+        function openInvokePanel() {
+            const invokePanel = document.getElementById('invokePanel');
+            const paramsEditor = document.getElementById('paramsEditor');
+
+            // 生成参数模板
+            if (AppState.apiDetail && AppState.apiDetail.request_params) {
+                const template = generateParamsTemplate(AppState.apiDetail.request_params);
+                paramsEditor.value = template;
+            } else {
+                paramsEditor.value = '{}';
+            }
+
+            // 清空响应
+            document.getElementById('responseContainer').style.display = 'none';
+
+            invokePanel.classList.add('visible');
+        }
+
+        // 生成参数模板
+        function generateParamsTemplate(requestParams) {
+            const template = {};
+
+            requestParams.forEach(param => {
+                if (param.default !== null && param.default !== undefined) {
+                    template[param.name] = param.default;
+                } else if (param.required) {
+                    switch (param.type) {
+                        case 'string': template[param.name] = ''; break;
+                        case 'integer': template[param.name] = 0; break;
+                        case 'boolean': template[param.name] = false; break;
+                        case 'array': template[param.name] = []; break;
+                        case 'object': template[param.name] = {}; break;
+                        default: template[param.name] = null;
+                    }
+                }
+            });
+
+            return JSON.stringify(template, null, 2);
+        }
+
+        // 调用 API
+        async function handleInvoke() {
+            const paramsEditor = document.getElementById('paramsEditor');
+            const invokeBtn = document.getElementById('invokeBtn');
+            const responseContainer = document.getElementById('responseContainer');
+            const responseStatus = document.getElementById('responseStatus');
+            const responseBody = document.getElementById('responseBody');
+
+            let params;
+            try {
+                params = JSON.parse(paramsEditor.value);
+            } catch (error) {
+                showToast('JSON 格式错误', 'error');
+                return;
+            }
+
+            // 检查是否为非 GET 请求，需要二次确认
+            const method = AppState.apiDetail?.method?.toUpperCase() || 'GET';
+            if (method !== 'GET') {
+                // 显示确认对话框
+                const confirmed = await showConfirmDialog({
+                    method: method,
+                    apiName: AppState.selectedAPI.api_name,
+                    module: AppState.selectedAPI.module
+                });
+
+                if (!confirmed) {
+                    return; // 用户取消操作
+                }
+            }
+
+            invokeBtn.disabled = true;
+            invokeBtn.textContent = '⏳ 调用中...';
+            responseContainer.style.display = 'none';
+
+            const startTime = Date.now();
+
+            try {
+                const result = await invokeAPI(
+                    AppState.selectedAPI.module,
+                    AppState.selectedAPI.api_name,
+                    params
+                );
+
+                const duration = ((Date.now() - startTime) / 1000).toFixed(3);
+
+                responseStatus.className = 'response-status ' + (result.success ? 'success' : 'error');
+                responseStatus.innerHTML = `
+                    <span>${result.success ? '✅ 成功' : '❌ 失败'}</span>
+                    <span>耗时: ${duration}s</span>
+                `;
+
+                responseBody.textContent = JSON.stringify(
+                    result.success ? result.response : {
+                        error_code: result.error_code,
+                        error_message: result.error_message
+                    },
+                    null,
+                    2
+                );
+
+                responseContainer.style.display = 'block';
+                showToast(result.success ? '调用成功' : '调用失败', result.success ? 'success' : 'error');
+            } catch (error) {
+                responseStatus.className = 'response-status error';
+                responseStatus.innerHTML = '<span>❌ 请求失败</span>';
+                responseBody.textContent = error.message;
+                responseContainer.style.display = 'block';
+            } finally {
+                invokeBtn.disabled = false;
+                invokeBtn.textContent = '▶ 发送请求';
+            }
+        }
+
+        // 显示确认对话框
+        function showConfirmDialog(options) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('confirmModal');
+                const methodEl = document.getElementById('confirmMethod');
+                const apiNameEl = document.getElementById('confirmApiName');
+                const moduleEl = document.getElementById('confirmModule');
+                const okBtn = document.getElementById('confirmOkBtn');
+                const cancelBtn = document.getElementById('confirmCancelBtn');
+
+                // 设置信息
+                methodEl.innerHTML = `<span class="method-badge method-${options.method.toLowerCase()}">${options.method}</span>`;
+                apiNameEl.textContent = options.apiName;
+                moduleEl.textContent = options.module;
+
+                // 显示对话框
+                modal.classList.add('visible');
+
+                // 点击确认
+                const handleOk = () => {
+                    modal.classList.remove('visible');
+                    cleanup();
+                    resolve(true);
+                };
+
+                // 点击取消
+                const handleCancel = () => {
+                    modal.classList.remove('visible');
+                    cleanup();
+                    resolve(false);
+                };
+
+                // 点击遮罩关闭
+                const handleOverlay = (e) => {
+                    if (e.target === modal) {
+                        modal.classList.remove('visible');
+                        cleanup();
+                        resolve(false);
+                    }
+                };
+
+                // 绑定事件
+                okBtn.addEventListener('click', handleOk);
+                cancelBtn.addEventListener('click', handleCancel);
+                modal.addEventListener('click', handleOverlay);
+
+                // 清理事件监听
+                function cleanup() {
+                    okBtn.removeEventListener('click', handleOk);
+                    cancelBtn.removeEventListener('click', handleCancel);
+                    modal.removeEventListener('click', handleOverlay);
+                }
+            });
+        }
+
+        // 搜索
+        function debounce(fn, delay = 300) {
+            let timer = null;
+            return function(...args) {
+                clearTimeout(timer);
+                timer = setTimeout(() => fn.apply(this, args), delay);
+            };
+        }
+
+        const handleSearch = debounce(async (keyword) => {
+            AppState.searchKeyword = keyword;
+            showLoading();
+            try {
+                // 根据开关状态决定搜索范围
+                const searchModule = AppState.searchAllModules ? '' : (AppState.currentModule || '');
+                const data = await fetchCatalog(searchModule, keyword);
+                renderAPIList(data);
+            } catch (error) {
+                showError('搜索失败');
+            }
+        }, 300);
+
+        // 显示 Toast
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        // 显示加载中
+        function showLoading() {
+            const apiListEl = document.getElementById('apiList');
+            apiListEl.innerHTML = '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+        }
+
+        // 显示错误
+        function showError(message) {
+            const apiListEl = document.getElementById('apiList');
+            apiListEl.innerHTML = `<div class="empty-state"><div class="empty-icon">❌</div><div>${message}</div></div>`;
+        }
+
+        // 初始化应用
+        async function initApp() {
+            try {
+                // 步骤 1: 获取 API 元信息
+                showToast('正在加载 APIResource 外部接口...', 'info');
+                const indexData = await fetchApiIndex();
+                console.log('API Explorer 初始化完成', AppState.endpoints);
+
+                // 步骤 2: 加载模块列表
+                const modulesData = await fetchModules();
+                AppState.modules = modulesData.modules;
+                AppState.allModules = modulesData.modules; // 保存完整列表用于筛选
+                renderModules(modulesData.modules);
+
+                // 步骤 3: 加载默认 API 列表
+                const catalogData = await fetchCatalog();
+                renderAPIList(catalogData);
+
+                showToast('加载完成!', 'success');
+            } catch (error) {
+                console.error('初始化失败:', error);
+                showError(error.message || '加载失败,请刷新页面重试');
+                showToast(error.message || '初始化失败', 'error');
+            }
+        }
+
+        // 事件绑定
+        document.addEventListener('DOMContentLoaded', () => {
+            // 初始化应用
+            initApp();
+
+            // 搜索
+            const searchInput = document.getElementById('searchInput');
+            const searchBtn = document.getElementById('searchBtn');
+
+            searchInput.addEventListener('input', (e) => {
+                handleSearch(e.target.value);
+            });
+
+            searchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    handleSearch(e.target.value);
+                }
+            });
+
+            searchBtn.addEventListener('click', () => {
+                handleSearch(searchInput.value);
+            });
+
+            // 搜索范围开关
+            const searchAllToggle = document.getElementById('searchAllToggle');
+            const searchScopeLabel = document.getElementById('searchScopeLabel');
+
+            searchAllToggle.addEventListener('change', (e) => {
+                AppState.searchAllModules = e.target.checked;
+
+                // 更新标签文本
+                if (e.target.checked) {
+                    searchScopeLabel.textContent = '全部模块';
+                } else {
+                    searchScopeLabel.textContent = '当前模块';
+                }
+
+                // 如果有搜索关键词，重新执行搜索
+                if (AppState.searchKeyword) {
+                    handleSearch(AppState.searchKeyword);
+                }
+            });
+
+            // 模块筛选（纯前端）
+            const moduleFilterInput = document.getElementById('moduleFilterInput');
+            moduleFilterInput.addEventListener('input', (e) => {
+                filterModules(e.target.value);
+            });
+
+            // 方法过滤
+            document.getElementById('methodFilterBtns').addEventListener('click', (e) => {
+                const btn = e.target.closest('.method-filter-btn');
+                if (btn) {
+                    setMethodFilter(btn.dataset.method);
+                }
+            });
+
+            // 关闭详情面板
+            document.getElementById('closeDetailBtn').addEventListener('click', () => {
+                document.getElementById('detailPanel').classList.remove('visible');
+            });
+
+            // 关闭调用面板
+            document.getElementById('closeInvokeBtn').addEventListener('click', () => {
+                document.getElementById('invokePanel').classList.remove('visible');
+            });
+
+            // 点击遮罩关闭
+            document.getElementById('invokePanel').addEventListener('click', (e) => {
+                if (e.target.id === 'invokePanel') {
+                    document.getElementById('invokePanel').classList.remove('visible');
+                }
+            });
+
+            // 生成模板
+            document.getElementById('generateTemplateBtn').addEventListener('click', () => {
+                if (AppState.apiDetail && AppState.apiDetail.request_params) {
+                    const template = generateParamsTemplate(AppState.apiDetail.request_params);
+                    document.getElementById('paramsEditor').value = template;
+                }
+            });
+
+            // 格式化 JSON
+            document.getElementById('formatJsonBtn').addEventListener('click', () => {
+                const editor = document.getElementById('paramsEditor');
+                try {
+                    const json = JSON.parse(editor.value);
+                    editor.value = JSON.stringify(json, null, 2);
+                    showToast('格式化成功', 'success');
+                } catch (error) {
+                    showToast('JSON 格式错误', 'error');
+                }
+            });
+
+            // 清空参数
+            document.getElementById('clearParamsBtn').addEventListener('click', () => {
+                document.getElementById('paramsEditor').value = '{}';
+            });
+
+            // 发送请求
+            document.getElementById('invokeBtn').addEventListener('click', handleInvoke);
+
+            // 复制响应结果
+            document.getElementById('copyResponseBtn').addEventListener('click', () => {
+                const responseBody = document.getElementById('responseBody');
+                const copyBtn = document.getElementById('copyResponseBtn');
+                const copyIcon = copyBtn.querySelector('.copy-icon');
+                const copyText = copyBtn.querySelector('.copy-text');
+                const text = responseBody.textContent;
+
+                // 复制成功后的视觉反馈
+                function onCopySuccess() {
+                    copyBtn.classList.add('copied');
+                    copyIcon.textContent = '✅';
+                    copyText.textContent = '已复制';
+                    showToast('已复制到剪贴板', 'success');
+
+                    // 2秒后恢复原状
+                    setTimeout(() => {
+                        copyBtn.classList.remove('copied');
+                        copyIcon.textContent = '📋';
+                        copyText.textContent = '一键复制';
+                    }, 2000);
+                }
+
+                // 尝试使用现代 Clipboard API
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text)
+                        .then(onCopySuccess)
+                        .catch(() => {
+                            // 降级到传统方法
+                            fallbackCopy(text, onCopySuccess);
+                        });
+                } else {
+                    // 使用传统复制方法
+                    fallbackCopy(text, onCopySuccess);
+                }
+            });
+        });
+
+        // 传统复制方法（兼容非 HTTPS 环境）
+        function fallbackCopy(text, onSuccess) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '-9999px';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+
+            try {
+                const successful = document.execCommand('copy');
+                if (successful) {
+                    onSuccess();
+                } else {
+                    showToast('复制失败，请手动复制', 'error');
+                }
+            } catch (err) {
+                showToast('复制失败，请手动复制', 'error');
+            }
+
+            document.body.removeChild(textarea);
+        }
+    </script>
+</body>
+</html>

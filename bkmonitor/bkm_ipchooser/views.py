@@ -1,12 +1,30 @@
-# -*- coding: utf-8 -*-
-import typing
-
 from django.utils.translation import gettext_lazy as _
-from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.authentication import BasicAuthentication
 from rest_framework.response import Response
 from rest_framework.viewsets import GenericViewSet
+
+try:
+    from drf_spectacular.utils import extend_schema
+
+    def swagger_auto_schema(operation_summary=None, tags=None, request_body=None, responses=None, **kwargs):
+        """兼容适配器：将 drf_yasg 风格的参数转为 drf-spectacular 的 extend_schema"""
+        es_kwargs = {}
+        if operation_summary:
+            es_kwargs["summary"] = str(operation_summary)
+        if tags:
+            es_kwargs["tags"] = tags
+        if request_body is not None:
+            es_kwargs["request"] = type(request_body) if not isinstance(request_body, type) else request_body
+        if responses is not None:
+            es_kwargs["responses"] = responses
+        return extend_schema(**es_kwargs)
+
+except ImportError:
+
+    def swagger_auto_schema(**kwargs):
+        return lambda f: f
+
 
 from bkm_ipchooser.authentication import CsrfExemptSessionAuthentication
 from bkm_ipchooser.handlers import (
@@ -66,7 +84,7 @@ class CommonViewSet(GenericViewSet):
         return dict(_serializer.data)
 
     @property
-    def validated_data(self) -> typing.Dict:
+    def validated_data(self) -> dict:
         """
         校验的数据
         """
@@ -94,7 +112,7 @@ class CommonViewSet(GenericViewSet):
 
         # 返回响应头禁用浏览器的类型猜测行为
         # response.headers["x-content-type-options"] = ("X-Content-Type-Options", "nosniff")
-        return super(CommonViewSet, self).finalize_response(request, response, *args, **kwargs)
+        return super().finalize_response(request, response, *args, **kwargs)
 
 
 class IpChooserTopoViewSet(CommonViewSet):

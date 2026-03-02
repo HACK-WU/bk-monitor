@@ -1,0 +1,176 @@
+{% load static %}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 文档 - Swagger UI{% if tags %} ({{ tags }}){% endif %}</title>
+    <link rel="stylesheet" type="text/css" href="{% static 'drf_resource/swagger-ui/swagger-ui.css' %}">
+    <style>
+        html {
+            box-sizing: border-box;
+            overflow-y: scroll;
+        }
+
+        *,
+        *:before,
+        *:after {
+            box-sizing: inherit;
+        }
+
+        body {
+            margin: 0;
+            background: #fafafa;
+        }
+
+        .custom-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .custom-header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .back-link {
+            color: white;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .back-link:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .back-link svg {
+            width: 16px;
+            height: 16px;
+            margin-right: 6px;
+        }
+
+        .current-tags {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+
+        .current-tags strong {
+            background: rgba(255,255,255,0.2);
+            padding: 4px 12px;
+            border-radius: 12px;
+            margin-left: 5px;
+        }
+
+        .custom-header-right {
+            display: flex;
+            gap: 10px;
+        }
+
+        .header-btn {
+            color: white;
+            text-decoration: none;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+        }
+
+        .header-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        .swagger-ui .topbar {
+            display: none;
+        }
+
+        .swagger-ui .info {
+            margin: 30px 0;
+        }
+
+        .swagger-ui .scheme-container {
+            background: #f7f8fa;
+            padding: 15px;
+            box-shadow: none;
+        }
+
+        @media (max-width: 600px) {
+            .custom-header {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="custom-header">
+        <div class="custom-header-left">
+            <a href="../" class="back-link">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5M12 19l-7-7 7-7"/>
+                </svg>
+                返回分组
+            </a>
+            {% if tags %}
+            <span class="current-tags">
+                当前分组: <strong>{{ tags }}</strong>
+            </span>
+            {% else %}
+            <span class="current-tags">
+                显示: <strong>全部接口</strong>
+            </span>
+            {% endif %}
+        </div>
+        <div class="custom-header-right">
+            <a href="../lite/{% if tags %}?tags={{ tags }}{% endif %}" class="header-btn">
+                📋 轻量列表
+            </a>
+            <a href="{{ schema_url }}" class="header-btn" target="_blank">
+                📄 下载 Schema
+            </a>
+        </div>
+    </div>
+
+    <div id="swagger-ui"></div>
+
+    <script src="{% static 'drf_resource/swagger-ui/swagger-ui-bundle.js' %}"></script>
+    <script src="{% static 'drf_resource/swagger-ui/swagger-ui-standalone-preset.js' %}"></script>
+    <script>
+        window.onload = function() {
+            const ui = SwaggerUIBundle({
+                url: "{{ schema_url }}",
+                dom_id: '#swagger-ui',
+                deepLinking: true,
+                presets: [
+                    SwaggerUIBundle.presets.apis,
+                    SwaggerUIStandalonePreset
+                ],
+                plugins: [
+                    SwaggerUIBundle.plugins.DownloadUrl
+                ],
+                layout: "StandaloneLayout",
+                filter: true,
+                showExtensions: true,
+                showCommonExtensions: true,
+                defaultModelsExpandDepth: 0,
+                defaultModelExpandDepth: 1,
+                docExpansion: 'list',
+                persistAuthorization: true
+            });
+            window.ui = ui;
+        };
+    </script>
+</body>
+</html>
