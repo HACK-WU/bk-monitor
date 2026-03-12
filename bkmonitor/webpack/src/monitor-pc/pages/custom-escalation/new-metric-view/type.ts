@@ -1,9 +1,12 @@
+import type * as apiMap from '../service';
+
 export interface ChartSettingsParams {
   /** 是否自动调整Y轴 */
   autoYAxis: boolean;
   /** 小数位 */
   decimal: number;
 }
+
 export interface IColumnItem {
   colKey?: string;
   color?: string;
@@ -19,6 +22,7 @@ export interface IColumnItem {
   sortBy?: string;
   sorter?: boolean;
   sortType?: string;
+  timeOffset?: string;
   title?: Function | string;
   width?: number | string;
   renderFn?: (row) => void;
@@ -44,6 +48,8 @@ export interface ICondition {
 export interface IDataItem {
   avg?: number;
   color?: string;
+  datapoints?: number[];
+  date?: number;
   dimensions?: IObjItem;
   latest?: number;
   max?: number;
@@ -62,7 +68,6 @@ export interface IDataItem {
     value?: number;
   }[];
 }
-
 export interface IDimensionItem {
   alias?: string;
   checked?: boolean;
@@ -72,38 +77,6 @@ export interface IDimensionItem {
   value?: number | string;
 }
 
-export interface IFilterConfig {
-  group_by: string[];
-  function: {
-    time_compare: string[];
-  };
-}
-
-export interface IGroupBy {
-  field: string;
-  split: boolean;
-}
-
-export interface ILimit {
-  function: 'bottom' | 'top';
-  limit: number;
-}
-
-export interface IMetricAnalysisConfig {
-  bk_biz_id: number;
-  common_conditions: ICommonCondition[];
-  compare: ICompare;
-  conditions: ICondition[];
-  end_time: number;
-  group_by: IGroupBy[];
-  highlight_peak_value?: boolean;
-  limit: ILimit;
-  metrics: string[];
-  show_statistical_value: boolean;
-  start_time: number;
-  time_series_group_id: number;
-  view_column?: number;
-}
 /*
  * Tencent is pleased to support the open source community by making
  * 蓝鲸智云PaaS平台 (BlueKing PaaS) available.
@@ -129,6 +102,44 @@ export interface IMetricAnalysisConfig {
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+export interface IFilterConfig {
+  group_by: string[];
+  function: {
+    time_compare: string[];
+  };
+}
+
+export interface IGroupBy {
+  field: string;
+  split: boolean;
+}
+
+export interface ILimit {
+  function: 'bottom' | 'top';
+  limit: number;
+}
+
+export interface IMetricAnalysisConfig {
+  bk_biz_id?: number;
+  common_conditions?: ICommonCondition[];
+  compare?: ICompare;
+  conditions?: ICondition[];
+  end_time?: number;
+  group_by?: IGroupBy[];
+  highlight_peak_value?: boolean;
+  limit: ILimit;
+  metrics: { field_scope: string; name: string; scope_name?: string }[];
+  show_statistical_value?: boolean;
+  start_time?: number;
+  time_series_group_id?: number;
+  view_column?: number;
+}
+
+export interface IMetrics {
+  groupName: string;
+  metricsName: string[];
+}
+
 export interface IObjItem {
   [key: string]: any;
 }
@@ -139,7 +150,6 @@ export interface IRefreshItem {
   // 刷新间隔名称
   name: string;
 }
-
 export interface IResultItem {
   highlight_peak_value: boolean;
   metrics: string[];
@@ -169,7 +179,6 @@ export interface IResultItem {
     value: string[];
   }[];
 }
-
 export interface ITableColumn {
   $index: number;
   checked?: boolean;
@@ -198,3 +207,9 @@ export interface ITableColumn {
   // renderHeader
   renderHeader?: () => any;
 }
+
+export type RequestHandlerMap = {
+  [K in RequestHandlerKey]: (typeof apiMap)[K];
+};
+
+type RequestHandlerKey = keyof typeof apiMap;
