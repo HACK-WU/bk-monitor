@@ -23,25 +23,25 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { Component, InjectReactive, Prop, ProvideReactive, Watch } from 'vue-property-decorator';
+import { Component, Emit, InjectReactive, Prop, ProvideReactive, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
 import { connect, disconnect } from 'echarts/core';
-import { getCustomTsGraphConfig } from 'monitor-api/modules/scene_view';
 import { Debounce, random } from 'monitor-common/utils';
 import { deepClone } from 'monitor-common/utils';
 import EmptyStatus from 'monitor-pc/components/empty-status/empty-status';
 import { handleTransformToTimestamp } from 'monitor-pc/components/time-range/utils';
 
-import LayoutChartTable from './layout-chart-table';
-import { chunkArray } from './utils';
+// import { getCustomTsGraphConfig } from '../../../../../service';
+import { chunkArray } from '../../../../utils';
+import LayoutChartTable from './components/layout-chart-table';
 
-import type { ChartSettingsParams, IMetricAnalysisConfig } from '../type';
+import type { ChartSettingsParams, IMetricAnalysisConfig, RequestHandlerMap } from '../../../../type';
 import type { TimeRangeType } from 'monitor-pc/components/time-range/time-range';
 import type { IViewOptions } from 'monitor-ui/chart-plugins/typings';
 import type { IPanelModel } from 'monitor-ui/chart-plugins/typings';
 
-import './panel-chart-view.scss';
+import './index.scss';
 
 /** 图表 + 表格列表，支持拉伸 */
 const DEFAULT_HEIGHT = 600;
@@ -49,7 +49,9 @@ interface IGroups {
   name: string;
   panels: IPanelModel[];
 }
-
+interface IPanelChartViewEvents {
+  onMetricManage?: (tab: 'dimension' | 'metric') => 'dimension' | 'metric';
+}
 interface IPanelChartViewProps {
   chartSettingParams?: ChartSettingsParams;
   config?: IMetricAnalysisConfig;
@@ -58,7 +60,7 @@ interface IPanelChartViewProps {
 }
 
 @Component
-export default class PanelChartView extends tsc<IPanelChartViewProps> {
+export default class PanelChartView extends tsc<IPanelChartViewProps, IPanelChartViewEvents> {
   // 相关配置
   @Prop({ default: () => ({}) }) config: IMetricAnalysisConfig;
 
@@ -81,6 +83,12 @@ export default class PanelChartView extends tsc<IPanelChartViewProps> {
     interval: 'auto',
   };
   @InjectReactive('timeRange') readonly timeRange!: TimeRangeType;
+  @InjectReactive('timeSeriesGroupId') readonly timeSeriesGroupId: number;
+  @InjectReactive('isApm') readonly isApm: boolean;
+  @InjectReactive('appName') readonly appName: string;
+  @InjectReactive('serviceName') readonly serviceName: string;
+  @InjectReactive('requestHandlerMap') readonly requestHandlerMap!: RequestHandlerMap;
+
   activeName = [];
   /** 分组数据 */
   groupList: IGroups[] = [];
@@ -123,6 +131,11 @@ export default class PanelChartView extends tsc<IPanelChartViewProps> {
   }
   get baseHeight() {
     return this.showStatisticalValue ? DEFAULT_HEIGHT : 300;
+  }
+
+  @Emit('metricManage')
+  handleMetricManage(tab) {
+    return tab;
   }
 
   /** 重新获取对应的高度 */
@@ -168,7 +181,10 @@ export default class PanelChartView extends tsc<IPanelChartViewProps> {
   /** 获取图表配置 */
   @Debounce(300)
   getGroupList() {
-    if (!this.$route.params.id) {
+    // if (!this.$route.params.id) {
+    //   return;
+    // }
+    if (!this.timeSeriesGroupId && !this.isApm) {
       return;
     }
     if (this.config.metrics.length < 1) {
@@ -177,22 +193,34 @@ export default class PanelChartView extends tsc<IPanelChartViewProps> {
       this.activeName = [];
       return;
     }
-
     this.loading = true;
     const [startTime, endTime] = handleTransformToTimestamp(this.timeRange);
-    const params = {
+    const config = {
       ...this.config,
-      time_series_group_id: Number(this.$route.params.id),
+      metrics: this.config.metrics.map(({ scope_name, ...item }) => item),
+    };
+    const params = {
+      ...config,
+      time_series_group_id: Number(this.timeSeriesGroupId), // apm不需要
       start_time: startTime,
       end_time: endTime,
     };
+    // apm不需要time_series_group_id，改为apm_app_name和apm_service_name
+    if (this.isApm) {
+      delete params.time_series_group_id;
+      Object.assign(params, {
+        apm_app_name: this.appName,
+        apm_service_name: this.serviceName,
+      });
+    }
     delete params.bk_biz_id;
     if (!params.compare?.type) {
       delete params.compare;
     }
     const len = params.metrics.length;
     const max = Math.ceil(len / this.viewColumn);
-    getCustomTsGraphConfig(params)
+    this.requestHandlerMap
+      .getCustomTsGraphConfig(params)
       .then(res => {
         this.loading = false;
         this.groupList = res.groups || [];
@@ -216,6 +244,7 @@ export default class PanelChartView extends tsc<IPanelChartViewProps> {
           groupId={name || this.defaultGroupId}
           isShowStatisticalValue={this.showStatisticalValue}
           panel={chart}
+          onMetricManage={this.handleMetricManage}
           onResize={height => this.handleResize(height, ind, chartInd)}
         />
       </div>
