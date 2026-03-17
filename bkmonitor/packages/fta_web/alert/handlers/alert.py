@@ -648,15 +648,33 @@ class AlertQueryHandler(BaseBizQueryHandler):
         need_bucket_count: bool = True,
         **kwargs,
     ):
+        """
+        初始化告警查询处理器
+
+        参数:
+            bk_biz_ids: 业务ID列表，用于限定查询的业务范围
+            username: 请求用户名，用于权限控制和用户相关过滤
+            status: 告警状态列表，支持实际状态（ABNORMAL/RECOVERED/CLOSED）和虚拟状态（MINE/MY_APPOINTEE等）
+            is_time_partitioned: 是否启用时间分区查询模式，用于大数据量分片查询
+            is_finaly_partition: 是否为最终时间分区，仅在时间分区模式下生效
+            need_bucket_count: 是否需要统计桶数量，影响聚合查询的性能
+            **kwargs: 其他参数，包括:
+                - must_exists_fields: 必须存在字段的列表
+                - context: 查询上下文信息
+                - start_time/end_time: 查询时间范围
+                - page/page_size: 分页参数
+        """
         super().__init__(bk_biz_ids, username, **kwargs)
         self.must_exists_fields = kwargs.get("must_exists_fields", [])
+        # 统一处理status参数，支持字符串和列表两种输入形式
         self.status = [status] if isinstance(status, str) else status
         if not self.ordering:
-            # 默认排序
+            # 默认排序：先按状态排序，再按创建时间倒序，最后按序号倒序
             self.ordering = ["status", "-create_time", "-seq_id"]
         self.is_time_partitioned = is_time_partitioned
         self.is_finaly_partition = is_finaly_partition
         self.need_bucket_count = need_bucket_count
+        # 构建查询上下文，供查询转换器使用
         self.query_context = kwargs.get("context", {})
         self.query_context.update(
             {
@@ -820,10 +838,35 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return search_object
 
     def search_raw(self, show_overview=False, show_aggs=False, show_dsl=False):
+        """
+        执行原始ES搜索，返回未处理的搜索结果
+
+        参数:
+            show_overview: 是否添加概览聚合配置
+            show_aggs: 是否添加高级筛选聚合配置
+            show_dsl: 是否返回查询DSL语句
+
+        返回值:
+            tuple: (search_result, dsl_dict)
+                - search_result: ES搜索结果对象
+                - dsl_dict: 查询DSL字典（show_dsl=True时返回，否则为None）
+
+        该方法实现ES查询构建的核心流程：
+        1. 获取基础查询对象并添加过滤条件
+        2. 添加查询字符串（全文检索）
+        3. 添加排序和分页
+        4. 按需添加聚合配置
+        5. 执行搜索并跟踪总命中数
+        """
+        # 构建基础查询对象
         search_object = self.get_search_object()
+        # 添加业务过滤条件
         search_object = self.add_conditions(search_object)
+        # 添加全文检索条件
         search_object = self.add_query_string(search_object, context=self.query_context)
+        # 添加排序规则
         search_object = self.add_ordering(search_object)
+        # 添加分页参数
         search_object = self.add_pagination(search_object)
 
         # 根据参数添加附加功能
@@ -833,7 +876,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
         if show_aggs:
             search_object = self.add_aggs(search_object)
 
-        # 执行搜索并跟踪总匹配数
+        # 执行搜索并跟踪总匹配数（用于精确分页）
         search_result = search_object.params(track_total_hits=True).execute()
 
         # 根据参数决定是否返回DSL字典
@@ -921,35 +964,76 @@ class AlertQueryHandler(BaseBizQueryHandler):
         agg_fields: list[str],
     ):
         """
-        获取聚合结果
+        递归提取ES聚合结果中的桶数据
+
+        参数:
+            result: 结果字典，键为维度元组，值为聚合桶数据
+            dimensions: 当前维度字典，记录递归路径上的维度值
+            aggregation: 当前层级的聚合对象
+            agg_fields: 待处理的聚合字段列表
+
+        返回值:
+            None: 结果直接写入result参数
+
+        该方法通过递归遍历多层聚合结构，将嵌套的桶数据扁平化为维度元组到桶数据的映射。
+        对于tags开头的字段，使用特殊的嵌套聚合路径访问方式。
         """
         if agg_fields:
             field = agg_fields[0]
+            # tags字段使用嵌套聚合，需要特殊处理访问路径
             if field.startswith("tags."):
                 buckets = aggregation[field].key.value.buckets
             else:
                 buckets = aggregation[field].buckets
+            # 递归处理每个桶
             for bucket in buckets:
                 dimensions[field] = bucket.key
                 self._get_buckets(result, dimensions, bucket, agg_fields[1:])
         else:
+            # 递归终止：将当前维度组合和对应的聚合数据存入结果
             dimension_tuple: tuple = tuple(dimensions.items())
             result[dimension_tuple] = aggregation
 
     def date_histogram(self, interval: str = "auto", group_by: list[str] | None = None, bucket_size: int = 100):
+        """
+        按时间维度统计告警数量分布
+
+        参数:
+            interval: 聚合时间间隔，支持 "auto" 自动计算或指定如 "1h"、"1d"
+            group_by: 分组维度列表，如 ["status", "severity"]，默认按status分组
+            bucket_size: 每个聚合桶的大小限制
+
+        返回值:
+            defaultdict: 嵌套字典结构，格式为 {维度元组: {状态: {时间戳: 告警数量}}}
+                - 维度元组: 由group_by字段值组成的元组，如 (("severity", "1"),)
+                - 状态: ABNORMAL/RECOVERED/CLOSED
+                - 时间戳: 毫秒级Unix时间戳
+                - 告警数量: 该时间点的告警计数
+
+        该方法实现告警趋势统计的核心算法：
+        1. 计算合适的聚合时间间隔
+        2. 处理status字段的特殊分组逻辑
+        3. 构建三类时间聚合查询：
+           - 已结束告警（按end_time聚合）
+           - 新增异常告警（按begin_time聚合）
+           - 历史遗留告警（查询时间范围之前开始的告警）
+        4. 合并聚合结果，计算每个时间点的异常告警数量
+        5. 根据status_group参数决定是否合并状态数据
+        """
+        # 计算聚合时间间隔
         new_interval: int = self.calculate_agg_interval(self.start_time, self.end_time, interval)
 
         # 默认按status聚合
         if group_by is None:
             group_by = ["status"]
 
-        # status 会被单独处理
+        # status会被单独处理，从group_by中移除
         status_group = False
         if "status" in group_by:
             status_group = True
             group_by = [field for field in group_by if field != "status"]
 
-        # TODO: tags开头的字段是否能够进行嵌套聚合？
+        # 校验tags字段数量：ES不支持多个tags字段同时嵌套聚合
         tags_field_count = 0
         for field in group_by:
             if field.startswith("tags."):
@@ -957,32 +1041,34 @@ class AlertQueryHandler(BaseBizQueryHandler):
         if tags_field_count > 1:
             raise ValueError("can not group by more than one tags field")
 
-        # 将tags开头的字段放在后面
+        # 将tags开头的字段放在后面（嵌套聚合需要放在最后）
         group_by = sorted(group_by, key=lambda x: x.startswith("tags."))
 
-        # 查询时间对齐
+        # 查询时间对齐到聚合间隔边界
         start_time = self.start_time // new_interval * new_interval
         end_time = self.end_time // new_interval * new_interval + new_interval
         now_time = int(time.time()) // new_interval * new_interval + new_interval
 
+        # 构建查询对象
         search_object = self.get_search_object(start_time=start_time, end_time=end_time)
         search_object = self.add_conditions(search_object)
         search_object = self.add_query_string(search_object)
 
-        # 已经恢复或关闭的告警，按end_time聚合
+        # 构建三类时间聚合查询
+        # 1. 已恢复或关闭的告警，按end_time聚合
         ended_object = search_object.aggs.bucket(
             "end_time", "filter", {"range": {"end_time": {"lte": end_time}}}
         ).bucket("end_alert", "filter", {"terms": {"status": [EventStatus.RECOVERED, EventStatus.CLOSED]}})
-        # 查询时间范围内产生的告警，按begin_time聚合
+        # 2. 查询时间范围内产生的告警，按begin_time聚合
         new_anomaly_object = search_object.aggs.bucket(
             "begin_time", "filter", {"range": {"begin_time": {"gte": start_time, "lte": end_time}}}
         )
-        # 开始时间在查询时间范围之前的告警总数
+        # 3. 开始时间在查询时间范围之前的告警总数（用于计算初始异常数量）
         old_anomaly_object = search_object.aggs.bucket(
             "init_alert", "filter", {"range": {"begin_time": {"lt": start_time}}}
         )
 
-        # 时间聚合
+        # 添加时间聚合
         ended_object = ended_object.bucket(
             "time", "date_histogram", field="end_time", fixed_interval=f"{new_interval}s"
         ).bucket("status", "terms", field="status")
@@ -990,21 +1076,24 @@ class AlertQueryHandler(BaseBizQueryHandler):
             "time", "date_histogram", field="begin_time", fixed_interval=f"{new_interval}s"
         )
 
-        # 维度聚合
+        # 添加维度聚合
         for field in group_by:
             ended_object = self.add_agg_bucket(ended_object, field, size=bucket_size)
             new_anomaly_object = self.add_agg_bucket(new_anomaly_object, field, size=bucket_size)
             old_anomaly_object = self.add_agg_bucket(old_anomaly_object, field, size=bucket_size)
 
-        # 查询
+        # 执行查询（不需要返回文档，只需要聚合结果）
         search_result = search_object[:0].execute()
 
+        # 初始化结果字典，预填充所有时间点
         result = defaultdict(
             lambda: {
                 status: {ts * 1000: 0 for ts in range(start_time, min(now_time, end_time), new_interval)}
                 for status in EVENT_STATUS_DICT
             }
         )
+
+        # 处理新增异常告警的聚合结果
         if hasattr(search_result.aggs, "begin_time"):
             for time_bucket in search_result.aggs.begin_time.time.buckets:
                 begin_time_result = {}
@@ -1015,6 +1104,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                     if key in result[dimension_tuple][EventStatus.ABNORMAL]:
                         result[dimension_tuple][EventStatus.ABNORMAL][key] = bucket.doc_count
 
+        # 处理已结束告警的聚合结果
         if hasattr(search_result.aggs, "end_time") and hasattr(search_result.aggs.end_time, "end_alert"):
             for time_bucket in search_result.aggs.end_time.end_alert.time.buckets:
                 for status_bucket in time_bucket.status.buckets:
@@ -1026,25 +1116,27 @@ class AlertQueryHandler(BaseBizQueryHandler):
                         if key in result[dimension_tuple][status_bucket.key]:
                             result[dimension_tuple][status_bucket.key][key] = bucket.doc_count
 
+        # 处理历史遗留告警的聚合结果
         init_alert_result = {}
         if hasattr(search_result.aggs, "init_alert"):
             self._get_buckets(init_alert_result, {}, search_result.aggs.init_alert, group_by)
 
-        # 获取全部维度
+        # 获取全部维度（合并查询结果和历史遗留告警的维度）
         all_dimensions = set(result.keys()) | set(init_alert_result.keys())
 
         # 按维度分别统计事件数量
         for dimension_tuple in all_dimensions:
             all_series = result[dimension_tuple]
 
+            # 获取该维度下的历史遗留告警数量
             if dimension_tuple in init_alert_result:
                 current_abnormal_count = init_alert_result[dimension_tuple].doc_count
             else:
                 current_abnormal_count = 0
 
+            # 计算每个时间点的异常告警数量
+            # 算法：当前异常 = 上期异常 + 本期新增异常 - 本期恢复 - 本期关闭
             for ts in all_series[EventStatus.ABNORMAL]:
-                # 异常是一个持续的状态，会随着时间的推移不断叠加
-                # 一旦有恢复或关闭的告警，异常告警将会相应减少
                 all_series[EventStatus.ABNORMAL][ts] = (
                     current_abnormal_count
                     + all_series[EventStatus.ABNORMAL][ts]
@@ -1053,7 +1145,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 )
                 current_abnormal_count = all_series[EventStatus.ABNORMAL][ts]
 
-            # 如果不按status聚合，需要将status聚合的结果合并到一起
+            # 如果不按status聚合，需要将所有状态的结果合并到ABNORMAL中
             if not status_group:
                 for ts in all_series[EventStatus.ABNORMAL]:
                     all_series[EventStatus.ABNORMAL][ts] += (
@@ -1064,23 +1156,44 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return result
 
     def parse_condition_item(self, condition: dict) -> Q:
+        """
+        解析单个过滤条件，转换为ES查询对象
+
+        参数:
+            condition: 过滤条件字典，包含key、value、method等字段
+
+        返回值:
+            Q: elasticsearch-dsl查询对象
+
+        该方法处理多种特殊字段的查询转换：
+        1. stage字段：转换为处理阶段的复合条件
+        2. tags开头字段：转换为嵌套查询
+        3. alert_name字段：使用raw字段精确匹配
+        4. action_name字段：通过套餐名称反查告警ID
+        5. query_string字段：转换为全文检索查询
+        """
+        # 处理阶段字段的特殊转换
         if condition["key"] == "stage":
             conditions = []
             for value in condition["value"]:
                 if value == "is_handled":
+                    # 已通知：非屏蔽、非确认、已处理
                     conditions.append(
                         ~Q("term", is_shielded=True) & ~Q("term", is_ack=True) & Q("term", is_handled=True)
                     )
                 elif value == "is_ack":
+                    # 已确认：非屏蔽、已确认
                     conditions.append(~Q("term", is_shielded=True) & Q("term", is_ack=True))
                 elif value == "is_shielded":
+                    # 已屏蔽
                     conditions.append(Q("term", is_shielded=True))
                 elif value == "is_blocked":
+                    # 已流控
                     conditions.append(Q("term", is_blocked=True))
-            # 对 key 为 stage 进行特殊处理
+            # 多个阶段条件使用OR组合
             return reduce(operator.or_, conditions)
         elif condition["key"].startswith("tags."):
-            # 对 tags 开头的字段进行特殊处理
+            # tags字段使用嵌套查询
             return Q(
                 "nested",
                 path="event.tags",
@@ -1088,10 +1201,11 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 & Q("terms", **{"event.tags.value.raw": condition["value"]}),
             )
         elif condition["key"] == "alert_name":
+            # 告警名称使用raw字段进行精确匹配
             condition["key"] = "alert_name.raw"
 
         elif condition["origin_key"] == "action_name" and condition["key"] == "id":
-            # 用于支持对处理套餐名称查询
+            # 处理套餐名称查询：先通过套餐名称查询关联的告警ID
             params = {
                 "action_names": condition["value"],
                 "bk_biz_ids": self.bk_biz_ids,
@@ -1110,9 +1224,11 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
             return Q("ids", values=alert_ids)
         elif condition["key"] == "query_string":
+            # 全文检索查询：支持多个查询字符串的OR组合
             con_q = None
             for query_string in condition["value"]:
                 if query_string.strip():
+                    # 使用查询转换器处理查询字符串
                     query_dsl = self.query_transformer.transform_query_string(query_string, self.query_context)
                     if isinstance(query_dsl, str):
                         temp_q = Q("query_string", query=query_dsl)
@@ -1125,6 +1241,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                         con_q = con_q | temp_q
 
             return con_q
+        # 其他字段使用父类的默认处理
         return super().parse_condition_item(condition)
 
     def add_biz_condition(self, search_object):
@@ -1163,13 +1280,30 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return search_object
 
     def add_filter(self, search_object, start_time: int = None, end_time: int = None):
-        # 条件过滤
+        """
+        添加基础过滤条件到查询对象
+
+        参数:
+            search_object: ES查询对象
+            start_time: 查询开始时间戳（可选）
+            end_time: 查询结束时间戳（可选）
+
+        返回值:
+            添加过滤条件后的查询对象
+
+        该方法添加两类过滤条件：
+        1. 业务ID过滤：限定查询的业务范围
+        2. 时间范围过滤：查询指定时间范围内的告警，包括已恢复和未恢复的告警
+        """
+        # 业务ID过滤
         if self.bk_biz_ids:
             search_object = search_object.filter("terms", **{"event.bk_biz_id": self.bk_biz_ids})
 
+        # 时间范围过滤
         start_time = start_time or self.start_time
         end_time = end_time or self.end_time
         if start_time and end_time:
+            # 查询条件：end_time在范围内，或者end_time不存在（未恢复的告警）
             search_object = search_object.filter(
                 Q("range", end_time={"gte": start_time, "lte": end_time}) | ~Q("exists", field="end_time")
             )
@@ -1383,6 +1517,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_aggs_severity(cls, search_result):
+        """
+        处理严重度聚合结果
+
+        参数:
+            search_result: ES搜索结果对象
+
+        返回值:
+            dict: 严重度分布统计结果，包含id、name、count、children字段
+        """
         if search_result.aggs:
             severity_dict = {bucket.key: bucket.doc_count for bucket in search_result.aggs.severity.buckets}
         else:
@@ -1401,15 +1544,28 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_aggs_category(cls, search_result):
+        """
+        处理分类聚合结果
+
+        参数:
+            search_result: ES搜索结果对象
+
+        返回值:
+            dict: 分类分布统计结果，包含层级结构的分类树
+
+        该方法将ES聚合结果与标签配置合并，生成完整的分类树结构。
+        """
         if search_result.aggs:
             category_dict = {bucket.key: bucket.doc_count for bucket in search_result.aggs.category.buckets}
         else:
             category_dict = {}
 
+        # 获取标签配置
         try:
             labels = resource.commons.get_label()
         except Exception:
             labels = []
+        # 合并聚合结果到标签配置
         for first_label in labels:
             first_label["count"] = 0
             for second_label in first_label["children"]:
@@ -1428,6 +1584,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_aggs_stage(cls, search_result):
+        """
+        处理处理阶段聚合结果
+
+        参数:
+            search_result: ES搜索结果对象
+
+        返回值:
+            dict: 处理阶段分布统计结果，包含已通知、已确认、已屏蔽、已流控四个阶段
+        """
         handled_count = search_result.aggs.is_handled.doc_count if search_result.aggs else 0
         ack_count = search_result.aggs.is_ack.doc_count if search_result.aggs else 0
         shielded_count = search_result.aggs.is_shielded.doc_count if search_result.aggs else 0
@@ -1447,6 +1612,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_aggs_data_type(cls, search_result):
+        """
+        处理数据类型聚合结果
+
+        参数:
+            search_result: ES搜索结果对象
+
+        返回值:
+            dict: 数据类型分布统计结果
+        """
         if search_result.aggs:
             data_type_dict = {bucket.key: bucket.doc_count for bucket in search_result.aggs.data_type.buckets}
         else:
@@ -1464,18 +1638,38 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_overview(cls, search_result):
+        """
+        处理概览聚合结果
+
+        参数:
+            search_result: ES搜索结果对象
+
+        返回值:
+            dict: 告警概览统计结果，包含：
+                - 我的告警：当前用户关联的告警
+                - 我负责的：当前用户作为负责人的告警
+                - 我关注的：当前用户关注的告警
+                - 我收到的：当前用户作为处理人的告警
+                - 未恢复：未恢复且未屏蔽的告警
+                - 未恢复(已屏蔽)：未恢复但已屏蔽的告警
+                - 已恢复：已恢复的告警
+
+        该方法从聚合结果中提取各维度的统计数据，构建层级化的概览结构。
+        """
+        # 初始化聚合结果容器
         agg_result = {
             cls.SHIELD_ABNORMAL_STATUS_NAME: 0,
             cls.NOT_SHIELD_ABNORMAL_STATUS_NAME: 0,
             EventStatus.RECOVERED: 0,
         }
 
+        # 提取状态和屏蔽状态的嵌套聚合结果
         if search_result.aggs:
             for status_bucket in search_result.aggs.status.buckets:
                 status = status_bucket.key
                 if status == EventStatus.ABNORMAL:
+                    # 异常状态需要进一步区分是否屏蔽
                     for is_shielded_bucket in status_bucket.is_shielded.buckets:
-                        # 只记录已屏蔽，未恢复的告警数量
                         if is_shielded_bucket.key:
                             agg_result[cls.SHIELD_ABNORMAL_STATUS_NAME] = is_shielded_bucket.doc_count
                         else:
@@ -1483,6 +1677,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 elif status in agg_result:
                     agg_result[status] = status_bucket.doc_count
 
+        # 构建层级化的概览结果
         result = {
             "id": "alert",
             "name": _("告警"),
@@ -1528,18 +1723,35 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return result
 
     def export_with_docs(self) -> tuple[list[AlertDocument], list[dict]]:
-        """导出告警数据，并附带原始文档。"""
+        """
+        导出告警数据，并附带原始文档
+
+        返回值:
+            tuple: (raw_docs, cleaned_docs)
+                - raw_docs: 原始AlertDocument对象列表
+                - cleaned_docs: 清洗后的告警数据字典列表
+
+        该方法用于告警导出功能，返回原始文档和清洗后的数据。
+        """
+        # 扫描所有匹配的文档，只查询导出需要的字段
         raw_docs = [AlertDocument(**hit.to_dict()) for hit in self.scan(source_fields=self.get_export_fields())]
+        # 清洗文档并翻译字段名称
         cleaned_docs = (self.clean_document(doc, exclude=["extra_info"]) for doc in raw_docs)
         return raw_docs, list(self.translate_field_names(cleaned_docs))
 
     def get_export_fields(self):
         """
         获取导出时需要查询的字段列表
+
+        返回值:
+            list: 需要查询的ES字段名列表
+
+        该方法从查询转换器、关联信息依赖和排序字段中提取需要查询的字段，
+        排除无用字段以优化查询性能。
         """
         fields = set()
 
-        # 从 query_fields 中提取需要的字段，排除无用字段
+        # 从查询转换器的字段配置中提取需要的字段
         for field in self.query_transformer.query_fields:
             if field.field in self.EXCLUDED_EXPORT_FIELDS:
                 continue
@@ -1562,6 +1774,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     @classmethod
     def handle_hit(cls, hit):
+        """
+        处理单个搜索结果，转换为清洗后的字典
+
+        参数:
+            hit: ES搜索结果中的单个命中对象
+
+        返回值:
+            dict: 清洗后的告警数据字典
+        """
         return cls.clean_document(AlertDocument(**hit.to_dict()), exclude=["extra_info"])
 
     @classmethod
@@ -1684,14 +1905,39 @@ class AlertQueryHandler(BaseBizQueryHandler):
     def adapt_to_event(cls, alert):
         """
         将告警数据适配为事件数据
+
+        参数:
+            alert: 告警数据字典
+
+        返回值:
+            dict: 事件数据字典，包含event字段和从告警中提取的id、status、assignee字段
+
+        该方法用于将告警数据结构转换为事件数据结构，便于事件相关的业务处理。
         """
         event = alert["event"]
 
+        # 将告警的核心字段复制到事件中
         for field in ["id", "status", "assignee"]:
             event[field] = alert.get(field)
         return event
 
     def top_n(self, fields: list, size=10, translators: dict = None, char_add_quotes=True):
+        """
+        获取指定字段的Top N统计结果
+
+        参数:
+            fields: 需要统计的字段列表
+            size: 返回的桶数量，默认为10
+            translators: 字段翻译器字典，用于将ID翻译为可读名称
+            char_add_quotes: 是否为包含特殊字符的值添加引号
+
+        返回值:
+            dict: Top N统计结果，包含fields字段和各字段的桶数据
+
+        该方法对metric字段进行特殊处理，因为metric的ID可能是PromQL语句，
+        需要对特殊字符进行转义以支持ES查询。
+        """
+        # 配置字段翻译器
         translators = {
             "metric": MetricTranslator(name_format="{name} ({id})", bk_biz_ids=self.bk_biz_ids),
             "bk_biz_id": BizTranslator(),
@@ -1702,11 +1948,11 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
         result = super().top_n(fields, size, translators, char_add_quotes)
 
-        # 对metric字段进行特殊处理
-        # metric对应的id可能是promql语句，需要进行转义
+        # 对metric字段进行特殊处理：转义PromQL语句中的特殊字符
         if "metric" not in fields:
             return result
 
+        # ES查询语法中的特殊字符正则
         regex = r'([+\-=&|><!(){}[\]^"~*?\\:\/ ])'
         special_chars = re.compile(regex)
         for field in result["fields"]:
@@ -1715,8 +1961,10 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
             for bucket in field["buckets"]:
                 bucket_id = bucket["id"]
+                # 只处理包含PromQL语句的metric
                 if not is_include_promql(bucket_id):
                     continue
+                # 移除引号并转义特殊字符
                 bucket_id = bucket_id.strip("'\"")
                 bucket["id"] = special_chars.sub(r"\\\1", bucket_id)
 
@@ -1725,44 +1973,25 @@ class AlertQueryHandler(BaseBizQueryHandler):
     def list_tags(self):
         """
         获取告警标签列表
-        :return:
-        [
-            {
-                "id": "device_name",
-                "name": "device_name",
-                "count": 1234,
-            }
-        ]
+
+        返回值:
+            list: 标签列表，每项包含:
+                - id: 标签ID，格式为 "tags.{key}"
+                - name: 标签名称
+                - count: 该标签出现的次数
+
+        该方法使用ES嵌套聚合统计event.tags中各key的出现次数，
+        排除IGNORED_TAGS中定义的忽略标签。
         """
         search_object = self.get_search_object()
         search_object = self.add_conditions(search_object)
         search_object = self.add_query_string(search_object)
 
-        # tags_count = defaultdict(int)
-        # tags_name = {}
-        #
-        # for hit in search_object.source(fields=["event.tags", "dimensions"]).scan():
-        #     hit_dict = hit.to_dict()
-        #     for dimension in hit_dict.get("dimensions", []):
-        #         if not dimension["key"].startswith("tags."):
-        #             continue
-        #         key = dimension["key"][len("tags.") :]
-        #         if key != dimension.get("display_key"):
-        #             tags_name[key] = dimension["display_key"]
-        #
-        #     for tag in hit_dict.get("event", {}).get("tags", []):
-        #         tags_count[tag["key"]] += 1
-        #
-        # result = [
-        #     {"id": f"tags.{key}", "name": tags_name.get(key, key), "count": value}
-        #     for key, value in tags_count.items()
-        #     if key not in IGNORED_TAGS
-        # ]
-        # result.sort(key=lambda item: item["count"], reverse=True)
-
+        # 使用嵌套聚合统计tags.key的出现次数
         search_object.aggs.bucket("tags", "nested", path="event.tags").bucket(
             "key", "terms", field="event.tags.key", size=1000
         )
+        # 执行查询，不需要返回文档
         search_result = search_object[:0].execute()
 
         result = []

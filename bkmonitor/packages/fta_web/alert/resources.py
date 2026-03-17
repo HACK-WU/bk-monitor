@@ -564,20 +564,52 @@ class ListSearchHistoryResource(Resource):
 class AlertDateHistogramResource(Resource):
     """
     查询告警分布直方图
+
+    该资源用于按时间维度统计告警数量分布，返回各状态告警在不同时间点的数量序列，
+    支持前端绘制告警趋势折线图或柱状图。
     """
 
     class RequestSerializer(AlertSearchSerializer):
         interval = serializers.CharField(label="聚合周期", default="auto")
 
     def perform_request(self, validated_request_data):
+        """
+        执行告警分布直方图查询
+
+        参数:
+            validated_request_data: 已验证的请求参数，包含:
+                - start_time: 查询开始时间（Unix时间戳，毫秒）
+                - end_time: 查询结束时间（Unix时间戳，毫秒）
+                - interval: 聚合周期，支持 "auto" 自动计算或指定如 "1h"、"1d"
+                - bk_biz_ids: 业务ID列表，用于权限过滤
+                - 其他继承自 AlertSearchSerializer 的过滤条件
+
+        返回值:
+            dict: 包含以下字段:
+                - series: 各状态的时序数据列表，每项包含 name、display_name、data
+                - unit: 数据单位（空字符串）
+
+        该方法实现完整的告警分布统计流程：
+        1. 提取并计算聚合时间间隔
+        2. 解析业务权限，区分已授权和未授权业务
+        3. 按时间切片分批查询ES（避免单次查询时间跨度过大）
+        4. 合并各切片结果，填充默认时间序列（确保时间轴连续）
+        5. 格式化输出为前端图表所需的数据结构
+        """
+        # 1. 提取时间参数和聚合间隔
         start_time = validated_request_data.pop("start_time")
         end_time = validated_request_data.pop("end_time")
         interval = validated_request_data.pop("interval")
+        # 根据时间范围自动计算合适的聚合间隔（如 auto 模式）
         interval = BaseQueryHandler.calculate_agg_interval(start_time, end_time, interval)
+
+        # 2. 解析业务权限，区分已授权和未授权业务
         if validated_request_data["bk_biz_ids"] is not None:
             authorized_bizs, unauthorized_bizs = AlertQueryHandler.parse_biz_item(validated_request_data["bk_biz_ids"])
             validated_request_data["authorized_bizs"] = authorized_bizs
             validated_request_data["unauthorized_bizs"] = unauthorized_bizs
+
+        # 3. 按时间切片分批查询ES，避免单次查询跨度过大导致性能问题
         results = resource.alert.alert_date_histogram_result.bulk_request(
             [
                 {
@@ -590,19 +622,37 @@ class AlertDateHistogramResource(Resource):
             ]
         )
 
-        data = {status: {} for status in EVENT_STATUS_DICT}
+        # 4. 初始化各状态的数据字典，用于合并查询结果
+        # 根据传入的status参数确定需要返回哪些状态，如果没有指定则返回所有状态
+        raw_status = validated_request_data.get("status")
+        if raw_status:
+            # 用户指定了状态过滤条件，只返回这些状态的数据
+            target_statuses = set(raw_status) if isinstance(raw_status, list) else {raw_status}
+        else:
+            # 未指定状态过滤条件，返回所有状态
+            target_statuses = set(EVENT_STATUS_DICT.keys())
+
+        data = {status: {} for status in target_statuses}
         for result in results:
             for status, series in result.items():
+                # 处理默认时间序列，确保时间轴连续无断点
                 if status == "default_time_series":
                     interval = series["interval"]
+                    # 对齐时间边界到间隔整数倍
                     start_time = series["start_time"] // interval * interval
                     end_time = series["end_time"] // interval * interval + interval
+                    # 生成完整的时间序列，时间戳转换为毫秒
                     default_time_series = {ts * 1000: 0 for ts in range(start_time, end_time, interval)}
-                    for sta in EVENT_STATUS_DICT:
+                    # 只为目标状态填充默认时间序列，确保各状态时间轴一致
+                    for sta in target_statuses:
                         data[sta].update(default_time_series)
                     continue
 
-                data[status].update(series)
+                # 合并实际查询到的状态数据，只合并在目标状态列表中的数据
+                if status in target_statuses:
+                    data[status].update(series)
+
+        # 5. 格式化输出为前端图表所需的数据结构
         return {
             "series": [
                 {"data": list(series.items()), "name": status, "display_name": EVENT_STATUS_DICT[status]}

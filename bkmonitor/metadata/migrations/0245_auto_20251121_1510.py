@@ -30,10 +30,10 @@ class Migration(migrations.Migration):
             name="ClusterConfig",
             fields=[
                 ("id", models.AutoField(auto_created=True, primary_key=True, serialize=False, verbose_name="ID")),
-                ("bk_tenant_id", models.CharField(max_length=100, verbose_name="租户ID")),
-                ("namespace", models.CharField(max_length=100, verbose_name="命名空间")),
-                ("name", models.CharField(max_length=100, verbose_name="集群名称")),
-                ("kind", models.CharField(max_length=100, verbose_name="集群类型")),
+                ("bk_tenant_id", models.CharField(max_length=255, verbose_name="租户ID")),
+                ("namespace", models.CharField(max_length=255, verbose_name="命名空间")),
+                ("name", models.CharField(max_length=255, verbose_name="集群名称")),
+                ("kind", models.CharField(max_length=255, verbose_name="集群类型")),
                 (
                     "origin_config",
                     bkmonitor.utils.db.fields.SymmetricJsonField(default=dict, verbose_name="原始配置"),
