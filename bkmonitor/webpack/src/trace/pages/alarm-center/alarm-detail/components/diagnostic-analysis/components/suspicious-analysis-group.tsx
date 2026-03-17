@@ -23,9 +23,53 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-// 模糊匹配
-export const fuzzyMatch = (str: string, pattern: string) => {
-  const lowerStr = String(str || '').toLowerCase();
-  const lowerPattern = String(pattern || '').toLowerCase();
-  return lowerStr.includes(lowerPattern);
-};
+import { defineComponent, shallowRef, watch } from 'vue';
+
+import './suspicious-analysis-group.scss';
+
+export default defineComponent({
+  name: 'SuspiciousAnalysisGroup',
+  props: {
+    defaultExpand: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  setup(props) {
+    const expand = shallowRef(props.defaultExpand);
+
+    const toggleExpand = () => {
+      expand.value = !expand.value;
+    };
+
+    const unWatchExpand = watch(
+      () => props.defaultExpand,
+      val => {
+        expand.value = val;
+        unWatchExpand();
+      }
+    );
+
+    return {
+      expand,
+      toggleExpand,
+    };
+  },
+  render() {
+    return (
+      <div class={['suspicious-analysis-group', { expand: this.expand }]}>
+        <div class='suspicious-analysis-group-wrapper'>
+          <div
+            class='group-header'
+            onClick={this.toggleExpand}
+          >
+            <i class='icon-monitor icon-mc-arrow-right arrow-icon' />
+            {this.$slots.title?.()}
+          </div>
+          <div class='group-content'>{this.$slots.default?.()}</div>
+          {this.$slots.footer && <div class='group-footer'>{this.$slots.footer?.()}</div>}
+        </div>
+      </div>
+    );
+  },
+});

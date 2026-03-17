@@ -28,51 +28,43 @@ import { defineComponent } from 'vue';
 import AnalysisDetailContent from './analysis-detail-content';
 import SuspiciousAnalysisGroup from './suspicious-analysis-group';
 
-import './dimension-panel.scss';
+import './link-panel.scss';
 
 export default defineComponent({
-  name: 'DimensionPanel',
+  name: 'LinkPanel',
   render() {
     return (
-      <div class='suspicious-dimension-panel'>
-        <i18n-t
-          class='tips'
-          keypath='经过 {0} 分析，发现以下可疑维度（组合）：'
-          tag='div'
-        >
-          <span class='link-text'>{this.$t('维度下钻分析')}</span>
-        </i18n-t>
-        <div class='dimension-group-list'>
+      <div class='suspicious-link-panel'>
+        <div class='link-group-list'>
           <SuspiciousAnalysisGroup>
             {{
               title: () => (
                 <div class='group-title'>
-                  <span class='group-name'>异常维度（组合）1</span>
-                  <div class='abnormality-tag'>
-                    <span class='abnormality-label'>异常程度</span>
-                    <span class='abnormality-value'>90%</span>
+                  <div class='group-name'>
+                    {this.$t('调用链')}：<span class='link-name link-text'>7160731cd9fe607033c1ae7d7a5f449b</span>
                   </div>
                 </div>
               ),
               default: () => (
                 <AnalysisDetailContent
-                  tableData={[
-                    { name: '主机名', value: 'VM-156-110-centos' },
-                    { name: '目标IP', value: '11.185.157.110' },
-                    { name: '管控区域', value: '0' },
-                    { name: 'Key占位', value: 'Value 占位' },
+                  contentData={[
+                    {
+                      title: '错误情况',
+                      value: [
+                        "IE monitor_web，incident，resources, fronted_resources. IncidentHandlersResource 这个 span 中，发生了一个类型为 TypeError 的异常。异常信息为'<' not supported between instances of 'str' and 'int'. 这表明在代表中存在一个比较操作。试图将字符串和整数进行比较，导致了类型错误。",
+                      ],
+                    },
+                    {
+                      title: '错误详情',
+                      value: [
+                        '异常类型：TypeError',
+                        "异常信息：'<' not supported between instances of 'str' and 'int'",
+                      ],
+                    },
+                    { title: '堆栈跟踪', value: ['Transaction:Transaction root'] },
                   ]}
-                  contentData={[]}
+                  tableData={[]}
                 />
-              ),
-              footer: () => (
-                <div class='footer-content'>
-                  <span class='reason'>可疑原因：主调成功率 17%</span>
-                  <span class='link-text'>
-                    <i class='icon-monitor icon-xiangqing1' />
-                    {this.$t('分析详情')}
-                  </span>
-                </div>
               ),
             }}
           </SuspiciousAnalysisGroup>

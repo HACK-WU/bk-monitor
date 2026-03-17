@@ -1,0 +1,74 @@
+.analysis-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  grid-template-columns: 100%;
+  width: 100%;
+  overflow: hidden;
+  transition: grid-template-rows 0.6s ease;
+
+  .analysis-panel-wrapper {
+    min-height: 57px;
+  }
+
+  .analysis-panel-wrapper-header {
+    display: flex;
+    align-items: center;
+    padding: 16px 0 4px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    border-top: 1px solid var(--neutral-border, #e9edf5);
+
+    .arrow-icon {
+      margin-left: auto;
+      font-size: 16px;
+      color: #c1cde6;
+      transition: transform 0.1s;
+    }
+
+    .analysis-type-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      font-size: 14px;
+      color: #fff;
+      background: linear-gradient(136deg, #5f84ff 8.33%, #5151fc 92.72%);
+      border-radius: 6px;
+      box-shadow: 0 4px 8px -3px #154bfc33;
+    }
+
+    .panel-title {
+      margin: 0 4px 0 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #313238;
+    }
+
+    .count-tag {
+      min-width: 18px;
+      padding: 1px 5px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 16px;
+      color: #8f9fbd;
+      text-align: center;
+      background-color: #f0f4fa;
+      border-radius: 999px;
+    }
+  }
+
+  .analysis-panel-wrapper-content {
+    margin-bottom: 40px;
+  }
+
+  &.expand {
+    grid-template-rows: 1fr;
+
+    .analysis-panel-wrapper-header {
+      .arrow-icon {
+        transform: rotateZ(90deg);
+      }
+    }
+  }
+}

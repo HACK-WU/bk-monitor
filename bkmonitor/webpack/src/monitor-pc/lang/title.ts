@@ -222,4 +222,6 @@ export default {
   '确定解除关联?': 'Are you sure you want to disassociate?',
   蓝鲸智云: 'Tencent BlueKing',
   缩放: 'DataZoom',
+
+  诊断概率: 'Diagnostic probability',
 };

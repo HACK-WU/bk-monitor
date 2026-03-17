@@ -28,30 +28,31 @@ import { defineComponent } from 'vue';
 import AnalysisDetailContent from './analysis-detail-content';
 import SuspiciousAnalysisGroup from './suspicious-analysis-group';
 
-import './dimension-panel.scss';
+import './metric-panel.scss';
 
 export default defineComponent({
-  name: 'DimensionPanel',
+  name: 'MetricPanel',
   render() {
     return (
-      <div class='suspicious-dimension-panel'>
-        <i18n-t
-          class='tips'
-          keypath='经过 {0} 分析，发现以下可疑维度（组合）：'
-          tag='div'
-        >
-          <span class='link-text'>{this.$t('维度下钻分析')}</span>
-        </i18n-t>
-        <div class='dimension-group-list'>
+      <div class='suspicious-metric-panel'>
+        <div class='tips'>
+          下面这些指标维度，在过去时间里产生过相似的告警事件，希望能够帮助您进一步分析告警可能原因。
+        </div>
+        <div class='metric-group-list'>
           <SuspiciousAnalysisGroup>
             {{
               title: () => (
                 <div class='group-title'>
-                  <span class='group-name'>异常维度（组合）1</span>
-                  <div class='abnormality-tag'>
-                    <span class='abnormality-label'>异常程度</span>
-                    <span class='abnormality-value'>90%</span>
-                  </div>
+                  <span class='group-name'>指标：证书剩余天数（cert_shengyu_days）</span>
+                  <span
+                    class='link-text detail-link'
+                    onClick={e => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    <i class='icon-monitor icon-zhibiaojiansuo' />
+                    指标检索
+                  </span>
                 </div>
               ),
               default: () => (
@@ -60,17 +61,14 @@ export default defineComponent({
                     { name: '主机名', value: 'VM-156-110-centos' },
                     { name: '目标IP', value: '11.185.157.110' },
                     { name: '管控区域', value: '0' },
-                    { name: 'Key占位', value: 'Value 占位' },
                   ]}
                   contentData={[]}
                 />
               ),
               footer: () => (
                 <div class='footer-content'>
-                  <span class='reason'>可疑原因：主调成功率 17%</span>
-                  <span class='link-text'>
-                    <i class='icon-monitor icon-xiangqing1' />
-                    {this.$t('分析详情')}
+                  <span class='reason'>
+                    可疑原因：在（2025-04-16 00:00:00 ～ 2025-04-17 00:00:00）时间段内，告警产生具有相似性。
                   </span>
                 </div>
               ),

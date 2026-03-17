@@ -28,50 +28,49 @@ import { defineComponent } from 'vue';
 import AnalysisDetailContent from './analysis-detail-content';
 import SuspiciousAnalysisGroup from './suspicious-analysis-group';
 
-import './dimension-panel.scss';
+import './event-panel.scss';
 
 export default defineComponent({
-  name: 'DimensionPanel',
+  name: 'EventPanel',
   render() {
     return (
-      <div class='suspicious-dimension-panel'>
-        <i18n-t
-          class='tips'
-          keypath='经过 {0} 分析，发现以下可疑维度（组合）：'
-          tag='div'
-        >
-          <span class='link-text'>{this.$t('维度下钻分析')}</span>
-        </i18n-t>
-        <div class='dimension-group-list'>
+      <div class='suspicious-event-panel'>
+        <div class='tips'>通过分析告警产生前 1 小时时间窗口事件，可疑事件为：</div>
+        <div class='event-group-list'>
           <SuspiciousAnalysisGroup>
             {{
               title: () => (
                 <div class='group-title'>
-                  <span class='group-name'>异常维度（组合）1</span>
-                  <div class='abnormality-tag'>
-                    <span class='abnormality-label'>异常程度</span>
-                    <span class='abnormality-value'>90%</span>
-                  </div>
+                  <span
+                    class='group-name link-text'
+                    onClick={e => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    五一大版本发布
+                    <i class='icon-monitor icon-fenxiang' />
+                  </span>
+
+                  <span
+                    class='link-text detail-link'
+                    onClick={e => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    <i class='icon-monitor icon-xiangqing1' />
+                    分析详情
+                  </span>
                 </div>
               ),
               default: () => (
                 <AnalysisDetailContent
-                  tableData={[
-                    { name: '主机名', value: 'VM-156-110-centos' },
-                    { name: '目标IP', value: '11.185.157.110' },
-                    { name: '管控区域', value: '0' },
-                    { name: 'Key占位', value: 'Value 占位' },
-                  ]}
                   contentData={[]}
+                  tableData={[]}
                 />
               ),
               footer: () => (
                 <div class='footer-content'>
-                  <span class='reason'>可疑原因：主调成功率 17%</span>
-                  <span class='link-text'>
-                    <i class='icon-monitor icon-xiangqing1' />
-                    {this.$t('分析详情')}
-                  </span>
+                  <span class='reason'>可疑原因：该时间关联的服务跟告警服务相同</span>
                 </div>
               ),
             }}
