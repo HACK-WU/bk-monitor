@@ -493,24 +493,43 @@ class BaseQueryHandler:
     @classmethod
     def calculate_agg_interval(cls, start_time: int, end_time: int, interval: str = "auto"):
         """
-        根据起止时间计算聚合步长
-        返回单位：秒
+        根据起止时间计算聚合步长（用于 ES date_histogram 等时间聚合场景）
+
+        参数:
+            start_time: 查询起始时间，Unix 时间戳（秒）
+            end_time: 查询结束时间，Unix 时间戳（秒）
+            interval: 聚合步长，支持以下值：
+                - "auto"（默认）: 根据查询时间跨度自动选择合适的步长
+                - 数字字符串（如 "60"）: 直接作为步长秒数使用
+
+        返回值:
+            int: 聚合步长，单位为秒
+
+        该方法根据查询时间跨度自动匹配最佳聚合粒度，确保图表数据点数量适中：
+        1. 当 interval 为 "auto" 或空值时，按时间跨度分档计算：
+           - ≤1小时  → 1分钟（60s），约产生 ≤60 个数据点
+           - ≤6小时  → 5分钟（300s），约产生 ≤72 个数据点
+           - ≤72小时 → 1小时（3600s），约产生 ≤72 个数据点
+           - >72小时 → 1天（86400s），控制大跨度查询的数据点数量
+        2. 当 interval 为具体数值字符串时，直接转换为整数使用
         """
         if not interval or interval == "auto":
+            # 计算查询时间跨度（小时）
             hour_interval = (end_time - start_time) // 3600
             if hour_interval <= 1:
-                # 1分钟
+                # ≤1小时：1分钟粒度
                 interval = 60
             elif hour_interval <= 6:
-                # 5分钟
+                # ≤6小时：5分钟粒度
                 interval = 5 * 60
             elif hour_interval <= 72:
-                # 1小时
+                # ≤72小时（3天）：1小时粒度
                 interval = 60 * 60
             else:
-                # 1天
+                # >72小时：1天粒度
                 interval = 24 * 60 * 60
         else:
+            # 用户指定了具体步长，直接转为整数
             interval = int(interval)
 
         return interval
@@ -568,28 +587,86 @@ class BaseQueryHandler:
 
     def add_agg_bucket(self, search_object: Bucket, field: str, size: int = 10):
         """
-        按字段添加聚合桶
+        在ES搜索对象上按指定字段添加聚合桶（Bucket Aggregation）
+
+        参数:
+            search_object: elasticsearch-dsl 的 Bucket 对象，作为聚合的父级容器
+            field: 聚合字段名，支持以下格式：
+                - "field_name"   : 默认按文档数降序排列
+                - "-field_name"  : 按文档数降序排列（显式指定）
+                - "+field_name"  : 按文档数升序排列
+                - "tags.xxx"     : 标签字段，触发嵌套聚合逻辑
+            size: 聚合桶的最大返回数量，默认10
+
+        返回值:
+            Bucket: 新的聚合桶对象，可继续链式添加子聚合
+
+        该方法根据字段类型选择不同的聚合策略：
+        1. 解析排序前缀（-/+），确定桶排序方向和实际字段名
+        2. tags 字段 → 嵌套聚合（nested + filter + terms 三层结构）
+        3. duration 字段 → 范围聚合（range），按预定义的持续时间区间分桶
+        4. 其他字段 → 词项聚合（terms），按字段值分桶
         """
-        # 处理桶排序
+        # ========== 第一步：解析排序前缀，确定排序方向和实际字段名 ==========
         if field.startswith("-"):
+            # "-" 前缀：按文档数降序排列
             order = {"_count": "desc"}
             actual_field = field[1:]
         elif field.startswith("+"):
+            # "+" 前缀：按文档数升序排列
             order = {"_count": "asc"}
             actual_field = field[1:]
         else:
-            # 默认情况
+            # 无前缀：默认降序
             order = {"_count": "desc"}
             actual_field = field
 
+        # ========== 第二步：根据字段类型选择聚合策略 ==========
         if actual_field.startswith("tags."):
-            # tags 标签需要做嵌套查询
+            # --- 策略A：tags 标签字段 → 嵌套聚合 ---
+            # 告警标签在ES中以嵌套对象存储（event.tags = [{key: "xxx", value: "yyy"}, ...]），
+            # 不能直接用 terms 聚合，需要三层嵌套结构：
             tag_key = actual_field[len("tags.") :]
 
-            # 进行桶聚合
+            # 生成的聚合DSL及返回数据结构示例（假设 field="tags.device_name", tag_key="device_name"）：
+            # 聚合DSL:
+            # {
+            #   "tags.device_name": {
+            #     "nested": {"path": "event.tags"},
+            #     "aggs": {
+            #       "key": {
+            #         "filter": {"term": {"event.tags.key": "device_name"}},
+            #         "aggs": {
+            #           "value": {
+            #             "terms": {"field": "event.tags.value.raw", "size": 10, "order": {"_count": "desc"}}
+            #           }
+            #         }
+            #       }
+            #     }
+            #   }
+            # }
+            # 返回结果:
+            # {
+            #   "tags.device_name": {
+            #     "doc_count": 500,
+            #     "key": {
+            #       "doc_count": 120,
+            #       "value": {
+            #         "buckets": [
+            #           {"key": "server-01", "doc_count": 55},
+            #           {"key": "server-02", "doc_count": 40},
+            #           {"key": "switch-03", "doc_count": 25}
+            #         ]
+            #       }
+            #     }
+            #   }
+            # }
             new_search_object = (
+                # 第1层 nested：进入嵌套文档 event.tags
                 search_object.bucket(field, "nested", path="event.tags")
+                # 第2层 filter：过滤出 key 匹配的标签项（如 key="device_name"）
                 .bucket("key", "filter", {"term": {"event.tags.key": tag_key}})
+                # 第3层 terms：对匹配标签的 value 做词项聚合
                 .bucket(
                     "value",
                     "terms",
@@ -600,9 +677,37 @@ class BaseQueryHandler:
             )
 
         else:
+            # 将业务字段名转换为ES实际存储的字段名
             agg_field = self.query_transformer.transform_field_to_es_field(actual_field, for_agg=True)
+
             if agg_field == "duration":
-                # 对于Duration，需要进行范围桶聚合
+                # --- 策略B：duration 字段 → 范围聚合 ---
+                # 告警持续时长使用预定义的区间分桶（如 0-1min、1-5min、5-30min 等），
+                # 而非按精确值聚合，便于前端展示分布统计
+                #
+                # 聚合DSL:
+                # {
+                #   "duration": {
+                #     "range": {
+                #       "field": "duration",
+                #       "ranges": [
+                #         {"key": "minute", "to": 3600},
+                #         {"key": "hour", "from": 3600, "to": 86400},
+                #         {"key": "day", "from": 86400}
+                #       ]
+                #     }
+                #   }
+                # }
+                # 返回结果:
+                # {
+                #   "duration": {
+                #     "buckets": [
+                #       {"key": "minute", "to": 3600.0, "doc_count": 150},
+                #       {"key": "hour", "from": 3600.0, "to": 86400.0, "doc_count": 80},
+                #       {"key": "day", "from": 86400.0, "doc_count": 20}
+                #     ]
+                #   }
+                # }
                 new_search_object = search_object.bucket(
                     field,
                     "range",
@@ -610,6 +715,27 @@ class BaseQueryHandler:
                     field=agg_field,
                 )
             else:
+                # --- 策略C：普通字段 → 词项聚合 ---
+                # 按字段值分桶，每个唯一值一个桶，返回 top N 个桶
+                #
+                # 聚合DSL（假设 field="severity", agg_field="severity"）:
+                # {
+                #   "severity": {
+                #     "terms": {"field": "severity", "size": 10, "order": {"_count": "desc"}}
+                #   }
+                # }
+                # 返回结果:
+                # {
+                #   "severity": {
+                #     "doc_count_error_upper_bound": 0,
+                #     "sum_other_doc_count": 0,
+                #     "buckets": [
+                #       {"key": 1, "doc_count": 200},
+                #       {"key": 2, "doc_count": 150},
+                #       {"key": 3, "doc_count": 50}
+                #     ]
+                #   }
+                # }
                 new_search_object = search_object.bucket(
                     field,
                     "terms",

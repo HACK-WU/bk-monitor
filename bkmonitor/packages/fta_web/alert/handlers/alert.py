@@ -966,8 +966,44 @@ class AlertQueryHandler(BaseBizQueryHandler):
         """
         递归提取ES聚合结果中的桶数据
 
+
+        # aggregation 示例（对应 ES 返回的 JSON）
+        # 例如 time_bucket（来自 date_histogram 的一个时间桶）
+        aggregation = {
+            "key_as_string": "1773828660",    # 时间戳（秒级字符串）
+            "key": 1773828660000,              # 时间戳（毫秒级）
+            "doc_count": 199,                  # 该时间桶内的文档数量
+            # 如果有 status 子聚合：
+            "status": {
+                "buckets": [
+                    {"key": "ABNORMAL", "doc_count": 150},
+                    {"key": "RECOVERED", "doc_count": 49}
+                ]
+            }
+        }
+
+        # Python 中通过属性访问：
+        aggregation.key_as_string  # "1773828660"
+        aggregation.doc_count      # 199
+
+
         参数:
             result: 结果字典，键为维度元组，值为聚合桶数据
+                无 group_by 维度时（agg_fields 为空列表），键为空元组:
+                    {
+                        (): <BucketData: doc_count=199, ...>
+                    }
+                单维度时（如 agg_fields=["severity"]）:
+                    {
+                        (("severity", 1),): <BucketData: doc_count=50>,
+                        (("severity", 2),): <BucketData: doc_count=100>,
+                    }
+                多维度时（如 agg_fields=["severity", "tags.device_name"]）:
+                    {
+                        (("severity", 1), ("tags.device_name", "eth0")): <BucketData: doc_count=30>,
+                        (("severity", 1), ("tags.device_name", "eth1")): <BucketData: doc_count=20>,
+                        (("severity", 2), ("tags.device_name", "eth0")): <BucketData: doc_count=60>,
+                    }
             dimensions: 当前维度字典，记录递归路径上的维度值
             aggregation: 当前层级的聚合对象
             agg_fields: 待处理的聚合字段列表
@@ -997,6 +1033,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
     def date_histogram(self, interval: str = "auto", group_by: list[str] | None = None, bucket_size: int = 100):
         """
         按时间维度统计告警数量分布
+        重点计算的是未恢复的历史的告警数量分布图，无论查询条件是什么，未恢复的告警都会返回。
 
         参数:
             interval: 聚合时间间隔，支持 "auto" 自动计算或指定如 "1h"、"1d"
@@ -1059,19 +1096,22 @@ class AlertQueryHandler(BaseBizQueryHandler):
         ended_object = search_object.aggs.bucket(
             "end_time", "filter", {"range": {"end_time": {"lte": end_time}}}
         ).bucket("end_alert", "filter", {"terms": {"status": [EventStatus.RECOVERED, EventStatus.CLOSED]}})
+
         # 2. 查询时间范围内产生的告警，按begin_time聚合
         new_anomaly_object = search_object.aggs.bucket(
             "begin_time", "filter", {"range": {"begin_time": {"gte": start_time, "lte": end_time}}}
         )
+
         # 3. 开始时间在查询时间范围之前的告警总数（用于计算初始异常数量）
         old_anomaly_object = search_object.aggs.bucket(
             "init_alert", "filter", {"range": {"begin_time": {"lt": start_time}}}
         )
 
-        # 添加时间聚合
+        # 4.对已恢复或关闭的告警，按end_time聚合
         ended_object = ended_object.bucket(
             "time", "date_histogram", field="end_time", fixed_interval=f"{new_interval}s"
         ).bucket("status", "terms", field="status")
+
         new_anomaly_object = new_anomaly_object.bucket(
             "time", "date_histogram", field="begin_time", fixed_interval=f"{new_interval}s"
         )
