@@ -1033,8 +1033,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
     def date_histogram(self, interval: str = "auto", group_by: list[str] | None = None, bucket_size: int = 100):
         """
         按时间维度统计告警数量分布
-        重点计算的是未恢复的历史的告警数量分布图，无论查询条件是什么，未恢复的告警都会返回。
-
+        用于计算基于当前情况下的历史的告警趋势图。
         参数:
             interval: 聚合时间间隔，支持 "auto" 自动计算或指定如 "1h"、"1d"
             group_by: 分组维度列表，如 ["status", "severity"]，默认按status分组
