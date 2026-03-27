@@ -569,13 +569,21 @@ class SearchIssueResource(Resource):
 class RequestSerializer(IssueSearchSerializer):
         ordering = serializers.ListField(label="排序", child=serializers.CharField(), default=[])
         page = serializers.IntegerField(label="页数", min_value=1, default=1)
-        page_size = serializers.IntegerField(label="每页大小", min_value=0, max_value=5000, default=10)
+        page_size = serializers.IntegerField(label="每页大小", min_value=0, max_value=500, default=10)
         show_aggs = serializers.BooleanField(label="展示聚合统计信息", default=True)
+        show_dsl = serializers.BooleanField(label="返回ES DSL查询语句", default=False)
 
 def perform_request(self, validated_request_data):
         show_aggs = validated_request_data.pop("show_aggs")
+        show_dsl = validated_request_data.pop("show_dsl")
         handler = IssueQueryHandler(**validated_request_data)
-        return handler.search(show_aggs=show_aggs)
+        result = handler.search(show_aggs=show_aggs)
+        
+        # 如果需要返回 ES DSL 查询语句（用于调试）
+        if show_dsl:
+            result["dsl"] = handler.get_search_object().to_dict()
+        
+        return result
 ```
 
 #### RequestSerializer 完整字段一览
@@ -590,8 +598,9 @@ def perform_request(self, validated_request_data):
 | `end_time` | `int` | 否 | 无 | 时间范围终点 |
 | `ordering` | `list[str]` | 否 | `[]` | 排序字段列表，前缀 `-` 为倒序 |
 | `page` | `int` | 否 | `1` | 页码，最小值 1 |
-| `page_size` | `int` | 否 | `10` | 每页大小，最大 5000 |
+| `page_size` | `int` | 否 | `10` | 每页大小，最大 500 |
 | `show_aggs` | `bool` | 否 | `true` | 是否返回 aggs 高级筛选聚合 |
+| `show_dsl` | `bool` | 否 | `false` | 是否返回 ES DSL 查询语句（用于调试） |
 
 #### 请求示例
 
@@ -608,7 +617,8 @@ def perform_request(self, validated_request_data):
   "ordering": ["-update_time"],
   "page": 1,
   "page_size": 20,
-  "show_aggs": true
+  "show_aggs": true,
+  "show_dsl": false
 }
 ```
 
@@ -722,6 +732,7 @@ def perform_request(self, validated_request_data):
 | `issues` | `list[dict]` | Issue 列表，每项包含 ES 字段 + 计算字段 |
 | `total` | `int` | 满足查询条件的 Issue 总数（由 ES `hits.total.value` 提供） |
 | `aggs` | `list[dict]` | 高级筛选聚合（仅 `show_aggs=true` 时返回） |
+| `dsl` | `dict` | ES DSL 查询语句（仅 `show_dsl=true` 时返回，用于调试） |
 
 #### Issue 单项字段说明
 
