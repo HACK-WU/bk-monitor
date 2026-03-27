@@ -774,7 +774,41 @@ class AlertQueryHandler(BaseBizQueryHandler):
         agg_fields: list[str],
     ):
         """
-        获取聚合结果
+        递归解析 ES 多维度嵌套聚合结果，将其展平为以维度元组为 key 的字典。
+
+        参数:
+            result: 输出参数，递归过程中将解析结果写入此字典
+            dimensions: 递归过程中累积的当前维度键值对（初始传入空字典 {}）
+            aggregation: 当前层级的 ES 聚合桶数据
+            agg_fields: 剩余待解析的聚合字段列表，每递归一层消耗第一个字段
+
+        返回值:
+            无返回值，结果通过 result 参数原地写入。
+
+        数据结构示例:
+
+            1) agg_fields=[] （无额外分组维度）:
+               递归终止，直接写入空维度元组
+               {
+                   (): <BucketData doc_count=5 ...>
+               }
+
+            2) agg_fields=["severity"] （单维度分组）:
+               遍历 severity 桶，每个桶值作为维度元素
+               {
+                   (("severity", 1),): <BucketData doc_count=3 ...>,
+                   (("severity", 2),): <BucketData doc_count=2 ...>,
+               }
+
+            3) agg_fields=["severity", "tags.device_type"] （多维度分组，含 tags 嵌套字段）:
+               先遍历 severity 桶，再在每个桶内遍历 tags.device_type 的嵌套桶
+               {
+                   (("severity", 1), ("tags.device_type", "disk")):  <BucketData doc_count=2 ...>,
+                   (("severity", 1), ("tags.device_type", "cpu")):   <BucketData doc_count=1 ...>,
+                   (("severity", 2), ("tags.device_type", "disk")):  <BucketData doc_count=2 ...>,
+               }
+
+            其中 BucketData 对象包含 doc_count 属性（文档计数）及可能的子聚合数据。
         """
         if agg_fields:
             field = agg_fields[0]
