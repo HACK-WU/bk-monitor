@@ -23,7 +23,7 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|:----:|--------|------|
 | `bk_biz_ids` | `int[]` | 否 | `null` | 业务 ID 列表，为空时查询当前用户有权限的所有业务 |
-| `status` | `string[]` | 否 | — | 状态过滤，**仅支持虚拟状态**（`MY_ISSUE` / `ACTIVE`），可多选 OR 组合。实际状态过滤请使用 `conditions` 参数 |
+| `status` | `string[]` | 否 | — | 状态过滤，**仅支持虚拟状态**（`MY_ISSUE` / `NO_ASSIGNEE`），可多选 OR 组合。实际状态过滤请使用 `conditions` 参数 |
 | `conditions` | `object[]` | 否 | `[]` | 结构化过滤条件（见下方格式说明） |
 | `query_string` | `string` | 否 | `""` | 搜索关键词，支持 ES query_string 语法 |
 | `start_time` | `int` | 否 | — | 时间范围起点（秒级时间戳）。不传则不做时间下界过滤 |
@@ -57,19 +57,19 @@
 | 值 | 类型 | 说明 |
 |----|------|------|
 | `MY_ISSUE` | 虚拟状态 | 我负责的（当前用户为 assignee 的 Issue） |
-| `ACTIVE` | 虚拟状态 | 活跃的（= `pending_review` + `unresolved`） |
+| `NO_ASSIGNEE` | 虚拟状态 | 未分派的（assignee 为空的 Issue） |
 
 #### 虚拟状态说明
 
 | 虚拟状态 | 等价条件 | 使用场景 |
 |----------|----------|----------|
 | `MY_ISSUE` | `assignee = 当前用户` | 快速查看"我负责的 Issue" |
-| `ACTIVE` | `status in ["pending_review", "unresolved"]` | 快速查看"需要处理的 Issue"（排除已解决和已拒绝） |
+| `NO_ASSIGNEE` | `assignee 为空` | 快速查看"未分派的 Issue" |
 
 > **前端使用提示**：
-> - `status` 参数仅支持虚拟状态 `MY_ISSUE` 和 `ACTIVE`，用于快速筛选场景
+> - `status` 参数仅支持虚拟状态 `MY_ISSUE` 和 `NO_ASSIGNEE`，用于快速筛选场景
 > - **实际状态过滤请使用 `conditions` 参数**：`{"key": "status", "value": ["unresolved", "pending_review", "resolved", "archived"], "method": "eq"}`
-> - 虚拟状态可组合使用：`status: ["MY_ISSUE", "ACTIVE"]` 表示"我负责的活跃 Issue"
+> - 虚拟状态可组合使用：`status: ["MY_ISSUE", "NO_ASSIGNEE"]` 表示"我负责的或未分派的 Issue"
 > - `status` 参数为空数组或不传时，不进行状态过滤，返回所有状态的 Issue
 
 ---
@@ -130,12 +130,12 @@
 
 ## 请求示例
 
-### 示例 1：查询活跃的高优先级 Issue
+### 示例 1：查询未分派的高优先级 Issue
 
 ```json
 {
   "bk_biz_ids": [2],
-  "status": ["ACTIVE"],
+  "status": ["NO_ASSIGNEE"],
   "conditions": [
     {"key": "priority", "value": ["P0", "P1"], "method": "eq", "condition": ""}
   ],
@@ -418,10 +418,10 @@
 | 负责人 | `conditions` | `conditions: [{"key": "assignee", "value": ["zhangsan"], "method": "eq"}]` |
 | 类型 | `conditions` | `conditions: [{"key": "is_regression", "value": [true], "method": "eq"}]` |
 | 我负责的 | `status` | `status: ["MY_ISSUE"]` |
-| 活跃的 | `status` | `status: ["ACTIVE"]` |
+| 未分派的 | `status` | `status: ["NO_ASSIGNEE"]` |
 
 > **注意**：
-> - `status` 参数**仅支持虚拟状态** `MY_ISSUE` 和 `ACTIVE`，用于快速筛选场景
+> - `status` 参数**仅支持虚拟状态** `MY_ISSUE` 和 `NO_ASSIGNEE`，用于快速筛选场景
 > - 实际状态（`pending_review` / `unresolved` / `resolved` / `archived`）必须通过 `conditions` 参数过滤
 
 ---

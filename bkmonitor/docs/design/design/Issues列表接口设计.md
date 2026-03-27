@@ -121,7 +121,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
     query_transformer = IssueQueryTransformer
 
     MY_ISSUE_STATUS_NAME = "MY_ISSUE"          # 我负责的
-    ACTIVE_STATUS_NAME = "ACTIVE"              # 活跃的（待审核+未解决）
+    NO_ASSIGNEE_STATUS_NAME = "NO_ASSIGNEE"    # 未分派的
 ```
 
 #### `__init__` 参数
@@ -130,7 +130,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
 |------|------|------|
 | `bk_biz_ids` | `list[int]` | 业务 ID 列表 |
 | `username` | `str` | 当前用户名 |
-| `status` | `list[str]` | 否 | 无 | **仅支持虚拟状态**过滤（`MY_ISSUE` / `ACTIVE`）。实际状态过滤请使用 `conditions` 参数 |
+| `status` | `list[str]` | 否 | 无 | **仅支持虚拟状态**过滤（`MY_ISSUE` / `NO_ASSIGNEE`）。实际状态过滤请使用 `conditions` 参数 |
 | `start_time` | `int` | 开始时间 |
 | `end_time` | `int` | 结束时间 |
 | `ordering` | `list[str]` | 排序字段 |
@@ -160,7 +160,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
    → filter("terms", bk_biz_id=bk_biz_ids)
 4. 状态过滤：
    → MY_ISSUE → filter("term", assignee=request_username)
-   → ACTIVE → filter("terms", status=IssueStatus.ACTIVE_STATUSES)
+   → NO_ASSIGNEE → filter("term", assignee="") 或 must_not exists("assignee")
    → 其他直接按 status 精确匹配
 ```
 
@@ -191,7 +191,7 @@ def get_search_object(self, start_time=None, end_time=None, **kwargs):
 
     # 状态过滤（含虚拟状态）
     if self.status:
-        # ... MY_ISSUE / ACTIVE / 实际状态
+        # ... MY_ISSUE / NO_ASSIGNEE / 实际状态
     
     return search_object
 ```
@@ -515,7 +515,7 @@ class IssueSearchSerializer(BaseSearchSerializer):
     """Issue 搜索基础序列化器，提供 Issue 列表查询的通用请求字段"""
     status = serializers.ListField(
         label="状态", required=False, child=serializers.CharField(),
-        help_text="支持实际状态值和虚拟状态: MY_ISSUE(我负责的) / ACTIVE(活跃)"
+        help_text="支持实际状态值和虚拟状态: MY_ISSUE(我负责的) / NO_ASSIGNEE(未分派)"
     )
     conditions = SearchConditionSerializer(label="搜索条件", many=True, default=[])
     query_string = serializers.CharField(label="查询字符串", default="", allow_blank=True)
@@ -528,7 +528,7 @@ class IssueSearchSerializer(BaseSearchSerializer):
 | 字段 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `bk_biz_ids` | `list[int]` | 否 | `None` | 业务 ID 列表，为空时查询当前用户相关的所有 Issue |
-| `status` | `list[str]` | 否 | 无 | **仅支持虚拟状态**过滤（`MY_ISSUE` / `ACTIVE`）。实际状态过滤请使用 `conditions` 参数 |
+| `status` | `list[str]` | 否 | 无 | **仅支持虚拟状态**过滤（`MY_ISSUE` / `NO_ASSIGNEE`）。实际状态过滤请使用 `conditions` 参数 |
 | `conditions` | `list[dict]` | 否 | `[]` | 结构化过滤条件，每个条件包含 `key`、`value`、`method`、`condition` 四个字段 |
 | `query_string` | `str` | 否 | `\"\"` | 搜索关键词，支持 Elasticsearch query_string 语法 |
 | `start_time` | `int` | 否 | 无 | 新增 | 时间范围起点（秒级时间戳）。不传则不做时间过滤 |
@@ -607,7 +607,7 @@ def perform_request(self, validated_request_data):
 ```json
 {
   "bk_biz_ids": [2],
-  "status": ["ACTIVE"],
+  "status": ["NO_ASSIGNEE"],
   "conditions": [
     {"key": "priority", "value": ["P0", "P1"], "method": "eq", "condition": ""}
   ],
@@ -898,7 +898,7 @@ def perform_request(self, validated_request_data):
 > - `app`/`apm_service` 互斥：多应用时返回 `app`，单应用时返回 `apm_service`
 > - 若 Issue 无任何影响范围信息，`impact_scope` 为空字典 `{}`
 
-> **overview 统计说明**：`count` 为搜索结果总数，`children` 中的 `MY_ISSUE` 和 `ACTIVE` 是交叉维度统计（一个 Issue 可能同时属于"我负责的"和"活跃"），
+> **overview 统计说明**：`count` 为搜索结果总数，`children` 中的 `MY_ISSUE` 和 `NO_ASSIGNEE` 是交叉维度统计（一个 Issue 可能同时属于"我负责的"和"未分派"），
 > 因此各子项计数之和可能大于 `count`。实际的互斥状态统计由 `pending_review` + `unresolved` + `resolved` + `archived` 四项覆盖。
 
 
