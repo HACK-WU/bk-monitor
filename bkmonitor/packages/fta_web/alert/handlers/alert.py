@@ -790,19 +790,90 @@ class AlertQueryHandler(BaseBizQueryHandler):
             result[dimension_tuple] = aggregation
 
     def date_histogram(self, interval: str = "auto", group_by: list[str] | None = None, bucket_size: int = 100):
+        """
+        基于时间直方图的告警事件聚合统计
+
+        按照指定的时间间隔和分组维度，对告警事件进行时间序列聚合，
+        生成可用于趋势图展示的数据结构。
+
+        参数:
+            interval: 时间聚合间隔，默认"auto"表示根据查询时间范围自动计算合适的间隔
+            group_by: 分组维度字段列表，默认按"status"分组。支持普通字段和"tags."前缀的标签字段
+            bucket_size: 每个维度聚合桶的最大数量，默认100
+
+        返回值:
+            defaultdict[tuple, dict[str, dict[int, int]]]:
+            嵌套字典结构 {维度元组: {状态: {时间戳(毫秒): 告警数量}}}
+                - 维度元组(tuple): 由 group_by 字段值组成（排除 status），空元组 () 表示无额外分组维度
+                - 状态(str): EventStatus 枚举值（ABNORMAL/RECOVERED/CLOSED）
+                - 时间戳(int): 毫秒级时间戳，按 interval 对齐
+                - 告警数量(int): 该时间点对应状态的告警数
+
+            返回值示例:
+
+            1) 默认调用 date_histogram() —— 按 status 分组（group_by=["status"]）:
+               status_group=True, group_by 实际为 [], 维度元组为空元组 ()
+               {
+                   (): {
+                       "ABNORMAL":  {1741334400000: 5, 1741338000000: 8, ...},   # 存量异常告警快照（累计值）
+                       "RECOVERED": {1741334400000: 0, 1741338000000: 2, ...},
+                       "CLOSED":    {1741334400000: 0, 1741338000000: 1, ...},
+                   }
+               }
+
+            2) 不按 status 分组 date_histogram(group_by=[]):
+               status_group=False, RECOVERED/CLOSED 合并到 ABNORMAL, 值代表所有状态告警总数
+               {
+                   (): {
+                       "ABNORMAL": {1741334400000: 5, 1741338000000: 11, ...},
+                   }
+               }
+
+            3) 多维度分组 date_histogram(group_by=["status", "severity"]):
+               status_group=True, group_by=["severity"], 维度元组由 severity 值组成
+               {
+                   (1,): {  # severity=1（致命）
+                       "ABNORMAL":  {1741334400000: 3, ...},
+                       "RECOVERED": {1741334400000: 0, ...},
+                       "CLOSED":    {1741334400000: 0, ...},
+                   },
+                   (2,): {  # severity=2（预警）
+                       "ABNORMAL":  {1741334400000: 2, ...},
+                       "RECOVERED": {1741334400000: 0, ...},
+                       "CLOSED":    {1741334400000: 0, ...},
+                   },
+               }
+
+            状态键规则:
+                - group_by 包含 "status" 时: ABNORMAL 为累计快照，RECOVERED/CLOSED 为时间点增量
+                - group_by 不包含 "status" 时: 仅 ABNORMAL，值为所有状态告警总数
+
+        核心逻辑：
+        1. 参数预处理：计算聚合间隔、校验group_by字段（tags字段最多1个且排在末尾）
+        2. 时间对齐：将起止时间按聚合间隔向下/向上取整
+        3. 构建ES聚合查询，分三路并行聚合：
+           a. end_time桶：已结束（恢复/关闭）的告警，按结束时间聚合，统计各状态数量
+           b. begin_time桶：查询范围内新产生的告警，按开始时间聚合
+           c. init_alert桶：查询范围之前已存在的异常告警总数（作为初始基数）
+        4. 解析聚合结果，填充时间序列数据
+        5. 累计计算异常告警数：初始异常数 + 新增异常数 - 恢复数 - 关闭数（逐时间点滚动计算）
+        6. 若不按status分组，则将各状态数量合并为总数
+        """
         new_interval: int = self.calculate_agg_interval(self.start_time, self.end_time, interval)
 
         # 默认按status聚合
         if group_by is None:
             group_by = ["status"]
 
-        # status 会被单独处理
+        # status字段需要单独处理：它不参与维度聚合，而是通过三路聚合（异常/恢复/关闭）隐式体现
+        # status_group标记用户是否需要按状态分组展示，影响最终结果的合并策略
         status_group = False
         if "status" in group_by:
             status_group = True
             group_by = [field for field in group_by if field != "status"]
 
-        # TODO: tags开头的字段是否能够进行嵌套聚合？
+        # tags字段（如tags.xxx）在ES中以嵌套结构存储，嵌套聚合性能开销大
+        # 因此限制最多只能按一个tags字段分组
         tags_field_count = 0
         for field in group_by:
             if field.startswith("tags."):
@@ -810,32 +881,39 @@ class AlertQueryHandler(BaseBizQueryHandler):
         if tags_field_count > 1:
             raise ValueError("can not group by more than one tags field")
 
-        # 将tags开头的字段放在后面
+        # 将tags字段排在普通字段后面，确保嵌套聚合在聚合链的最内层
         group_by = sorted(group_by, key=lambda x: x.startswith("tags."))
 
-        # 查询时间对齐
+        # 查询时间对齐：start_time向下取整，end_time向上取整到下一个间隔边界
+        # now_time用于截断未来时间点，避免生成超出当前时刻的空数据
         start_time = self.start_time // new_interval * new_interval
         end_time = self.end_time // new_interval * new_interval + new_interval
         now_time = int(time.time()) // new_interval * new_interval + new_interval
 
+        # 构建ES搜索对象：设置时间范围 -> 添加过滤条件 -> 添加查询字符串
         search_object = self.get_search_object(start_time=start_time, end_time=end_time)
         search_object = self.add_conditions(search_object)
         search_object = self.add_query_string(search_object)
 
-        # 已经恢复或关闭的告警，按end_time聚合
+        # === 三路聚合查询构建 ===
+        # 第一路(ended_object)：统计已结束的告警（恢复/关闭），按end_time做时间直方图
+        # 用途：计算每个时间点有多少告警从异常状态退出
         ended_object = search_object.aggs.bucket(
             "end_time", "filter", {"range": {"end_time": {"lte": end_time}}}
         ).bucket("end_alert", "filter", {"terms": {"status": [EventStatus.RECOVERED, EventStatus.CLOSED]}})
-        # 查询时间范围内产生的告警，按begin_time聚合
+        # 第二路(new_anomaly_object)：统计查询范围内新产生的告警，按begin_time做时间直方图
+        # 用途：计算每个时间点有多少新告警产生
         new_anomaly_object = search_object.aggs.bucket(
             "begin_time", "filter", {"range": {"begin_time": {"gte": start_time, "lte": end_time}}}
         )
-        # 开始时间在查询时间范围之前的告警总数
+        # 第三路(old_anomaly_object)：统计查询范围之前就已存在的告警总数
+        # 用途：作为异常告警数量的初始基数，用于时间序列的起点值
         old_anomaly_object = search_object.aggs.bucket(
             "init_alert", "filter", {"range": {"begin_time": {"lt": start_time}}}
         )
 
-        # 时间聚合
+        # 时间聚合：对已结束告警按end_time做直方图，并进一步按status分桶（区分恢复/关闭）
+        # 对新异常告警按begin_time做直方图
         ended_object = ended_object.bucket(
             "time", "date_histogram", field="end_time", fixed_interval=f"{new_interval}s"
         ).bucket("status", "terms", field="status")
@@ -843,21 +921,28 @@ class AlertQueryHandler(BaseBizQueryHandler):
             "time", "date_histogram", field="begin_time", fixed_interval=f"{new_interval}s"
         )
 
-        # 维度聚合
+        # 维度聚合：在三路聚合的末尾分别追加group_by维度桶
+        # 每个维度字段会形成嵌套的terms聚合链，支持多维度交叉分组
         for field in group_by:
             ended_object = self.add_agg_bucket(ended_object, field, size=bucket_size)
             new_anomaly_object = self.add_agg_bucket(new_anomaly_object, field, size=bucket_size)
             old_anomaly_object = self.add_agg_bucket(old_anomaly_object, field, size=bucket_size)
 
-        # 查询
+        # 执行查询，[:0]表示不返回文档原文，只返回聚合结果
         search_result = search_object[:0].execute()
 
+        # 初始化结果数据结构：
+        # 外层key为维度元组，内层为 {状态: {毫秒时间戳: 告警数量}} 的时间序列
+        # 时间范围从start_time到min(now_time, end_time)，不超出当前时刻
         result = defaultdict(
             lambda: {
                 status: {ts * 1000: 0 for ts in range(start_time, min(now_time, end_time), new_interval)}
                 for status in EVENT_STATUS_DICT
             }
         )
+        # === 解析第二路聚合结果：新产生的异常告警 ===
+        # 遍历begin_time时间直方图的每个时间桶，提取维度分组后的告警数量
+        # 将每个时间点新产生的告警数写入ABNORMAL状态的对应时间槽
         if hasattr(search_result.aggs, "begin_time"):
             for time_bucket in search_result.aggs.begin_time.time.buckets:
                 begin_time_result = {}
@@ -868,6 +953,9 @@ class AlertQueryHandler(BaseBizQueryHandler):
                     if key in result[dimension_tuple][EventStatus.ABNORMAL]:
                         result[dimension_tuple][EventStatus.ABNORMAL][key] = bucket.doc_count
 
+        # === 解析第一路聚合结果：已结束（恢复/关闭）的告警 ===
+        # 遍历end_time时间直方图 -> status子桶 -> 维度分组
+        # 将恢复和关闭的告警数分别写入RECOVERED和CLOSED状态的对应时间槽
         if hasattr(search_result.aggs, "end_time") and hasattr(search_result.aggs.end_time, "end_alert"):
             for time_bucket in search_result.aggs.end_time.end_alert.time.buckets:
                 for status_bucket in time_bucket.status.buckets:
@@ -879,25 +967,29 @@ class AlertQueryHandler(BaseBizQueryHandler):
                         if key in result[dimension_tuple][status_bucket.key]:
                             result[dimension_tuple][status_bucket.key][key] = bucket.doc_count
 
+        # === 解析第三路聚合结果：查询范围之前的存量异常告警 ===
+        # 该结果没有时间直方图，只有维度分组，作为每个维度的初始异常基数
         init_alert_result = {}
         if hasattr(search_result.aggs, "init_alert"):
             self._get_buckets(init_alert_result, {}, search_result.aggs.init_alert, group_by)
 
-        # 获取全部维度
+        # 合并所有维度：可能存在某些维度只在新增告警或只在存量告警中出现
         all_dimensions = set(result.keys()) | set(init_alert_result.keys())
 
-        # 按维度分别统计事件数量
+        # === 按维度逐一进行时间序列的累计计算 ===
         for dimension_tuple in all_dimensions:
             all_series = result[dimension_tuple]
 
+            # 获取该维度在查询范围之前的存量异常告警数，作为累计计算的起点
             if dimension_tuple in init_alert_result:
                 current_abnormal_count = init_alert_result[dimension_tuple].doc_count
             else:
                 current_abnormal_count = 0
 
+            # 滚动计算每个时间点的实时异常告警数
+            # 公式：当前异常数 = 上一时刻异常数 + 本时刻新增异常数 - 本时刻恢复数 - 本时刻关闭数
+            # 这样得到的是每个时间点的「存量异常告警」快照，而非增量值
             for ts in all_series[EventStatus.ABNORMAL]:
-                # 异常是一个持续的状态，会随着时间的推移不断叠加
-                # 一旦有恢复或关闭的告警，异常告警将会相应减少
                 all_series[EventStatus.ABNORMAL][ts] = (
                     current_abnormal_count
                     + all_series[EventStatus.ABNORMAL][ts]
@@ -906,7 +998,8 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 )
                 current_abnormal_count = all_series[EventStatus.ABNORMAL][ts]
 
-            # 如果不按status聚合，需要将status聚合的结果合并到一起
+            # 若用户未指定按status分组，则将恢复和关闭的数量合并到异常数中
+            # 此时每个时间点的值代表「所有状态的告警总数」
             if not status_group:
                 for ts in all_series[EventStatus.ABNORMAL]:
                     all_series[EventStatus.ABNORMAL][ts] += (
