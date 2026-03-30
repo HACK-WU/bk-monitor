@@ -293,21 +293,46 @@ class Permission:
     def is_allowed(self, action: ActionMeta | str, resources: list[Resource] = None, raise_exception: bool = False):
         """
         校验用户是否有动作的权限
-        :param action: 动作
-        :param resources: 依赖的资源实例列表
-        :param raise_exception: 鉴权失败时是否需要抛出异常
+
+        参数:
+            action: IAM 动作对象（ActionMeta）或动作 ID 字符串
+            resources: 操作关联的 IAM 资源实例列表，为空时表示无需资源级鉴权
+            raise_exception: 鉴权失败时是否抛出 PermissionDeniedError 异常（携带权限申请链接）
+
+        返回值:
+            True — 权限校验通过
+            False — 权限校验不通过（仅在 raise_exception=False 时返回）
+
+        异常:
+            PermissionDeniedError — 当 raise_exception=True 且鉴权失败时抛出，
+                                    异常中包含权限申请数据和跳转 URL
+
+        该方法实现完整的 IAM 权限校验流程，包含：
+        1. API Token 快捷放行：请求携带 token 时，匹配 token 类型对应的 action 白名单，
+           或匹配特定 API 路径（如 unify_query），命中则直接放行（已在 auth 中间件校验过）
+        2. 全局跳过开关：skip_check 为 True 时直接放行（开发/调试环境或特殊请求头标记）
+        3. IAM SDK 鉴权：构造 Request 对象调用权限中心 API 进行实际鉴权，
+           读操作使用带缓存的 is_allowed_with_cache，写操作使用 is_allowed
+        4. 鉴权失败处理：当 raise_exception=True 时，补全资源详情信息，
+           区分 SaaS 空间（申请全家桶权限）和普通空间，生成权限申请数据并抛出异常
         """
-        # 如果request header 中携带token，通过获取token中的鉴权类型type匹配action
+        # ===== 第一步：API Token 快捷放行 =====
+        # 请求头携带 token 时（临时分享/API 调用场景），通过 token 类型匹配 action 白名单
         if self.request and getattr(self.request, "token", None):
+            # 从数据库查询 token 记录，获取其关联的鉴权类型（如 dashboard、event 等）
             try:
                 record = ApiAuthToken.objects.get(token=self.request.token, bk_tenant_id=self.request.user.tenant_id)
             except ApiAuthToken.DoesNotExist:
                 record = None
+            # 统一获取 action_id 字符串，兼容 ActionMeta 对象和字符串两种入参
             if isinstance(action, ActionMeta):
                 action_id = action.id
             else:
                 action_id = action
-            # 业务查看权限校验/操作对应类型action/graph_unify_query跳过，在auth中间件中已校验
+            # 满足以下任一条件即放行（这些场景已在 auth 中间件中完成校验）：
+            # 1) 业务查看权限（VIEW_BUSINESS）— 基础权限，token 场景默认放行
+            # 2) action 在 token 类型对应的 ActionIdMap 白名单中
+            # 3) 请求路径匹配 api_paths 中的特定 API（如 unify_query 数据查询接口）
             if (
                 action_id == ActionEnum.VIEW_BUSINESS.id
                 or (record and action in ActionIdMap[record.type])
@@ -316,40 +341,51 @@ class Permission:
             ):
                 return True
 
+        # ===== 第二步：全局跳过开关 =====
+        # skip_check 由环境变量 SKIP_IAM_PERMISSION_CHECK 或请求头标记控制
         if self.skip_check:
             return True
 
+        # ===== 第三步：IAM SDK 鉴权 =====
         resources = resources or []
 
+        # 将 action 统一转换为 ActionMeta 对象（支持字符串 ID 入参）
         action = get_action_by_id(action)
+        # 如果该动作不关联任何资源类型，则清空 resources（避免传入无效资源导致鉴权异常）
         if not action.related_resource_types:
             resources = []
 
+        # 构造 IAM Request 对象（包含系统、用户主体、动作、资源等信息）
         request = self.make_request(action, resources)
 
         try:
             if action.is_read_action():
-                # 仅对读权限做缓存
+                # 读操作使用带缓存的鉴权接口，减少对权限中心的请求压力
                 result = self.iam_client.is_allowed_with_cache(request)
             else:
+                # 写操作每次实时查询权限中心，确保权限实时生效
                 result = self.iam_client.is_allowed(request)
         except AuthAPIError as e:
+            # IAM API 调用异常时降级为无权限，避免阻塞业务流程
             logger.exception("[IAM AuthAPI Error]: %s", e)
             result = False
 
+        # ===== 第四步：鉴权失败处理 — 生成权限申请数据 =====
         if not result and raise_exception:
-            # 对资源信息(如资源名称)进行补全
-            # 先判断是否是SaaS空间
+            # 先判断资源是否属于 SaaS 空间（PAAS 平台创建的空间）
+            # SaaS 空间需要申请"全家桶"权限（MINI_ACTION_IDS 中定义的最小权限集）
             actions, detail_resources = self.prepare_apply_for_saas(resources)
             if not actions:
-                # 非SaaS空间
+                # 非 SaaS 空间：逐个补全资源的详细信息（如资源名称），用于权限申请页面展示
                 detail_resources = []
                 for resource in resources:
                     resource_mata = get_resource_by_id(resource.type)
                     detail_resources.append(resource_mata.create_instance(resource.id))
                 actions = [action]
+            # 生成权限申请数据（包含操作名称、资源信息）和权限中心申请页面 URL
             apply_data, apply_url = self.get_apply_data(actions, detail_resources)
 
+            # 抛出权限拒绝异常，前端可据此展示"申请权限"弹窗并跳转至权限中心
             raise PermissionDeniedError(
                 context={"action_name": action.name},
                 data={"apply_url": apply_url},

@@ -32,13 +32,42 @@ logger = logging.getLogger("apm")
 
 
 class IAMPermission(permissions.BasePermission):
+    """
+    基于蓝鲸 IAM（权限中心）的 DRF 权限基类
+
+    通过 IAM SDK 对当前请求用户进行操作权限校验。
+    支持传入多个 ActionMeta，采用"任一通过即放行"的 OR 语义。
+
+    属性:
+        actions: 待校验的 IAM 操作列表（ActionMeta），多个操作之间为 OR 关系
+        resources: 操作关联的 IAM 资源实例列表，由子类或调用方按需设置
+    """
+
     def __init__(self, actions: list[ActionMeta], resources: list[Resource] = None):
         self.actions = actions
         self.resources = resources or []
 
     def has_permission(self, request, view):
         """
-        Return `True` if permission is granted, `False` otherwise.
+        DRF 权限校验入口：校验当前用户是否拥有 self.actions 中任一操作的权限
+
+        参数:
+            request: DRF Request 对象（内含当前用户信息，由 IAM SDK 自动获取）
+            view: DRF ViewSet 实例
+
+        返回值:
+            True — 权限校验通过
+
+        异常:
+            PermissionDeniedError — 所有操作均无权限时抛出（携带 IAM 申请权限链接）
+
+        校验流程:
+        1. 若 actions 为空，直接放行（无需校验的场景）
+        2. 创建 IAM Permission 客户端，遍历 actions 逐个调用 is_allowed 校验
+        3. 任一 action 校验通过（未抛异常）→ 立即返回 True（OR 语义）
+        4. 某个 action 校验失败（抛出 PermissionDeniedError）：
+           - 非最后一个 action → 吞掉异常，继续尝试下一个
+           - 最后一个 action → 将异常向上抛出（所有 action 均失败）
         """
         if not self.actions:
             return True
@@ -62,7 +91,15 @@ class IAMPermission(permissions.BasePermission):
 
     def has_object_permission(self, request, view, obj):
         """
-        Return `True` if permission is granted, `False` otherwise.
+        对象级权限校验，默认委托给 has_permission 处理
+
+        参数:
+            request: DRF Request 对象
+            view: DRF ViewSet 实例
+            obj: 被访问的模型对象实例
+
+        返回值:
+            True — 权限校验通过
         """
         return self.has_permission(request, view)
 
