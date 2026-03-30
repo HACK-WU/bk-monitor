@@ -12,6 +12,7 @@ import logging
 import operator
 import time
 
+from collections import defaultdict
 from functools import reduce
 from typing import Any
 
@@ -21,11 +22,10 @@ from elasticsearch_dsl.response import Response
 from bkmonitor.documents.alert import AlertDocument
 from bkmonitor.documents.issue import IssueDocument
 from bkmonitor.utils.time_tools import hms_string
+from constants.alert import EVENT_STATUS_DICT, EventStatus
 from constants.issue import ImpactScopeDimension, IssuePriority, IssueStatus
-from core.drf_resource import resource
 from fta_web.alert.handlers.base import BaseBizQueryHandler, BaseQueryTransformer, QueryField
 from fta_web.alert.handlers.translator import BizTranslator, StrategyTranslator
-from fta_web.alert.utils import slice_time_interval
 
 logger = logging.getLogger("fta_action.issue")
 
@@ -360,135 +360,303 @@ class IssueQueryHandler(BaseBizQueryHandler):
     def handle_hit(cls, hit: Any) -> dict:
         return cls.clean_document(hit)
 
+    @classmethod
+    def _build_empty_trend(cls, issue: dict) -> list:
+        """根据 issue 的时间边界生成全零时间序列。"""
+        first_alert_time = issue.get("first_alert_time")
+        last_alert_time = issue.get("last_alert_time")
+        if not first_alert_time or not last_alert_time:
+            return []
+        interval = cls.calculate_agg_interval(int(first_alert_time), int(last_alert_time))
+        start = int(first_alert_time) // interval * interval
+        end = int(last_alert_time) // interval * interval + interval
+        now_aligned = int(time.time()) // interval * interval + interval
+        end = min(end, now_aligned)
+        return [[ts * 1000, 0] for ts in range(start, end, interval)]
+
     def add_alert_trend(self, issues: list[dict]) -> None:
         """
-        批量查询 AlertDocument，为每个 Issue 填充 trend、alert_count 和 anomaly_message。
+        一次 ES 聚合查询，为每个 Issue 填充 trend、alert_count 和 anomaly_message。
 
-        参数:
-            issues: search() 已清洗完成的 Issue 列表（会被原地修改）
+        核心算法复刻自 AlertHandler.date_histogram 的三路聚合：
+        1. end_time 路：已结束告警按 end_time 做直方图，区分 RECOVERED/CLOSED
+        2. begin_time 路：新产生告警按 begin_time 做直方图
+        3. init_alert 路：查询范围之前已存在的异常告警数（初始基数）
+        滚动计算：ABNORMAL[t] = ABNORMAL[t-1] + 新增[t] - 恢复[t] - 关闭[t]
+
+        列表场景下，各 Issue 的告警时间跨度不同，因此：
+        - ES 查询使用全局最细粒度 interval（保证数据精度不丢失）
+        - 每个 issue 桶内额外聚合 min/max begin_time，得到各自的实际时间边界
+        - 解析阶段根据各自时间边界重新计算 interval，对 histogram 桶做合并重采样
         """
         issue_ids = [issue["id"] for issue in issues if issue.get("id")]
         if not issue_ids:
             return
 
-        # 从本页 Issue 中提取告警时间边界
         first_alert_times = [issue["first_alert_time"] for issue in issues if issue.get("first_alert_time")]
         last_alert_times = [issue["last_alert_time"] for issue in issues if issue.get("last_alert_time")]
 
-        start_time = int(min(first_alert_times))
-        end_time = int(max(last_alert_times))
-        interval = self.calculate_agg_interval(start_time, end_time)
-
-        # 用请求参数一次性生成默认零值时间序列，无需在每个分片中重复计算
-        aligned_start = start_time // interval * interval
-        aligned_end = end_time // interval * interval + interval
-        default_time_series = [[ts * 1000, 0] for ts in range(aligned_start, aligned_end, interval)]
-
         if not first_alert_times or not last_alert_times:
             for issue in issues:
-                issue["trend"] = list(default_time_series)
+                issue["trend"] = self._build_empty_trend(issue)
                 issue["alert_count"] = 0
                 issue["anomaly_message"] = "--"
             return
 
-        # 复用 AlertDateHistogramResultResource + 时间分片并行查询
-        try:
-            results = resource.alert.alert_date_histogram_result.bulk_request(
-                [
-                    {
-                        "start_time": sliced_start_time,
-                        "end_time": sliced_end_time,
-                        "interval": interval,
-                        "conditions": [{"key": "issue_id", "value": issue_ids, "method": "eq"}],
-                        "group_by": ["issue_id"],
-                    }
-                    for sliced_start_time, sliced_end_time in slice_time_interval(start_time, end_time)
-                ]
+        # 全局使用最细粒度 interval（取最短时间跨度的 Issue 对应的 interval）
+        global_interval = min(
+            self.calculate_agg_interval(int(ft), int(lt))
+            for ft, lt in zip(
+                [issue["first_alert_time"] for issue in issues if issue.get("first_alert_time")],
+                [issue["last_alert_time"] for issue in issues if issue.get("last_alert_time")],
             )
+        )
+
+        # 时间对齐（使用全局最早/最晚时间）
+        start_time = int(min(first_alert_times)) // global_interval * global_interval
+        end_time = int(max(last_alert_times)) // global_interval * global_interval + global_interval
+
+        # 构建 AlertDocument 查询，按 issue_id 过滤
+        search_object = AlertDocument.search(start_time=start_time, end_time=end_time)
+        search_object = search_object.filter("terms", issue_id=issue_ids)
+
+        # 按 issue_id 分桶，桶内构建三路聚合
+        issue_agg = search_object.aggs.bucket("issues", "terms", field="issue_id", size=len(issue_ids))
+        self._build_alert_trend_aggs(issue_agg, start_time, end_time, global_interval)
+
+        try:
+            search_result = search_object[:0].execute()
         except Exception:
-            logger.exception("add_alert_trend: bulk_request failed")
+            logger.exception("add_alert_trend: ES aggregation failed")
             for issue in issues:
-                issue["trend"] = []
+                issue["trend"] = self._build_empty_trend(issue)
                 issue["alert_count"] = 0
                 issue["anomaly_message"] = "--"
             return
 
-        # 合并各时间分片的结果
-        merged = {}
+        # 解析聚合结果：每个 issue 桶根据自身时间边界重新计算 interval 并重采样
+        # 列表场景不区分状态，只需要一条趋势线
+        trend_map = {}
+        count_map = {}
+        msg_map = {}
 
-        for result in results:
-            for dimension_tuple, status_series in result.items():
-                if dimension_tuple == "default_time_series":
-                    continue
+        if not search_result.aggs or not hasattr(search_result.aggs, "issues"):
+            for issue in issues:
+                issue["trend"] = self._build_empty_trend(issue)
+                issue["alert_count"] = 0
+                issue["anomaly_message"] = "--"
+            return
 
-                issue_id = None
-                for key, value in dimension_tuple:
-                    if key == "issue_id":
-                        issue_id = value
-                        break
-                if issue_id is None:
-                    continue
+        for issue_bucket in search_result.aggs.issues.buckets:
+            issue_id = issue_bucket.key
+            trend_data, alert_count, anomaly_message = self._parse_alert_trend_bucket(
+                issue_bucket, start_time, end_time, global_interval, status_group=False
+            )
+            trend_map[issue_id] = trend_data
+            count_map[issue_id] = alert_count
+            msg_map[issue_id] = anomaly_message
 
-                if issue_id not in merged:
-                    merged[issue_id] = {}
-                # status_group=False 时只返回 ABNORMAL 序列
-                abnormal_series = status_series.get("ABNORMAL", {})
-                merged[issue_id].update(abnormal_series)
-
-        # 解析结果，回填到 Issue 列表
+        # 回填到 Issue 列表
         for issue in issues:
             issue_id = issue["id"]
-            if issue_id in merged:
-                series = merged[issue_id]
-                trend_data = []
-                total_count = 0
+            issue["trend"] = trend_map.get(issue_id) or self._build_empty_trend(issue)
+            issue["alert_count"] = count_map.get(issue_id, 0)
+            issue["anomaly_message"] = msg_map.get(issue_id, "--")
 
-                for ts, value in series.items():
-                    trend_data.append([ts, value])
-                    total_count += value
+    @classmethod
+    def get_single_issue_alert_trend(
+        cls, issue_id: str, first_alert_time: int, last_alert_time: int, status_group: bool = True
+    ) -> dict:
+        """
+        单个 Issue 的告警趋势查询（详情页场景），不按 issue_id 分桶，直接在顶层做三路聚合。
 
-                issue["trend"] = trend_data
-                issue["alert_count"] = total_count
-            else:
-                issue["trend"] = list(default_time_series)
-                issue["alert_count"] = 0
+        参数:
+            status_group: 是否按状态分组返回趋势数据，默认 True
+                - True: trend 为 {状态: [[ts, count], ...]} 字典
+                - False: trend 为 [[ts, count], ...] 列表（仅 ABNORMAL 存量快照）
 
-        # 单独获取 anomaly_message
-        self._fill_anomaly_message(issues, issue_ids, start_time, end_time)
+        返回: {"trend": ..., "alert_count": int, "anomaly_message": str}
+        """
+        default_trend = {status: [] for status in EVENT_STATUS_DICT} if status_group else []
+        default_result = {"trend": default_trend, "alert_count": 0, "anomaly_message": "--"}
 
-    def _fill_anomaly_message(self, issues: list[dict], issue_ids: list[str], start_time: int, end_time: int) -> None:
-        """单独查询每个 Issue 最新告警的 description 作为 anomaly_message"""
+        if not first_alert_time or not last_alert_time:
+            return default_result
+
+        interval = cls.calculate_agg_interval(int(first_alert_time), int(last_alert_time))
+
+        start_time = int(first_alert_time) // interval * interval
+        end_time = int(last_alert_time) // interval * interval + interval
+
+        # 构建查询，直接按单个 issue_id 过滤，无需分桶
+        search_object = AlertDocument.search(start_time=start_time, end_time=end_time)
+        search_object = search_object.filter("term", issue_id=issue_id)
+
+        # 直接在顶层 aggs 上构建三路聚合
+        cls._build_alert_trend_aggs(search_object.aggs, start_time, end_time, interval)
+
         try:
-            search_object = AlertDocument.search(start_time=start_time, end_time=end_time)
-            search_object = search_object.filter("terms", issue_id=issue_ids)
-
-            issue_agg = search_object.aggs.bucket("issues", "terms", field="issue_id", size=len(issue_ids))
-            issue_agg.metric(
-                "latest_alert",
-                "top_hits",
-                size=1,
-                sort=[{"begin_time": {"order": "desc"}}],
-                _source=["description"],
-            )
-
-            result = search_object[:0].execute()
-
-            msg_map = {}
-            for issue_bucket in result.aggs.issues.buckets:
-                issue_id = issue_bucket.key
-                anomaly_message = "--"
-                if hasattr(issue_bucket, "latest_alert") and issue_bucket.latest_alert:
-                    hits = issue_bucket.latest_alert.hits
-                    if hits and hits.hits and len(hits.hits) > 0:
-                        source = hits.hits[0].to_dict().get("_source", {})
-                        description = source.get("description", "")
-                        if description:
-                            anomaly_message = description
-                msg_map[issue_id] = anomaly_message
-
-            for issue in issues:
-                issue["anomaly_message"] = msg_map.get(issue["id"], "--")
+            search_result = search_object[:0].execute()
         except Exception:
-            logger.exception("_fill_anomaly_message failed")
-            for issue in issues:
-                issue.setdefault("anomaly_message", "--")
+            logger.exception("get_single_issue_alert_trend: ES aggregation failed, issue_id=%s", issue_id)
+            return default_result
+
+        # 详情场景：interval 就是精确值，无需重采样
+        trend_data, alert_count, anomaly_message = cls._parse_alert_trend_bucket(
+            search_result.aggs, start_time, end_time, interval, status_group=status_group
+        )
+        return {"trend": trend_data, "alert_count": alert_count, "anomaly_message": anomaly_message}
+
+    @staticmethod
+    def _build_alert_trend_aggs(agg_node, start_time: int, end_time: int, interval: int) -> None:
+        """
+        在指定的聚合节点上构建三路聚合 + alert_count + latest_alert + min/max 时间边界。
+        列表场景传入 issue_id 桶节点，详情场景传入顶层 aggs 节点。
+        """
+        # 第一路：已结束告警，按 end_time 做直方图，再按 status 分桶
+        agg_node.bucket("end_time", "filter", {"range": {"end_time": {"lte": end_time}}}).bucket(
+            "end_alert", "filter", {"terms": {"status": [EventStatus.RECOVERED, EventStatus.CLOSED]}}
+        ).bucket("time", "date_histogram", field="end_time", fixed_interval=f"{interval}s").bucket(
+            "status", "terms", field="status"
+        )
+
+        # 第二路：查询范围内新产生的告警，按 begin_time 做直方图
+        agg_node.bucket("begin_time", "filter", {"range": {"begin_time": {"gte": start_time, "lte": end_time}}}).bucket(
+            "time", "date_histogram", field="begin_time", fixed_interval=f"{interval}s"
+        )
+
+        # 第三路：查询范围之前已存在的异常告警数（初始基数）
+        agg_node.bucket("init_alert", "filter", {"range": {"begin_time": {"lt": start_time}}})
+
+        # 桶内告警时间边界（用于解析阶段按各 Issue 自身时间范围重新计算 interval）
+        agg_node.metric("min_alert_time", "min", field="begin_time")
+        agg_node.metric("max_alert_time", "max", field="begin_time")
+
+        # alert_count：精确文档计数
+        agg_node.metric("alert_count", "value_count", field="id")
+
+        # anomaly_message：最新告警的 description
+        agg_node.metric(
+            "latest_alert",
+            "top_hits",
+            size=1,
+            sort=[{"begin_time": {"order": "desc"}}],
+            _source=["event.description"],
+        )
+
+    @classmethod
+    def _parse_alert_trend_bucket(
+        cls, bucket, start_time: int, end_time: int, global_interval: int, status_group: bool = False
+    ) -> tuple:
+        """
+        从单个聚合桶中解析三路聚合结果，返回 (trend_data, alert_count, anomaly_message)。
+
+        参数:
+            bucket: issue_id 分桶的子桶（列表场景）或顶层 aggs（详情场景）
+            global_interval: ES date_histogram 使用的步长（全局最细粒度）
+            status_group: 是否按状态分组返回
+                - True: trend_data 为 {状态: [[ts, count], ...]}，ABNORMAL 为存量快照，RECOVERED/CLOSED 为增量
+                - False: trend_data 为 [[ts, count], ...]，仅 ABNORMAL 存量快照
+        """
+        now_time = int(time.time())
+
+        # 从桶内 min/max 聚合获取该 Issue 的实际告警时间边界
+        issue_min_time = None
+        issue_max_time = None
+        if hasattr(bucket, "min_alert_time") and bucket.min_alert_time.value is not None:
+            issue_min_time = int(bucket.min_alert_time.value)
+        if hasattr(bucket, "max_alert_time") and bucket.max_alert_time.value is not None:
+            issue_max_time = int(bucket.max_alert_time.value)
+
+        # 根据该 Issue 自身的时间跨度计算最合适的 interval
+        if issue_min_time and issue_max_time:
+            issue_interval = cls.calculate_agg_interval(issue_min_time, issue_max_time)
+        else:
+            issue_interval = global_interval
+
+        # 确保 issue_interval 是 global_interval 的整数倍（向上取整对齐）
+        if issue_interval < global_interval:
+            issue_interval = global_interval
+        elif issue_interval % global_interval != 0:
+            issue_interval = ((issue_interval // global_interval) + 1) * global_interval
+
+        # === 第一步：解析 ES 桶数据，直接按 issue_interval 对齐归桶 ===
+        # 将 global_interval 粒度的 ES 桶直接聚合到 issue_interval 粒度，避免双重循环
+        agg_abnormal = defaultdict(int)
+        agg_recovered = defaultdict(int)
+        agg_closed = defaultdict(int)
+
+        # 解析第二路：新产生的异常告警，按 issue_interval 对齐
+        if hasattr(bucket, "begin_time") and hasattr(bucket.begin_time, "time"):
+            for tb in bucket.begin_time.time.buckets:
+                ts_sec = int(tb.key_as_string)
+                aligned_ts = ts_sec // issue_interval * issue_interval * 1000
+                agg_abnormal[aligned_ts] += tb.doc_count
+
+        # 解析第一路：已结束的告警（恢复/关闭），按 issue_interval 对齐
+        if (
+            hasattr(bucket, "end_time")
+            and hasattr(bucket.end_time, "end_alert")
+            and hasattr(bucket.end_time.end_alert, "time")
+        ):
+            for tb in bucket.end_time.end_alert.time.buckets:
+                ts_sec = int(tb.key_as_string)
+                aligned_ts = ts_sec // issue_interval * issue_interval * 1000
+                for sb in tb.status.buckets:
+                    if sb.key == EventStatus.RECOVERED:
+                        agg_recovered[aligned_ts] += sb.doc_count
+                    elif sb.key == EventStatus.CLOSED:
+                        agg_closed[aligned_ts] += sb.doc_count
+
+        # 解析第三路：初始基数
+        init_count = 0
+        if hasattr(bucket, "init_alert"):
+            init_count = bucket.init_alert.doc_count
+
+        # === 第二步：单层遍历，滚动计算趋势数据 ===
+        if issue_min_time and issue_max_time:
+            trend_start = issue_min_time // issue_interval * issue_interval
+            trend_end = issue_max_time // issue_interval * issue_interval + issue_interval
+        else:
+            trend_start = start_time
+            trend_end = end_time
+
+        now_aligned = now_time // issue_interval * issue_interval + issue_interval
+        trend_end = min(trend_end, now_aligned)
+
+        current = init_count
+        if status_group:
+            trend_data = {status: [] for status in EVENT_STATUS_DICT}
+        else:
+            trend_data = []
+
+        for ts_sec in range(trend_start, trend_end, issue_interval):
+            ts_ms = ts_sec * 1000
+            window_abnormal = agg_abnormal.get(ts_ms, 0)
+            window_recovered = agg_recovered.get(ts_ms, 0)
+            window_closed = agg_closed.get(ts_ms, 0)
+
+            current = current + window_abnormal - window_recovered - window_closed
+
+            if status_group:
+                trend_data[EventStatus.ABNORMAL].append([ts_ms, current])
+                trend_data[EventStatus.RECOVERED].append([ts_ms, window_recovered])
+                trend_data[EventStatus.CLOSED].append([ts_ms, window_closed])
+            else:
+                trend_data.append([ts_ms, current])
+
+        # alert_count
+        alert_count = int(bucket.alert_count.value) if hasattr(bucket, "alert_count") else 0
+
+        # anomaly_message
+        anomaly_message = "--"
+        if hasattr(bucket, "latest_alert") and bucket.latest_alert:
+            hits = bucket.latest_alert.hits
+            if hits and hits.hits and len(hits.hits) > 0:
+                source = hits.hits[0].to_dict().get("_source", {})
+                event = source.get("event", {})
+                description = event.get("description", "") if isinstance(event, dict) else ""
+                if description:
+                    anomaly_message = description
+
+        return trend_data, alert_count, anomaly_message
