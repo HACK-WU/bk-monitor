@@ -78,8 +78,8 @@ def query_task_result(task_id):
             message = e.message
             data = e.data
         except Exception as e:
-            logger.exception(f"Caught exception when running async resource task : {e}")
-            message = f"{e}"
+            logger.exception("Caught exception when running async resource task : %s" % e)
+            message = "%s" % e
             data = None
 
     return {
@@ -94,48 +94,32 @@ def query_task_result(task_id):
 
 def step(state=None, message=None, data=None):
     """
-    步骤装饰器工厂函数，用于创建状态跟踪装饰器
-
-    参数说明：
-    state  : str | callable | None  步骤状态标识。当直接装饰函数时自动转为None
-    message: str | None             步骤描述信息
-    data   : Any | None             步骤关联的附加数据
-
-    返回值：
-    callable: 装饰器函数或直接返回装饰后的函数（当不带参数调用时）
-
-    功能特点：
-    1. 支持带参数和不带参数两种调用方式
-    2. 自动维护被装饰对象的状态跟踪
-    3. 默认使用被装饰函数的__name__.upper()作为步骤标识
+    步骤装饰器
+    :param state: 当前状态，字符串
+    :param message: 步骤信息
+    :param data: 步骤数据
     """
 
-    # 处理不带括号的装饰器用法：@step 等价于 @step()
+    # 兼容不带括号的情况
     if callable(state):
-        real_func = state  # 保存被装饰的原始函数
-        real_state = None  # 重置状态标识为默认值
+        real_func = state
+        real_state = None
     else:
         real_func = None
-        real_state = state  # 显式指定的状态标识
+        real_state = state
 
     def decorate(func):
-        """实际装饰器实现，负责包装原始函数"""
-
         @wraps(func)
         def wrapper(self, *args, **kwargs):
-            """包装器函数，实现状态更新逻辑"""
-            # 自动生成步骤标识：优先使用显式state，其次用函数名的大写形式
+            # 不传递步骤名称，则默认使用函数名的全大写形式作为步骤名称
             _state = real_state or func.__name__.upper()
-
-            # 在调用目标函数前更新任务状态
+            # 更新任务状态
             self.update_state(state=_state, message=message, data=data)
-
-            # 执行原始函数并返回结果
             return func(self, *args, **kwargs)
 
         return wrapper
 
-    # 处理两种装饰器调用方式的统一返回
     if real_func:
-        return decorate(real_func)  # 处理不带参数调用的装饰器
-    return decorate  # 处理带参数调用的装饰器
+        return decorate(real_func)
+
+    return decorate
