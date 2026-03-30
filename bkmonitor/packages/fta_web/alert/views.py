@@ -28,6 +28,22 @@ logger = logging.getLogger(__name__)
 
 class AlertViewSet(ResourceViewSet):
     def check_alert_permission(self):
+        """
+        基于告警关联人员的细粒度权限校验（绕过 IAM 业务权限）
+
+        返回值:
+            True  — 当前用户对目标告警有访问权限
+            False — 无权限或无法判断
+
+        校验流程:
+        1. 判断当前 action 是否在受理范围（读操作 / 写操作）内，不在则直接拒绝
+        2. 从请求参数中提取告警 ID 列表（兼容 id / alert_id / ids / alert_ids 多种传参方式）
+        3. 批量查询告警文档，收集每条告警的通知人(assignee)、负责人(appointee)、主管(supervisor)、关注人(follower)
+        4. 优先判断用户是否为 assignee/appointee/supervisor：
+           - 是 → 读写操作均放行
+           - 否且为写操作 → 直接拒绝（写操作不支持 follower 降级）
+        5. 读操作降级判断：用户是否为所有告警的 follower，是则放行
+        """
         read_actions = [
             "alert/detail",
             "alert/get_experience",
@@ -100,6 +116,19 @@ class AlertViewSet(ResourceViewSet):
         return True
 
     def check_action_permission(self):
+        """
+        基于处理动作执行人的细粒度权限校验（绕过 IAM 业务权限）
+
+        返回值:
+            True  — 当前用户是目标动作的执行人(operator)，有查看权限
+            False — 无权限或无法判断
+
+        校验流程:
+        1. 仅受理 action/detail 和 action/detail/sub_actions 两个查看动作
+        2. 从请求参数中提取动作 ID（兼容 id / parent_action_id 两种传参方式）
+        3. 批量查询动作实例文档，逐条校验当前用户是否为 operator
+        4. 任一动作的 operator 不包含当前用户即拒绝
+        """
         if self.action not in [
             "action/detail",
             "action/detail/sub_actions",
@@ -130,6 +159,24 @@ class AlertViewSet(ResourceViewSet):
         return True
 
     def check_permissions(self, request):
+        """
+        覆写 DRF ViewSet 的权限校验入口，实现多层级权限降级策略
+
+        参数:
+            request: HttpRequest 对象
+
+        校验流程:
+        1. 白名单放行：search_history / list_index_by_host / validate_query_string / allowed_biz 无需鉴权
+        2. IAM 业务权限校验：
+           - alert/search 需要 VIEW_EVENT 或 VIEW_BUSINESS 权限（支持跨业务搜索场景）
+           - 其余操作仅需 VIEW_EVENT 权限
+        3. IAM 校验失败后的降级策略（按优先级依次尝试）：
+           a. check_alert_permission  — 基于告警关联人员（通知人/负责人/关注人）放行
+           b. check_action_permission — 基于动作执行人(operator)放行
+           c. 列表类/统计类操作兜底   — 已登录用户对 search/top_n/export/date_histogram/tags 等
+              聚合查询接口直接放行（这些接口内部会按业务过滤数据，不会越权）
+        4. 以上均不满足则抛出 PermissionDeniedError
+        """
         if self.action in ["search_history", "list_index_by_host", "validate_query_string", "allowed_biz"]:
             return
         elif self.action == "alert/search":
