@@ -329,6 +329,7 @@ def add_alert_trend(self, issues: list[dict]) -> None:
     # - slice_time_interval() 将大时间跨度拆分为多个小分片
     # - bulk_request() 并行执行各分片的 date_histogram 查询
     # - conditions 注入 issue_id 过滤，group_by 按 issue_id 分桶
+    # - 不传 status，因为列表页不关心状态区分，只需要合并后的总数趋势
     results = resource.alert.alert_date_histogram_result.bulk_request(
         [
             {
@@ -338,23 +339,22 @@ def add_alert_trend(self, issues: list[dict]) -> None:
                 "conditions": [
                     {"key": "issue_id", "value": issue_ids, "method": "eq"}
                 ],
-                "group_by": ["status", "issue_id"],
+                "group_by": ["issue_id"],
             }
             for sliced_start_time, sliced_end_time in slice_time_interval(start_time, end_time)
         ]
     )
-    # date_histogram(group_by=["status", "issue_id"]) 返回结构：
+    # date_histogram(group_by=["issue_id"]) 返回结构（status_group=False 时的合并结果）：
     # {
     #     (("issue_id", "1741420800a3b7c9d2"),): {
-    #         "ABNORMAL":  {1741334400000: 3, 1741338000000: 5, ...},  # 存量异常快照（累计值）
-    #         "RECOVERED": {1741334400000: 1, 1741338000000: 0, ...},  # 时间点增量
-    #         "CLOSED":    {1741334400000: 0, 1741338000000: 1, ...},  # 时间点增量
+    #         "ABNORMAL": {1741334400000: 13, 1741338000000: 12, ...},  # 合并后的时间序列
     #     },
     #     ...
     # }
+    # 注：status_group=False 时，RECOVERED 和 CLOSED 已合并到 ABNORMAL 中，只返回一条序列
 
     # ── 3. 合并各时间分片的结果 ──
-    merged = {}  # {issue_id: {"ABNORMAL": {ts: count}, ...}}
+    merged = {}  # {issue_id: {ts: count}}
     for result in results:
         for dimension_tuple, status_series in result.items():
             # 从维度元组中提取 issue_id
@@ -368,26 +368,21 @@ def add_alert_trend(self, issues: list[dict]) -> None:
 
             if issue_id not in merged:
                 merged[issue_id] = {}
-            for status, ts_map in status_series.items():
-                if status not in merged[issue_id]:
-                    merged[issue_id][status] = {}
-                merged[issue_id][status].update(ts_map)
+            # status_group=False 时只返回 ABNORMAL 序列（已合并 RECOVERED 和 CLOSED）
+            abnormal_series = status_series.get("ABNORMAL", {})
+            merged[issue_id].update(abnormal_series)
 
     # ── 4. 解析结果，回填到 Issue 列表 ──
     for issue in issues:
         issue_id = issue["id"]
         if issue_id in merged:
             series = merged[issue_id]
-            # 合并所有状态的时间序列为 trend（sparkline 用总数）
-            all_timestamps = sorted(series.get(EventStatus.ABNORMAL, {}).keys())
+            # 直接使用已合并的时间序列
+            all_timestamps = sorted(series.keys())
             trend_data = []
             total_count = 0
             for ts in all_timestamps:
-                count = (
-                    series.get(EventStatus.ABNORMAL, {}).get(ts, 0)
-                    + series.get(EventStatus.RECOVERED, {}).get(ts, 0)
-                    + series.get(EventStatus.CLOSED, {}).get(ts, 0)
-                )
+                count = series[ts]
                 trend_data.append([ts, count])
                 total_count += count
             issue["trend"] = trend_data
@@ -435,19 +430,19 @@ def _fill_anomaly_message(self, issues, issue_ids, start_time, end_time):
         issue["anomaly_message"] = msg_map.get(issue["id"], "--")
 ```
 
-##### `date_histogram(group_by=["status", "issue_id"])` 内部执行流程
+##### `date_histogram(group_by=["issue_id"])` 内部执行流程
 
-> `date_histogram` 方法内部会自动处理 `status` 和 `issue_id` 两个维度：
-> - `status` 被识别为特殊字段，触发 `status_group=True` 分支，启用三路聚合（begin_time / end_time / init_alert）
+> `date_histogram` 方法内部会自动处理 `issue_id` 维度：
 > - `issue_id` 作为普通维度字段，通过 `add_agg_bucket()` 在三路聚合的末尾追加 `terms` 聚合
-> - `_get_buckets()` 递归解析嵌套聚合结果，展平为 `{(("issue_id", id),): BucketData}` 结构
+> - `_get_buckets()` 递归解析嵌套聚合结果，展平为 `{((\"issue_id\", id),): BucketData}` 结构
+> - 由于 `group_by` 不包含 `\"status\"`，`status_group=False`，最终结果会将 RECOVERED 和 CLOSED 合并到 ABNORMAL 中，只返回一条时间序列
 
 ```
 三路聚合结构（由 date_histogram 自动构建）：
 
 1. end_time 桶（已结束告警）
    └── date_histogram(end_time)
-       └── terms(status)        ← 区分 RECOVERED / CLOSED
+       └── terms(status)        ← 区分 RECOVERED / CLOSED（内部处理）
            └── terms(issue_id)  ← 按 Issue 分桶
 
 2. begin_time 桶（新产生告警）
@@ -459,16 +454,20 @@ def _fill_anomaly_message(self, issues, issue_ids, start_time, end_time):
 
 → 滚动累加：每个 issue_id 维度独立计算
   当前异常数 = 上一时刻异常数 + 新增异常 - 恢复 - 关闭
+
+→ 最终合并（status_group=False）：
+  ABNORMAL[ts] += RECOVERED[ts] + CLOSED[ts]
+  只返回一条合并后的时间序列
 ```
 
 ##### 设计要点
 
 | 要点 | 说明 |
 |------|------|
-| **直接复用 `date_histogram`** | 通过 `group_by=["status", "issue_id"]` 参数，复用已有的三路聚合 + 滚动累加算法，零重复代码 |
+| **直接复用 `date_histogram`** | 通过 `group_by=["issue_id"]` 参数，复用已有的三路聚合 + 滚动累加算法，零重复代码 |
 | **时间分片并行查询** | 复用 `slice_time_interval()` + `bulk_request()` 模式（参考 `AlertDateHistogramResource`），将大时间跨度拆分为多个小分片并行查询，避免单次 ES 查询超时 |
-| **天然区分告警状态** | `group_by` 包含 `"status"` 时，`date_histogram` 自动走 `status_group=True` 分支，返回 ABNORMAL / RECOVERED / CLOSED 三条时间序列 |
-| **`alert_count` 动态计算** | `alert_count = sum(各状态时间序列的值)`，确保趋势图和计数值严格一致 |
+| **不区分告警状态** | `group_by` 不包含 `"status"`，`date_histogram` 内部仍执行三路聚合，但最终将 RECOVERED 和 CLOSED 合并到 ABNORMAL，只返回一条时间序列 |
+| **`alert_count` 动态计算** | `alert_count = sum(时间序列各时间点的值)`，确保趋势图和计数值严格一致 |
 | **`anomaly_message` 单独获取** | `date_histogram` 不含 `top_hits` 聚合，`anomaly_message` 通过 `_fill_anomaly_message()` 单独查询。无值时返回 `"--"` |
 | **覆盖 IssueDocument 的静态 `alert_count`** | `IssueDocument` 中有一个后端 processor 写入的静态 `alert_count`（全生命周期累计），列表页用动态计算值覆盖 |
 | **时间范围由 Issue 自身决定** | 趋势的时间范围取自本页所有 Issue 的 `min(first_alert_time)` 和 `max(last_alert_time)`，展示每个 Issue 完整生命周期内的告警分布 |
@@ -481,11 +480,11 @@ def _fill_anomaly_message(self, issues, issue_ids, start_time, end_time):
 | 维度 | 列表页 `add_alert_trend()` | 详情页 `IssueDateHistogramResource` |
 |------|---------------------------|-------------------------------------|
 | **查询目标** | 批量（本页 N 个 Issue） | 单个 Issue |
-| **聚合方式** | 复用 `date_histogram(group_by=["status", "issue_id"])` | 复用 `date_histogram(group_by=["status"])` |
-| **状态分组** | ✅ ABNORMAL / RECOVERED / CLOSED（通过 `group_by` 包含 `"status"`） | ✅ ABNORMAL / RECOVERED / CLOSED |
+| **聚合方式** | 复用 `date_histogram(group_by=["issue_id"])` | 复用 `date_histogram(group_by=["status"])` |
+| **状态分组** | ❌ 不区分，只返回合并后的总数序列 | ✅ ABNORMAL / RECOVERED / CLOSED 三条序列 |
 | **时间分片** | ✅ `slice_time_interval()` + `bulk_request()` 并行分片 | ✅ 同左（参考 `AlertDateHistogramResource`） |
 | **时间范围** | 由 Issue 自身 `first_alert_time` / `last_alert_time` 决定 | 由请求参数 `start_time` / `end_time` 决定 |
-| **返回格式** | `[[ts, count], ...]`（合并各状态总数） | `{"series": [{"name": "ABNORMAL", "data": [...]}, ...]}` |
+| **返回格式** | `[[ts, count], ...]`（合并后的总数） | `{"series": [{"name": "ABNORMAL", "data": [...]}, ...]}` |
 | **使用场景** | sparkline 小图 + alert_count 计数 | 堆叠柱状图，展示告警状态随时间变化 |
 | **ES 查询次数** | 按时间分片并行（通常 1~4 次） | 同左 |
 
@@ -975,17 +974,17 @@ Handler->>Handler: add_aggs()
 
     Handler->>Res: bulk_request(分片请求列表)
     Note over Res: AlertDateHistogramResultResource<br/>slice_time_interval() 时间分片
-    Res->>ES: date_histogram(group_by=["status","issue_id"])
-    Note over ES: 三路聚合(begin_time/end_time/init_alert)<br/>× issue_id 维度分桶
+    Res->>ES: date_histogram(group_by=["issue_id"])
+    Note over ES: 三路聚合(begin_time/end_time/init_alert)<br/>× issue_id 维度分桶<br/>status_group=False 合并结果
     ES-->>Res: 聚合结果
-    Res-->>Handler: {(issue_id,): {ABNORMAL/RECOVERED/CLOSED: {ts: count}}}
+    Res-->>Handler: {(issue_id,): {"ABNORMAL": {ts: count}}}
 
     Handler->>ES: execute() [查询 anomaly_message]
     Note over ES: terms(issue_id) → top_hits(description)
     ES-->>Handler: 最新告警描述
 
     Handler->>Handler: 合并结果，回填到 Issue
-    Note over Handler: trend = [[ts, count], ...]<br/>alert_count = sum(各状态值)
+    Note over Handler: trend = [[ts, count], ...]<br/>alert_count = sum(序列值)
 
     Handler->>Handler: handle_overview() + handle_aggs()
 Handler-->>Res: {issues, total, aggs}
