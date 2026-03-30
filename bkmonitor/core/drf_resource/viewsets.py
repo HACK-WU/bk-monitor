@@ -12,13 +12,19 @@ from django.http import HttpResponse, StreamingHttpResponse
 from django.utils.decorators import method_decorator
 from django.utils.translation import gettext as _
 from django.views.decorators.cache import cache_control
-from drf_yasg.utils import swagger_auto_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.serializers import Serializer
 
 from core.drf_resource.base import Resource
+
+try:
+    from core.drf_resource.contrib.spectacular import generate_resource_schema_decorator
+
+    _HAS_SPECTACULAR = True
+except ImportError:
+    _HAS_SPECTACULAR = False
 
 """
 Resource的ViewSet定义
@@ -126,16 +132,11 @@ class ResourceViewSet(viewsets.GenericViewSet):
             # 生成方法模版
             function = cls._generate_function_template(resource_route)
 
-            # 配置swagger装饰器
-            request_serializer_class = resource_route.resource_class.RequestSerializer or Serializer
-            request_serializer = request_serializer_class(many=resource_route.resource_class.many_request_data)
-            response_serializer_class = resource_route.resource_class.ResponseSerializer or Serializer
-            response_serializer = response_serializer_class(many=resource_route.resource_class.many_response_data)
-            decorator_function = swagger_auto_schema(
-                responses={200: response_serializer},
-                operation_description=resource_route.resource_class.__doc__,
-                query_serializer=request_serializer if resource_route.method == "GET" else None,
-            )
+            # 配置 drf-spectacular 文档装饰器
+            if _HAS_SPECTACULAR:
+                decorator_function = generate_resource_schema_decorator(resource_route)
+            else:
+                decorator_function = lambda f: f  # noqa: E731
 
             # 添加装饰器
             if resource_route.decorators:
@@ -199,6 +200,7 @@ class ResourceViewSet(viewsets.GenericViewSet):
 
         def template(self, request, *args, **kwargs):
             resource = resource_route.resource_class()
+            resource._current_request = request
             params = request.query_params.copy() if resource_route.method == "GET" else request.data
 
             if resource_route.pk_field:

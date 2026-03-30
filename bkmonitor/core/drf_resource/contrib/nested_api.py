@@ -129,7 +129,7 @@ def load_api_yaml():
         return
     with open(yaml_file_path, encoding="utf8") as yaml_fd:
         try:
-            for api_item in yaml.safe_load(yaml_fd):
+            for api_item in yaml.load(yaml_fd, Loader=yaml.FullLoader):
                 name = api_item["name"]
                 API_DEFINE[name] = {
                     "dest_path": api_item["dest_path"],
@@ -152,7 +152,7 @@ def load_api_yaml():
                 continue
             file_path = os.path.join(path, file_name)
             with open(file_path, encoding="utf8") as yaml_fd:
-                api_config: dict[str, Any] = yaml.safe_load(yaml_fd)
+                api_config: dict[str, Any] = yaml.load(yaml_fd, Loader=yaml.FullLoader)
                 for api_path, api_item in api_config["paths"].items():
                     if "post" in api_item:
                         dest_http_method = "POST"

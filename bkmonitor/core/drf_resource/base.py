@@ -12,7 +12,6 @@ import abc
 import logging
 import time
 
-import six
 from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext as _
@@ -76,7 +75,7 @@ Resource的执行流程：
 """
 
 
-class Resource(six.with_metaclass(abc.ABCMeta, object)):
+class Resource(metaclass=abc.ABCMeta):
     RequestSerializer = None
     ResponseSerializer = None
 
@@ -427,6 +426,7 @@ class Resource(six.with_metaclass(abc.ABCMeta, object)):
         state_message = f"Async resource task running - {self.get_resource_name()} [state=`{state}` message=`{message}` data=`{data}`]"
         logger.info(state_message)
 
+        # _task_manager 将会是一个celery task 对象
         if not self._task_manager:
             return
 
