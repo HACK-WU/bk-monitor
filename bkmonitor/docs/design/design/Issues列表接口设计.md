@@ -210,9 +210,8 @@ def get_search_object(self, start_time=None, end_time=None, **kwargs):
 4. add_alert_trend() → 批量查询本页所有 Issue 的关联告警时间分布趋势
    → 从 Issue 中取 min(first_alert_time) / max(last_alert_time) 确定时间范围
    → 复用 AlertDateHistogramResultResource.bulk_request + slice_time_interval 时间分片并行查询
-   → 内部调用 AlertQueryHandler.date_histogram(group_by=["status", "issue_id"])
-   → 将 trend 和 alert_count（= sum(trend)）回填到每个 Issue
-   → 单独查询 anomaly_message（date_histogram 不含 top_hits）
+   → 内部调用 AlertQueryHandler.date_histogram(group_by=["issue_id"]) 获取 trend
+   → 后台线程并行执行 value_count 聚合获取 alert_count，以及 top_hits 获取 anomaly_message
 5. 组装返回: { issues, total, aggs? }
 ```
 
@@ -256,8 +255,10 @@ def add_aggs(self, search_object):
 
 #### `add_alert_trend()` — 批量查询关联告警趋势
 
-> **设计目标**：为列表页返回的每个 Issue 附加关联告警的时间分布趋势（sparkline），并基于趋势数据动态计算 `alert_count`。
-> 通过复用 `AlertQueryHandler.date_histogram(group_by=["status", "issue_id"])` + `bulk_request` 时间分片并行查询，避免重复造轮子和 N+1 性能问题。
+> **设计目标**：为列表页返回的每个 Issue 附加关联告警的时间分布趋势（sparkline）、告警数量和异常信息。
+> - **trend**：通过复用 `AlertQueryHandler.date_histogram(group_by=["issue_id"])` + `bulk_request` 时间分片并行查询获取
+> - **alert_count**：通过 ES `value_count` 聚合统计 `AlertDocument.id` 字段得出（与 trend 独立查询）
+> - **anomaly_message**：通过 ES `top_hits` 聚合获取最新告警的 description
 
 ##### 复用策略
 
@@ -296,9 +297,9 @@ def add_alert_trend(self, issues: list[dict]) -> None:
         issues: search() 已清洗完成的 Issue 列表（会被原地修改）
     
     副作用:
-        - 为每个 issue dict 添加 "trend" 字段: list[list[int, int]]
-        - 为每个 issue dict 覆盖 "alert_count" 字段: int
-        - 为每个 issue dict 添加 "anomaly_message" 字段: str（从 alert.description 获取，无值返回 "--"）
+        - 为每个 issue dict 添加 "trend" 字段: list[list[int, int]]（时间分布趋势）
+        - 为每个 issue dict 覆盖 "alert_count" 字段: int（告警文档总数，通过 value_count 聚合得出）
+        - 为每个 issue dict 添加 "anomaly_message" 字段: str（最新告警的 description，无值返回 "--"）
     """
 ```
 
@@ -324,12 +325,19 @@ def add_alert_trend(self, issues: list[dict]) -> None:
     end_time = max(last_alert_times)
     interval = self.calculate_agg_interval(start_time, end_time)
 
-    # ── 2. 复用 AlertDateHistogramResultResource + 时间分片并行查询 ──
+    # ── 2. 启动后台线程并行查询 alert_count 和 anomaly_message ──
+    fill_result = {"alert_count_map": {}, "anomaly_message_map": {}}
+    fill_thread = threading.Thread(
+        target=_fill_anomaly_message,
+        args=(issue_ids, start_time, end_time, fill_result),
+    )
+    fill_thread.start()
+
+    # ── 3. 查询告警趋势：复用 AlertDateHistogramResultResource ──
     # 参考 AlertDateHistogramResource.perform_request() 的实现模式：
     # - slice_time_interval() 将大时间跨度拆分为多个小分片
-    # - bulk_request() 并行执行各分片的 date_histogram 查询
+    # - 并行执行各分片的 date_histogram 查询
     # - conditions 注入 issue_id 过滤，group_by 按 issue_id 分桶
-    # - 不传 status，因为列表页不关心状态区分，只需要合并后的总数趋势
     results = resource.alert.alert_date_histogram_result.bulk_request(
         [
             {
@@ -353,7 +361,7 @@ def add_alert_trend(self, issues: list[dict]) -> None:
     # }
     # 注：status_group=False 时，RECOVERED 和 CLOSED 已合并到 ABNORMAL 中，只返回一条序列
 
-    # ── 3. 合并各时间分片的结果 ──
+    # ── 4. 合并各时间分片的结果 ──
     merged = {}  # {issue_id: {ts: count}}
     for result in results:
         for dimension_tuple, status_series in result.items():
@@ -372,62 +380,67 @@ def add_alert_trend(self, issues: list[dict]) -> None:
             abnormal_series = status_series.get("ABNORMAL", {})
             merged[issue_id].update(abnormal_series)
 
-    # ── 4. 解析结果，回填到 Issue 列表 ──
+    # ── 5. 等待后台线程完成 ──
+    fill_thread.join()
+
+    # ── 6. 解析结果，回填到 Issue 列表 ──
     for issue in issues:
         issue_id = issue["id"]
         if issue_id in merged:
             series = merged[issue_id]
-            # 直接使用已合并的时间序列
-            all_timestamps = sorted(series.keys())
-            trend_data = []
-            total_count = 0
-            for ts in all_timestamps:
-                count = series[ts]
-                trend_data.append([ts, count])
-                total_count += count
-            issue["trend"] = trend_data
-            issue["alert_count"] = total_count
+            # 将时间序列转换为 [[ts_ms, count], ...] 格式
+            issue["trend"] = sorted([[ts, count] for ts, count in series.items()])
         else:
             issue["trend"] = []
-            issue["alert_count"] = 0
 
-    # ── 5. 单独获取 anomaly_message（date_histogram 不含 top_hits） ──
-    self._fill_anomaly_message(issues, issue_ids, start_time, end_time)
+        # alert_count 由后台线程通过 value_count 聚合得出
+        issue["anomaly_message"] = fill_result["anomaly_message_map"].get(issue_id, "--")
+        issue["alert_count"] = fill_result["alert_count_map"].get(issue_id, 0)
 
 
-def _fill_anomaly_message(self, issues, issue_ids, start_time, end_time):
-    """单独查询每个 Issue 最新告警的 description 作为 anomaly_message"""
+def _fill_anomaly_message(issue_ids, start_time, end_time, fill_result):
+    """后台线程：查询每个 Issue 最新告警的 description 和告警数量"""
     search_object = AlertDocument.search(start_time=start_time, end_time=end_time)
     search_object = search_object.filter("terms", issue_id=issue_ids)
 
-    # 按 issue_id 分桶，每个桶取最新一条告警的 description
+    # 按 issue_id 分桶
     issue_agg = search_object.aggs.bucket(
         "issues", "terms", field="issue_id", size=len(issue_ids)
     )
+    # 获取最新告警的 description
     issue_agg.metric(
         "latest_alert", "top_hits",
         size=1,
         sort=[{"begin_time": {"order": "desc"}}],
         _source=["description"],
     )
+    # 统计每个 Issue 的告警文档数量
+    issue_agg.metric("alert_count", "value_count", field="id")
 
     result = search_object[:0].execute()
 
     msg_map = {}
+    count_map = {}
     for issue_bucket in result.aggs.issues.buckets:
         issue_id = issue_bucket.key
+        
+        # 解析 anomaly_message
         anomaly_message = "--"
         if hasattr(issue_bucket, "latest_alert") and issue_bucket.latest_alert:
             hits = issue_bucket.latest_alert.hits
             if hits and hits.hits and len(hits.hits) > 0:
-                source = hits.hits[0].to_dict().get("_source", {})
-                description = source.get("description", "")
+                hit = hits.hits[0]
+                description = getattr(hit, "description", "") or hit.to_dict().get("description", "")
                 if description:
                     anomaly_message = description
         msg_map[issue_id] = anomaly_message
 
-    for issue in issues:
-        issue["anomaly_message"] = msg_map.get(issue["id"], "--")
+        # 解析 alert_count（通过 value_count 聚合得出）
+        if hasattr(issue_bucket, "alert_count"):
+            count_map[issue_id] = int(issue_bucket.alert_count.value or 0)
+
+    fill_result["anomaly_message_map"] = msg_map
+    fill_result["alert_count_map"] = count_map
 ```
 
 ##### `date_histogram(group_by=["issue_id"])` 内部执行流程
@@ -467,13 +480,13 @@ def _fill_anomaly_message(self, issues, issue_ids, start_time, end_time):
 | **直接复用 `date_histogram`** | 通过 `group_by=["issue_id"]` 参数，复用已有的三路聚合 + 滚动累加算法，零重复代码 |
 | **时间分片并行查询** | 复用 `slice_time_interval()` + `bulk_request()` 模式（参考 `AlertDateHistogramResource`），将大时间跨度拆分为多个小分片并行查询，避免单次 ES 查询超时 |
 | **不区分告警状态** | `group_by` 不包含 `"status"`，`date_histogram` 内部仍执行三路聚合，但最终将 RECOVERED 和 CLOSED 合并到 ABNORMAL，只返回一条时间序列 |
-| **`alert_count` 动态计算** | `alert_count = sum(时间序列各时间点的值)`，确保趋势图和计数值严格一致 |
-| **`anomaly_message` 单独获取** | `date_histogram` 不含 `top_hits` 聚合，`anomaly_message` 通过 `_fill_anomaly_message()` 单独查询。无值时返回 `"--"` |
-| **覆盖 IssueDocument 的静态 `alert_count`** | `IssueDocument` 中有一个后端 processor 写入的静态 `alert_count`（全生命周期累计），列表页用动态计算值覆盖 |
+| **`alert_count` 通过 value_count 聚合获取** | `alert_count` 通过 ES `value_count` 聚合统计 `AlertDocument.id` 字段得出，与 `trend` 是独立的查询。使用后台线程并行执行，避免阻塞主查询 |
+| **`anomaly_message` 通过 top_hits 获取** | 通过 ES `top_hits` 聚合获取最新告警的 `description` 字段，无值时返回 `"--"`。与 `alert_count` 在同一次 ES 请求中获取 |
+| **覆盖 IssueDocument 的静态 `alert_count`** | `IssueDocument` 中有一个后端 processor 写入的静态 `alert_count`（全生命周期累计），列表页用动态聚合值覆盖，实时性更好 |
 | **时间范围由 Issue 自身决定** | 趋势的时间范围取自本页所有 Issue 的 `min(first_alert_time)` 和 `max(last_alert_time)`，展示每个 Issue 完整生命周期内的告警分布 |
 | **`conditions` 注入 `issue_id` 过滤** | 通过 `conditions=[{"key": "issue_id", "value": issue_ids, "method": "eq"}]` 限制只查本页 Issue 的告警 |
 | **聚合粒度自动计算** | 复用 `BaseQueryHandler.calculate_agg_interval()` 方法：≤1h→1min, ≤6h→5min, ≤72h→1h, >72h→1天 |
-| **执行时机** | 在 `search()` 流程中，位于 `handle_hit_list()` + 字段翻译之后、组装返回值之前 |
+| **后台线程并行优化** | `alert_count` 和 `anomaly_message` 的查询使用后台线程并行执行，与 `trend` 的 date_histogram 查询同时进行，减少总体响应时间 |
 
 ##### 与详情页趋势接口的对比
 
@@ -782,7 +795,7 @@ def perform_request(self, validated_request_data):
 | `bk_biz_id` | `str` | ES 字段 | 所属业务 ID（Keyword 类型，字符串） |
 | `bk_biz_name` | `str` | 翻译字段 | 业务名称（由 `BizTranslator` 翻译） |
 | `labels` | `list[str]` | ES 字段 | 标签列表 |
-| `alert_count` | `int` | 动态计算 | Issue 完整生命周期内关联告警总数，等于 `trend` 各时间段 count 之和。由 `add_alert_trend()` 基于 `AlertDocument` 聚合得出，覆盖 `IssueDocument` 中的静态累计值 |
+| `alert_count` | `int` | 动态计算 | Issue 在时间范围内的关联告警文档总数，通过 ES `value_count` 聚合统计 `AlertDocument.id` 字段得出。由 `add_alert_trend()` 在后台线程并行查询，覆盖 `IssueDocument` 中的静态累计值 |
 | `anomaly_message` | `str` | 动态计算 | 异常信息，从关联告警的 `description` 字段获取。若无关联告警或 description 为空，返回 `"--"` |
 | `trend` | `list[list[int, int]]` | 动态计算 | 关联告警的时间分布趋势（sparkline 数据），格式为 `[[timestamp_ms, count], ...]`。时间范围由 Issue 自身的 `first_alert_time` / `last_alert_time` 决定，基于 `AlertDocument.begin_time` 聚合 |
 | `first_alert_time` | `int` | ES 字段 | 首条关联告警时间（秒级时间戳） |
@@ -984,7 +997,7 @@ Handler->>Handler: add_aggs()
     ES-->>Handler: 最新告警描述
 
     Handler->>Handler: 合并结果，回填到 Issue
-    Note over Handler: trend = [[ts, count], ...]<br/>alert_count = sum(序列值)
+    Note over Handler: trend = [[ts, count], ...]<br/>alert_count = value_count(id)<br/>anomaly_message = top_hits(description)
 
     Handler->>Handler: handle_overview() + handle_aggs()
 Handler-->>Res: {issues, total, aggs}
@@ -1035,7 +1048,7 @@ if not self.ordering:
 | **`add_biz_condition` 需简化** | Issue 的业务过滤直接使用 `bk_biz_id`（顶层 Keyword 字段），无需像 Alert 那样查 `event.bk_biz_id`（嵌套路径），`IssueQueryHandler` 需覆写 `add_biz_condition` 方法 |
 | **`status` 字段排序需自定义** | `ordering=["status"]` 在 ES 中默认按字母序排序，但期望活跃状态排前面。需要在 `add_ordering()` 中对 status 字段使用 ES script-based sorting 或在 `IssueQueryTransformer` 中配置 status 排序映射 |
 | **搜索历史功能** | 第一阶段不实现 `record_history`，如后续需要可参照 `SearchAlertResource` 的 `SearchHistory.record()` 模式 |
-| **`alert_count` 静态值 vs 动态值** | `IssueDocument` 中有后端 processor 写入的静态 `alert_count`（全生命周期累计），`clean_document()` 会先从 ES 取到这个静态值，随后 `add_alert_trend()` 用动态计算值覆盖。动态值基于 `AlertQueryHandler.date_histogram(group_by=["status", "issue_id"])` 聚合得出，理论上与静态值一致（都是该 Issue 全生命周期内的告警总数），但动态值更可靠（实时聚合） |
+| **`alert_count` 静态值 vs 动态值** | `IssueDocument` 中有后端 processor 写入的静态 `alert_count`（全生命周期累计），`clean_document()` 会先从 ES 取到这个静态值，随后 `add_alert_trend()` 用动态聚合值覆盖。动态值通过 ES `value_count` 聚合实时计算，比静态值更可靠 |
 | **趋势时间范围取自 Issue 自身** | `add_alert_trend()` 从本页 Issue 中取 `min(first_alert_time)` 和 `max(last_alert_time)` 作为查询范围。如果本页所有 Issue 都没有 `first_alert_time`（理论上不应出现），则跳过趋势查询，直接填充空 trend 和 `alert_count=0` |
 | **`begin_time` vs `create_time` 语义** | `AlertDocument.begin_time` 是告警实际触发时间，`create_time` 是服务器写入时间。趋势图和时间范围过滤均使用 `begin_time`，与 `issue_processor` 中 `first_alert_time = alert.begin_time` 的写入逻辑保持一致 |
 | **`AlertDocument.issue_id` 索引** | 趋势聚合依赖 `AlertDocument.issue_id` 字段（`field.Keyword()`），确保该字段已建立倒排索引，`terms` 聚合才能高效执行 |
@@ -1048,7 +1061,7 @@ if not self.ordering:
 |------|------|------|
 | **Task A** | 创建 `fta_web/issue/` 模块骨架（`__init__.py` / `urls.py` / `views.py`） | 无 |
 | **Task B** | `IssueQueryTransformer` + `IssueQueryHandler`（handlers/issue.py） | 依赖 `IssueDocument`（已完成） |
-| **Task B-1** | `IssueQueryHandler.add_alert_trend()` 方法（复用 `date_histogram(group_by=["status", "issue_id"])` + `bulk_request` 时间分片并行查询 + 动态 alert_count） | Task B + `AlertDocument.issue_id` 字段（已完成） |
+| **Task B-1** | `IssueQueryHandler.add_alert_trend()` 方法（trend 复用 `date_histogram(group_by=["issue_id"])` + alert_count 使用 `value_count` 聚合 + anomaly_message 使用 `top_hits` 聚合，后台线程并行优化） | Task B + `AlertDocument.issue_id` 字段（已完成） |
 | **Task C** | `IssueSearchSerializer` + `IssueIDField`（serializers.py） | 无 |
 | **Task D** | `SearchIssueResource` / `IssueDetailResource` / `IssueTopNResource`（resources.py） | Task B + B-1 + C |
 | **Task E** | `IssueViewSet` 路由注册 + 权限校验 | Task D |

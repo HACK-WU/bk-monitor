@@ -80,7 +80,26 @@ Issue 详情页按设计稿包含以下模块和对应接口：
 
 > 对应设计稿模块：**页面头部** + **基本信息** + **告警趋势统计**
 
-### 2.1 IssueDetailResource
+### 2.1 实现状态概览
+
+基于 `IssueQueryHandler` 现有实现分析，各字段实现状态如下：
+
+| 字段 | 状态 | 实现来源 | 说明 |
+|------|------|----------|------|
+| 基本字段（id/name/status/priority/assignee 等） | ✅ 已实现 | `IssueQueryHandler.clean_document` | 完整提取 Issue 基本信息字段 |
+| `duration` | ✅ 已实现 | `clean_document` | 根据 create_time/resolved_time 自动计算 |
+| `status_display` / `priority_display` | ✅ 已实现 | `clean_document` | 状态/优先级中文翻译 |
+| `impact_scope` | ✅ 已实现 | `clean_document` | 已添加 `display_name` 翻译 |
+| `aggregate_config` | ✅ 已实现 | `clean_document` | 直接透传聚合配置 |
+| `anomaly_message` | ✅ 已实现 | `_fill_anomaly_message` | 查询最新告警的 description |
+| `alert_count` | ✅ 已实现 | `_fill_anomaly_message` | 同时在查询中统计 |
+| `trend`（三段式） | ⚠️ 需调整 | 复用 `AlertQueryHandler.date_histogram` | 当前列表接口只返回 ABNORMAL 状态 |
+| `dimension_summary` | ❌ 需新增 | 从 `AlertDocument.dimensions` 聚合 | 需实现维度分布统计 |
+| `alert_ids` | ❌ 需新增 | 从 `AlertDocument` 批量查询 | 需实现告警 ID 列表查询 |
+| `latest_alert_id` | ❌ 需新增 | 从 alert_ids 中提取 | 按时间排序后的最新/最早告警 |
+| `earliest_alert_id` | ❌ 需新增 | 从 alert_ids 中提取 | 按时间排序后的最新/最早告警 |
+
+### 2.2 IssueDetailResource
 
 ```python
 class IssueDetailResource(Resource):
@@ -93,11 +112,59 @@ class IssueDetailResource(Resource):
         end_time = serializers.IntegerField(label="结束时间", required=False)
 
     def perform_request(self, validated_request_data):
-        # ...existing code...
-        pass
+        """
+        获取 Issue 详情的完整处理流程：
+        
+        1. 查询 Issue 基本信息（复用 IssueQueryHandler.clean_document）
+        2. 确定时间范围（start_time/end_time 或 first_alert_time/last_alert_time）
+        3. 并行查询扩展信息：
+           - trend: 复用 IssueAlertDateHistogramResultResource（≤7天直接请求，>7天时间分片）
+           - dimension_summary + alert_ids: 同一次查询获取维度分布和告警ID列表
+        4. 合并结果返回
+        """
+        issue_id = validated_request_data["id"]
+        bk_biz_id = validated_request_data["bk_biz_id"]
+        start_time = validated_request_data.get("start_time")
+        end_time = validated_request_data.get("end_time")
+
+        # 1. 查询 Issue 基本信息
+        issue = _get_issue_or_raise(issue_id, bk_biz_id=bk_biz_id)
+        result = IssueQueryHandler.clean_document(issue)
+
+        # 2. 确定时间范围
+        first_alert_time = result.get("first_alert_time")
+        last_alert_time = result.get("last_alert_time")
+        start_time = start_time or first_alert_time
+        end_time = end_time or last_alert_time or int(time.time())
+
+        # 3. 并行查询扩展信息（后台线程）
+        fill_result = {}
+        fill_thread = threading.Thread(
+            target=self._build_dimension_and_alert_ids,
+            args=(issue_id, start_time, end_time, fill_result),
+        )
+        fill_thread.start()
+
+        # 4. 查询趋势图（≤7天直接请求，>7天时间分片）
+        result["trend"] = self._build_trend(issue_id, start_time, end_time)
+
+        # 5. 等待后台线程完成
+        fill_thread.join()
+
+        # 6. 合并维度统计和告警ID信息
+        result["dimension_summary"] = fill_result.get("dimension_summary", [])
+        result["alert_ids"] = fill_result.get("alert_ids", [])
+        result["latest_alert_id"] = fill_result.get("latest_alert_id")
+        result["earliest_alert_id"] = fill_result.get("earliest_alert_id")
+
+        # 7. 补充 alert_count（若 anomaly_message 查询未返回）
+        if not result.get("alert_count"):
+            result["alert_count"] = len(result.get("alert_ids", []))
+
+        return result
 ```
 
-### 2.2 请求参数
+### 2.3 请求参数
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -240,34 +307,50 @@ class IssueDetailResource(Resource):
 | 最早告警ID | `earliest_alert_id` | 用于点击跳转到最早告警详情 |
 | 维度统计 | `dimension_summary` | 维度分布图，Top5 + 其他，详情见下方说明 |
 
-### 2.5 impact_scope 说明
+### 2.6 impact_scope 说明
 
-设计稿中的**维度统计**模块（主机、云区域 ID 进度条）实际对应 **影响范围**。
+设计稿中的**影响范围**模块用于展示 Issue 影响的具体实例列表。
 
-**数据来源**：从告警的 `dimensions` 字段中获取相关维度信息，而非从 `IssueDocument.impact_scope` 字段。
+**数据来源**：`IssueDocument.impact_scope` 字段。
+
+> **重要澄清**：该字段在 Issue 创建时由聚合处理器 `IssueAggregationProcessor._build_impact_scope()` 方法从告警中提取并写入，存储在 Issue 文档中，**无需实时查询告警**。
 
 **数据结构**：
 
 ```json
 {
-  "host": {
-    "count": 2,
-    "display_name": "主机",
-    "instance_list": [
-      {"bk_host_id": 1001, "display_name": "10.0.0.1"},
-      {"bk_host_id": 1002, "display_name": "10.0.0.2"}
-    ],
-    "link_tpl": "/performance/detail/{bk_host_id}"
-  },
   "cluster": {
     "count": 1,
     "display_name": "集群",
     "instance_list": [
-      {"bcs_cluster_id": "BCS-K8S-12345", "display_name": "生产集群"}
+      {"bcs_cluster_id": "BCS-K8s-5234", "display_name": "BCS-K8s-5234"}
     ],
     "link_tpl": "/k8s?filter-bcs_cluster_id={bcs_cluster_id}&sceneId=kubernetes&sceneType=overview"
+  },
+  "pod": {
+    "count": 30,
+    "display_name": "Pod",
+    "instance_list": [
+      {"bcs_cluster_id": "BCS-K8s-5234", "pod": "lobby-7534534532323lfse345", "display_name": "BCS-K8s-5234/lobby-7534534532323lfse345"}
+    ],
+    "link_tpl": "/k8s?filter-bcs_cluster_id={bcs_cluster_id}&filter-pod_name={pod}&dashboardId=pod&sceneId=kubernetes&sceneType=detail"
   }
 }
+```
+
+**实现说明**：
+
+`IssueQueryHandler.clean_document` 方法会调用 `add_dimension_display_name()` 为每个维度补充 `display_name` 字段（若缺失）：
+
+```python
+# bkmonitor/packages/fta_web/issue/handlers/issue.py
+
+def add_dimension_display_name(impact_scope: dict) -> dict:
+    """为 impact_scope 中每个维度添加 display_name 字段"""
+    for dimension_key, dimension_data in impact_scope.items():
+        if isinstance(dimension_data, dict):
+            dimension_data["display_name"] = ImpactScopeDimension.get_display_name(dimension_key)
+    return impact_scope
 ```
 
 > **说明**：每个维度对象包含 `display_name` 字段，用于前端显示维度名称。
@@ -291,9 +374,86 @@ class IssueDetailResource(Resource):
 - `count` 用于计算占比，`instance_list` 用于 Tooltip 显示
 - `link_tpl` 用于点击跳转
 
-### 2.6 trend 趋势统计说明
+### 2.7 trend 趋势统计说明
 
-趋势图数据复用 `AlertQueryHandler.date_histogram` 方法，通过 ES 聚合从 `AlertDocument` 实时计算获取。
+趋势图数据复用 `IssueAlertDateHistogramResultResource`，与列表接口 `add_alert_trend` 保持一致。
+
+**实现方案**：
+
+```python
+def _build_trend(self, issue_id: str, start_time: int, end_time: int) -> list[dict]:
+    """
+    构建告警趋势数据
+    
+    复用 IssueAlertDateHistogramResultResource，返回三段式趋势：
+    - ABNORMAL: 未恢复（存量快照）
+    - RECOVERED: 已恢复
+    - CLOSED: 已失效
+    
+    参数:
+        issue_id: Issue ID
+        start_time: 开始时间戳（秒）
+        end_time: 结束时间戳（秒）
+    
+    返回值:
+        list[dict]，每个元素包含：
+        - name: 状态枚举值（ABNORMAL/RECOVERED/CLOSED）
+        - display_name: 状态显示名称（未恢复/已恢复/已失效）
+        - data: 时间序列数据 [[毫秒时间戳, 数量], ...]
+    """
+    from fta_web.issue.resources import IssueAlertDateHistogramResultResource
+    
+    # 计算聚合间隔
+    interval = calculate_agg_interval(start_time, end_time)
+    
+    # ≤7天直接单次请求，>7天走时间分片并行查询
+    SLICED_THRESHOLD = 7 * 24 * 60 * 60  # 7天
+    
+    if (end_time - start_time) <= SLICED_THRESHOLD:
+        result = IssueAlertDateHistogramResultResource().request(
+            start_time=start_time,
+            end_time=end_time,
+            interval=interval,
+            conditions=[{"key": "issue_id", "value": [issue_id], "method": "eq"}],
+            group_by=["status"],  # 按 status 分组获取三段式趋势
+        )
+    else:
+        result = IssueAlertDateHistogramResultResource.sliced_date_histogram(
+            start_time=start_time,
+            end_time=end_time,
+            interval=interval,
+            handler_kwargs={
+                "conditions": [{"key": "issue_id", "value": [issue_id], "method": "eq"}],
+            },
+            group_by=["status"],
+        )
+    
+    # 转换为前端所需格式
+    status_display = {
+        "ABNORMAL": "未恢复",
+        "RECOVERED": "已恢复",
+        "CLOSED": "已失效",
+    }
+    
+    trend = []
+    # date_histogram 返回格式：{(): {"ABNORMAL": {...}, "RECOVERED": {...}, "CLOSED": {...}}}
+    status_series = result.get((), {})
+    
+    for status in ["ABNORMAL", "RECOVERED", "CLOSED"]:
+        ts_map = status_series.get(status, {})
+        trend.append({
+            "name": status,
+            "display_name": status_display.get(status, status),
+            "data": sorted([[ts, count] for ts, count in ts_map.items()]),
+        })
+    
+    return trend
+```
+
+> **说明**：
+> - 复用 `IssueAlertDateHistogramResultResource`，与列表接口保持一致
+> - `group_by=["status"]` 返回三段式趋势数据
+> - 时间跨度 ≤7 天直接单次请求，>7 天走时间分片并行查询
 
 **返回格式**：
 
@@ -351,38 +511,15 @@ class IssueDetailResource(Resource):
 - `display_name`: 状态显示名称（中文）：未恢复 / 已恢复 / 已失效
 - `name`: 状态枚举值（ABNORMAL / RECOVERED / CLOSED）
 
-**复用方式**：
-```python
-from fta_web.alert.handlers.alert import AlertQueryHandler
-
-def _build_trend(self, issue_id: str, start_time: int, end_time: int) -> list:
-    """
-    构建告警趋势数据
-    
-    复用 AlertQueryHandler.date_histogram 方法，按 status 分组统计：
-    - ABNORMAL: 未恢复（红色）
-    - RECOVERED: 已恢复（绿色）
-    - CLOSED: 已失效（黄色）
-    """
-    handler = AlertQueryHandler(
-        start_time=start_time,
-        end_time=end_time,
-        conditions=[{"key": "issue_id", "value": [issue_id], "method": "eq"}]
-    )
-    
-    # 调用 date_histogram，默认按 status 分组
-    result = handler.date_histogram(interval="auto")
-    # ...existing code...
-    pass
-```
-
-> **说明**：`AlertQueryHandler.date_histogram` 已实现三段式聚合 + 滚动累加逻辑，直接复用即可。
-
-### 2.7 dimension_summary 维度统计说明
+### 2.8 dimension_summary 维度统计说明
 
 维度统计模块用于展示告警在各维度上的分布情况，帮助用户快速了解问题影响范围。
 
-**数据来源**：从告警的 `dimensions` 字段中聚合统计获取。
+**数据来源**：从 `AlertDocument.dimensions` 字段中聚合统计获取。
+
+> **注意**：`impact_scope` 和 `dimension_summary` 是两个不同的概念：
+> - `impact_scope`：Issue 影响的具体实例列表（存储在 IssueDocument 中）
+> - `dimension_summary`：告警在各维度上的分布统计（实时从 AlertDocument 聚合）
 
 **返回格式**：
 
@@ -423,99 +560,128 @@ def _build_trend(self, issue_id: str, start_time: int, end_time: int) -> list:
 | `count` | `int` | 该值出现次数 |
 | `percentage` | `float` | 占比百分比（保留2位小数） |
 
-**聚合策略**：
+### 2.9 alert_ids 告警ID列表说明
 
-1. 从 `AlertDocument` 批量获取所有告警的 `dimensions` 字段
-2. 遍历每个维度 key，统计各 value 的出现次数
-3. 按 count 降序排列，取 Top5
-4. 其余归入 `"其他"` 分类（后端使用 `_("其他")` 进行国际化翻译）
-5. 计算各项占比百分比
+告警ID列表用于支持前端跳转到最新/最早告警详情，以及提供告警列表查询的基础数据。
 
-**实现示例**：
+**数据来源**：从 `AlertDocument` 批量查询获取（与 dimension_summary 合并查询）。
+
+**返回字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `alert_ids` | `list[str]` | 全部关联告警的 ID 列表 |
+| `latest_alert_id` | `str` \| `None` | 最新告警 ID（按 begin_time 降序） |
+| `earliest_alert_id` | `str` \| `None` | 最早告警 ID（按 begin_time 升序） |
+
+### 2.10 合并查询实现方案
+
+`dimension_summary` 和 `alert_ids` 通过同一次 ES 查询获取，在后台线程中执行：
 
 ```python
-def _build_dimension_summary(self, alert_ids: list[str]) -> list[dict]:
+def _build_dimension_and_alert_ids(
+    self, issue_id: str, start_time: int, end_time: int, fill_result: dict
+) -> None:
     """
-    构建维度统计数据
+    后台线程：一次查询同时获取维度统计和告警ID列表
     
-    构建维度统计数据
+    参数:
+        issue_id: Issue ID
+        start_time: 开始时间戳（秒）
+        end_time: 结束时间戳（秒）
+        fill_result: 输出参数，用于存储结果
     
-    告警的 dimensions 字段结构为 list[dict]，每个元素包含：
-    - key: 维度字段名（如 bk_target_ip）
-    - value: 维度值（如 10.0.0.1）
-    - display_key: 维度展示名（如 主机IP），告警生成阶段已填充
-    - display_value: 维度值展示文本，告警生成阶段已填充
-    
-    因此无需额外的维度名称映射表，直接使用 display_key / display_value 即可。
+    输出:
+        fill_result["dimension_summary"]: 维度统计列表
+        fill_result["alert_ids"]: 告警ID列表
+        fill_result["latest_alert_id"]: 最新告警ID
+        fill_result["earliest_alert_id"]: 最早告警ID
     """
-    # {dim_key: {"display_key": str, "values": {value: {"display_value": str, "count": int}}}}
-    dimension_map = {}
+    from collections import defaultdict
+    from bkmonitor.documents.alert import AlertDocument
     
-    for alert in alerts:
-        for dim in alert.dimensions:
-            dim_key = dim["key"]
-            dim_value = dim["value"]
+    # 查询该 Issue 关联的所有告警
+    search_object = AlertDocument.search(start_time=start_time, end_time=end_time)
+    search_object = search_object.filter("term", issue_id=issue_id)
+    search_object = search_object.source(["id", "begin_time", "dimensions"])
+    
+    # 聚合维度统计 + 收集告警ID
+    dimension_map = defaultdict(lambda: {"display_key": "", "values": defaultdict(int)})
+    alerts = []
+    
+    for hit in search_object.scan():
+        doc = hit.to_dict()
+        
+        # 收集告警 ID 和时间
+        alerts.append({
+            "id": doc.get("id"),
+            "begin_time": doc.get("begin_time"),
+        })
+        
+        # 聚合维度统计
+        dimensions = doc.get("dimensions", [])
+        for dim in dimensions:
+            dim_key = dim.get("key")
             display_key = dim.get("display_key", dim_key)
-            display_value = dim.get("display_value", dim_value)
+            display_value = dim.get("display_value", dim.get("value"))
             
             if dim_key not in dimension_map:
-                dimension_map[dim_key] = {"display_key": display_key, "values": {}}
+                dimension_map[dim_key]["display_key"] = display_key
             
-            entry = dimension_map[dim_key]["values"]
-            if dim_value not in entry:
-                entry[dim_value] = {"display_value": display_value, "count": 0}
-            entry[dim_value]["count"] += 1
+            dimension_map[dim_key]["values"][display_value] += 1
     
-    result = []
+    # 构建 dimension_summary
+    dimension_summary = []
     for dim_key, dim_info in dimension_map.items():
         value_counts = dim_info["values"]
-        # 排序并取 Top5
-        sorted_items = sorted(value_counts.items(), key=lambda x: x[1]["count"], reverse=True)
+        total = sum(value_counts.values())
+        
+        sorted_items = sorted(value_counts.items(), key=lambda x: x[1], reverse=True)
         top5 = sorted_items[:5]
         others = sorted_items[5:]
         
-        total = sum(v["count"] for v in value_counts.values())
-        items = []
-        
-        for value, info in top5:
-            items.append({
-                "value": value,
-                "count": info["count"],
-                "percentage": round(info["count"] / total * 100, 2)
-            })
+        items = [
+            {"value": value, "count": count, "percentage": round(count / total * 100, 2)}
+            for value, count in top5
+        ]
         
         if others:
-            others_count = sum(info["count"] for _, info in others)
+            others_count = sum(count for _, count in others)
             items.append({
-                "value": _("其他"),
+                "value": "其他",
                 "count": others_count,
-                "percentage": round(others_count / total * 100, 2)
+                "percentage": round(others_count / total * 100, 2),
             })
         
-        result.append({
+        dimension_summary.append({
             "dimension_key": dim_key,
             "dimension_name": dim_info["display_key"],
             "total_count": total,
-            "items": items
+            "items": items,
         })
     
-    return result
+    # 构建 alert_ids 信息
+    if alerts:
+        alerts.sort(key=lambda x: x.get("begin_time", 0))
+        alert_ids = [a["id"] for a in alerts]
+        latest_alert_id = alerts[-1]["id"]
+        earliest_alert_id = alerts[0]["id"]
+    else:
+        alert_ids = []
+        latest_alert_id = None
+        earliest_alert_id = None
+    
+    # 写入结果
+    fill_result["dimension_summary"] = dimension_summary
+    fill_result["alert_ids"] = alert_ids
+    fill_result["latest_alert_id"] = latest_alert_id
+    fill_result["earliest_alert_id"] = earliest_alert_id
 ```
 
-**前端渲染逻辑**：
-
-```
-维度统计
-├── 主机IP (共 86 次)
-│   ┌─────────────────────────────────────┐
-│   │ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 10.0.0.1 (30次, 34.88%)
-│   │ █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 10.0.0.2 (20次, 23.26%)
-│   │ ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 10.0.0.3 (15次, 17.44%)
-│   │ ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 10.0.0.4 (12次, 13.95%)
-│   │ ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 10.0.0.5 (8次, 9.30%)
-│   │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │ 其他 (1次, 1.16%)
-│   └─────────────────────────────────────┘
-```
+> **优化说明**：
+> - 维度统计和告警 ID 列表合并为一次 ES 查询，减少网络开销
+> - 使用后台线程并行执行，不阻塞趋势图查询
+> - 趋势图查询和维度统计并行进行，整体响应时间取决于较慢的那个
 
 ---
 
