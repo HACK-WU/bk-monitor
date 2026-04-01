@@ -13,12 +13,15 @@ import logging
 import time
 
 from alarm_backends.core.alert.adapter import MonitorEventAdapter
-from alarm_backends.core.cache.key import ANOMALY_LIST_KEY, ANOMALY_SIGNAL_KEY
+from alarm_backends.core.cache.key import ANOMALY_LIST_KEY, ANOMALY_SIGNAL_KEY, TRIGGER_EVENT_RATE_LIMIT_KEY
 from alarm_backends.core.control.strategy import Strategy
 from alarm_backends.core.storage.redis_cluster import get_node_by_strategy_id
 from alarm_backends.service.trigger.checker import AnomalyChecker
 from core.errors.alarm_backends import StrategyNotFound
 from core.prometheus import metrics
+
+# 每个（策略, 数据时间戳）计数器的最大 event 数，超过则丢弃
+TRIGGER_EVENT_RATE_LIMIT_THRESHOLD = 5000
 
 logger = logging.getLogger("trigger")
 
@@ -130,75 +133,144 @@ class TriggerProcessor:
                 f"[pull anomaly record] strategy({self.strategy_id}), item({self.item_id}) pull {len(self.anomaly_points)} record"
             )
 
+    def _filter_by_rate_limit(self, event_records):
+        """
+        按（strategy_id, item_id, 数据时间戳）对本批 event_records 进行限流判定。
+
+        key 含 item_id，与 trigger 执行锁粒度一致，保证同一 key 不存在并发写入。
+
+        算法：
+        1. 内存中按 source_time 分组，统计各时间戳的请求数。
+        2. pipeline MGET 一次取各计数器的 Redis 已有值。
+        3. 逐条判定：redis_count + 本批已通过数 >= 阈值时拒绝本条（fail-open 无时间戳）。
+
+        注意：INCRBY 不在本方法内执行，由调用方在 Kafka 发送成功后统一提交，
+              避免「先记账后投递」导致 Kafka 失败时额度被静默消耗。
+
+        返回：(allowed_records, batch_counts, ts_keys, drop_counts)
+          - allowed_records : 允许下发的记录列表
+          - batch_counts    : {source_time: 本批通过数}，供发送后 INCRBY 使用
+          - ts_keys         : {source_time: redis_key}
+          - drop_counts     : {source_time: 丢弃数}，用于上报指标
+        """
+        client = TRIGGER_EVENT_RATE_LIMIT_KEY.client
+        threshold = TRIGGER_EVENT_RATE_LIMIT_THRESHOLD
+
+        # step1: 收集本批各时间戳的 Redis key
+        ts_keys = {}  # source_time -> redis key
+        for record in event_records:
+            source_time = record["event_record"].get("data", {}).get("time")
+            if source_time is None:
+                continue
+            source_time = int(source_time)
+            if source_time not in ts_keys:
+                ts_keys[source_time] = TRIGGER_EVENT_RATE_LIMIT_KEY.get_key(
+                    strategy_id=self.strategy_id, item_id=self.item_id, source_time=source_time
+                )
+
+        if not ts_keys:
+            return event_records, {}, {}, {}
+
+        # step2: pipeline MGET 取 Redis 已有计数
+        ordered_ts = list(ts_keys.keys())
+        pipe = client.pipeline(transaction=False)
+        for ts in ordered_ts:
+            pipe.get(ts_keys[ts])
+        try:
+            redis_results = pipe.execute()
+        except Exception as e:
+            logger.warning("[trigger rate limit] redis MGET failed, fail-open. reason: %s", e)
+            return event_records, {}, {}, {}
+
+        redis_counts = {ts: int(val) if val is not None else 0 for ts, val in zip(ordered_ts, redis_results)}
+
+        # step3: 内存逐条判定（不写 Redis）
+        allowed_records = []
+        batch_counts = {ts: 0 for ts in ordered_ts}
+        drop_counts = {}
+
+        for record in event_records:
+            event_record = record["event_record"]
+            event_data = event_record.get("data", {})
+            source_time = event_data.get("time")
+            if source_time is None:
+                allowed_records.append(record)
+                continue
+            source_time = int(source_time)
+            already = redis_counts[source_time] + batch_counts[source_time]
+            if already >= threshold:
+                drop_counts[source_time] = drop_counts.get(source_time, 0) + 1
+                logger.warning(
+                    "[trigger rate limit] drop event: strategy(%s) item(%s) source_time(%s) "
+                    "record_id(%s) dimensions(%s) count(%s) threshold(%s)",
+                    self.strategy_id,
+                    self.item_id,
+                    source_time,
+                    event_data.get("record_id"),
+                    event_data.get("dimensions"),
+                    already + 1,
+                    threshold,
+                )
+            else:
+                batch_counts[source_time] += 1
+                allowed_records.append(record)
+
+        return allowed_records, batch_counts, ts_keys, drop_counts
+
+    def _commit_rate_limit_counts(self, batch_counts, ts_keys):
+        """Kafka 发送成功后，将本批通过数写入 Redis 计数器（每个 ts 至多一次 INCRBY）。"""
+        if not any(cnt > 0 for cnt in batch_counts.values()):
+            return
+        client = TRIGGER_EVENT_RATE_LIMIT_KEY.client
+        pipe = client.pipeline(transaction=False)
+        for ts, cnt in batch_counts.items():
+            if cnt > 0:
+                pipe.incrby(ts_keys[ts], cnt)
+                pipe.expire(ts_keys[ts], TRIGGER_EVENT_RATE_LIMIT_KEY.ttl)
+        try:
+            pipe.execute()
+        except Exception as e:
+            logger.warning("[trigger rate limit] redis INCRBY failed. reason: %s", e)
+
     def push_event_to_kafka(self, event_records):
-        """
-        将触发的告警事件推送到Kafka消息队列
+        try:
+            cache_node = get_node_by_strategy_id(self.strategy_id)
+            redis_node = cache_node.node_alias or f"{cache_node.host}:{cache_node.port}"
+        except Exception:
+            redis_node = "unknown"
 
-        参数:
-            event_records: list[dict], 事件记录列表，每个元素结构如下:
-                {
-                    "event_record": {
-                        "data": {"detect_time": 1234567890, ...},  # 检测数据
-                        "strategy_snapshot_key": "snapshot_xxx",   # 策略快照Key
-                        ...
-                    }
-                }
+        # step1: 限流判定（只读 Redis，不写）
+        allowed_records, batch_counts, ts_keys, drop_counts = self._filter_by_rate_limit(event_records)
+        total_drop = sum(drop_counts.values())
+        if total_drop > 0:
+            metrics.TRIGGER_EVENT_RATE_LIMIT_DROP.labels(
+                module="trigger",
+                strategy_id=self.strategy_id,
+                bk_biz_id=self.strategy.bk_biz_id,
+                strategy_name=self.strategy.name,
+                redis_node=redis_node,
+            ).inc(total_drop)
 
-        执行步骤:
-            1. 遍历事件记录，计算处理延迟并转换为标准事件格式
-            2. 记录处理延迟指标，延迟超过60秒记录告警日志
-            3. 批量推送事件到Kafka
-            4. 事件数超过1000时记录溢出指标
-
-        数据流线图:
-            ┌─────────────────────────────────────────────────────────────────────┐
-            │  Step 1: 遍历事件记录，计算延迟并适配格式                              │
-            │  - 计算 latency = current_time - detect_time                        │
-            │  - 使用 MonitorEventAdapter 转换为标准事件格式                        │
-            │  - 追踪批次内最大延迟 (max_latency)                                   │
-            └─────────────────────────────────────────────────────────────────────┘
-                                            │
-                                            ▼
-            ┌─────────────────────────────────────────────────────────────────────┐
-            │  Step 2: 记录处理延迟指标                                            │
-            │  - 始终记录 TRIGGER_PROCESS_LATENCY 指标                             │
-            │  - max_latency > 60s 时:                                            │
-            │    ├── 记录 warning 日志                                            │
-            │    └── 记录 PROCESS_BIG_LATENCY 指标（含业务和策略标签）               │
-            └─────────────────────────────────────────────────────────────────────┘
-                                            │
-                                            ▼
-            ┌─────────────────────────────────────────────────────────────────────┐
-            │  Step 3: 批量推送到Kafka                                             │
-            │  MonitorEventAdapter.push_to_kafka(events)                          │
-            └─────────────────────────────────────────────────────────────────────┘
-                                            │
-                                            ▼
-            ┌─────────────────────────────────────────────────────────────────────┐
-            │  Step 4: 溢出监控                                                    │
-            │  - 事件数 > 1000 时记录 PROCESS_OVER_FLOW 指标                        │
-            │  - 用于监控单批次事件量异常情况                                        │
-            └─────────────────────────────────────────────────────────────────────┘
-        """
+        # step2: 构建 Kafka 消息
         events = []
         current_time = time.time()
         max_latency = 0
 
         # Step 1: 遍历事件记录，计算延迟并转换为标准事件格式
-        for record in event_records:
+        for record in allowed_records:
             event_record = record["event_record"]
             detect_time = event_record.get("data", {}).get("detect_time")
 
             # 计算从检测到触发的处理延迟，追踪批次内最大延迟
             if detect_time:
-                latency = current_time - event_record["data"]["detect_time"]
+                latency = current_time - detect_time
                 if latency > max_latency:
                     max_latency = latency
 
             # 使用适配器将事件记录转换为Kafka消息格式
             adapter = MonitorEventAdapter(
-                record=record["event_record"],
-                strategy=self.get_strategy_snapshot(record["event_record"]["strategy_snapshot_key"]),
+                record=event_record,
+                strategy=self.get_strategy_snapshot(event_record["strategy_snapshot_key"]),
             )
             events.append(adapter.adapt())
 
@@ -219,8 +291,9 @@ class TriggerProcessor:
                 strategy_name=self.strategy.name,
             ).observe(max_latency)
 
-        # Step 3: 批量推送事件到Kafka，供下游消费处理
+        # step3: 发送到 Kafka；成功后再提交计数，避免失败时额度被静默消耗
         MonitorEventAdapter.push_to_kafka(events=events)
+        self._commit_rate_limit_counts(batch_counts, ts_keys)
 
         # Step 4: 单批次事件量超过1000，记录溢出指标（用于容量预警）
         if len(events) > 1000:
