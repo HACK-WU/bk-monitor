@@ -26,12 +26,33 @@
 import { Component, Emit, Prop, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
+import CommonItem from '../components/common-form-item';
 import AlarmHandling, { type IValue as IAlarmItem, type IAllDefense } from './alarm-handling';
+import IssueAgg from './issue-agg';
 import SimpleSelect from './simple-select';
 
 import type { IGroupItem } from '../components/group-select';
+import type { MetricDetail } from '../typings/index';
 
 import './alarm-handling-list.scss';
+
+const actionType = {
+  action: 'action',
+  issueAgg: 'issue-agg',
+} as const;
+
+type ActionTypeEnum = (typeof actionType)[keyof typeof actionType];
+const actionTypeList = [
+  {
+    id: actionType.action,
+    name: window.i18n.tc('处理套餐'),
+  },
+
+  {
+    id: actionType.issueAgg,
+    name: window.i18n.tc('Issue聚合'),
+  },
+];
 
 interface IEvents {
   onAddMeal?: number;
@@ -42,6 +63,7 @@ interface IProps {
   allAction?: IGroupItem[]; // 套餐列表
   allDefense?: IAllDefense[]; // 防御动作列表
   isSimple?: boolean; // 简易模式（无预览, 无回填）
+  metricData?: MetricDetail[];
   readonly?: boolean;
   strategyId?: number | string;
   value?: IAlarmItem[];
@@ -71,11 +93,19 @@ export default class AlarmHandlingList extends tsc<IProps, IEvents> {
   @Prop({ type: Boolean, default: false }) readonly: boolean;
   @Prop({ default: '', type: [Number, String] }) strategyId: number;
   @Prop({ default: false, type: Boolean }) isSimple: boolean;
+  @Prop({ type: Array, default: () => [] }) metricData: MetricDetail[];
 
   data: IAlarmItem[] = [];
   addValue = [];
+  /** 当前选中的tab: action(处理套餐) | issueAgg(Issue聚合) */
+  activeTab: ActionTypeEnum = actionType.action;
 
   errMsg = '';
+
+  /** 切换tab */
+  handleTabChange(tab: ActionTypeEnum) {
+    this.activeTab = tab;
+  }
 
   @Watch('value', { immediate: true, deep: true })
   handleValue(v) {
@@ -216,18 +246,43 @@ export default class AlarmHandlingList extends tsc<IProps, IEvents> {
                   <span class='icon-monitor icon-arrow-down' />
                 </span>
               </SimpleSelect>
-              <AlarmHandling
-                extCls={'alarm-handling-item'}
-                allAction={this.allAction}
-                allDefense={this.allDefense}
-                isSimple={this.isSimple}
-                list={signalOptions}
-                readonly={this.readonly}
-                strategyId={this.strategyId}
-                value={item}
-                onAddMeal={() => this.handleAddMeal(index)}
-                onChange={v => this.handleAlarmChange(v, index)}
-              />
+              <CommonItem
+                class='action-tab-form-item'
+                title={this.$t('动作')}
+              >
+                <div class='bk-button-group'>
+                  {actionTypeList.map(action => (
+                    <bk-button
+                      key={action.id}
+                      class={this.activeTab === action.id ? 'is-selected' : ''}
+                      size='small'
+                      onClick={() => this.handleTabChange(action.id)}
+                    >
+                      {action.name}
+                    </bk-button>
+                  ))}
+                </div>
+              </CommonItem>
+              {this.activeTab === actionType.action ? (
+                <AlarmHandling
+                  extCls={'alarm-handling-item'}
+                  allAction={this.allAction}
+                  allDefense={this.allDefense}
+                  isSimple={this.isSimple}
+                  list={signalOptions}
+                  readonly={this.readonly}
+                  strategyId={this.strategyId}
+                  value={item}
+                  onAddMeal={() => this.handleAddMeal(index)}
+                  onChange={v => this.handleAlarmChange(v, index)}
+                />
+              ) : (
+                <IssueAgg
+                  class='alarm-handling-item'
+                  metricData={this.metricData}
+                  readonly={this.readonly}
+                />
+              )}
             </div>
           ))}
         </div>

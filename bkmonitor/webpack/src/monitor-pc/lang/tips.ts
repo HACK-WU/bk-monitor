@@ -447,4 +447,19 @@ export default {
   自动匹配规则: 'Automatic matching rules',
   当前业务时区: 'Current business time zone',
   '输入 $ 可以插入变量': 'Input $ to insert variables',
+
+  // ISSUES
+  新问题: 'New Issue',
+  回归问题: 'Regression Issue',
+  新: 'New',
+  回归: 'Regression',
+  待审核: 'Pending Review',
+  归档: 'Archived',
+  '确认批量标记为"已解决"？': 'Confirm batch marking as "Resolved"?',
+  '确认标记为“已解决”？': 'Confirm marking as "Resolved"?',
+  '确认重新打开？': 'Confirm reopening?',
+  '确认归档？': 'Confirm archiving?',
+  '确认恢复？': 'Confirm restoring?',
+  指派责任人成功: 'Assign responsible person successfully',
+  添加跟进信息成功: 'Add follow-up information successfully',
 };

@@ -45,8 +45,12 @@ import {
 import './ui-selector.scss';
 
 interface IProps {
+  addBtnAlign?: 'left' | 'right';
   clearKey?: string;
   fields: IFilterField[];
+  hasConditionChange?: boolean;
+  hasInput?: boolean;
+  kvTagHasHideBtn?: boolean;
   value?: IFilterItem[];
   getValueFn?: (params: IGetValueFnParams) => Promise<IWhereValueOptionsItem>;
   onChange?: (v: IFilterItem[]) => void;
@@ -66,6 +70,10 @@ export default class UiSelector extends tsc<IProps> {
   getValueFn: (params: IGetValueFnParams) => Promise<IWhereValueOptionsItem>;
   @Prop({ type: Array, default: () => [] }) value: IFilterItem[];
   @Prop({ type: String, default: '' }) clearKey: string;
+  @Prop({ type: Boolean, default: true }) hasInput: boolean;
+  @Prop({ type: String, default: 'left' }) addBtnAlign: 'left' | 'right';
+  @Prop({ type: Boolean, default: false }) hasConditionChange: boolean;
+  @Prop({ type: Boolean, default: true }) kvTagHasHideBtn: boolean;
   @Ref('selector') selectorRef: HTMLDivElement;
 
   /* 是否显示弹出层 */
@@ -263,6 +271,9 @@ export default class UiSelector extends tsc<IProps> {
    * @description 点击组件
    */
   handleClickComponent(event?: MouseEvent) {
+    if (!this.hasInput) {
+      return;
+    }
     event?.stopPropagation();
     this.updateActive = -1;
     // this.showInput = true;
@@ -323,12 +334,25 @@ export default class UiSelector extends tsc<IProps> {
     }
   }
 
+  handleConditionChange(index: number) {
+    const curCondition = this.localValue[index].condition.id;
+    let condition = ECondition.and;
+    if (curCondition === ECondition.and) {
+      condition = ECondition.or;
+    }
+    this.localValue.splice(index, 1, {
+      ...this.localValue[index],
+      condition: { id: condition, name: condition.toUpperCase() },
+    });
+    this.handleChange();
+  }
   render() {
-    return (
-      <div
-        class='retrieval-filter__ui-selector-component'
-        onClick={this.handleClickComponent}
-      >
+    const addBtnRender = () => {
+      return this.$scopedSlots?.addBtn ? (
+        this.$scopedSlots?.addBtn(e => {
+          this.handleAdd(e);
+        })
+      ) : (
         <div
           class='add-btn'
           onClick={this.handleAdd}
@@ -336,25 +360,46 @@ export default class UiSelector extends tsc<IProps> {
           <span class='icon-monitor icon-mc-add' />
           <span class='add-text'>{this.$t('添加条件')}</span>
         </div>
-        {this.localValue.map((item, index) => (
+      );
+    };
+    return (
+      <div
+        class='retrieval-filter__ui-selector-component'
+        onClick={this.handleClickComponent}
+      >
+        {this.addBtnAlign === 'left' ? addBtnRender() : undefined}
+        {this.localValue.map((item, index) => [
+          this.hasConditionChange && index > 0 ? (
+            <div
+              key={`${index}_condition`}
+              class='condition-item'
+              onClick={() => this.handleConditionChange(index)}
+            >
+              <span>{item.condition.name}</span>
+            </div>
+          ) : undefined,
           <KvTag
             key={`${index}_kv`}
+            hasHideBtn={this.kvTagHasHideBtn}
             value={item}
             onDelete={() => this.handleDeleteTag(index)}
             onHide={() => this.handleHideTag(index)}
             onUpdate={event => this.handleUpdateTag(event, index)}
-          />
-        ))}
+          />,
+        ])}
+        {this.addBtnAlign === 'right' ? addBtnRender() : undefined}
         <div class={['kv-placeholder', { 'is-en': isEn }]}>
-          <AutoWidthInput
-            height={40}
-            isFocus={this.inputFocus}
-            placeholder={`${this.$t('快捷键 / ，请输入...')}`}
-            value={this.inputValue}
-            onBlur={this.handleBlur}
-            onEnter={this.handleEnter}
-            onInput={this.handleInput}
-          />
+          {this.hasInput && (
+            <AutoWidthInput
+              height={40}
+              isFocus={this.inputFocus}
+              placeholder={`${this.$t('快捷键 / ，请输入...')}`}
+              value={this.inputValue}
+              onBlur={this.handleBlur}
+              onEnter={this.handleEnter}
+              onInput={this.handleInput}
+            />
+          )}
           {/* <div class='kv-placeholder'>
           {this.showInput ? (
             <AutoWidthInput

@@ -40,6 +40,7 @@ import FavoriteBox, {
   type IFavoriteGroup,
   EditFavorite,
 } from 'trace/pages/trace-explore/components/favorite-box';
+import VueJsonPretty from 'vue-json-pretty';
 import { useRoute, useRouter } from 'vue-router';
 
 import { EFieldType, EMode } from '../../components/retrieval-filter/typing';
@@ -82,13 +83,25 @@ import dayjs from 'dayjs';
 import { handleTransformToTimestamp } from 'trace/components/time-range/utils';
 import { useI18n } from 'vue-i18n';
 
+import { useIssuesImpactScopeDrawer } from './alarm-issues/components/issues-impact-scope-drawer/hooks/use-issues-impact-scope-drawer';
+import IssuesImpactScopeDrawer from './alarm-issues/components/issues-impact-scope-drawer/issues-impact-scope-drawer';
+import { useIssuesDialogs } from './alarm-issues/components/issues-operation-dialogs/hooks/use-issues-dialogs';
+import IssuesOperationDialogs from './alarm-issues/components/issues-operation-dialogs/issues-operation-dialogs';
+import { IssuesBatchActionEnum } from './alarm-issues/constant';
+import IssuesDetailSideSlider from './alarm-issues/issues-detail/issues-detail-sideslider';
+import IssuesTable from './alarm-issues/issues-table/issues-table';
+import IssuesToolbar from './alarm-issues/issues-toolbar/issues-toolbar';
+import { showOperationResult, updateIssuesPriority } from './alarm-issues/services/issues-operations';
 import { saveAlertContentName } from './services/alert-services';
 import EmptyStatus from '@/components/empty-status/empty-status';
 
+import type { IssueItem, IssuePriorityType } from './alarm-issues/typing';
 import type { AlertSavePromiseEvent } from './components/alarm-table/components/alert-content-detail/alert-content-detail';
 
 import './alarm-center.scss';
 
+/** 表格固定配置项(表头吸顶、横向滚动条吸底) */
+const tableAffixed = { container: `.${CONTENT_SCROLL_ELEMENT_CLASS_NAME}` };
 export default defineComponent({
   name: 'AlarmCenter',
   setup() {
@@ -110,7 +123,15 @@ export default defineComponent({
       updateQuickFilterValue,
       handleQuickFilteringOperation,
     } = useQuickFilter();
+
     const { data, loading, total, page, pageSize, ordering } = useAlarmTable();
+
+    /** 表格分页配置 */
+    const pagination = computed(() => ({
+      currentPage: page.value,
+      pageSize: pageSize.value,
+      total: total.value,
+    }));
     const {
       tableColumns: tableSourceColumns,
       storageColumns,
@@ -127,7 +148,43 @@ export default defineComponent({
       handleAlertDialogShow,
       handleAlertDialogHide,
       handleAlertDialogConfirm,
-    } = useAlertDialogs(data as unknown as ShallowRef<AlertTableItem[]>);
+    } = useAlertDialogs(data as ShallowRef<AlertTableItem[]>);
+
+    const {
+      issuesDialogShow,
+      issuesDialogType,
+      issuesDialogData,
+      issuesDialogParam,
+      handleIssuesDialogShow,
+      handleIssuesDialogHide,
+      handleIssuesDialogSuccess,
+    } = useIssuesDialogs(data as ShallowRef<IssueItem[]>);
+
+    /**
+     * @description 直接调用优先级变更接口，无需打开弹窗，成功后原地更新对应 Issue 行数据
+     * @param {string} id - Issue ID
+     * @param {IssuePriorityType} priority - 目标优先级（P0 / P1 / P2）
+     * @returns {void}
+     */
+    const handleIssuesPriorityChange = async (id: string, priority: IssuePriorityType) => {
+      const issuesData = data.value as IssueItem[];
+      const targetRow = issuesData.find(item => item.id === id);
+      if (!targetRow) return;
+
+      const res = await updateIssuesPriority({
+        issues: [{ bk_biz_id: targetRow.bk_biz_id, issue_id: id }],
+        priority,
+      });
+
+      showOperationResult(res, t('修改成功'));
+
+      // 接口成功，原地更新行数据
+      const item = res.succeeded?.[0];
+      if (item) {
+        targetRow.priority = item.priority;
+        targetRow.update_time = item.update_time;
+      }
+    };
 
     const favoriteBox = useTemplateRef<ComponentPublicInstance<typeof FavoriteBox>>('favoriteBox');
     const allFavoriteList = computed(() => {
@@ -174,12 +231,12 @@ export default defineComponent({
     const showResidentBtn = shallowRef(false);
 
     const isCollapsed = shallowRef(false);
-    const alarmId = shallowRef<string>('');
+    const detailId = shallowRef<string>('');
     const alarmDetailShow = shallowRef(false);
     /** table 选中的 rowKey 数组 */
     const selectedRowKeys = shallowRef<string[]>([]);
     const defaultActiveRowKeys = computed(() => {
-      return alarmId.value ? [alarmId.value] : [];
+      return detailId.value ? [detailId.value] : [];
     });
     /* 是否是所选中告警记录行的关注人 */
     const isSelectedFollower = shallowRef(false);
@@ -188,6 +245,15 @@ export default defineComponent({
     const isShowFavorite = shallowRef(false);
     const editFavoriteData = shallowRef<IFavoriteGroup['favorites'][number]>(null);
     const editFavoriteShow = shallowRef(false);
+
+    /** issue 第一个告警时间（用于确认告警详情默认时间范围） */
+    const issueFirstAlarmTime = shallowRef<number | string>('');
+    /** issue bizId */
+    const issueBizId = shallowRef<number>(null);
+
+    const { impactScopeDrawerShow, impactScopeResourceKey, impactScopeResource, handleImpactScopeClick } =
+      useIssuesImpactScopeDrawer();
+
     /**
      * @description 检索栏字段列表
      */
@@ -237,6 +303,12 @@ export default defineComponent({
       }
     );
 
+    /** 告警类型切换 */
+    const handleAlarmTypeChange = (value: AlarmType) => {
+      alarmStore.handleAlarmTypeChange(value);
+      isFirstInit.value = true;
+    };
+
     const updateIsCollapsed = (v: boolean) => {
       isCollapsed.value = v;
     };
@@ -250,6 +322,7 @@ export default defineComponent({
     };
     /** 告警分析添加条件 */
     const handleAddCondition = (condition: CommonCondition) => {
+      handleCurrentPageChange(1);
       if (alarmStore.filterMode === EMode.ui) {
         let conditionResult: CommonCondition[] = [condition];
         // 持续时间需要特殊处理
@@ -305,9 +378,22 @@ export default defineComponent({
 
     /** URL参数 */
     const urlParams = computed<AlarmUrlParams>(() => {
+      let detailUrlParams = {};
+
+      if (alarmDetailShow.value) {
+        detailUrlParams = {
+          detailId: detailId.value,
+          showDetail: JSON.stringify(alarmDetailShow.value),
+          /** issue 首次告警时间 */
+          issueFirstAlarmTime: String(issueFirstAlarmTime.value),
+          /** issue bizId*/
+          issueBizId: issueBizId.value,
+        };
+      }
+
       return {
-        from: alarmStore.timeRange[0],
-        to: alarmStore.timeRange[1],
+        from: String(alarmStore.timeRange[0]),
+        to: String(alarmStore.timeRange[1]),
         timezone: alarmStore.timezone,
         refreshInterval: String(alarmStore.refreshInterval),
         queryString: alarmStore.queryString,
@@ -318,12 +404,11 @@ export default defineComponent({
         lastQuickFilterCategoryData: JSON.stringify(alarmStore.lastQuickFilterOperationCategoryData),
         filterMode: alarmStore.filterMode,
         alarmType: alarmStore.alarmType,
-        alarmId: alarmId.value,
         bizIds: JSON.stringify(alarmStore.bizIds),
         currentPage: page.value,
         sortOrder: ordering.value,
-        showDetail: JSON.stringify(alarmDetailShow.value),
         showResidentBtn: String(showResidentBtn.value),
+        ...detailUrlParams,
       };
     });
 
@@ -367,11 +452,14 @@ export default defineComponent({
         sortOrder,
         currentPage,
         showDetail,
-        alarmId: alarmIdParams,
+        detailId: queryDetailId,
         favorite_id: favoriteId,
         showResidentBtn: queryShowResidentBtn,
         /** 最后一次操作的快速过滤条件分类数据 */
         lastQuickFilterCategoryData,
+        /** issue 相关参数 */
+        issueFirstAlarmTime: queryIssueFirstAlarmTime,
+        issueBizId: queryIssueBizId,
         /** 以下是兼容事件中心的URL参数 */
         searchType,
         condition,
@@ -419,7 +507,9 @@ export default defineComponent({
         }
         isShowFavorite.value = JSON.parse(localStorage.getItem(ALARM_CENTER_SHOW_FAVORITE) || 'false');
         alarmDetailShow.value = JSON.parse((showDetail as string) || 'false');
-        alarmId.value = (alarmIdParams as string) || '';
+        detailId.value = (queryDetailId as string) || '';
+        issueFirstAlarmTime.value = queryIssueFirstAlarmTime as string;
+        issueBizId.value = queryIssueBizId ? Number(queryIssueBizId) : null;
         alarmStore.initAlarmService();
       } catch (error) {
         console.log('route query:', error);
@@ -431,20 +521,31 @@ export default defineComponent({
      */
     function handleShowAlertDetail(id: string, defaultTab?: string) {
       alarmDetailDefaultTab.value = defaultTab || '';
-      alarmId.value = id;
+      detailId.value = id;
       handleDetailShowChange(true);
     }
 
     /**  展示处理记录详情  */
     function handleShowActionDetail(id: string) {
-      alarmId.value = id;
+      detailId.value = id;
       handleDetailShowChange(true);
     }
+
+    /**
+     * @description 展示 Issue 详情
+     * @param {string} _id - Issue ID
+     */
+    const handleIssuesShowDetail = (item: IssueItem) => {
+      detailId.value = item.id;
+      issueFirstAlarmTime.value = item.first_alert_time;
+      issueBizId.value = item.bk_biz_id;
+      handleDetailShowChange(true);
+    };
 
     function handleDetailShowChange(show: boolean) {
       alarmDetailShow.value = show;
       if (!show) {
-        alarmId.value = '';
+        detailId.value = '';
         alarmDetailDefaultTab.value = '';
       }
     }
@@ -485,16 +586,36 @@ export default defineComponent({
 
     /** 上一个详情 */
     const handlePreviousDetail = () => {
-      let index = data.value.findIndex(item => item.id === alarmId.value);
+      let index = data.value.findIndex(item => item.id === detailId.value);
       index = index === -1 ? 0 : index;
-      alarmId.value = (data.value as AlertTableItem[])[index === 0 ? data.value.length - 1 : index - 1].id;
+      detailId.value = (data.value as AlertTableItem[])[index === 0 ? data.value.length - 1 : index - 1].id;
     };
 
     /** 下一个详情 */
     const handleNextDetail = () => {
-      let index = data.value.findIndex(item => item.id === alarmId.value);
+      let index = data.value.findIndex(item => item.id === detailId.value);
       index = index === -1 ? 0 : index;
-      alarmId.value = (data.value as AlertTableItem[])[index === data.value.length - 1 ? 0 : index + 1].id;
+      detailId.value = (data.value as AlertTableItem[])[index === data.value.length - 1 ? 0 : index + 1].id;
+    };
+
+    /** issues 上一个详情*/
+    const handleIssuePreviousDetail = () => {
+      let index = data.value.findIndex(item => item.id === detailId.value);
+      index = index === -1 ? 0 : index;
+      const target = (data.value as IssueItem[])[index === 0 ? data.value.length - 1 : index - 1];
+      issueFirstAlarmTime.value = target.first_alert_time;
+      issueBizId.value = target.bk_biz_id;
+      detailId.value = target.id;
+    };
+
+    /** issues 下一个详情 */
+    const handleIssueNextDetail = () => {
+      let index = data.value.findIndex(item => item.id === detailId.value);
+      index = index === -1 ? 0 : index;
+      const target = (data.value as IssueItem[])[index === data.value.length - 1 ? 0 : index + 1];
+      issueFirstAlarmTime.value = target.first_alert_time;
+      issueBizId.value = target.bk_biz_id;
+      detailId.value = target.id;
     };
 
     /**
@@ -648,6 +769,7 @@ export default defineComponent({
         handleSelectedRowKeysChange();
       }
     );
+
     onBeforeMount(() => {
       getUrlParams();
       setUrlParams();
@@ -659,6 +781,7 @@ export default defineComponent({
       quickFilterLoading,
       quickFilterEmptyStatusType,
       isCollapsed,
+      pagination,
       data,
       loading,
       total,
@@ -676,7 +799,7 @@ export default defineComponent({
       appStore,
       retrievalFilterFields,
       residentSettingOnlyId,
-      alarmId,
+      detailId,
       alarmDetailShow,
       alertDialogShow,
       alertDialogType,
@@ -692,6 +815,12 @@ export default defineComponent({
       defaultFavoriteId,
       alarmDetailDefaultTab,
       showResidentBtn,
+      issueBizId,
+      issueFirstAlarmTime,
+      impactScopeDrawerShow,
+      impactScopeResourceKey,
+      impactScopeResource,
+      handleImpactScopeClick,
       setUrlParams,
       handleSelectedRowKeysChange,
       handleAlertDialogShow,
@@ -717,6 +846,7 @@ export default defineComponent({
       handleDetailShowChange,
       handlePreviousDetail,
       handleNextDetail,
+      handleAlarmTypeChange,
       handleFavoriteShowChange,
       handleFavoriteSave,
       handleEditFavoriteShow,
@@ -725,9 +855,40 @@ export default defineComponent({
       handleSaveAlertContentName,
       handleShowResidentBtnChange,
       handleQuickFilteringOperation,
+      handleIssuesDialogShow,
+      handleIssuesDialogHide,
+      handleIssuesDialogSuccess,
+      issuesDialogShow,
+      issuesDialogType,
+      issuesDialogData,
+      issuesDialogParam,
+      handleIssuesShowDetail,
+      handleIssuesPriorityChange,
+      handleIssuePreviousDetail,
+      handleIssueNextDetail,
     };
   },
   render() {
+    const renderFavoriteQuery = (favoriteType: string) => {
+      return favoriteType === `alarm_${AlarmType.ISSUES}`
+        ? params => {
+            const queryParams = params?.config?.queryParams || {};
+            const filterMode = params?.config?.componentData?.filterMode || EMode.ui;
+            if (filterMode === EMode.queryString || queryParams?.query_string) {
+              return <span>{queryParams.query_string}</span>;
+            }
+            if (filterMode === EMode.ui || queryParams?.conditions?.length) {
+              return (
+                <VueJsonPretty
+                  data={queryParams}
+                  deep={5}
+                />
+              );
+            }
+            return '*';
+          }
+        : undefined;
+    };
     return (
       <div class='alarm-center-page'>
         <div
@@ -742,12 +903,17 @@ export default defineComponent({
             onChange={this.handleFavoriteChange}
             onClose={() => this.handleFavoriteShowChange(false)}
             onOpenBlank={this.handleFavoriteOpenBlank}
-          />
+          >
+            {{
+              renderFavoriteQuery: renderFavoriteQuery(this.favoriteType),
+            }}
+          </FavoriteBox>
         </div>
         <div class='alarm-center'>
           <AlarmCenterHeader
             class='alarm-center-header'
             isShowFavorite={this.isShowFavorite}
+            onAlarmTypeChange={this.handleAlarmTypeChange}
             onFavoriteShowChange={this.handleFavoriteShowChange}
           />
           <AlarmRetrievalFilter
@@ -807,46 +973,81 @@ export default defineComponent({
                 default: () => {
                   return (
                     <div class={CONTENT_SCROLL_ELEMENT_CLASS_NAME}>
-                      <div class='chart-trend'>
-                        <AlarmTrendChart total={this.total} />
-                      </div>
-                      {this.alarmStore.alarmType !== AlarmType.INCIDENT && (
+                      {this.alarmStore.alarmType !== AlarmType.ISSUES && (
+                        <div class='chart-trend'>
+                          <AlarmTrendChart total={this.total} />
+                        </div>
+                      )}
+                      {![AlarmType.INCIDENT, AlarmType.ISSUES].includes(this.alarmStore.alarmType) && (
                         <div class='alarm-analysis'>
                           <AlarmAnalysis onConditionChange={this.handleAddCondition} />
                         </div>
                       )}
                       <div class='alarm-center-table'>
-                        <AlarmTable
-                          pagination={{
-                            currentPage: this.page,
-                            pageSize: this.pageSize,
-                            total: this.total,
-                          }}
-                          tableSettings={{
-                            checked: this.storageColumns,
-                            fields: this.allTableFields,
-                            disabled: this.lockedTableFields,
-                          }}
-                          columns={this.tableSourceColumns}
-                          data={this.data}
-                          defaultActiveRowKeys={this.defaultActiveRowKeys}
-                          isSelectedFollower={this.isSelectedFollower}
-                          loading={this.loading}
-                          selectedRowKeys={this.selectedRowKeys}
-                          sort={this.ordering}
-                          timeRange={this.alarmStore.timeRange}
-                          onCurrentPageChange={this.handleCurrentPageChange}
-                          onDisplayColFieldsChange={displayColFields => {
-                            this.storageColumns = displayColFields;
-                          }}
-                          onOpenAlertDialog={this.handleAlertDialogShow}
-                          onPageSizeChange={this.handlePageSizeChange}
-                          onSaveAlertContentName={this.handleSaveAlertContentName}
-                          onSelectionChange={this.handleSelectedRowKeysChange}
-                          onShowActionDetail={this.handleShowActionDetail}
-                          onShowAlertDetail={this.handleShowAlertDetail}
-                          onSortChange={sort => this.handleSortChange(sort as string)}
-                        />
+                        {this.alarmStore.alarmType === AlarmType.ISSUES ? (
+                          <IssuesToolbar
+                            batchAction={action => this.handleIssuesDialogShow(action, this.selectedRowKeys)}
+                            issuesIds={this.selectedRowKeys}
+                          >
+                            <IssuesTable
+                              columns={this.tableSourceColumns}
+                              data={this.data as IssueItem[]}
+                              headerAffixedTop={tableAffixed}
+                              horizontalScrollAffixedBottom={tableAffixed}
+                              loading={this.loading}
+                              pagination={this.pagination}
+                              scrollContainerSelector={`.${CONTENT_SCROLL_ELEMENT_CLASS_NAME}`}
+                              selectedRowKeys={this.selectedRowKeys}
+                              sort={this.ordering}
+                              onAssignClick={(id, data) =>
+                                this.handleIssuesDialogShow(IssuesBatchActionEnum.ASSIGN, id, data)
+                              }
+                              onCurrentPageChange={this.handleCurrentPageChange}
+                              onImpactScopeClick={this.handleImpactScopeClick}
+                              onMarkResolved={(id: string) =>
+                                this.handleIssuesDialogShow(IssuesBatchActionEnum.RESOLVE, id)
+                              }
+                              onPageSizeChange={this.handlePageSizeChange}
+                              onPriorityChange={(id: string, priority: IssuePriorityType) =>
+                                this.handleIssuesPriorityChange(id, priority)
+                              }
+                              onSelectionChange={this.handleSelectedRowKeysChange}
+                              onShowDetail={this.handleIssuesShowDetail}
+                              onSortChange={sort => this.handleSortChange(sort as string)}
+                            />
+                          </IssuesToolbar>
+                        ) : (
+                          <AlarmTable
+                            tableSettings={{
+                              checked: this.storageColumns,
+                              fields: this.allTableFields,
+                              disabled: this.lockedTableFields,
+                            }}
+                            columns={this.tableSourceColumns}
+                            data={this.data}
+                            defaultActiveRowKeys={this.defaultActiveRowKeys}
+                            headerAffixedTop={tableAffixed}
+                            horizontalScrollAffixedBottom={tableAffixed}
+                            isSelectedFollower={this.isSelectedFollower}
+                            loading={this.loading}
+                            pagination={this.pagination}
+                            scrollContainerSelector={`.${CONTENT_SCROLL_ELEMENT_CLASS_NAME}`}
+                            selectedRowKeys={this.selectedRowKeys}
+                            sort={this.ordering}
+                            timeRange={this.alarmStore.timeRange}
+                            onCurrentPageChange={this.handleCurrentPageChange}
+                            onDisplayColFieldsChange={displayColFields => {
+                              this.storageColumns = displayColFields;
+                            }}
+                            onOpenAlertDialog={this.handleAlertDialogShow}
+                            onPageSizeChange={this.handlePageSizeChange}
+                            onSaveAlertContentName={this.handleSaveAlertContentName}
+                            onSelectionChange={this.handleSelectedRowKeysChange}
+                            onShowActionDetail={this.handleShowActionDetail}
+                            onShowAlertDetail={this.handleShowAlertDetail}
+                            onSortChange={sort => this.handleSortChange(sort as string)}
+                          />
+                        )}
                       </div>
                     </div>
                   );
@@ -859,17 +1060,29 @@ export default defineComponent({
               onUpdate:isCollapsed={this.updateIsCollapsed}
             />
           </div>
-
-          <AlarmCenterDetail
-            alarmId={this.alarmId}
-            alarmType={this.alarmStore.alarmType}
-            defaultTab={this.alarmDetailDefaultTab}
-            show={this.alarmDetailShow}
-            showStepBtn={this.data.length > 1}
-            onNext={this.handleNextDetail}
-            onPrevious={this.handlePreviousDetail}
-            onUpdate:show={this.handleDetailShowChange}
-          />
+          {this.alarmStore.alarmType === AlarmType.ISSUES ? (
+            <IssuesDetailSideSlider
+              firstAlarmTime={this.issueFirstAlarmTime}
+              issueBizId={this.issueBizId}
+              issueId={this.detailId}
+              show={this.alarmDetailShow}
+              showStepBtn={this.data.length > 1}
+              onNext={this.handleIssueNextDetail}
+              onPrevious={this.handleIssuePreviousDetail}
+              onUpdate:show={this.handleDetailShowChange}
+            />
+          ) : (
+            <AlarmCenterDetail
+              alarmId={this.detailId}
+              alarmType={this.alarmStore.alarmType}
+              defaultTab={this.alarmDetailDefaultTab}
+              show={this.alarmDetailShow}
+              showStepBtn={this.data.length > 1}
+              onNext={this.handleNextDetail}
+              onPrevious={this.handlePreviousDetail}
+              onUpdate:show={this.handleDetailShowChange}
+            />
+          )}
 
           <AlertOperationDialogs
             alarmBizId={this.alertDialogBizId}
@@ -883,6 +1096,30 @@ export default defineComponent({
               this.setUrlParams({ autoShowAlertAction: '' });
             }}
           />
+
+          <IssuesOperationDialogs
+            dialogParam={this.issuesDialogParam}
+            dialogType={this.issuesDialogType}
+            issuesData={this.issuesDialogData}
+            show={this.issuesDialogShow}
+            onSuccess={this.handleIssuesDialogSuccess}
+            onUpdate:show={(v: boolean) => {
+              if (!v) {
+                this.handleIssuesDialogHide();
+              }
+            }}
+          />
+
+          <IssuesImpactScopeDrawer
+            resource={this.impactScopeResource}
+            resourceKey={this.impactScopeResourceKey}
+            show={this.impactScopeDrawerShow}
+            onFilterByInstance={this.handleAddCondition}
+            onUpdate:show={(v: boolean) => {
+              if (v) return;
+              this.handleImpactScopeClick();
+            }}
+          />
         </div>
         <EditFavorite
           key={this.favoriteType}
@@ -891,7 +1128,11 @@ export default defineComponent({
           isShow={this.editFavoriteShow}
           onClose={() => this.handleEditFavoriteShow(false)}
           onSuccess={() => this.handleEditFavoriteShow(false)}
-        />
+        >
+          {{
+            renderFavoriteQuery: renderFavoriteQuery(this.favoriteType),
+          }}
+        </EditFavorite>
       </div>
     );
   },
