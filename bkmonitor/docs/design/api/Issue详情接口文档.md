@@ -11,7 +11,7 @@ Issue 详情页包含以下接口：**（本文重点对接的是issue/detail接
 
 | 接口名称 | 请求方式 | 接口地址 | 说明 |
 |----------|----------|----------|------|
-| Issue 详情查询 | GET | `/fta/issue/issue/detail` | 获取 Issue 完整信息（含趋势统计） |
+| Issue 详情查询 | POST | `/fta/issue/issue/detail` | 获取 Issue 完整信息（含趋势统计） |
 | Issue 告警查询 | POST | `/fta/issue/alert/search` | 参考告警搜索，通过 alert_ids 过滤 |
 | Issue 活动日志 | POST | `/fta/issue/issue/activity` | 获取 Issue 活动记录 |
 | Issue 历史 | POST | `/fta/issue/issue/history` | 获取同策略的历史 Issue |
@@ -25,7 +25,7 @@ Issue 详情页包含以下接口：**（本文重点对接的是issue/detail接
 | 项目 | 值 |
 |------|-----|
 | **接口名称** | Issue 详情查询 |
-| **请求方式** | GET |
+| **请求方式** | POST |
 | **接口地址** | `/fta/issue/issue/detail` |
 | **内容类型** | application/json |
 
@@ -40,8 +40,13 @@ Issue 详情页包含以下接口：**（本文重点对接的是issue/detail接
 
 ### 请求示例
 
-```
-GET /fta/issue/issue/detail?id=1741420800a3b7c9d2&bk_biz_id=2
+```json
+POST /fta/issue/issue/detail
+
+{
+  "id": "1741420800a3b7c9d2",
+  "bk_biz_id": 2
+}
 ```
 
 ### 响应结构
@@ -287,8 +292,207 @@ GET /fta/issue/issue/detail?id=1741420800a3b7c9d2&bk_biz_id=2
 
 ## 2. Issue 告警查询
 
-Issue 告警搜索接口 `POST /fta/issue/alert/search`
-获取次Issue关联的指定条件下的告警信息，包括趋势图、最新告警、最早告警、告警列表等信息
+### 接口信息
+
+| 项目 | 值 |
+|------|-----|
+| **接口名称** | Issue 告警查询 |
+| **请求方式** | POST |
+| **接口地址** | `/fta/issue/alert/search` |
+| **内容类型** | application/json |
+
+### 功能说明
+
+查询指定 Issue 关联的告警数据，用于 Issue 详情页中**检索栏搜索、翻页、排序**等交互场景的局部刷新。
+
+返回内容包括：告警 ID 列表（分页）、告警趋势图、维度统计、最新/最早告警 ID。
+
+> **与 detail 接口的关系**：`detail` 接口返回 Issue 完整信息（含元数据 + 动态数据），本接口仅返回动态数据部分，用于用户操作检索栏后的局部刷新，无需重新加载整个详情页。
+
+### 请求参数
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|:----:|--------|------|
+| `bk_biz_id` | `int` | 是 | — | 业务 ID |
+| `issue_id` | `string` | 是 | — | Issue ID |
+| `start_time` | `int` | 是 | — | 开始时间（秒级时间戳） |
+| `end_time` | `int` | 是 | — | 结束时间（秒级时间戳） |
+| `conditions` | `object[]` | 否 | `[]` | 搜索条件，格式同告警中心搜索栏，详见下方说明 |
+| `query_string` | `string` | 否 | `""` | 查询字符串（支持 Lucene 语法） |
+| `page` | `int` | 否 | `1` | 页码，从 1 开始 |
+| `page_size` | `int` | 否 | `100` | 每页数量，范围 1~1000 |
+| `ordering` | `string[]` | 否 | `[]` | 排序字段列表，前缀 `-` 表示降序。为空时使用默认排序 |
+
+#### conditions 格式说明
+
+`conditions` 数组中每个元素的结构：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `key` | `string` | 过滤字段名，如 `severity`、`status`、`assignee` 等 |
+| `value` | `any[]` | 过滤值列表 |
+| `method` | `string` | 匹配方式：`eq`（等于）、`neq`（不等于）、`include`（包含）、`exclude`（不包含） |
+
+#### ordering 排序说明
+
+- 字段名前加 `-` 表示降序，不加前缀表示升序
+- 支持的排序字段：`status`、`severity`、`create_time`、`seq_id` 等
+- 为空时使用默认排序：`["status", "-create_time", "-seq_id"]`
+
+### 请求示例
+
+#### 基础查询（首次加载）
+
+```json
+POST /fta/issue/alert/search
+{
+  "bk_biz_id": 2,
+  "issue_id": "1741420800a3b7c9d2",
+  "start_time": 1741334400,
+  "end_time": 1741420800,
+  "conditions": [],
+  "query_string": "",
+  "page": 1,
+  "page_size": 100,
+  "ordering": []
+}
+```
+
+#### 带条件过滤 + 自定义排序
+
+```json
+POST /fta/issue/alert/search
+{
+  "bk_biz_id": 2,
+  "issue_id": "1741420800a3b7c9d2",
+  "start_time": 1741334400,
+  "end_time": 1741420800,
+  "conditions": [
+    {"key": "severity", "value": [1], "method": "eq"}
+  ],
+  "query_string": "",
+  "page": 1,
+  "page_size": 100,
+  "ordering": ["-severity", "-create_time"]
+}
+```
+
+#### 翻页查询
+
+```json
+POST /fta/issue/alert/search
+{
+  "bk_biz_id": 2,
+  "issue_id": "1741420800a3b7c9d2",
+  "start_time": 1741334400,
+  "end_time": 1741420800,
+  "conditions": [],
+  "query_string": "",
+  "page": 2,
+  "page_size": 100,
+  "ordering": []
+}
+```
+
+### 响应结构
+
+```json
+{
+  "result": true,
+  "code": 200,
+  "message": "OK",
+  "data": {
+    "issue_id": "1741420800a3b7c9d2",
+    "latest_alert_id": "17414208001234abcd",
+    "earliest_alert_id": "17413344005678efgh",
+    "alert_ids": [
+      "17414208001234abcd",
+      "17414100009876dcba",
+      "17413344005678efgh"
+    ],
+    "total": 86,
+    "alert_count": 86,
+    "trend": [
+      {
+        "data": [[1773619200000, 1], [1773705600000, 3]],
+        "display_name": "未恢复",
+        "name": "ABNORMAL"
+      },
+      {
+        "data": [[1773619200000, 0], [1773705600000, 1]],
+        "display_name": "已恢复",
+        "name": "RECOVERED"
+      },
+      {
+        "data": [[1773619200000, 0], [1773705600000, 0]],
+        "display_name": "已失效",
+        "name": "CLOSED"
+      }
+    ],
+    "dimension_summary": [
+      {
+        "dimension_key": "bk_target_ip",
+        "dimension_name": "主机IP",
+        "total_count": 86,
+        "items": [
+          {"value": "10.0.0.1", "count": 30, "percentage": 34.88},
+          {"value": "10.0.0.2", "count": 20, "percentage": 23.26},
+          {"value": "10.0.0.3", "count": 15, "percentage": 17.44},
+          {"value": "10.0.0.4", "count": 12, "percentage": 13.95},
+          {"value": "10.0.0.5", "count": 8, "percentage": 9.30},
+          {"value": "其他", "count": 1, "percentage": 1.16}
+        ]
+      }
+    ]
+  }
+}
+```
+
+### 响应字段说明
+
+#### 顶层字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `issue_id` | `string` | 当前查询的 Issue ID（与请求参数一致） |
+| `latest_alert_id` | `string` | 最新告警 ID（按时间倒序第一条），用于"最新告警"跳转 |
+| `earliest_alert_id` | `string` | 最早告警 ID（按时间正序第一条），用于"最早告警"跳转 |
+| `alert_ids` | `string[]` | 当前页的告警 ID 列表，按排序规则排列 |
+| `total` | `int` | 符合条件的告警总数（用于分页计算） |
+| `alert_count` | `int` | 告警总数，与 `total` 一致（对齐 detail 接口字段命名） |
+| `trend` | `object[]` | 告警趋势图数据，格式同 detail 接口 |
+| `dimension_summary` | `object[]` | 维度统计数据，格式同 detail 接口 |
+
+#### trend 趋势图
+
+格式与 detail 接口完全一致，参见 [trend 趋势统计](#trend-趋势统计)。
+
+**前端渲染说明**：
+- 使用堆叠柱状图展示
+- 红色：未恢复 (ABNORMAL)
+- 绿色：已恢复 (RECOVERED)
+- 黄色：已失效 (CLOSED)
+
+#### dimension_summary 维度统计
+
+格式与 detail 接口完全一致，参见 [dimension_summary 维度统计](#dimension_summary-维度统计)。
+
+**前端渲染说明**：
+- 每个维度渲染为一组进度条，按 `percentage` 显示占比
+- 最多展示 Top5 + 其他
+- `value` 直接作为展示文本
+
+### 前端使用场景
+
+| 场景 | 操作 | 参数变化 |
+|------|------|----------|
+| **首次加载** | 详情页打开后，使用 detail 接口返回的数据即可，无需调用本接口 | — |
+| **检索栏搜索** | 用户输入搜索条件后点击搜索 | `conditions` / `query_string` 变化，`page` 重置为 1 |
+| **切换时间范围** | 用户修改时间选择器 | `start_time` / `end_time` 变化，`page` 重置为 1 |
+| **翻页** | 用户点击下一页 | `page` 变化，其他参数不变 |
+| **排序** | 用户点击列表表头排序 | `ordering` 变化，`page` 重置为 1 |
+
+> **注意**：`issue_id` 由前端从 detail 接口获取后传入，无需用户手动输入。检索栏的 UI 交互复用告警中心组件，`issue_id` 的过滤由后端自动处理，前端无需在 `conditions` 中手动添加 `issue_id` 条件。
 
 ---
 
@@ -318,7 +522,7 @@ Issue 告警搜索接口 `POST /fta/issue/alert/search`
 
 | 接口 | 说明 |
 |------|------|
-| `GET /fta/issue/issue/detail?id=xxx` | 页面头部、基本信息、趋势统计、告警ID列表 |
+| `POST /fta/issue/issue/detail` | 页面头部、基本信息、趋势统计、告警ID列表 |
 | `POST /fta/issue/issue/activity` | 问题活动记录 |
 
 ### 第二阶段

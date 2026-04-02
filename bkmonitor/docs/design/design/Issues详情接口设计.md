@@ -44,7 +44,7 @@ Issue 详情页按设计稿包含以下模块和对应接口：
 
 | 接口名 | Resource 类名             | HTTP | endpoint | 对应模块  | 说明                          |
 |--------|-------------------------|------|----------|-------|-----------------------------|
-| **Issue 详情** | `IssueDetailResource`   | GET | `issue/detail` | 基本信息 + 趋势 | 获取 Issue 完整信息，含告警趋势统计       |
+| **Issue 详情** | `IssueDetailResource`   | POST | `issue/detail` | 基本信息 + 趋势 | 获取 Issue 完整信息，含告警趋势统计       |
 | **Issue 告警查询** | `IssueSearchAlertResource` | POST | `alert/search` | 检索栏   | 复用 AlertQueryHandler 搜索能力，自动注入 issue_id 过滤条件 |
 | **Issue 活动日志** | `IssueActivityResource` | POST | `issue/activity` | 问题活动  | 查询 IssueActivityDocument，含 operator_display_name 翻译 |
 | **Issue 历史** | `IssueHistoryResource`  | POST | `issue/history` | 历史 Issue | 同策略的历史 Issue 列表             |
@@ -55,7 +55,7 @@ Issue 详情页按设计稿包含以下模块和对应接口：
 
 ```
 第一阶段（页面骨架）── 并行请求 ──┐
-  ├─ GET  issue/detail              → 头部 + 基本信息 + 趋势图 + 告警ID列表
+  ├─ POST issue/detail              → 头部 + 基本信息 + 趋势图 + 告警ID列表
   └─ POST issue/activity            → 问题活动记录
                                   ──┘
 
@@ -693,7 +693,7 @@ def _build_dimension_and_alert_ids(
 class IssueViewSet(ResourceViewSet):
     resource_routes = [
         # 查询类
-        ResourceRoute("GET", IssueDetailResource, endpoint="detail"),
+        ResourceRoute("POST", IssueDetailResource, endpoint="detail"),
         ResourceRoute("POST", IssueSearchAlertResource, endpoint="alert/search"),
         ResourceRoute("POST", IssueActivityResource, endpoint="activity"),
         ResourceRoute("POST", IssueHistoryResource, endpoint="history"),

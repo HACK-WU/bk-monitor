@@ -47,6 +47,9 @@ class IssueSearchAlertResource(Resource):
         query_string = serializers.CharField(label="查询字符串", default="", allow_blank=True)
         start_time = serializers.IntegerField(label="开始时间")
         end_time = serializers.IntegerField(label="结束时间")
+        page = serializers.IntegerField(label="页码", default=1, min_value=1)
+        page_size = serializers.IntegerField(label="每页数量", default=100, min_value=1, max_value=1000)
+        ordering = serializers.ListField(label="排序字段", child=serializers.CharField(), default=[])
 
     def perform_request(self, validated_request_data):
         # 具体实现见开发阶段
@@ -65,8 +68,9 @@ class IssueSearchAlertResource(Resource):
 | `query_string` | `str` | 否 | `""` | 查询字符串 |
 | `start_time` | `int` | 是 | — | 开始时间（秒级时间戳） |
 | `end_time` | `int` | 是 | — | 结束时间（秒级时间戳） |
-
-> **说明**：本接口不支持分页和排序参数。告警列表返回当前条件下的全量数据，前端自行处理展示逻辑。
+| `page` | `int` | 否 | `1` | 页码，最小值为 1 |
+| `page_size` | `int` | 否 | `100` | 每页数量，范围 1~1000，默认 100 |
+| `ordering` | `list[str]` | 否 | `[]` | 排序字段列表，前缀 `-` 表示降序。为空时使用默认排序：`["status", "-create_time", "-seq_id"]` |
 
 ---
 
@@ -76,11 +80,11 @@ class IssueSearchAlertResource(Resource):
 
 ```json
 {
-  "alerts": [...],
-  "total": 86,
+  "issue_id": "1741420800a3b7c9d2",
+  "latest_alert_id": "17414208001234abcd",
+  "earliest_alert_id": "17413344005678efgh",
+  "alert_ids": ["17414208001234abcd", "17413344005678efgh", ...],
   "alert_count": 86,
-  "aggs": [...],
-  "overview": {...},
   "trend": [
     {
       "data": [[1773619200000, 1], [1773705600000, 3], ...],
@@ -115,17 +119,19 @@ class IssueSearchAlertResource(Resource):
 
 ### 5.1 返回值字段说明
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `alerts` | `list` | 当前条件下的告警列表（全量） |
-| `total` | `int` | 告警总数 |
-| `alert_count` | `int` | 告警总数（与 `total` 一致，对齐 Issue 详情接口字段） |
-| `aggs` | `list` | 聚合统计信息 |
-| `overview` | `dict` | 总览统计信息 |
+| 字段 | 类型 | 说明                                        |
+|------|------|-------------------------------------------|
+| `issue_id` | `str` | 当前查询的 Issue ID                            |
+| `latest_alert_id` | `str` | 最新告警 ID（按时间倒序第一条）                         |
+| `earliest_alert_id` | `str` | 最早告警 ID（按时间正序第一条）                         |
+| `alert_ids` | `list[str]` | 当前条件下的告警 ID 列表（分页返回）                      |
+| `alert_count` | `int` | 符合条件的告警总数（用于分页计算）                          |
 | `trend` | `list` | 告警趋势图数据（ABNORMAL / RECOVERED / CLOSED 三条时间序列） |
-| `dimension_summary` | `list` | 维度统计数据（Top5 + 其他） |
+| `dimension_summary` | `list` | 维度统计数据（Top5 + 其他）                         |
 
-> **与 Issue 详情接口的关系**：本接口返回的 `alerts`、`trend`、`dimension_summary`、`alert_count`、`aggs`、`overview` 字段含义与 Issue 详情接口一致，用于替换详情页中对应模块的数据。
+> **与 Issue 详情接口的关系**：本接口返回的 `alert_ids`、`trend`、`dimension_summary`、`alert_count` 字段含义与 Issue 详情接口一致，用于替换详情页中对应模块的数据。
+>
+> **不返回 `aggs` 和 `overview`**：Issue 详情页的告警列表不需要独立的聚合统计和总览面板，这些功能由 Issue 列表页承担。
 
 ---
 
@@ -141,7 +147,10 @@ POST /fta/issue/alert/search
   "start_time": 1741334400,
   "end_time": 1741420800,
   "conditions": [],
-  "query_string": ""
+  "query_string": "",
+  "page": 1,
+  "page_size": 100,
+  "ordering": []
 }
 ```
 
@@ -157,7 +166,10 @@ POST /fta/issue/alert/search
   "conditions": [
     {"key": "severity", "value": [1], "method": "eq"}
   ],
-  "query_string": ""
+  "query_string": "",
+  "page": 1,
+  "page_size": 100,
+  "ordering": ["-severity", "-create_time"]
 }
 ```
 
@@ -205,6 +217,91 @@ class IssueViewSet(ResourceViewSet):
     ]
 ```
 
+### 8.3 IssueSearchAlertResource 实现方案
+
+#### 核心思路
+
+复用 `AlertQueryHandler` 的搜索能力，将 `issue_id` 自动注入为 `conditions`，传入分页和排序参数，调用 `handler.search()` 时不启用 `show_overview` 和 `show_aggs`，仅返回告警列表 + 趋势图 + 维度统计。
+
+#### perform_request 实现流程
+
+```python
+def perform_request(self, validated_request_data):
+    bk_biz_id = validated_request_data["bk_biz_id"]
+    issue_id = validated_request_data["issue_id"]
+    page = validated_request_data.get("page", 1)
+    page_size = validated_request_data.get("page_size", 100)
+    ordering = validated_request_data.get("ordering", [])
+
+    # 1. 将 issue_id 注入到 conditions 中
+    conditions = validated_request_data.get("conditions", [])
+    conditions.append({"key": "issue_id", "value": [issue_id], "method": "eq"})
+
+    # 2. 构造 AlertQueryHandler，传入分页和排序参数
+    handler = AlertQueryHandler(
+        bk_biz_ids=[bk_biz_id],
+        start_time=validated_request_data["start_time"],
+        end_time=validated_request_data["end_time"],
+        conditions=conditions,
+        query_string=validated_request_data.get("query_string", ""),
+        page=page,
+        page_size=page_size,
+        ordering=ordering,
+    )
+
+    # 3. 调用 search()，不启用 show_overview 和 show_aggs
+    result = handler.search(show_overview=False, show_aggs=False)
+    # result 包含 {"alerts": [...], "total": N}
+
+    # 4. 提取告警 ID 列表，以及最新/最早告警 ID
+    alerts = result["alerts"]
+    alert_ids = [alert["id"] for alert in alerts]
+    latest_alert_id = get_latest_alert_id(handler, ...)
+    earliest_alert_id = get_earliest_alert_id(handler, ...)
+
+    # 5. 构建趋势图数据（复用 date_histogram）
+    trend = build_trend_data(handler, ...)
+
+    # 6. 构建维度统计数据
+    dimension_summary = build_dimension_summary(handler, ...)
+
+    return {
+        "issue_id": issue_id,
+        "latest_alert_id": latest_alert_id,
+        "earliest_alert_id": earliest_alert_id,
+        "alert_ids": alert_ids,
+        "alert_count": result["total"],
+        "trend": trend,
+        "dimension_summary": dimension_summary,
+    }
+```
+
+#### 分页与排序的实现依赖
+
+分页和排序能力由 `BaseQueryHandler` 基类提供，无需额外开发：
+
+- **分页**：`BaseQueryHandler.add_pagination()` 根据 `page` 和 `page_size` 计算 ES 的 `from/size` 偏移量
+- **排序**：`BaseQueryHandler.add_ordering()` 将 `ordering` 列表转换为 ES 的 `sort` 参数，支持 `-field` 降序语法
+- **默认排序**：`AlertQueryHandler.__init__()` 中当 `ordering` 为空时，使用默认排序 `["status", "-create_time", "-seq_id"]`
+
+#### 不返回 aggs/overview 的实现方式
+
+`AlertQueryHandler.search()` 方法已支持 `show_overview` 和 `show_aggs` 参数控制：
+
+```python
+# AlertQueryHandler.search() 现有逻辑
+def search(self, show_overview=False, show_aggs=False, show_dsl=False):
+    # ...
+    result = {"alerts": alerts, "total": search_result.hits.total.value}
+    if show_overview:
+        result["overview"] = self.handle_overview(search_result)
+    if show_aggs:
+        result["aggs"] = self.handle_aggs(search_result)
+    # ...
+```
+
+在 `IssueSearchAlertResource.perform_request()` 中调用 `handler.search(show_overview=False, show_aggs=False)` 即可，返回值中自然不包含 `aggs` 和 `overview` 字段。
+
 ---
 
 ## 9. 开发任务
@@ -231,9 +328,10 @@ sequenceDiagram
     View->>Res: perform_request()
     Res->>Res: 注入 issue_id 到 conditions
     Res->>Handler: AlertQueryHandler(**params)
-    Handler->>ES: AlertDocument.search()<br/>.filter("term", issue_id=xxx)
-    ES-->>Handler: 告警列表 + 聚合结果
-    Handler-->>Res: {alerts, total, aggs, overview}
+    Handler->>ES: AlertDocument.search()<br/>.filter("term", issue_id=xxx)<br/>.sort(...).slice(page, page_size)
+    ES-->>Handler: 告警列表（分页）
+    Handler-->>Res: {alerts, total}
+    Res->>Res: 提取 alert_ids + latest/earliest
     Res->>Res: 构建 trend + dimension_summary
-    Res-->>FE: {alerts, total, alert_count,<br/>trend, dimension_summary, aggs, overview}
+    Res-->>FE: {issue_id, alert_ids,<br/>latest_alert_id, earliest_alert_id,<br/>alert_count, trend, dimension_summary}
 ```
