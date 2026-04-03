@@ -1,11 +1,11 @@
 """
 Issue 测试数据脚本
-- 生成 12 条 Issue，覆盖所有状态 × 优先级 × 业务 × 负责人 × 回归 × 标签 × 影响范围组合
+- 生成 12 条 Issue，覆盖所有状态 × 优先级 × 负责人 × 回归 × 标签 × 影响范围组合（业务统一为 bk_biz_id=2）
 - 今天日期：2026-03-30，时间戳基准 ≈ 1774841300
 """
 
 # import hello 是加载Django环境，不要删除。
-import hello  # noqa
+# import hello  # noqa
 import datetime
 import random
 import time
@@ -20,12 +20,18 @@ from constants.issue import IssuePriority, IssueStatus
 from elasticsearch.helpers import bulk
 from elasticsearch_dsl.connections import get_connection
 
+# 修改超时时间
+AlertDocument.ES_REQUEST_TIMEOUT=120
+IssueDocument.ES_REQUEST_TIMEOUT=120
+IssueActivityDocument.ES_REQUEST_TIMEOUT=120
+
 # ────────────────────────────────────────────────────────────────
 # 时间基准（2026-03-30 11:00:00 CST）
 # ────────────────────────────────────────────────────────────────
 NOW = int(time.time())
 HOUR = 3600
 DAY = 86400
+# MONTH = 30 * DAY
 
 # 各 Issue 的创建时间分布（从 7 天前到刚才）
 T_7D = NOW - 7 * DAY  # 7 天前
@@ -42,9 +48,13 @@ T_10M = NOW - 10 * 60  # 10 分钟前
 T_5M = NOW - 5 * 60  # 5 分钟前
 
 
+# 测试数据固定后缀，用于筛选和安全删除
+TEST_DATA_SUFFIX = "_issuetest"
+
+
 def _id(ts: int) -> str:
-    """生成 Issue ID：10位时间戳 + 8位UUID"""
-    return f"{ts}{uuid.uuid4().hex[:8]}"
+    """生成 Issue ID：10位时间戳 + 8位UUID + 固定后缀"""
+    return f"{ts}{uuid.uuid4().hex[:8]}{TEST_DATA_SUFFIX}"
 
 
 # ────────────────────────────────────────────────────────────────
@@ -195,7 +205,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 2. pending_review × P1 × biz=6 × 无负责人 × 回归 ──
     {
-        "bk_biz_id": 6,
+        "bk_biz_id": 2,
         "strategy_id": "1002",
         "name": "[回归] 磁盘 IO 延迟告警",
         "status": IssueStatus.PENDING_REVIEW,
@@ -215,7 +225,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 3. pending_review × P2 × biz=8 × 无负责人 × 非回归 ──
     {
-        "bk_biz_id": 8,
+        "bk_biz_id": 2,
         "strategy_id": "1003",
         "name": "内存使用率超过阈值",
         "status": IssueStatus.PENDING_REVIEW,
@@ -255,7 +265,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 5. unresolved × P1 × biz=6 × lisi × 回归 ──
     {
-        "bk_biz_id": 6,
+        "bk_biz_id": 2,
         "strategy_id": "1005",
         "name": "[回归] APM 服务响应超时",
         "status": IssueStatus.UNRESOLVED,
@@ -275,7 +285,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 6. unresolved × P2 × biz=8 × wangwu × 非回归 ──
     {
-        "bk_biz_id": 8,
+        "bk_biz_id": 2,
         "strategy_id": "1006",
         "name": "日志采集延迟过高",
         "status": IssueStatus.UNRESOLVED,
@@ -315,7 +325,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 8. resolved × P1 × biz=6 × lisi × 回归 ──
     {
-        "bk_biz_id": 6,
+        "bk_biz_id": 2,
         "strategy_id": "1008",
         "name": "[回归] 数据库连接池耗尽",
         "status": IssueStatus.RESOLVED,
@@ -335,7 +345,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 9. resolved × P2 × biz=8 × wangwu × 非回归 ──
     {
-        "bk_biz_id": 8,
+        "bk_biz_id": 2,
         "strategy_id": "1009",
         "name": "Elasticsearch 集群 Yellow 状态",
         "status": IssueStatus.RESOLVED,
@@ -395,7 +405,7 @@ ISSUE_DEFINITIONS = [
     },
     # ── 12. pending_review × P0 × biz=6 × 无负责人 × 非回归（无标签、无影响范围）──
     {
-        "bk_biz_id": 6,
+        "bk_biz_id": 2,
         "strategy_id": "1012",
         "name": "进程端口未监听",
         "status": IssueStatus.PENDING_REVIEW,
@@ -458,7 +468,9 @@ def _ensure_write_aliases_for_doc(doc_cls, index_prefix, timestamps):
             pass
 
         try:
-            client.indices.update_aliases(body={"actions": [{"add": {"index": target_index, "alias": alias_name}}]})
+            client.indices.update_aliases(
+                body={"actions": [{"add": {"index": target_index, "alias": alias_name, "is_write_index": True}}]}
+            )
             print(f"  ✅ 创建别名: {alias_name} → {target_index}")
         except Exception as e:
             print(f"  ❌ 创建别名失败: {alias_name}: {e}")
@@ -515,11 +527,19 @@ def create_test_issues():
         )
         issues.append(issue)
 
-    try:
-        result = IssueDocument.bulk_create(issues, action=BulkActionType.INDEX)
-        print(f"✅ 批量写入完成: {result}")
-    except Exception as e:
-        print(f"❌ 写入异常: {type(e).__name__}: {e}")
+    # 分批写入，每批 3 条，避免 ES 超时
+    BATCH_SIZE = 3
+    total_written = 0
+    for batch_start in range(0, len(issues), BATCH_SIZE):
+        batch = issues[batch_start : batch_start + BATCH_SIZE]
+        try:
+            result = IssueDocument.bulk_create(batch, action=BulkActionType.INDEX)
+            total_written += len(batch)
+            print(f"  ✅ 第 {batch_start // BATCH_SIZE + 1} 批写入完成 ({len(batch)} 条)")
+        except Exception as e:
+            print(f"  ❌ 第 {batch_start // BATCH_SIZE + 1} 批写入异常: {type(e).__name__}: {e}")
+    print(f"✅ 全部写入完成: {total_written}/{len(issues)} 条")
+    if total_written == 0:
         return
 
     # 刷新 ES 索引，确保后续查询能立即看到数据
@@ -635,14 +655,14 @@ def print_field_summary(issues):
 
 
 def _generate_alert_id(begin_time, seq):
-    """生成告警 ID：10位时间戳 + 10位序列号"""
-    return f"{begin_time}{seq:010d}"
+    """生成告警 ID：10位时间戳 + 10位序列号 + 固定后缀"""
+    return f"{begin_time}{seq:010d}{TEST_DATA_SUFFIX}"
 
 
-def create_test_alerts():
+def create_test_alerts(start_time, end_time):
     """为每个 Issue 生成关联的 AlertDocument 测试数据"""
     # 先查询已有的 Issue，获取 ID 列表
-    results = IssueDocument.search(all_indices=True).params(size=50).execute()
+    results = IssueDocument.search(start_time=start_time, end_time=end_time).params(size=50).execute()
     issue_map = {}  # issue_id -> issue_defn_index
     for hit in results.hits:
         issue_map[hit.meta.id] = hit
@@ -766,15 +786,19 @@ def create_test_alerts():
             alerts.append(alert)
             seq += 1
 
-    # 批量写入
-    try:
-        AlertDocument.bulk_create(alerts, action=BulkActionType.INDEX)
-        print(f"✅ 告警批量写入完成: {len(alerts)} 条")
-    except Exception as e:
-        print(f"❌ 告警写入异常: {type(e).__name__}: {e}")
-        import traceback
-
-        traceback.print_exc()
+    # 分批写入，每批 20 条，避免 ES 超时
+    BATCH_SIZE = 20
+    total_written = 0
+    for batch_start in range(0, len(alerts), BATCH_SIZE):
+        batch = alerts[batch_start : batch_start + BATCH_SIZE]
+        try:
+            AlertDocument.bulk_create(batch, action=BulkActionType.INDEX)
+            total_written += len(batch)
+            print(f"  ✅ 告警第 {batch_start // BATCH_SIZE + 1} 批写入完成 ({len(batch)} 条)")
+        except Exception as e:
+            print(f"  ❌ 告警第 {batch_start // BATCH_SIZE + 1} 批写入异常: {type(e).__name__}: {e}")
+    print(f"✅ 告警全部写入完成: {total_written}/{len(alerts)} 条")
+    if total_written == 0:
         return
 
     # 刷新索引
@@ -801,9 +825,14 @@ def create_test_alerts():
     print(f"共写入 {len(alerts)} 条告警，关联 {len(alert_plan)} 个 Issue\n")
 
 
-def query_alerts():
+def query_alerts(start_time=None, end_time=None):
     """查询所有关联 Issue 的告警"""
-    results = AlertDocument.search(all_indices=True).filter("exists", field="issue_id").params(size=200).execute()
+    results = (
+        AlertDocument.search(start_time=start_time, end_time=end_time)
+        .filter("exists", field="issue_id")
+        .params(size=200)
+        .execute()
+    )
     print(f"\n🔔 关联 Issue 的告警共 {results.hits.total.value} 条:")
     print(f"{'─' * 130}")
 
@@ -818,21 +847,28 @@ def query_alerts():
     print(f"{'─' * 130}")
 
 
-def delete_alerts():
-    """删除所有关联 Issue 的告警"""
-    results = AlertDocument.search(all_indices=True).filter("exists", field="issue_id").params(size=1000).execute()
+def delete_alerts(start_time=None, end_time=None):
+    """删除带有测试后缀的告警"""
+    results = (
+        AlertDocument.search(start_time=start_time, end_time=end_time)
+        .filter("wildcard", id=f"*{TEST_DATA_SUFFIX}")
+        .params(size=1000)
+        .execute()
+    )
     actions = [{"_op_type": "delete", "_index": hit.meta.index, "_id": hit.meta.id} for hit in results.hits]
     if actions:
         client = get_connection()
         success, failed = bulk(client, actions, raise_on_error=True)
         print(f"🗑️  告警删除: {success} 条")
     else:
-        print("🗑️  无关联告警需要删除")
+        print("🗑️  无测试告警需要删除")
 
 
-def query_issues():
+def query_issues(start_time=None, end_time=None):
     """查询所有 Issue"""
-    results = IssueDocument.search(all_indices=True).params(size=100).execute()
+    results = (
+        IssueDocument.search(start_time=start_time, end_time=end_time, all_indices=True).params(size=100).execute()
+    )
     print(f"\n📦 Issue 共 {results.hits.total.value} 条:")
     print(f"{'─' * 120}")
     for hit in results.hits:
@@ -849,9 +885,13 @@ def query_issues():
     print(f"{'─' * 120}")
 
 
-def query_activities():
+def query_activities(start_time=None, end_time=None):
     """查询所有活动记录"""
-    results = IssueActivityDocument.search(all_indices=True).params(size=500).execute()
+    results = (
+        IssueActivityDocument.search(start_time=start_time, end_time=end_time, all_indices=True)
+        .params(size=500)
+        .execute()
+    )
     print(f"\n📝 活动记录共 {results.hits.total.value} 条:")
     for hit in results.hits:
         print(
@@ -861,29 +901,38 @@ def query_activities():
         )
 
 
-def delete_issues():
-    """删除所有业务的 Issue"""
-    for biz_id in ["2", "6", "8"]:
-        results = IssueDocument.search(all_indices=True).filter("term", bk_biz_id=biz_id).params(size=500).execute()
-        actions = [{"_op_type": "delete", "_index": hit.meta.index, "_id": hit.meta.id} for hit in results.hits]
-        if actions:
-            client = get_connection()
-            success, failed = bulk(client, actions, raise_on_error=True)
-            print(f"🗑️  业务 {biz_id} Issue 删除: {success} 条")
-        else:
-            print(f"🗑️  业务 {biz_id} 无 Issue 需要删除")
-
-
-def delete_activities():
-    """删除所有活动记录"""
-    results = IssueActivityDocument.search(all_indices=True).params(size=500).execute()
+def delete_issues(start_time=None, end_time=None):
+    """删除带有测试后缀的 Issue"""
+    results = (
+        IssueDocument.search(start_time=start_time, end_time=end_time)
+        .filter("wildcard", id=f"*{TEST_DATA_SUFFIX}")
+        .params(size=500)
+        .execute()
+    )
     actions = [{"_op_type": "delete", "_index": hit.meta.index, "_id": hit.meta.id} for hit in results.hits]
     if actions:
         client = get_connection()
         success, failed = bulk(client, actions, raise_on_error=True)
-        print(f"🗑️  活动日志删除: {success} 条")
+        print(f"🗑️  测试 Issue 删除: {success} 条")
     else:
-        print("🗑️  无活动日志需要删除")
+        print("🗑️  无测试 Issue 需要删除")
+
+
+def delete_activities(start_time=None, end_time=None):
+    """删除带有测试后缀的活动记录"""
+    results = (
+        IssueActivityDocument.search(start_time=start_time, end_time=end_time)
+        .filter("wildcard", issue_id=f"*{TEST_DATA_SUFFIX}")
+        .params(size=500)
+        .execute()
+    )
+    actions = [{"_op_type": "delete", "_index": hit.meta.index, "_id": hit.meta.id} for hit in results.hits]
+    if actions:
+        client = get_connection()
+        success, failed = bulk(client, actions, raise_on_error=True)
+        print(f"🗑️  测试活动日志删除: {success} 条")
+    else:
+        print("🗑️  无测试活动日志需要删除")
 
 
 def query_issue_index():
@@ -906,28 +955,33 @@ def delete_issue_index():
         print(f"🗑️  删除物理索引: {index_name}")
 
 
-if __name__ == "__main__":
-    # ── 初始化索引（首次运行需取消注释）──
-    # IssueDocument.rollover()
-    # IssueActivityDocument.rollover()
-    # AlertDocument.rollover()
 
-    # ── 查看索引 ──
-    # query_issue_index()
+#------ 用例执行入口 ------
+# ── 初始化索引（首次运行需取消注释）──
+# IssueDocument.rollover()
+# IssueActivityDocument.rollover()
+# AlertDocument.rollover()
 
-    # ── 删除索引 ──
-    # delete_issue_index()
+# ── 查看索引 ──
+# query_issue_index()
 
-    # ── 清理旧数据 ──
-    # delete_issues()
-    # delete_activities()
-    # delete_alerts()
+# ── 删除索引 ──
+# delete_issue_index()
 
-    # ── 创建测试数据（12 条 Issue + 关联告警）──
-    create_test_issues()
-    create_test_alerts()
+# ── 清理旧数据（最近1个月）──
 
-    # ── 查询验证 ──
-    query_issues()
-    query_alerts()
-    # query_activities()
+start_time=NOW-3 * DAY
+end_time=NOW
+
+# delete_issues(start_time=start_time, end_time=end_time)
+# delete_activities(start_time=start_time, end_time=end_time)
+# delete_alerts(start_time=start_time, end_time=end_time)
+
+# ── 创建测试数据（12 条 Issue + 关联告警）──
+# create_test_issues()
+# create_test_alerts(start_time=start_time, end_time=end_time)
+
+# ── 查询验证（最近1个月）──
+query_issues(start_time=start_time, end_time=end_time)
+query_alerts(start_time=start_time, end_time=end_time)
+query_activities(start_time=start_time, end_time=end_time)

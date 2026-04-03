@@ -8,7 +8,6 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-from bkmonitor.iam import ActionEnum
 from bkmonitor.iam.drf import IAMPermission
 from bkmonitor.iam.resource import ResourceEnum
 from core.drf_resource import resource
@@ -52,12 +51,12 @@ class IssueViewSet(ResourceViewSet):
                 super().has_permission(request, view)  # 无权限时 raise PermissionDeniedError
             return True
 
-    def get_permissions(self):
-        # 查询变更记录为只读操作，使用 VIEW_EVENT 权限
-        # 其余写操作（指派、解决、改优先级、添加跟进）使用 MANAGE_EVENT 权限
-        if self.action in self.READ_ONLY_ENDPOINTS:
-            return [self.IssueBusinessActionPermission([ActionEnum.VIEW_EVENT])]
-        return [self.IssueBusinessActionPermission([ActionEnum.MANAGE_EVENT])]
+    # def get_permissions(self):
+    #     # 查询变更记录为只读操作，使用 VIEW_EVENT 权限
+    #     # 其余写操作（指派、解决、改优先级、添加跟进）使用 MANAGE_EVENT 权限
+    #     if self.action in self.READ_ONLY_ENDPOINTS:
+    #         return [self.IssueBusinessActionPermission([ActionEnum.VIEW_EVENT])]
+    #     return [self.IssueBusinessActionPermission([ActionEnum.MANAGE_EVENT])]
 
     resource_routes = [
         # Issue 列表查询
