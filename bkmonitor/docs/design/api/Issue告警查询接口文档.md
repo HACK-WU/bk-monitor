@@ -1,19 +1,35 @@
 # Issue 告警查询接口文档
 
-> **版本**: v1.0  
-> **更新时间**: 2026-04-02  
-> **关联文档**：[Issue详情接口文档.md](Issue详情接口文档.md)
+> **⚠️ 已废弃**
+>
+> 本接口已废弃，功能由告警中心现有接口替代。请使用以下接口：
+>
+> | 功能 | 替代接口 | 说明 |
+> |------|----------|------|
+> | 趋势图 | `POST /fta/alert/v2/alert/date_histogram/` | 通过 `conditions` 传入 `issue_id` |
+> | 维度统计 | `POST /fta/alert/v2/alert/top_n/` | 通过 `conditions` 传入 `issue_id` |
+> | 告警列表 | `POST /fta/alert/v2/alert/search/` | 通过 `conditions` 传入 `issue_id` |
+> | 最新告警 | `POST /fta/alert/v2/alert/search/` | `ordering: ["-create_time"]`, `page_size: 1` |
+> | 最早告警 | `POST /fta/alert/v2/alert/search/` | `ordering: ["create_time"]`, `page_size: 1` |
+>
+> 详细调用流程参见：[Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md)
 
 ---
 
-## 接口信息
+> **版本**: v1.0（已废弃）  
+> **更新时间**: 2026-03-23  
+> **废弃时间**: 2026-04-03
+
+---
+
+## 接口信息（已废弃）
 
 | 项目 | 值 |
 |------|-----|
 | **接口名称** | Issue 告警查询 |
 | **请求方式** | POST |
 | **接口地址** | `/fta/issue/alert/search` |
-| **内容类型** | application/json |
+| **状态** | ⚠️ **已废弃** |
 
 ---
 

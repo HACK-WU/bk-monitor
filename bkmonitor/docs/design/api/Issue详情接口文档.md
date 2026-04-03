@@ -1,20 +1,31 @@
 # Issue 详情接口文档
 
-> **版本**: v1.0  
-> **更新时间**: 2026-03-23
+> **版本**: v2.1  
+> **更新时间**: 2026-04-03  
+> **变更说明**: `issue/detail` 接口不再返回告警动态数据（`alert_count`、`trend`、`dimension_summary`、`alert_ids` 等），改由前端调用告警中心现有接口获取。`/fta/issue/alert/search` 接口已废弃。
 
 ---
 
 ## 接口概览
 
-Issue 详情页包含以下接口：**（本文重点对接的是issue/detail接口）**
+Issue 详情页包含以下接口：**（本文重点对接的是 issue/detail 接口）**
 
 | 接口名称 | 请求方式 | 接口地址 | 说明 |
 |----------|----------|----------|------|
-| Issue 详情查询 | POST | `/fta/issue/issue/detail` | 获取 Issue 完整信息（含趋势统计） |
-| Issue 告警查询 | POST | `/fta/issue/alert/search` | 参考告警搜索，通过 alert_ids 过滤 |
+| Issue 详情查询 | POST | `/fta/issue/issue/detail` | 获取 Issue 元数据（**不再返回告警动态数据**） |
+| 告警趋势图 | POST | `/fta/alert/v2/alert/date_histogram/` | 复用告警中心接口，通过 `conditions` 传入 `issue_id` |
+| 维度统计 | POST | `/fta/alert/v2/alert/top_n/` | 复用告警中心接口，通过 `conditions` 传入 `issue_id` |
+| 告警搜索 | POST | `/fta/alert/v2/alert/search/` | 复用告警中心接口，通过 `conditions` 传入 `issue_id` |
 | Issue 活动日志 | POST | `/fta/issue/issue/activity` | 获取 Issue 活动记录 |
 | Issue 历史 | POST | `/fta/issue/issue/history` | 获取同策略的历史 Issue |
+
+### 废弃接口
+
+| 接口名称 | 请求方式 | 接口地址 | 说明 |
+|----------|----------|----------|------|
+| ~~Issue 告警查询~~ | ~~POST~~ | ~~`/fta/issue/alert/search`~~ | **已废弃**，功能由告警中心现有接口替代 |
+
+> **详细调用流程**：参见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md)
 
 ---
 
@@ -35,8 +46,6 @@ Issue 详情页包含以下接口：**（本文重点对接的是issue/detail接
 |------|------|:----:|--------|------|
 | `id` | `string` | 是 | — | Issue ID |
 | `bk_biz_id` | `int` | 是 | — | 业务 ID（用于权限校验） |
-| `start_time` | `int` | 否 | `first_alert_time` | 趋势图开始时间（秒级时间戳） |
-| `end_time` | `int` | 否 | `last_alert_time` 或当前时间 | 趋势图结束时间（秒级时间戳） |
 
 ### 请求示例
 
@@ -71,10 +80,6 @@ POST /fta/issue/issue/detail
     "bk_biz_id": "2",
     "bk_biz_name": "蓝鲸",
     "labels": ["主机监控"],
-    "alert_count": 86,
-    "alert_ids": ["alert_id_1", "alert_id_2", "alert_id_3"],
-    "latest_alert_id": "alert_id_1",
-    "earliest_alert_id": "alert_id_86",
     "first_alert_time": 1741420790,
     "last_alert_time": 1741507200,
     "create_time": 1741420800,
@@ -83,9 +88,7 @@ POST /fta/issue/issue/detail
     "is_resolved": false,
     "duration": "1d 1h",
     "impact_scope": {...},
-    "aggregate_config": {...},
-    "dimension_summary": [...],
-    "trend": [...]
+    "aggregate_config": {...}
   }
 }
 ```
@@ -110,15 +113,6 @@ POST /fta/issue/issue/detail
 | `bk_biz_id` | `string` | 所属业务 ID |
 | `bk_biz_name` | `string` | 业务名称 |
 | `labels` | `string[]` | 标签列表 |
-
-#### 告警关联字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `alert_count` | `int` | 关联告警总数 |
-| `alert_ids` | `string[]` | 全部关联告警的 ID 列表 |
-| `latest_alert_id` | `string` | 最新告警 ID，用于点击跳转到最新告警详情 |
-| `earliest_alert_id` | `string` | 最早告警 ID，用于点击跳转到最早告警详情 |
 
 #### 时间字段
 
@@ -182,95 +176,9 @@ POST /fta/issue/issue/detail
 
 ```json
 {
-  "aggregate_dimensions": ["bk_target_ip"],
+  "aggregate_dimensions": ["bk_target_ip", "bk_cloud_id"],
   "conditions": [],
   "alert_levels": [1, 2]
-}
-```
-
-#### dimension_summary 维度统计
-
-维度统计模块用于展示告警在各维度上的分布情况，帮助用户快速了解问题影响范围。数据来源于告警的 `dimensions` 字段聚合统计。
-
-```json
-{
-  "dimension_summary": [
-    {
-      "dimension_key": "bk_target_ip",
-      "dimension_name": "主机IP",
-      "total_count": 86,
-      "items": [
-        {"value": "10.0.0.1", "count": 30, "percentage": 34.88},
-        {"value": "10.0.0.2", "count": 20, "percentage": 23.26},
-        {"value": "10.0.0.3", "count": 15, "percentage": 17.44},
-        {"value": "10.0.0.4", "count": 12, "percentage": 13.95},
-        {"value": "10.0.0.5", "count": 8, "percentage": 9.30},
-        {"value": "其他", "count": 1, "percentage": 1.16}
-      ]
-    }
-  ]
-}
-```
-
-**dimension_summary 数组元素字段说明**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `dimension_key` | `string` | 维度字段名，对应 alert.dimensions 中的 key |
-| `dimension_name` | `string` | 维度显示名称（中文），来源于告警 dimensions 的 display_key |
-| `total_count` | `int` | 该维度在所有告警中出现的总次数 |
-| `items` | `object[]` | 维度值分布列表（Top5 + 其他） |
-
-**items 数组元素字段说明**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `value` | `string` | 维度值，前端直接使用该字段展示；聚合剩余项时值为翻译后的 `"其他"` |
-| `count` | `int` | 该值出现次数 |
-| `percentage` | `float` | 占比百分比（保留2位小数） |
-
-**前端渲染说明**：
-- 每个维度渲染为一组进度条，按 `percentage` 显示占比
-- 最多展示 Top5 + 其他
-- `value` 直接作为展示文本
-
-#### trend 趋势统计
-
-> **注意**：此接口返回的 trend 格式与设计文档中的格式不一致，是**故意设计**的。前端请按此接口返回的数组格式渲染，设计文档中的格式仅供参考。
-
-趋势图数据，按状态分组统计：
-
-```json
-{
-  "trend": [
-    {
-      "data": [
-        [1773619200000, 1],
-        [1773705600000, 1],
-        [1773792000000, 1]
-      ],
-      "display_name": "未恢复",
-      "name": "ABNORMAL"
-    },
-    {
-      "data": [
-        [1773619200000, 0],
-        [1773705600000, 0],
-        [1773792000000, 0]
-      ],
-      "display_name": "已恢复",
-      "name": "RECOVERED"
-    },
-    {
-      "data": [
-        [1773619200000, 0],
-        [1773705600000, 0],
-        [1773792000000, 0]
-      ],
-      "display_name": "已失效",
-      "name": "CLOSED"
-    }
-  ]
 }
 ```
 
@@ -278,225 +186,107 @@ POST /fta/issue/issue/detail
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `data` | `[int, int][]` | 时间序列数据，格式为 `[[毫秒时间戳, 数量], ...]` |
-| `display_name` | `string` | 状态中文名：未恢复 / 已恢复 / 已失效 |
-| `name` | `string` | 状态枚举值：`ABNORMAL` / `RECOVERED` / `CLOSED` |
+| `aggregate_dimensions` | `string[]` | 聚合维度列表，用于 `alert/top_n` 接口的 `fields` 参数 |
+| `conditions` | `object[]` | 聚合条件 |
+| `alert_levels` | `int[]` | 告警级别列表 |
 
-**前端渲染说明**：
-- 使用堆叠柱状图展示
-- 红色：未恢复 (ABNORMAL)
-- 绿色：已恢复 (RECOVERED)
-- 黄色：已失效 (CLOSED)
+> **前端使用说明**：`aggregate_dimensions` 用于调用 `alert/top_n` 接口时构建 `fields` 参数。需要注意内置字段不加前缀，自定义字段需加 `tags.` 前缀，详见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 6.4 节。
 
 ---
 
-## 2. Issue 告警查询
+## 2. 告警趋势图（复用告警中心接口）
 
-### 接口信息
-
-| 项目 | 值 |
-|------|-----|
-| **接口名称** | Issue 告警查询 |
-| **请求方式** | POST |
-| **接口地址** | `/fta/issue/alert/search` |
-| **内容类型** | application/json |
-
-### 功能说明
-
-查询指定 Issue 关联的告警数据，用于 Issue 详情页中**检索栏搜索、翻页、排序**等交互场景的局部刷新。
-
-返回内容包括：告警 ID 列表（分页）、告警趋势图、维度统计、最新/最早告警 ID。
-
-> **与 detail 接口的关系**：`detail` 接口返回 Issue 完整信息（含元数据 + 动态数据），本接口仅返回动态数据部分，用于用户操作检索栏后的局部刷新，无需重新加载整个详情页。
-
-### 请求参数
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|:----:|--------|------|
-| `bk_biz_id` | `int` | 是 | — | 业务 ID |
-| `issue_id` | `string` | 是 | — | Issue ID |
-| `start_time` | `int` | 是 | — | 开始时间（秒级时间戳） |
-| `end_time` | `int` | 是 | — | 结束时间（秒级时间戳） |
-| `conditions` | `object[]` | 否 | `[]` | 搜索条件，格式同告警中心搜索栏，详见下方说明 |
-| `query_string` | `string` | 否 | `""` | 查询字符串（支持 Lucene 语法） |
-| `page` | `int` | 否 | `1` | 页码，从 1 开始 |
-| `page_size` | `int` | 否 | `100` | 每页数量，范围 1~1000 |
-| `ordering` | `string[]` | 否 | `[]` | 排序字段列表，前缀 `-` 表示降序。为空时使用默认排序 |
-
-#### conditions 格式说明
-
-`conditions` 数组中每个元素的结构：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `key` | `string` | 过滤字段名，如 `severity`、`status`、`assignee` 等 |
-| `value` | `any[]` | 过滤值列表 |
-| `method` | `string` | 匹配方式：`eq`（等于）、`neq`（不等于）、`include`（包含）、`exclude`（不包含） |
-
-#### ordering 排序说明
-
-- 字段名前加 `-` 表示降序，不加前缀表示升序
-- 支持的排序字段：`status`、`severity`、`create_time`、`seq_id` 等
-- 为空时使用默认排序：`["status", "-create_time", "-seq_id"]`
+> **接口地址**：`POST /fta/alert/v2/alert/date_histogram/`
+>
+> **调用方式**：通过 `conditions` 传入 `issue_id` 过滤条件。
+>
+> **详细说明**：参见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 4.2 节。
 
 ### 请求示例
 
-#### 基础查询（首次加载）
-
 ```json
-POST /fta/issue/alert/search
-{
-  "bk_biz_id": 2,
-  "issue_id": "1741420800a3b7c9d2",
-  "start_time": 1741334400,
-  "end_time": 1741420800,
-  "conditions": [],
-  "query_string": "",
-  "page": 1,
-  "page_size": 100,
-  "ordering": []
-}
-```
+POST /fta/alert/v2/alert/date_histogram/
 
-#### 带条件过滤 + 自定义排序
-
-```json
-POST /fta/issue/alert/search
 {
-  "bk_biz_id": 2,
-  "issue_id": "1741420800a3b7c9d2",
-  "start_time": 1741334400,
-  "end_time": 1741420800,
+  "bk_biz_ids": [2],
   "conditions": [
-    {"key": "severity", "value": [1], "method": "eq"}
+    {"key": "issue_id", "value": ["1741420800a3b7c9d2"], "method": "eq"}
   ],
-  "query_string": "",
-  "page": 1,
-  "page_size": 100,
-  "ordering": ["-severity", "-create_time"]
+  "start_time": 1741420790,
+  "end_time": 1741507200,
+  "interval": "auto"
 }
 ```
-
-#### 翻页查询
-
-```json
-POST /fta/issue/alert/search
-{
-  "bk_biz_id": 2,
-  "issue_id": "1741420800a3b7c9d2",
-  "start_time": 1741334400,
-  "end_time": 1741420800,
-  "conditions": [],
-  "query_string": "",
-  "page": 2,
-  "page_size": 100,
-  "ordering": []
-}
-```
-
-### 响应结构
-
-```json
-{
-  "result": true,
-  "code": 200,
-  "message": "OK",
-  "data": {
-    "issue_id": "1741420800a3b7c9d2",
-    "latest_alert_id": "17414208001234abcd",
-    "earliest_alert_id": "17413344005678efgh",
-    "alert_ids": [
-      "17414208001234abcd",
-      "17414100009876dcba",
-      "17413344005678efgh"
-    ],
-    "total": 86,
-    "alert_count": 86,
-    "trend": [
-      {
-        "data": [[1773619200000, 1], [1773705600000, 3]],
-        "display_name": "未恢复",
-        "name": "ABNORMAL"
-      },
-      {
-        "data": [[1773619200000, 0], [1773705600000, 1]],
-        "display_name": "已恢复",
-        "name": "RECOVERED"
-      },
-      {
-        "data": [[1773619200000, 0], [1773705600000, 0]],
-        "display_name": "已失效",
-        "name": "CLOSED"
-      }
-    ],
-    "dimension_summary": [
-      {
-        "dimension_key": "bk_target_ip",
-        "dimension_name": "主机IP",
-        "total_count": 86,
-        "items": [
-          {"value": "10.0.0.1", "count": 30, "percentage": 34.88},
-          {"value": "10.0.0.2", "count": 20, "percentage": 23.26},
-          {"value": "10.0.0.3", "count": 15, "percentage": 17.44},
-          {"value": "10.0.0.4", "count": 12, "percentage": 13.95},
-          {"value": "10.0.0.5", "count": 8, "percentage": 9.30},
-          {"value": "其他", "count": 1, "percentage": 1.16}
-        ]
-      }
-    ]
-  }
-}
-```
-
-### 响应字段说明
-
-#### 顶层字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `issue_id` | `string` | 当前查询的 Issue ID（与请求参数一致） |
-| `latest_alert_id` | `string` | 最新告警 ID（按时间倒序第一条），用于"最新告警"跳转 |
-| `earliest_alert_id` | `string` | 最早告警 ID（按时间正序第一条），用于"最早告警"跳转 |
-| `alert_ids` | `string[]` | 当前页的告警 ID 列表，按排序规则排列 |
-| `total` | `int` | 符合条件的告警总数（用于分页计算） |
-| `alert_count` | `int` | 告警总数，与 `total` 一致（对齐 detail 接口字段命名） |
-| `trend` | `object[]` | 告警趋势图数据，格式同 detail 接口 |
-| `dimension_summary` | `object[]` | 维度统计数据，格式同 detail 接口 |
-
-#### trend 趋势图
-
-格式与 detail 接口完全一致，参见 [trend 趋势统计](#trend-趋势统计)。
-
-**前端渲染说明**：
-- 使用堆叠柱状图展示
-- 红色：未恢复 (ABNORMAL)
-- 绿色：已恢复 (RECOVERED)
-- 黄色：已失效 (CLOSED)
-
-#### dimension_summary 维度统计
-
-格式与 detail 接口完全一致，参见 [dimension_summary 维度统计](#dimension_summary-维度统计)。
-
-**前端渲染说明**：
-- 每个维度渲染为一组进度条，按 `percentage` 显示占比
-- 最多展示 Top5 + 其他
-- `value` 直接作为展示文本
-
-### 前端使用场景
-
-| 场景 | 操作 | 参数变化 |
-|------|------|----------|
-| **首次加载** | 详情页打开后，使用 detail 接口返回的数据即可，无需调用本接口 | — |
-| **检索栏搜索** | 用户输入搜索条件后点击搜索 | `conditions` / `query_string` 变化，`page` 重置为 1 |
-| **切换时间范围** | 用户修改时间选择器 | `start_time` / `end_time` 变化，`page` 重置为 1 |
-| **翻页** | 用户点击下一页 | `page` 变化，其他参数不变 |
-| **排序** | 用户点击列表表头排序 | `ordering` 变化，`page` 重置为 1 |
-
-> **注意**：`issue_id` 由前端从 detail 接口获取后传入，无需用户手动输入。检索栏的 UI 交互复用告警中心组件，`issue_id` 的过滤由后端自动处理，前端无需在 `conditions` 中手动添加 `issue_id` 条件。
 
 ---
 
-## 3. Issue 活动日志
+## 3. 维度统计（复用告警中心接口）
+
+> **接口地址**：`POST /fta/alert/v2/alert/top_n/`
+>
+> **调用方式**：
+> 1. 从 detail 接口获取 `aggregate_config.aggregate_dimensions`
+> 2. 转换维度字段名（内置字段不加前缀，自定义字段加 `tags.` 前缀）
+> 3. 通过 `conditions` 传入 `issue_id` 过滤条件
+>
+> **详细说明**：参见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 4.3 节。
+
+### 请求示例
+
+```json
+POST /fta/alert/v2/alert/top_n/
+
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {"key": "issue_id", "value": ["1741420800a3b7c9d2"], "method": "eq"}
+  ],
+  "start_time": 1741420790,
+  "end_time": 1741507200,
+  "fields": ["tags.bk_target_ip", "bk_cloud_id"],
+  "size": 5
+}
+```
+
+---
+
+## 4. 告警搜索（复用告警中心接口）
+
+> **接口地址**：`POST /fta/alert/v2/alert/search/`
+>
+> **调用方式**：通过 `conditions` 传入 `issue_id` 过滤条件。
+>
+> **详细说明**：参见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 4.4 节。
+
+### 使用场景
+
+| 场景 | ordering | page_size | 说明 |
+|------|----------|-----------|------|
+| 最新告警 | `["-create_time"]` | 1 | 获取最新告警 ID |
+| 最早告警 | `["create_time"]` | 1 | 获取最早告警 ID |
+| 告警列表 | `[]` | 100 | 用户点击告警列表 Tab 时加载 |
+
+### 请求示例（最新告警）
+
+```json
+POST /fta/alert/v2/alert/search/
+
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {"key": "issue_id", "value": ["1741420800a3b7c9d2"], "method": "eq"}
+  ],
+  "start_time": 1741420790,
+  "end_time": 1741507200,
+  "ordering": ["-create_time"],
+  "page": 1,
+  "page_size": 1
+}
+```
+
+---
+
+## 5. Issue 活动日志
 
 **接口地址**：`POST /fta/issue/issue/activity`
 
@@ -504,7 +294,7 @@ POST /fta/issue/alert/search
 
 ---
 
-## 4. Issue 历史
+## 6. Issue 历史
 
 **接口地址**：`POST /fta/issue/issue/history`
 
@@ -514,25 +304,34 @@ POST /fta/issue/alert/search
 
 ## 页面加载策略
 
-详情页采用分层加载策略：
+详情页采用分层加载策略，详见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md)：
 
-### 第一阶段（页面骨架）
+### 第一阶段（全部并行，无依赖）
 
-**并行请求**：
+**立即执行**：
 
 | 接口 | 说明 |
 |------|------|
-| `POST /fta/issue/issue/detail` | 页面头部、基本信息、趋势统计、告警ID列表 |
+| `POST /fta/issue/issue/detail` | Issue 元数据 |
 | `POST /fta/issue/issue/activity` | 问题活动记录 |
+| `POST /fta/alert/v2/alert/date_histogram/` | 趋势图 |
+| `POST /fta/alert/v2/alert/search/`（最新告警） | ordering: `["-create_time"]`, page_size: 1 |
+| `POST /fta/alert/v2/alert/search/`（最早告警） | ordering: `["create_time"]`, page_size: 1 |
 
-### 第二阶段
+### 第二阶段（依赖 issue/detail）
 
-用户交互触发：
+**等待 detail 返回后执行**：
+
+| 接口 | 说明 |
+|------|------|
+| `POST /fta/alert/v2/alert/top_n/` | 维度统计（需要 `aggregate_dimensions`） |
+
+### 第三阶段（用户交互触发）
 
 | 触发场景 | 调用接口 |
 |----------|----------|
-| 使用检索栏搜索告警 | `POST /fta/issue/alert/search` |
-| 手动点击历史 Issue 区域 | `POST /fta/issue/issue/history` |
+| 点击告警列表 Tab | `POST /fta/alert/v2/alert/search/`（page_size: 100） |
+| 点击历史 Issue 区域 | `POST /fta/issue/issue/history` |
 
 ---
 
@@ -559,17 +358,36 @@ POST /fta/issue/alert/search
 
 ### 趋势图模块
 
-| 设计稿元素 | 对应字段 | 说明 |
+| 设计稿元素 | 数据来源 | 说明 |
 |-----------|----------|------|
-| 告警事件数量 | `alert_count` | 关联告警总数 |
-| 堆叠柱状图 | `trend` | 三条时间序列 |
-| 维度统计 | `dimension_summary` | 维度分布图，Top5 + 其他 |
+| 告警事件数量 | `alert/search` 的 `total` | 关联告警总数 |
+| 堆叠柱状图 | `alert/date_histogram` | 三条时间序列 |
+
+### 维度统计模块
+
+| 设计稿元素 | 数据来源 | 说明 |
+|-----------|----------|------|
+| 维度分布进度条 | `alert/top_n` | Top5 + 其他，前端计算百分比 |
 
 ### 告警列表模块
 
-| 设计稿元素 | 数据来源                          | 说明                |
-|-----------|-------------------------------|-------------------|
-| 最新告警 | `/fta/alert/v2/alert/detail/` | 点击跳转告警详情,传递告警ID参数 |
-| 最早告警 | `/fta/alert/v2/alert/detail/` | 点击跳转告警详情，传递告警ID参数 |
-| 告警列表 | `/fta/alert/v2/alert/search/` | 点击搜索告警列表，传递告警ID参数 |
+| 设计稿元素 | 数据来源 | 说明 |
+|-----------|----------|------|
+| 最新告警 | `alert/search`（ordering: `"-create_time"`, page_size: 1） | 点击跳转告警详情 |
+| 最早告警 | `alert/search`（ordering: `"create_time"`, page_size: 1） | 点击跳转告警详情 |
+| 告警列表 | `alert/search`（page_size: 100） | 用户点击告警列表 Tab 时加载 |
 
+---
+
+## 废弃接口说明
+
+### ~~Issue 告警查询~~（已废弃）
+
+> **废弃说明**：`/fta/issue/alert/search` 接口已废弃，功能由告警中心现有接口替代。
+>
+> **替代方案**：
+> - 趋势图 → `POST /fta/alert/v2/alert/date_histogram/`
+> - 维度统计 → `POST /fta/alert/v2/alert/top_n/`
+> - 告警列表 → `POST /fta/alert/v2/alert/search/`
+>
+> 所有接口通过 `conditions` 传入 `issue_id` 过滤条件即可复用告警中心现有能力。
