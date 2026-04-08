@@ -686,6 +686,8 @@ class AlertQueryHandler(BaseBizQueryHandler):
             }
         )
 
+        self._alert_notice_ways_cache = {}
+
     def get_search_object(
         self,
         start_time: int = None,
