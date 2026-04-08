@@ -23,35 +23,29 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-<<<<<<<< HEAD:bkmonitor/webpack/src/monitor-pc/pages/custom-escalation/custom-escalation-detail/utils.ts
-// 模糊匹配
-export const fuzzyMatch = (str: string, pattern: string) => {
-  const lowerStr = String(str || '').toLowerCase();
-  const lowerPattern = String(pattern || '').toLowerCase();
-  return lowerStr.includes(lowerPattern);
-========
 
-export const DiagnosticTypeEnum = {
-  DIMENSION: 'dimension',
-  LINK: 'link',
-  LOG: 'log',
-  EVENT: 'event',
-  METRIC: 'metric',
-} as const;
+import type { ActionTableItem } from '../../../typings';
 
-export const DiagnosticTypeMap = {
-  [DiagnosticTypeEnum.DIMENSION]: window.i18n.t('可疑维度'),
-  [DiagnosticTypeEnum.LINK]: window.i18n.t('可疑调用链'),
-  [DiagnosticTypeEnum.LOG]: window.i18n.t('可疑日志'),
-  [DiagnosticTypeEnum.EVENT]: window.i18n.t('可疑事件'),
-  [DiagnosticTypeEnum.METRIC]: window.i18n.t('相关性指标'),
-};
+export interface UseActionHandlersOptions {
+  /** 显示处理记录详情抽屉回调 */
+  showDetailEmit: (row: ActionTableItem) => void;
+}
 
-export const DiagnosticTypeIconMap = {
-  [DiagnosticTypeEnum.DIMENSION]: 'icon-dimension-line',
-  [DiagnosticTypeEnum.LINK]: 'icon-Tracing',
-  [DiagnosticTypeEnum.LOG]: 'icon-a-logrizhi',
-  [DiagnosticTypeEnum.EVENT]: 'icon-shijianjiansuo',
-  [DiagnosticTypeEnum.METRIC]: 'icon-zhibiaojiansuo',
->>>>>>>> de9db2af8e (feat: 优化告警诊断分析代码结构和整体样式 (#9942)):bkmonitor/webpack/src/monitor-pc/pages/custom-escalation/custom-escalation-detail/constant.ts
+export type UseActionHandlersReturnType = ReturnType<typeof useActionHandlers>;
+
+/**
+ * @description 处理记录场景私有交互逻辑
+ */
+export const useActionHandlers = ({ showDetailEmit }: UseActionHandlersOptions) => {
+  /**
+   * @description 展示处理记录详情抽屉
+   * @param {ActionTableItem} row - 处理记录行数据
+   */
+  const handleActionSliderShowDetail = (row: ActionTableItem) => {
+    showDetailEmit(row);
+  };
+
+  return {
+    handleActionSliderShowDetail,
+  };
 };
