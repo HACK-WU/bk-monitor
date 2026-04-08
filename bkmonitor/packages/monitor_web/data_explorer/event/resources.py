@@ -761,6 +761,28 @@ class EventGenerateQueryStringResource(EventBaseResource):
         return False
 
     def perform_request(self, data):
+        """
+        将前端 UI 模式的过滤条件列表转换为 Elasticsearch query_string 查询语句
+
+        参数:
+            data: 经过序列化器校验后的请求数据，包含:
+                - where: list[dict]，过滤条件列表，每个条件包含:
+                    - key: str，字段名（如 "event_name"、"target"）
+                    - method: str，操作符（如 "eq"、"include"、"reg" 等，对应 Operation 中定义的操作符）
+                    - value: list，过滤值列表
+                    - options: dict（可选），附加选项，如 {"is_wildcard": True} 表示启用通配符匹配
+
+        返回值:
+            str: 生成的 Elasticsearch query_string 查询语句，多个条件之间以 AND 连接
+                 例如: 'dimensions.event_name: "login" AND dimensions.target: (*test*)'
+
+        该方法实现 UI 过滤条件到 ES query_string 的转换流程：
+        1. 使用 Operation.QueryStringOperatorMapping 初始化 QueryStringGenerator，建立 UI 操作符到 ES query_string 操作符的映射
+        2. 遍历 where 条件列表，对每个条件：
+           a. 通过 format_field 为维度字段补充 "dimensions." 前缀（保持与告警/API层的兼容性）
+           b. 将字段名、操作符、值及通配符选项注册到生成器中
+        3. 调用 to_query_string() 将所有过滤条件拼接为完整的 query_string 语句并返回
+        """
         generator = QueryStringGenerator(Operation.QueryStringOperatorMapping)
         for f in data["where"]:
             generator.add_filter(
