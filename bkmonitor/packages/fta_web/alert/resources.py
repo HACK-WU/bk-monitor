@@ -892,6 +892,14 @@ class DeleteExperienceResource(Resource):
 class AlertEventCountResource(Resource):
     """
     获取告警关联的事件数量
+
+    根据告警ID列表，查询每个告警关联的事件数量。
+    告警分为两类分别处理：
+    - 简单告警：通过ES聚合查询，按dedupe_md5和时间范围统计事件数
+    - 关联告警（复合策略/FTA事件策略）：通过search_event接口批量查询事件总数
+
+    返回值:
+        dict: {alert_id: event_count} 告警ID到事件数量的映射
     """
 
     class RequestSerializer(serializers.Serializer):
@@ -899,15 +907,31 @@ class AlertEventCountResource(Resource):
 
     @classmethod
     def cal_simple_event_count(cls, simple_alerts):
-        # 计算简单告警的事件数量
+        """
+        计算简单告警的事件数量
+
+        参数:
+            simple_alerts: list[AlertDocument], 简单告警文档列表（非复合策略、非FTA事件策略的告警）
+
+        返回值:
+            dict: {alert_id: event_count} 告警ID到事件数量的映射
+
+        该方法通过ES聚合查询一次性统计所有简单告警的事件数量：
+        1. 构建每个告警的查询条件：按dedupe_md5精确匹配 + 时间范围过滤（begin_time ~ latest_time）
+        2. 构建ES搜索请求，使用terms过滤缩小候选文档范围
+        3. 为每个告警创建独立的filter聚合桶，实现单次查询获取所有告警的事件计数
+        4. 从聚合结果中提取各告警对应桶的doc_count作为事件数量
+        """
         if not simple_alerts:
             return {}
 
         now_time = int(time.time())
+        # 构建告警映射：alert_id -> {dedupe_md5, query条件}
         alert_mapping = {}
         for alert in simple_alerts:
             alert_mapping[alert.id] = {
                 "dedupe_md5": alert.dedupe_md5,
+                # 组合查询条件：时间范围 AND dedupe_md5精确匹配
                 "query": (
                     Q("range", time={"gte": alert.begin_time, "lte": alert.latest_time or now_time})
                     & Q("term", dedupe_md5=alert.dedupe_md5)
@@ -915,17 +939,19 @@ class AlertEventCountResource(Resource):
             }
 
         event_count = {}
-        # Step 2: 根据时间范围和MD5去查询告警信息
+        # 构建ES搜索：先用terms过滤缩小候选文档范围，减少聚合计算量
         search = EventDocument.search(all_indices=True)
         search = search.filter("terms", dedupe_md5=[alert["dedupe_md5"] for alert in alert_mapping.values()])
 
+        # 为每个告警创建独立的filter聚合桶，桶名为alert_id
         for alert_id, alert in alert_mapping.items():
-            # 为每个告警条件设置一个桶
             search.aggs.bucket(alert_id, "filter", alert["query"])
 
+        # 不需要返回文档本身，只需要聚合结果
         search = search.extra(size=0)
         search_result = search.execute()
 
+        # 从聚合结果中提取每个告警桶的文档计数
         for alert_id in alert_mapping:
             if not search_result.aggs:
                 continue
@@ -938,39 +964,74 @@ class AlertEventCountResource(Resource):
     @classmethod
     def cal_composite_event_count(cls, composite_alerts):
         """
-        计算关联告警的事件数量
+        计算关联告警（复合策略/FTA事件策略）的事件数量
+
+        参数:
+            composite_alerts: list[AlertDocument], 关联告警文档列表（复合策略或FTA事件策略的告警）
+
+        返回值:
+            dict: {alert_id: event_count} 告警ID到事件数量的映射
+
+        该方法通过search_event接口批量查询关联告警的事件数量：
+        1. 构建批量请求参数，每个告警只请求1条记录（page_size=1），仅需获取total总数
+        2. 调用bulk_request并行查询，忽略单个请求的异常避免影响整体结果
+        3. 从返回结果中提取total字段作为事件数量
         """
         if not composite_alerts:
             return {}
 
         event_count = {}
+        # 批量调用search_event接口，page_size=1因为只需要total计数，不需要实际事件数据
         results = resource.alert.search_event.bulk_request(
             [{"alert_id": alert.id, "page_size": 1} for alert in composite_alerts], ignore_exceptions=True
         )
+        # 按索引位置将结果与告警一一对应
         for index, result in enumerate(results):
             if result:
                 event_count[composite_alerts[index].id] = result["total"]
         return event_count
 
     def perform_request(self, validated_request_data):
+        """
+        执行请求，获取告警关联的事件数量
+
+        参数:
+            validated_request_data: dict, 经过序列化器校验的请求数据，包含:
+                - ids: list[str], 告警ID列表
+
+        返回值:
+            dict: {alert_id: event_count} 告警ID到事件数量的映射，未查到的告警默认为0
+
+        该方法的处理流程：
+        1. 根据告警ID批量获取告警文档，提取关键字段（时间范围、dedupe_md5等）
+        2. 按告警类型分类：简单告警 vs 关联告警（复合策略/FTA事件策略）
+        3. 分别调用对应的计算方法统计事件数量
+        4. 合并结果并返回，确保每个告警ID都有对应的计数值（默认为0）
+        """
         alert_ids = validated_request_data["ids"]
 
-        # Step 1: 先根据告警ID，查询对应的告警，将开始结束时间和md5字段拿出来
+        # Step 1: 批量获取告警文档，只取统计所需的关键字段以减少数据传输量
         alerts = AlertDocument.mget(
             alert_ids, fields=["id", "begin_time", "end_time", "latest_time", "dedupe_md5", "extra_info"]
         )
 
+        # Step 2: 按告警类型分类，不同类型采用不同的事件计数策略
         simple_alerts = []
         composite_alerts = []
         for alert in alerts:
             if alert.is_composite_strategy or alert.is_fta_event_strategy:
+                # 复合策略或FTA事件策略告警，需通过search_event接口查询
                 composite_alerts.append(alert)
             else:
+                # 简单告警，通过ES聚合查询统计
                 simple_alerts.append(alert)
 
+        # Step 3: 初始化所有告警的事件计数为0，确保未查到结果的告警也有默认值
         event_count = {}
         for alert_id in alert_ids:
             event_count.setdefault(alert_id, 0)
+
+        # Step 4: 分别计算两类告警的事件数量并合并结果
         event_count.update(self.cal_simple_event_count(simple_alerts))
         event_count.update(self.cal_composite_event_count(composite_alerts))
         return event_count
