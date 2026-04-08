@@ -34,7 +34,7 @@ import {
   watch,
 } from 'vue';
 
-import { commonPageSizeSet, convertDurationArray, tryURLDecodeParse } from 'monitor-common/utils';
+import { commonPageSizeSet, convertDurationArray, copyText, tryURLDecodeParse } from 'monitor-common/utils';
 import FavoriteBox, {
   type IFavorite,
   type IFavoriteGroup,
@@ -80,10 +80,12 @@ const ALARM_CENTER_SHOW_FAVORITE = 'ALARM_CENTER_SHOW_FAVORITE';
 
 import { Message } from 'bkui-vue';
 import dayjs from 'dayjs';
+import { traceGenerateQueryString } from 'monitor-api/modules/apm_trace';
 import { handleTransformToTimestamp } from 'trace/components/time-range/utils';
 import { useI18n } from 'vue-i18n';
 
 import { saveAlertContentName } from './services/alert-services';
+import EmptyStatus from '@/components/empty-status/empty-status';
 
 import type { AlertSavePromiseEvent } from './components/alarm-table/components/alert-content-detail/alert-content-detail';
 
@@ -102,7 +104,14 @@ export default defineComponent({
       handleSetUserConfig: handleSetResidentSettingUserConfig,
     } = useUserConfig();
 
-    const { quickFilterList, quickFilterLoading } = useQuickFilter();
+    const {
+      isFirstInit,
+      quickFilterList,
+      quickFilterLoading,
+      quickFilterEmptyStatusType,
+      updateQuickFilterValue,
+      handleQuickFilteringOperation,
+    } = useQuickFilter();
     const { data, loading, total, page, pageSize, ordering } = useAlarmTable();
     const {
       tableColumns: tableSourceColumns,
@@ -234,9 +243,12 @@ export default defineComponent({
       isCollapsed.value = v;
     };
     /** 快捷筛选 */
-    const handleFilterValueChange = (filterValue: CommonCondition[]) => {
+    const handleFilterValueChange = (filterValue: CommonCondition[], category: string) => {
       handleCurrentPageChange(1);
-      alarmStore.quickFilterValue = filterValue;
+      alarmStore.lastQuickFilterOperationCategory = category;
+      alarmStore.lastQuickFilterOperationCategoryData =
+        quickFilterList.value.find(item => item.id === category) || null;
+      updateQuickFilterValue(filterValue);
     };
     /** 告警分析添加条件 */
     const handleAddCondition = (condition: CommonCondition) => {
@@ -304,6 +316,8 @@ export default defineComponent({
         conditions: JSON.stringify(alarmStore.conditions),
         residentCondition: JSON.stringify(alarmStore.residentCondition),
         quickFilterValue: JSON.stringify(alarmStore.quickFilterValue),
+        /** 最后一次操作的快速过滤条件分类数据 */
+        lastQuickFilterCategoryData: JSON.stringify(alarmStore.lastQuickFilterOperationCategoryData),
         filterMode: alarmStore.filterMode,
         alarmType: alarmStore.alarmType,
         alarmId: alarmId.value,
@@ -357,10 +371,12 @@ export default defineComponent({
         showDetail,
         alarmId: alarmIdParams,
         favorite_id: favoriteId,
+        showResidentBtn: queryShowResidentBtn,
+        /** 最后一次操作的快速过滤条件分类数据 */
+        lastQuickFilterCategoryData,
         /** 以下是兼容事件中心的URL参数 */
         searchType,
         condition,
-        showResidentBtn: queryShowResidentBtn,
       } = route.query;
 
       try {
@@ -382,13 +398,22 @@ export default defineComponent({
           }));
         } else {
           alarmStore.quickFilterValue = tryURLDecodeParse(quickFilterValue as string, []);
+          alarmStore.lastQuickFilterOperationCategoryData = tryURLDecodeParse(
+            lastQuickFilterCategoryData as string,
+            null
+          );
+          alarmStore.lastQuickFilterOperationCategory = alarmStore.lastQuickFilterOperationCategoryData?.id || '';
         }
         showResidentBtn.value = tryURLDecodeParse<boolean>(queryShowResidentBtn as string, false);
         alarmStore.filterMode = (filterMode as EMode) || EMode.ui;
-
-        /** 兼容事件中心的bizIds */
-        alarmStore.bizIds =
-          typeof bizIds === 'string' ? tryURLDecodeParse(bizIds, [-1]) : bizIds.map(item => Number(item));
+        if (bizIds) {
+          /** 兼容事件中心的bizIds */
+          if (typeof bizIds === 'string') {
+            alarmStore.bizIds = Number.isNaN(Number(bizIds)) ? tryURLDecodeParse(bizIds, [-1]) : [Number(bizIds)];
+          } else {
+            alarmStore.bizIds = bizIds.map(item => Number(item));
+          }
+        }
         ordering.value = (sortOrder as string) || '';
         page.value = Number(currentPage || 1);
         if (favoriteId) {
@@ -467,13 +492,15 @@ export default defineComponent({
 
     /** 上一个详情 */
     const handlePreviousDetail = () => {
-      const index = data.value.findIndex(item => item.id === alarmId.value);
+      let index = data.value.findIndex(item => item.id === alarmId.value);
+      index = index === -1 ? 0 : index;
       alarmId.value = (data.value as AlertTableItem[])[index === 0 ? data.value.length - 1 : index - 1].id;
     };
 
     /** 下一个详情 */
     const handleNextDetail = () => {
-      const index = data.value.findIndex(item => item.id === alarmId.value);
+      let index = data.value.findIndex(item => item.id === alarmId.value);
+      index = index === -1 ? 0 : index;
       alarmId.value = (data.value as AlertTableItem[])[index === data.value.length - 1 ? 0 : index + 1].id;
     };
 
@@ -620,6 +647,49 @@ export default defineComponent({
       showResidentBtn.value = val;
     };
 
+    const handleCopyWhereQueryString = async (whereParams: CommonCondition[]) => {
+      const filters = whereParams.map(item => {
+        if (item.key === '*') {
+          return {
+            ...item,
+            operator: 'equal',
+            options: {},
+          };
+        }
+        const type = retrievalFilterFields.value.find(v => v.name === item.key)?.type || 'keyword';
+        return {
+          ...item,
+          value: [EFieldType.integer, EFieldType.long].includes(type as EFieldType)
+            ? item.value.map(v => {
+                const numberV = Number(v);
+                return numberV === 0 ? 0 : numberV || v;
+              })
+            : item.value,
+          operator: item.method,
+        };
+      });
+      if (filters.length) {
+        const copyStr = await traceGenerateQueryString({
+          filters,
+        }).catch(() => {
+          return '';
+        });
+        if (copyStr) {
+          copyText(copyStr, msg => {
+            Message({
+              message: msg,
+              theme: 'error',
+            });
+            return;
+          });
+          Message({
+            message: t('复制成功'),
+            theme: 'success',
+          });
+        }
+      }
+    };
+
     watch(
       () => data.value,
       () => {
@@ -634,8 +704,10 @@ export default defineComponent({
     });
 
     return {
+      isFirstInit,
       quickFilterList,
       quickFilterLoading,
+      quickFilterEmptyStatusType,
       isCollapsed,
       data,
       loading,
@@ -702,6 +774,8 @@ export default defineComponent({
       handleFavoriteOpenBlank,
       handleSaveAlertContentName,
       handleShowResidentBtnChange,
+      handleQuickFilteringOperation,
+      handleCopyWhereQueryString,
     };
   },
   render() {
@@ -746,6 +820,7 @@ export default defineComponent({
             selectFavorite={this.retrievalSelectFavorite}
             onBizIdsChange={this.handleBizIdsChange}
             onConditionChange={this.handleConditionChange}
+            onCopyWhere={this.handleCopyWhereQueryString}
             onFavoriteSave={this.handleFavoriteSave}
             onFilterModeChange={this.handleFilterModeChange}
             onQuery={this.handleQuery}
@@ -763,10 +838,21 @@ export default defineComponent({
                       <QuickFiltering
                         filterList={this.quickFilterList}
                         filterValue={this.alarmStore.quickFilterValue}
+                        isFilterEmptyItem={false}
+                        isFirstInit={this.isFirstInit}
                         loading={this.quickFilterLoading}
                         onClose={this.updateIsCollapsed}
                         onUpdate:filterValue={this.handleFilterValueChange}
-                      />
+                      >
+                        {{
+                          empty: () => (
+                            <EmptyStatus
+                              type={this.quickFilterEmptyStatusType}
+                              onOperation={this.handleQuickFilteringOperation}
+                            />
+                          ),
+                        }}
+                      </QuickFiltering>
                     </div>
                   );
                 },
