@@ -31,6 +31,53 @@ logger = logging.getLogger("alert.manager")
 BATCH_SIZE = 200
 # 默认检测周期
 DEFAULT_CHECK_INTERVAL = 60
+# ES 深分页每页大小
+SCAN_PAGE_SIZE = 5000
+
+
+def _search_after_hits(search, page_size: int):
+    """
+    基于 search_after + PIT 对 elasticsearch_dsl Search 对象做深分页迭代。
+
+    替代 scan()（scroll API），既避免 ES scroll context 积压，又通过 PIT 保留查询
+    开始时的快照语义，防止分页期间 refresh 导致的漏扫或重复扫描。
+
+    :param search: 已配置好 filter/source 的 elasticsearch_dsl Search 对象
+    :param page_size: 每页大小
+    """
+    es_client = AlertDocument._index._get_connection()
+    # 从 search 对象自身提取 index，保留调用方指定的 all_indices / 时间范围等差异
+    index = search._index
+    base_body = search.to_dict()
+    # 使用映射字段 id（Keyword，带 doc_values）而非元字段 _id，与 Elastic 官方推荐一致
+    base_body["sort"] = [{"id": "asc"}]
+    base_body["size"] = page_size
+
+    pit_resp = es_client.open_point_in_time(index=index, keep_alive="1m", ignore_unavailable=True)
+    pit_id = pit_resp["id"]
+
+    try:
+        search_after = None
+        while True:
+            # 每次构造独立 body，避免多次迭代间共享 dict 引发的状态污染
+            body = {**base_body, "pit": {"id": pit_id, "keep_alive": "1m"}}
+            if search_after:
+                body["search_after"] = search_after
+            # 使用 PIT 时不传 index，PIT 已携带索引快照信息
+            resp = es_client.search(body=body, request_timeout=30)
+            # ES 每轮响应可能刷新 pit_id，需同步更新
+            if resp.get("pit_id"):
+                pit_id = resp["pit_id"]
+            hits = resp["hits"]["hits"]
+            if not hits:
+                break
+            yield from hits
+            search_after = hits[-1]["sort"]
+    finally:
+        try:
+            es_client.close_point_in_time(body={"id": pit_id})
+        except Exception:
+            logger.warning("[_search_after_hits] failed to close PIT %s", pit_id)
 
 
 def check_abnormal_alert():
@@ -50,14 +97,17 @@ def check_abnormal_alert():
     cluster_bk_biz_ids = set(get_cluster_bk_biz_ids())
 
     alerts = []
-    # 这里用 scan 迭代的查询方式，目的是为了突破 ES 查询条数 1w 的限制
-    for hit in search.params(size=5000).scan():
-        if not getattr(hit, "id", None) or not getattr(hit, "event", None) or not getattr(hit.event, "bk_biz_id", None):
+    # 使用 search_after 深分页替代 scan()，避免 ES scroll context 积压
+    for hit in _search_after_hits(search, page_size=SCAN_PAGE_SIZE):
+        src = hit.get("_source") or {}
+        alert_id = src.get("id")
+        bk_biz_id = (src.get("event") or {}).get("bk_biz_id")
+        if not alert_id or not bk_biz_id:
             continue
         # 只处理集群内的告警
-        if hit.event.bk_biz_id not in cluster_bk_biz_ids:
+        if bk_biz_id not in cluster_bk_biz_ids:
             continue
-        alerts.append({"id": hit.id, "strategy_id": getattr(hit, "strategy_id", None)})
+        alerts.append({"id": alert_id, "strategy_id": src.get("strategy_id")})
 
     if alerts:
         send_check_task(alerts)
@@ -65,7 +115,7 @@ def check_abnormal_alert():
 
 def check_blocked_alert():
     """
-    拉取异常告警，对这些告警进行状态管理
+    拉取被流控的异常告警，对这些告警进行状态管理
     """
     current_time = int(time.time())
     end_time = current_time - CONST_ONE_HOUR
@@ -82,14 +132,17 @@ def check_blocked_alert():
 
     alerts = []
     total = 0
-    # 这里用 scan 迭代的查询方式，目的是为了突破 ES 查询条数 1w 的限制
-    for hit in search.params(size=BATCH_SIZE).scan():
-        if not getattr(hit, "id", None) or not getattr(hit, "event", None) or not getattr(hit.event, "bk_biz_id", None):
+    # 使用 search_after 深分页替代 scan()，避免 ES scroll context 积压
+    for hit in _search_after_hits(search, page_size=BATCH_SIZE):
+        src = hit.get("_source") or {}
+        alert_id = src.get("id")
+        bk_biz_id = (src.get("event") or {}).get("bk_biz_id")
+        if not alert_id or not bk_biz_id:
             continue
         # 只处理集群内的告警
-        if hit.event.bk_biz_id not in cluster_bk_biz_ids:
+        if bk_biz_id not in cluster_bk_biz_ids:
             continue
-        alerts.append({"id": hit.id, "strategy_id": getattr(hit, "strategy_id", None)})
+        alerts.append({"id": alert_id, "strategy_id": src.get("strategy_id")})
         total += 1
         if total % BATCH_SIZE == 0:
             alert_keys = [AlertKey(alert_id=alert["id"], strategy_id=alert.get("strategy_id")) for alert in alerts]
