@@ -23,12 +23,13 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { Component, Prop, Ref, Watch } from 'vue-property-decorator';
+import { Component, InjectReactive, Prop, Ref, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
-import { modifyCustomTsFields } from 'monitor-api/modules/custom_report';
+// import { modifyCustomTsFields } from 'monitor-api/modules/custom_report';
+import type { RequestHandlerMap } from '../../../../../../../type';
 
-import './render-metric.scss';
+import './index.scss';
 
 interface IEmit {
   onCheckChange: (checked: boolean) => void;
@@ -37,8 +38,11 @@ interface IEmit {
 
 interface IProps {
   checked?: boolean;
+  scopeId: number; // 分组id
+  scopeName: string; // 分组名称
   data: {
     alias: string;
+    field_id: number;
     metric_name: string;
   };
 }
@@ -46,11 +50,18 @@ interface IProps {
 @Component
 export default class RenderMetric extends tsc<IProps, IEmit> {
   @Prop({ type: Object, required: true }) readonly data: IProps['data'];
+  @Prop({ type: Number, default: -1 }) readonly scopeId: IProps['scopeId'];
+  @Prop({ type: String, default: '' }) readonly scopeName: IProps['scopeName'];
   @Prop({ type: Boolean, default: false }) readonly checked: IProps['checked'];
+  @InjectReactive('timeSeriesGroupId') readonly timeSeriesGroupId: number;
+  @InjectReactive('isApm') readonly isApm: boolean;
+  @InjectReactive('appName') readonly appName: string;
+  @InjectReactive('serviceName') readonly serviceName: string;
+  @InjectReactive('requestHandlerMap') readonly requestHandlerMap!: RequestHandlerMap;
 
-  @Ref('fromRef') fromRef: any;
-  @Ref('popoverRef') popoverRef: any;
-  @Ref('inputRef') inputRef: any;
+  @Ref('fromRef') fromRef;
+  @Ref('popoverRef') popoverRef;
+  @Ref('inputRef') inputRef;
 
   isActive = false;
   isSubmiting = false;
@@ -86,15 +97,32 @@ export default class RenderMetric extends tsc<IProps, IEmit> {
 
   async handleSubmit() {
     this.isSubmiting = true;
+    const params = {
+      time_series_group_id: Number(this.timeSeriesGroupId),
+    };
+    if (this.isApm) {
+      delete params.time_series_group_id;
+      Object.assign(params, {
+        app_name: this.appName,
+        service_name: this.serviceName,
+      });
+    }
     try {
       await this.fromRef.validate();
-      await modifyCustomTsFields({
-        time_series_group_id: this.$route.params.id,
+      await this.requestHandlerMap.modifyCustomTsFields({
+        ...params,
         update_fields: [
           {
+            id: this.data.field_id,
             type: 'metric',
             name: this.data.metric_name,
-            ...this.formData,
+            config: {
+              alias: this.formData.description,
+            },
+            scope: {
+              id: this.scopeId,
+              name: this.scopeName,
+            },
           },
         ],
       });
@@ -189,7 +217,10 @@ export default class RenderMetric extends tsc<IProps, IEmit> {
             </div>
           </bk-popover>
         </div>
-        <div slot='content'>
+        <div
+          class='metric-item-tooltip'
+          slot='content'
+        >
           <div>
             {this.$t('指标名：')}
             {this.data.metric_name}

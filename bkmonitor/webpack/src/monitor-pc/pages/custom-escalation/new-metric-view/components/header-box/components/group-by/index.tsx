@@ -27,10 +27,10 @@ import { Component, Prop, Ref, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
 import _ from 'lodash';
+import customEscalationViewStore from 'monitor-pc/store/modules/custom-escalation-view';
 
-import { formatTipsContent } from '../../../../metric-chart-view/utils';
+import { formatTipsContent } from '../../../../../../utils';
 import SelectPanel from './components/select-panel';
-import customEscalationViewStore from '@store/modules/custom-escalation-view';
 
 import './index.scss';
 
@@ -73,20 +73,15 @@ export default class AggregateDimensions extends tsc<IProps, IEmit> {
     return customEscalationViewStore.dimensionAliasNameMap;
   }
 
+  get aggInfoData() {
+    return customEscalationViewStore.aggInfoData;
+  }
+
   get demensionList() {
     if (this.customDemensionList) {
       return this.customDemensionList;
     }
-    const demenesionNameMap = {};
-    return this.currentSelectedMetricList.reduce<{ alias: string; name: string }[]>((result, item) => {
-      for (const demesionItem of item.dimensions) {
-        if (!demenesionNameMap[demesionItem.name]) {
-          result.push(demesionItem);
-          demenesionNameMap[demesionItem.name] = true;
-        }
-      }
-      return result;
-    }, []);
+    return this.aggInfoData.common_dimensions || [];
   }
 
   get renderValueList() {
@@ -125,9 +120,9 @@ export default class AggregateDimensions extends tsc<IProps, IEmit> {
         const selectBtnWidth = 60;
         const clearBtnWidth = 30;
 
-        const allTagEleList = Array.from(this.calcTagListRef!.querySelectorAll('.value-item'));
+        const allTagEleList = Array.from(this.calcTagListRef?.querySelectorAll('.value-item'));
         if (
-          this.calcTagListRef!.getBoundingClientRect().width + selectBtnWidth + labelWidth + clearBtnWidth <=
+          this.calcTagListRef?.getBoundingClientRect().width + selectBtnWidth + labelWidth + clearBtnWidth <=
             maxWidth ||
           this.localValueList.length === 1
         ) {

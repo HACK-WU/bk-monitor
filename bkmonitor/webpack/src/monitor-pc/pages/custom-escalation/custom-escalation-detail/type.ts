@@ -24,6 +24,17 @@
  * IN THE SOFTWARE.
  */
 
+import type * as apiMap from '../service';
+import type { IGroupingRule } from '../service';
+
+/** API 请求方法映射类型，将 service 模块中的所有 API 方法汇集为统一的映射类型 */
+export type RequestHandlerMap = {
+  [K in RequestHandlerKey]: (typeof apiMap)[K];
+};
+
+/** service 模块中所有可用的 API 方法名称 */
+type RequestHandlerKey = keyof typeof apiMap;
+
 /** 全量 */
 export const ALL_OPTION = 'allOption';
 /** 勾选项 */
@@ -42,67 +53,34 @@ export enum CheckboxStatus {
 /** 全部 */
 export const ALL_LABEL = '__all_label__';
 /** 未分组 */
-export const NULL_LABEL = '__null_label__';
+export const NULL_LABEL = 'default';
 
-/** 状态 */
-export const statusMap = new Map([
-  [false, { name: window.i18n.tc('启用'), color1: '#3FC06D', color2: 'rgba(63,192,109,0.16)' }],
-  [true, { name: window.i18n.tc('停用'), color1: '#FF9C01', color2: 'rgba(255,156,1,0.16)' }],
-]);
 /** 默认高度偏移量 */
 export const DEFAULT_HEIGHT_OFFSET = 8;
 
-export type DimensionHeaderKeys = keyof Pick<IDimensionItem, 'common' | 'hidden'>;
-
 /** 表格列配置 */
 export interface IColumnConfig {
+  fixed?: 'left' | 'right';
   label: string;
+  minWidth?: number;
   type?: string;
-  width: number;
+  width?: number;
   renderFn: (props: any, key?: any) => any;
   renderHeaderFn?: (config: any) => any;
 }
 
-export interface IDimensionItem {
-  common?: boolean;
-  description?: string;
-  disabled?: boolean;
-  error?: string;
-  hidden?: boolean;
-  isNew?: boolean;
-  name: string;
-  selection?: boolean;
-  type?: string;
-}
-
 /** 分组列表 */
 export interface IGroupListItem {
-  manualList: string[]; // 手动添加的指标
+  createFrom: 'data' | 'user';
+  dimensionConfig: IGroupingRule['dimension_config'];
   matchRules: string[]; // 匹配规则
   matchRulesOfMetrics?: string[]; // 匹配规则匹配的指标列表
+  metricCount: number;
   name: string; // 分组名称
+  scopeId: number;
 }
 
-export interface IMetricItem {
-  aggregate_method?: string;
-  description?: string;
-  dimensions?: string[];
-  disabled?: boolean;
-  error?: string;
-  function?: string[];
-  hidden?: boolean;
-  interval?: number;
-  isNew?: boolean;
-  name: string;
-  selection?: boolean;
-  unit?: string;
-}
-
-export type MetricHeaderKeys = keyof Pick<
-  IMetricItem,
-  'aggregate_method' | 'dimensions' | 'function' | 'interval' | 'unit'
->;
-
+/** Popover 子组件引用类型，用于获取弹窗内部的下拉组件实例 */
 export type PopoverChildRef = Vue & {
   $refs: {
     refDropdownContent?: PopoverInstance;
@@ -110,6 +88,7 @@ export type PopoverChildRef = Vue & {
   };
 };
 
+/** Popover 弹窗实例接口，提供隐藏弹窗的方法 */
 export interface PopoverInstance extends Vue {
   $el: HTMLDivElement;
   hideHandler: () => void;

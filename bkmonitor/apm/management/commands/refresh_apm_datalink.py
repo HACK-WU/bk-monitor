@@ -26,7 +26,6 @@ logger = logging.getLogger("apm")
 
 # APM 场景下的 metric_group_dimensions 固定配置
 APM_METRIC_GROUP_DIMENSIONS = [
-    {"key": "service_name", "default_value": "unknown_service"},
     {"key": "scope_name", "default_value": "default"},
 ]
 
@@ -40,7 +39,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--metric_group_dimensions",
             type=str,
-            help='自定义 metric_group_dimensions 的 JSON 字符串，如 \'[{"key":"service_name","default_value":"unknown_service"}]\'',
+            help='自定义 metric_group_dimensions 的 JSON 字符串，如 \'[{"key":"scope_name","default_value":"default"}]\'',
         )
 
     def handle(self, *args, **options):

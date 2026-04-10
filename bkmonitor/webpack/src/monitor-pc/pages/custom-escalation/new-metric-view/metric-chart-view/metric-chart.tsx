@@ -180,9 +180,8 @@ class NewMetricChart extends CommonSimpleChart {
     return this.yAxisNeedUnit ?? true;
   }
 
-  /** 指标列表 */
-  get currentSelectedMetricList() {
-    return customEscalationViewStore.currentSelectedMetricList;
+  get aggInfoData() {
+    return customEscalationViewStore.aggInfoData;
   }
 
   get viewWidth() {
@@ -391,8 +390,9 @@ class NewMetricChart extends CommonSimpleChart {
     return transformSeries;
   }
 
-  convertJsonObject(obj, name: string) {
-    const dimensions = this.currentSelectedMetricList.find(ele => ele.metric_name === name)?.dimensions;
+  convertJsonObject(obj) {
+    // const dimensions = this.currentSelectedMetricList.find(ele => ele.metric_name === name)?.dimensions;
+    const dimensions = this.aggInfoData.all_dimensions;
     const keys = Object.keys(obj);
     const parts = [];
     for (const key of keys) {
@@ -425,7 +425,7 @@ class NewMetricChart extends CommonSimpleChart {
     const { dimensions = {}, dimensions_translation = {}, time_offset } = set;
     const { metric = {} } = item;
     const timeOffset = time_offset ? `${this.formatTimeStr(time_offset)}` : '';
-    const output = this.convertJsonObject({ ...dimensions, ...dimensions_translation }, metric.name);
+    const output = this.convertJsonObject({ ...dimensions, ...dimensions_translation });
     const outputStr = output ? `${output}` : '';
     if (!timeOffset && !outputStr) {
       return metric.alias || metric.name;
@@ -857,8 +857,9 @@ class NewMetricChart extends CommonSimpleChart {
     this.handleAddStrategy(copyPanel, metric, {});
   }
   /** 获取当前指标的维度列表长度 */
-  getDimensionsLen(name: string) {
-    const dimensions = this.currentSelectedMetricList.find(ele => ele.metric_name === name)?.dimensions || [];
+  getDimensionsLen() {
+    // const dimensions = this.currentSelectedMetricList.find(ele => ele.metric_name === name)?.dimensions || [];
+    const dimensions = this.aggInfoData.all_dimensions || [];
     return dimensions.length || 0;
   }
 
@@ -886,7 +887,8 @@ class NewMetricChart extends CommonSimpleChart {
             >
               {this.panel.targets.map((target, ind) => {
                 const dimensionsName = target?.metric?.name;
-                const dimensionsLen = this.getDimensionsLen(dimensionsName);
+                // const dimensionsLen = this.getDimensionsLen(dimensionsName);
+                const dimensionsLen = this.getDimensionsLen();
                 return (
                   <li
                     key={dimensionsName}
@@ -905,7 +907,8 @@ class NewMetricChart extends CommonSimpleChart {
           </bk-dropdown-menu>
         );
       }
-      const dimensionsLen = this.getDimensionsLen(this.panel?.targets[0]?.metric?.name || '--');
+      // const dimensionsLen = this.getDimensionsLen(this.panel?.targets[0]?.metric?.name || '--');
+      const dimensionsLen = this.getDimensionsLen();
       /** 判断是否有维度可以下钻 */
       const isDrillDisabled = item.id === 'drillDown' && dimensionsLen === 0;
       return (

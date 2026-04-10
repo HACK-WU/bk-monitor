@@ -27,10 +27,10 @@ import { Component, Prop, Ref, Watch } from 'vue-property-decorator';
 import { Component as tsc } from 'vue-tsx-support';
 
 import _ from 'lodash';
+import customEscalationViewStore from 'monitor-pc/store/modules/custom-escalation-view';
 
-import { formatTipsContent } from '../../../../../../metric-chart-view/utils';
+import { formatTipsContent } from '../../../../../../../../utils';
 import EditPanel, { type IMetrics, type IValue, methodMap } from './components/edit-panel/index';
-import customEscalationViewStore from '@store/modules/custom-escalation-view';
 
 import './index.scss';
 
@@ -60,8 +60,12 @@ export default class ValueTag extends tsc<IProps, IEmit> {
     return customEscalationViewStore.dimensionAliasNameMap;
   }
 
+  get aggInfoData() {
+    return customEscalationViewStore.aggInfoData;
+  }
+
   get isAddBtnDisabled() {
-    return _.every(this.latestMetricsList, metricItem => metricItem.dimensions.length < 1);
+    return !this.currentSelectedMetricList.length;
   }
 
   @Watch('currentSelectedMetricList', { immediate: true })
@@ -76,30 +80,28 @@ export default class ValueTag extends tsc<IProps, IEmit> {
   }
 
   calcLatestMetricsList() {
-    const dimensionCountMap: Record<string, number> = {};
-
-    for (const metricItem of this.currentSelectedMetricList) {
-      for (const dimensionItem of metricItem.dimensions) {
-        dimensionCountMap[dimensionItem.name] = (dimensionCountMap[dimensionItem.name] || 0) + 1;
-      }
-    }
-
     const commonDimensionList: IMetrics['dimensions'] = [];
     const otherDimensionList: IMetrics['dimensions'] = [];
-    for (const metricsItem of this.currentSelectedMetricList) {
-      for (const dimensionItem of metricsItem.dimensions) {
-        if (dimensionCountMap[dimensionItem.name] > 1) {
-          commonDimensionList.push(dimensionItem);
-          continue;
-        }
-        otherDimensionList.push(dimensionItem);
+
+    const commonDimensionsSet = new Set((this.aggInfoData.common_dimensions || []).map(item => item.name));
+
+    for (const dimensionItem of this.aggInfoData.all_dimensions || []) {
+      if (commonDimensionsSet.has(dimensionItem.name)) {
+        commonDimensionList.push({
+          alias: dimensionItem.alias,
+          name: dimensionItem.name,
+        });
+      } else {
+        otherDimensionList.push({
+          alias: dimensionItem.alias,
+          name: dimensionItem.name,
+        });
       }
     }
 
     const nextMetricsList: IMetrics[] = [];
 
-    // 选择指标数至少有 2 个时一定会显示共有维度分组
-    if (this.currentSelectedMetricList.length >= 2) {
+    if (commonDimensionList.length > 0) {
       nextMetricsList.push({
         alias: this.$t('共用维度') as string,
         metric_name: this.$t('共用维度') as string,
