@@ -142,4 +142,5 @@ export default {
   分享: 'Share',
   从分组中移除: 'Remove from Group',
   自定义时间: 'Custom time',
+  用户操作: 'User Operation',
 };
