@@ -394,13 +394,47 @@ class ConvergeProcessor:
         抛出异常:
             ActionAlreadyFinishedError: 当检测到已结束的收敛实例时抛出
 
-        该方法实现完整的收敛处理流程，包含：
-        1. 屏蔽状态优先级校验
-        2. 任务状态有效性验证
-        3. 分布式锁获取控制
-        4. 收敛逻辑执行调度
-        5. 执行结果状态处理
-        6. 收敛日志记录
+        流程图:
+            开始
+             │
+             ├─[ACTION 类型]─────────────────────────────────────────────────────┐
+             │   │                                                               │
+             │   ├─ 实例状态在 END_STATUS 中？                                   │
+             │   │       └─ 是 → 抛出 ActionAlreadyFinishedError                │
+             │   │                                                               │
+             │   ├─ 状态为 SLEEP 且已超时（is_sleep_timeout）？                  │
+             │   │       └─ 是 → 返回 SKIPPED                                   │
+             │   │                                                               │
+             │   └─ 非主任务（is_parent_action=False）？                         │
+             │           └─ 是 → 检查屏蔽（shield_manager.shield）              │
+             │                       └─ 已屏蔽 → 记录日志+写告警日志            │
+             │                                   → 返回 SHIELD                  │
+             │                                                                   │
+             ├─[CONVERGE 类型]────────────────────────────────────────────────── ┘
+             │   └─ 实例已有 end_time？
+             │           └─ 是 → 抛出 ActionAlreadyFinishedError
+             │
+             ├─ is_illegal 为 True？
+             │       └─ 是 → 返回 False（无需收敛）
+             │
+             ├─ 初始化 ConvergeManager（查询/创建收敛实例）
+             │
+             ├─ 需要加锁（need_get_lock）？
+             │       └─ 是 → get_dimension_lock()
+             │                   └─ 加锁失败 → 推入收敛等待队列 → 抛出 ConvergeLockError
+             │
+             ├─ do_converge() 返回 False？
+             │       └─ 是 → 返回 False（未达到收敛阈值，继续等待）
+             │
+             ├─ 初始化 ConvergeFunc，调用对应收敛方法（converge_func）
+             │       └─ 方法不存在 → status = False
+             │
+             ├─ connect_converge 关联收敛实例与当前状态
+             │
+             ├─ status == SKIPPED 且为 ACTION 类型？
+             │       └─ 是 → 写告警日志（套餐已收敛）+ execute_times += 1
+             │
+             └─ 返回 status
         """
         # 告警屏蔽优先级最高，如果屏蔽了，则都不需要处理，直接不做收敛
         if self.instance_type == ConvergeType.ACTION:
@@ -460,6 +494,7 @@ class ConvergeProcessor:
             self.get_dimension_lock()
 
         if converge_manager.do_converge() is False:
+            # 返回False，表示无需收敛。
             return False
 
         converge_instance = converge_manager.converge_instance

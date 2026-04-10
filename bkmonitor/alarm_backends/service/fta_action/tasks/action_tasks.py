@@ -256,39 +256,65 @@ def sync_action_instances():
 @app.task(ignore_result=True, queue="celery_action_cron")
 def sync_action_instances_every_10_secs(last_sync_time=None):
     """
-    每隔十秒同步任务
-    :param last_sync_time:
-    :return:
+    定时同步处理记录（ActionInstance）到ES的Celery周期任务，每10秒调度一次。
+
+    通过分布式锁保证同一时刻只有一个worker执行同步，基于Redis缓存的上次同步时间戳
+    实现增量同步，将符合条件的处理记录分片下发给 sync_actions_sharding_task 异步写入ES。
+
+    参数:
+        last_sync_time: int 或 None，上次同步的Unix时间戳（秒）。
+                        仅在Redis缓存读取失败时作为兜底值使用，正常情况下从Redis获取。
+
+    返回值:
+        无返回值（Celery任务设置了ignore_result=True）
+
+    该方法的执行流程：
+    1. 获取分布式锁（SYNC_ACTION_LOCK_KEY），防止多worker并发执行
+    2. 从Redis读取上次同步时间戳，读取失败时降级为1小时前或传入的last_sync_time
+    3. 构建增量查询条件：
+       a. 基础条件：update_time <= 当前时间
+       b. 增量条件：update_time >= (上次同步时间 - 5分钟)，回退5分钟作为安全窗口防止数据遗漏
+       c. 信号与状态过滤：
+          - 普通信号（异常/恢复/关闭/无数据/手动/确认）且状态可同步
+          - 或汇总信号（COLLECT）且状态在汇总可同步范围内
+    4. 将查询到的处理记录ID按每200条分片，下发给 sync_actions_sharding_task 异步执行
+    5. 更新Redis中的同步时间戳为当前时间
+    6. 异常处理：加锁失败则跳过本次执行，其他异常记录日志后返回
     """
     try:
+        # Step 1: 获取分布式锁，确保同一时刻只有一个worker执行同步任务
         with service_lock(SYNC_ACTION_LOCK_KEY):
             current_sync_time = datetime.now(timezone.utc)
             redis_client = LATEST_TIME_OF_SYNC_ACTION_KEY.client
             cache_key = LATEST_TIME_OF_SYNC_ACTION_KEY.get_key()
+
+            # Step 2: 从Redis获取上次同步时间戳，用于增量同步
             try:
                 last_sync_time = int(redis_client.get(cache_key))
             except (ValueError, TypeError):
+                # Redis缓存读取失败（key不存在或值非法），降级处理：
+                # 优先使用函数参数传入的last_sync_time，否则回退到1小时前
                 logger.warning(
                     f"[sync_action_instances] get last_sync_time({cache_key}) failed. "
                     f"will start processing one hour ago"
                 )
-                # 如果获取缓存记录异常，表示要全库更新或者指定变量，这种可能性很小，但是无法保证redis一直正常运行
                 one_hour_ago = current_sync_time - timedelta(hours=1)
                 last_sync_time = last_sync_time or int(one_hour_ago.timestamp())
 
-            # 同步逻辑： 如果不存在最近更新时间的缓存key， 直接更新全表， 如果有，则更新对应时间范围内的数据即可
-            # 汇总并且处于休眠期的内容不做同步
-            # 刚接收到的处理记录也不做同步
-            # demo任务也不同步到ES库
+            # Step 3: 构建增量查询QuerySet
+            # 基础过滤：只查询update_time不超过当前时间的记录，避免查到未来时间的脏数据
             updated_action_instances = ActionInstance.objects.filter(update_time__lte=current_sync_time)
 
             if last_sync_time:
-                # 同步的时候，默认用5分钟之前的数据
+                # 回退5分钟作为安全窗口，防止因时钟偏差或事务延迟导致的数据遗漏
                 last_sync_time -= 5 * CONST_MINUTES
                 updated_action_instances = updated_action_instances.filter(
                     update_time__gte=datetime.fromtimestamp(last_sync_time)
                 )
 
+            # 信号与状态过滤，排除不需要同步的记录：
+            # - 普通信号(异常/恢复/关闭/无数据/手动/确认) + 可同步状态
+            # - 汇总信号(COLLECT) + 汇总可同步状态(等待/执行中/成功/部分成功/失败/跳过)
             updated_action_instances = updated_action_instances.filter(
                 Q(signal__in=ActionSignal.NORMAL_SIGNAL, status__in=ActionStatus.CAN_SYNC_STATUS)
                 | Q(signal=ActionSignal.COLLECT, status__in=ActionStatus.COLLECT_SYNC_STATUS)
@@ -296,12 +322,15 @@ def sync_action_instances_every_10_secs(last_sync_time=None):
 
             logger.info("start sync_action_instances from time %s", last_sync_time)
 
+            # Step 4: 将待同步的记录ID分片（每片200条），下发给异步子任务并行处理
             perform_sharding_task(
                 updated_action_instances.values_list("id", flat=True), sync_actions_sharding_task, num_per_task=200
             )
+
+            # Step 5: 同步完成后，将当前时间戳写入Redis，作为下次增量同步的起点
             redis_client.set(cache_key, int(current_sync_time.timestamp()))
     except LockError:
-        # 加锁失败
+        # 加锁失败，说明其他worker正在执行同步，本次跳过
         logger.info("[get service lock fail] sync_action_instances_every_10_secs. will process later")
         return
     except BaseException as e:  # NOCC:broad-except(设计如此:)
@@ -312,44 +341,81 @@ def sync_action_instances_every_10_secs(last_sync_time=None):
 @app.task(ignore_result=True, queue="celery_action_cron")
 def sync_actions_sharding_task(action_ids):
     """
-    分片任务同步信息，避免一次任务量太大
-    :param action_ids:
-    :return:
+    将一批处理记录（ActionInstance）从MySQL同步到ES的分片子任务。
+
+    由 sync_action_instances_every_10_secs 按每200条分片后下发调度，
+    负责将指定ID范围内的处理记录转换为ES文档并批量写入。
+
+    参数:
+        action_ids: list[int]，需要同步的ActionInstance主键ID列表（单片最多200条）
+
+    返回值:
+        无返回值（Celery任务设置了ignore_result=True）
+
+    该方法的执行流程：
+    1. 预加载收敛关系（ConvergeRelation），建立 action_id -> 收敛信息 的映射
+    2. 批量查询ActionInstance和关联的AlertDocument，减少数据库/ES查询次数
+    3. 遍历每个处理记录，挂载收敛信息，转换为ES文档格式
+    4. 收集有子任务状态变更的主任务（parent_action），用于后续级联更新
+    5. 批量写入ES（ActionInstanceDocument.bulk_create）
+    6. 调用 sync_updated_parent_actions 级联同步受影响的主任务状态
     """
     action_documents = []
     current_sync_time = datetime.now(timezone.utc)
+
+    # Step 1: 预加载当前批次所有处理记录的收敛关系
+    # 收敛关系记录了处理记录与收敛实例之间的关联（是否为主任务、收敛状态等）
+    # 构建 {action_id: {converge_id, related_id, converge_status, is_primary}} 映射
     converge_relations = {
         item["related_id"]: item
         for item in ConvergeRelation.objects.filter(related_id__in=action_ids, related_type=ConvergeType.ACTION).values(
             "converge_id", "related_id", "converge_status", "is_primary"
         )
     }
+
+    # Step 2: 批量查询处理记录实例，并收集所有关联的告警ID
     all_actions = []
     all_alerts = []
     for instance in ActionInstance.objects.filter(id__in=action_ids):
         all_alerts.extend(instance.alerts)
         all_actions.append(instance)
+
+    # 从ES批量获取告警文档，构建 {alert_id: AlertDocument} 映射，避免逐条查询
     all_alert_docs = {alert.id: alert for alert in AlertDocument.mget(ids=all_alerts)}
-    # 记录需要更新的主任务
+
+    # Step 3: 遍历处理记录，逐条转换为ES文档
+    # 同时收集需要级联更新状态的主任务 {parent_action_id: generate_uuid}
     updated_parent_actions = {}
     for instance in all_actions:
+        # 将预加载的收敛信息挂载到实例上，供 to_document 转换时使用
         instance.converge_info = converge_relations.get(instance.id, {})
+
+        # 跳过没有动作配置的记录（无法生成有效的ES文档）
         if not instance.action_config:
             continue
+
+        # Step 4: 如果当前记录是子任务，且状态不在忽略范围（RUNNING/SLEEP/SKIPPED/SHIELD），
+        # 则记录其主任务ID，后续需要根据子任务状态级联更新主任务状态
         if instance.parent_action_id and instance.real_status not in ActionStatus.IGNORE_STATUS:
             updated_parent_actions.update({instance.parent_action_id: instance.generate_uuid})
+
         try:
+            # 获取当前处理记录关联的第一条告警文档（用于ES文档中的告警快照信息）
             alert_doc = all_alert_docs.get(instance.alerts[0]) if instance.alerts else None
             action_documents.append(to_document(instance, current_sync_time, alerts=[alert_doc] if alert_doc else None))
         except BaseException as error:  # NOCC:broad-except(设计如此:)
+            # 单条记录转换失败不影响整批同步，记录异常后继续处理
             logger.exception(
                 "sync action error: %s , action_info %s",
                 error,
                 "{}{}".format(instance.id, instance.action_config.get("name", "")),
             )
+
+    # Step 5: 批量将转换后的文档写入ES，使用INDEX操作（存在则更新，不存在则创建）
     ActionInstanceDocument.bulk_create(action_documents, action=BulkActionType.INDEX)
 
-    # 涉及到相关的主任务也进行一次同步
+    # Step 6: 级联同步受子任务状态变更影响的主任务
+    # 根据子任务的成功/失败情况，更新主任务状态为 FAILURE 或 PARTIAL_FAILURE
     sync_updated_parent_actions(updated_parent_actions, all_alert_docs, current_sync_time)
 
 
