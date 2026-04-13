@@ -27,13 +27,22 @@
 import { type PropType, defineComponent } from 'vue';
 
 import { IssuesBatchActionEnum } from '../../constant';
+import {
+  assignIssues,
+  followUpIssues,
+  resolveIssues,
+  showOperationResult,
+  updateIssuesPriority,
+} from '../../services/issues-operations';
 import IssuesAssignDialog from '../issues-assign-dialog/issues-assign-dialog';
 import IssuesFollowUpDialog from '../issues-follow-up-dialog/issues-follow-up-dialog';
 import IssuesPriorityDialog from '../issues-priority-dialog/issues-priority-dialog';
 import IssuesResolveDialog from '../issues-resolve-dialog/issues-resolve-dialog';
 
+import type { AsyncDialogConfirmEvent } from '../../hooks/use-async-dialog';
 import type {
   IssueIdentifier,
+  IssuePriorityType,
   IssuesBatchActionType,
   IssuesOperationDialogEvent,
   IssuesOperationDialogParams,
@@ -63,9 +72,10 @@ export default defineComponent({
   },
   emits: {
     'update:show': (value: boolean) => typeof value === 'boolean',
-    success: (dialogType: IssuesBatchActionType, event: IssuesOperationDialogEvent) => dialogType && event != null,
+    success: (dialogType: IssuesBatchActionType, event: IssuesOperationDialogEvent) =>
+      dialogType != null && event != null,
   },
-  setup(_props, { emit }) {
+  setup(props, { emit }) {
     /**
      * @description dialog 操作成功后统一回调，将子 dialog 返回的 succeeded 数组包装为 IssuesOperationDialogEvent
      * @param {IssuesBatchActionType} dialogType - dialog 类型
@@ -84,9 +94,75 @@ export default defineComponent({
       emit('update:show', v);
     };
 
+    /**
+     * @description 创建 dialog confirm 处理函数的工厂方法，统一封装 service 调用 → 结果提示 → resolve/reject 协议 → 成功回调
+     * @param {object} config - 配置项
+     * @param {Function} config.service - service 层异步函数
+     * @param {Function} config.buildParams - 从 event.payload 构建请求参数的函数
+     * @param {string} config.successMessage - 操作成功提示文案
+     * @param {IssuesBatchActionType} config.dialogType - 对应的批量操作枚举值
+     * @returns {Function} 可直接绑定到子 dialog onConfirm 的异步处理函数
+     */
+    const createConfirmHandler = <T extends Record<string, unknown> = Record<string, unknown>>(config: {
+      buildParams: (payload: T) => Record<string, unknown>;
+      dialogType: IssuesBatchActionType;
+      service: (params: any) => Promise<IssuesOperationDialogEvent>;
+      successMessage: string;
+    }) => {
+      return async (event: AsyncDialogConfirmEvent<T>) => {
+        const res = await config.service({
+          issues: props.issuesData,
+          ...config.buildParams(event.payload),
+        });
+        const success = showOperationResult(res, config.successMessage);
+        if (success) {
+          event.resolve();
+          handleConfirmSuccess(config.dialogType, res);
+        } else {
+          event.reject();
+        }
+      };
+    };
+
+    /** 标记已解决 dialog 的 confirm 回调 */
+    const handleResolveConfirm = createConfirmHandler({
+      service: resolveIssues,
+      buildParams: () => ({}),
+      successMessage: window.i18n.t('标记为已解决成功'),
+      dialogType: IssuesBatchActionEnum.RESOLVE,
+    });
+
+    /** 指派负责人 dialog 的 confirm 回调 */
+    const handleAssignConfirm = createConfirmHandler<{ assignee: string[] }>({
+      service: assignIssues,
+      buildParams: payload => ({ assignee: payload.assignee }),
+      successMessage: window.i18n.t('指派责任人成功'),
+      dialogType: IssuesBatchActionEnum.ASSIGN,
+    });
+
+    /** 修改优先级 dialog 的 confirm 回调 */
+    const handlePriorityConfirm = createConfirmHandler<{ priority: IssuePriorityType }>({
+      service: updateIssuesPriority,
+      buildParams: payload => ({ priority: payload.priority }),
+      successMessage: window.i18n.t('修改成功'),
+      dialogType: IssuesBatchActionEnum.PRIORITY,
+    });
+
+    /** 添加跟进信息 dialog 的 confirm 回调 */
+    const handleFollowUpConfirm = createConfirmHandler<{ content: string }>({
+      service: followUpIssues,
+      buildParams: payload => ({ content: payload.content }),
+      successMessage: window.i18n.t('添加跟进信息成功'),
+      dialogType: IssuesBatchActionEnum.FOLLOW_UP,
+    });
+
     return {
       handleConfirmSuccess,
       handleShowChange,
+      handleResolveConfirm,
+      handleAssignConfirm,
+      handlePriorityConfirm,
+      handleFollowUpConfirm,
     };
   },
   render() {
@@ -99,18 +175,14 @@ export default defineComponent({
           isShow={this.dialogType === IssuesBatchActionEnum.ASSIGN && this.show}
           issuesData={this.issuesData}
           onCancel={() => this.handleShowChange(false)}
-          onSuccess={(event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.ASSIGN>) =>
-            this.handleConfirmSuccess(IssuesBatchActionEnum.ASSIGN, event)
-          }
+          onConfirm={this.handleAssignConfirm}
           onUpdate:isShow={this.handleShowChange}
         />
         <IssuesResolveDialog
           isShow={this.dialogType === IssuesBatchActionEnum.RESOLVE && this.show}
           issuesData={this.issuesData}
           onCancel={() => this.handleShowChange(false)}
-          onSuccess={(event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.RESOLVE>) =>
-            this.handleConfirmSuccess(IssuesBatchActionEnum.RESOLVE, event)
-          }
+          onConfirm={this.handleResolveConfirm}
           onUpdate:isShow={this.handleShowChange}
         />
         <IssuesPriorityDialog
@@ -118,18 +190,14 @@ export default defineComponent({
           isShow={this.dialogType === IssuesBatchActionEnum.PRIORITY && this.show}
           issuesData={this.issuesData}
           onCancel={() => this.handleShowChange(false)}
-          onSuccess={(event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.PRIORITY>) =>
-            this.handleConfirmSuccess(IssuesBatchActionEnum.PRIORITY, event)
-          }
+          onConfirm={this.handlePriorityConfirm}
           onUpdate:isShow={this.handleShowChange}
         />
         <IssuesFollowUpDialog
           isShow={this.dialogType === IssuesBatchActionEnum.FOLLOW_UP && this.show}
           issuesData={this.issuesData}
           onCancel={() => this.handleShowChange(false)}
-          onSuccess={(event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.FOLLOW_UP>) =>
-            this.handleConfirmSuccess(IssuesBatchActionEnum.FOLLOW_UP, event)
-          }
+          onConfirm={this.handleFollowUpConfirm}
           onUpdate:isShow={this.handleShowChange}
         />
       </div>

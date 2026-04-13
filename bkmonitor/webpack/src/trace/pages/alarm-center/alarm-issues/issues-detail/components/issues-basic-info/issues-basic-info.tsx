@@ -31,7 +31,7 @@ import dayjs from 'dayjs';
 import { useI18n } from 'vue-i18n';
 
 import UserSelector from '../../../../../../components/user-selector/user-selector';
-import { IssueActionEnum, IssuesPriorityMap, IssueStatusEnum } from '../../../constant';
+import { IssueActionEnum, ISSUES_PRIORITY_MAP, IssueStatusEnum } from '../../../constant';
 import {
   archiveIssues,
   assignIssues,
@@ -124,7 +124,7 @@ export default defineComponent({
     /**
      * issues 优先级列表
      */
-    const issuesPriorityList = Object.entries(IssuesPriorityMap).map(([key, value]) => ({
+    const issuesPriorityList = Object.entries(ISSUES_PRIORITY_MAP).map(([key, value]) => ({
       ...value,
       id: key as IssuePriorityType,
     }));
@@ -139,8 +139,6 @@ export default defineComponent({
      * @param id 优先级id
      */
     const handlePriorityClick = (id: IssuePriorityType) => {
-      priorityPopover.value?.hide();
-
       loadings.priority = true;
       updateIssuesPriority({
         issues: [
@@ -152,6 +150,7 @@ export default defineComponent({
         priority: id,
       })
         .then(() => {
+          priorityPopover.value?.hide();
           emit('priorityChange', id);
         })
         .finally(() => {
@@ -164,7 +163,6 @@ export default defineComponent({
      * @param users 负责人列表
      */
     const handleResponsiblePersonChange = (users: string[]) => {
-      console.log('handleResponsiblePersonChange', users);
       userList.value = users;
       if (users.length === 0) {
         Message({
@@ -280,6 +278,7 @@ export default defineComponent({
                   <Loading
                     loading={this.loadings.priority}
                     mode='spin'
+                    size='small'
                     theme='primary'
                   >
                     <div class='priority-select-wrap'>
@@ -311,12 +310,12 @@ export default defineComponent({
               <div class={['basic-info-value', { 'is-active': this.priorityPopoverShow }]}>
                 <div
                   style={{
-                    color: IssuesPriorityMap[this.detail.priority]?.color,
-                    backgroundColor: IssuesPriorityMap[this.detail.priority]?.bgColor,
+                    color: ISSUES_PRIORITY_MAP[this.detail.priority]?.color,
+                    backgroundColor: ISSUES_PRIORITY_MAP[this.detail.priority]?.bgColor,
                   }}
                   class='priority-tag'
                 >
-                  {IssuesPriorityMap[this.detail.priority]?.alias}
+                  {ISSUES_PRIORITY_MAP[this.detail.priority]?.alias}
                 </div>
               </div>
             </Popover>
@@ -341,6 +340,7 @@ export default defineComponent({
               <span class='title'>{this.$t('影响范围')}</span>
             </div>
             <div class='basic-info-value'>
+              {Object.entries(this.detail.impact_scope ?? {}).length === 0 && this.$t('无')}
               {Object.entries(this.detail.impact_scope ?? {}).map(([resourceKey, resource]) => (
                 <div
                   key={resourceKey}
@@ -376,7 +376,9 @@ export default defineComponent({
             {this.detail.status !== IssueStatusEnum.ARCHIVED && (
               <Button
                 class='confirm-btn'
-                theme={isResolved ? 'default' : 'primary'}
+                {...(!isResolved && {
+                  theme: 'primary',
+                })}
                 onClick={() => {
                   this.handleDialogChange(true, isResolved ? IssueActionEnum.UNRESOLVED : IssueActionEnum.RESOLVED);
                 }}

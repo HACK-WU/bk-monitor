@@ -24,15 +24,15 @@
  * IN THE SOFTWARE.
  */
 
-import { type PropType, defineComponent, shallowRef, watch } from 'vue';
+import { type PropType, defineComponent, toRef } from 'vue';
 
 import { Button, Dialog } from 'bkui-vue';
 import { useI18n } from 'vue-i18n';
 
-import { resolveIssues, showOperationResult } from '../../services/issues-operations';
+import { useAsyncDialog } from '../../hooks/use-async-dialog';
 
-import type { IssuesBatchActionEnum } from '../../constant';
-import type { IssueIdentifier, IssuesOperationDialogEvent } from '../../typing';
+import type { AsyncDialogConfirmEvent } from '../../hooks/use-async-dialog';
+import type { IssueIdentifier } from '../../typing';
 
 import './issues-resolve-dialog.scss';
 
@@ -55,62 +55,51 @@ export default defineComponent({
     },
   },
   emits: {
-    success: (event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.RESOLVE>) => event != null,
+    confirm: (_event: AsyncDialogConfirmEvent) => _event != null,
     cancel: () => true,
-    'update:isShow': (val: boolean) => typeof val === 'boolean',
+    'update:isShow': (_val: boolean) => typeof _val === 'boolean',
   },
   setup(props, { emit }) {
     const { t } = useI18n();
-    /** 提交中 loading 状态 */
-    const loading = shallowRef(false);
+    const {
+      loading,
+      handleConfirm: createConfirmEvent,
+      handleCancel: internalCancel,
+    } = useAsyncDialog({
+      isShow: toRef(() => props.isShow),
+      onShowChange: (val: boolean) => emit('update:isShow', val),
+    });
 
     /**
      * @description 获取提示内容
-     * @returns { string } 提示内容
+     * @returns {string} 提示内容
      */
     const getTip = () => {
       if (props.tip) return props.tip;
-      if (props.issuesData?.length > 1) return window.i18n.t('确认批量标记为"已解决"？');
-      return window.i18n.t('确认标记为"已解决"？');
+      if (props.issuesData?.length > 1) return t('确认批量标记为"已解决"？');
+      return t('确认标记为“已解决”？');
     };
 
     /**
-     * @description 确认标记为已解决
+     * @description 确认操作——通过 useAsyncDialog 创建 { resolve, reject } 事件对象并 emit 给调用方
+     * @returns {void}
      */
-    const handleConfirm = async () => {
-      loading.value = true;
-
-      try {
-        const res = await resolveIssues({
-          issues: props.issuesData,
-        });
-
-        showOperationResult(res, t('标记成功'));
-        emit('success', res);
-      } finally {
-        loading.value = false;
-      }
+    const handleConfirm = () => {
+      const event = createConfirmEvent();
+      emit('confirm', event);
     };
 
     /**
      * @description 取消操作
+     * @returns {void}
      */
     const handleCancel = () => {
-      if (loading.value) return;
+      if (!internalCancel()) return;
       emit('cancel');
     };
 
-    // 每次弹窗打开时重置 loading
-    watch(
-      () => props.isShow,
-      val => {
-        if (val) {
-          loading.value = false;
-        }
-      }
-    );
-
     return {
+      t,
       loading,
       getTip,
       handleConfirm,
@@ -135,13 +124,13 @@ export default defineComponent({
                   theme='primary'
                   onClick={this.handleConfirm}
                 >
-                  {window.i18n.t('确定')}
+                  {this.t('确定')}
                 </Button>
                 <Button
                   disabled={this.loading}
                   onClick={this.handleCancel}
                 >
-                  {window.i18n.t('取消')}
+                  {this.t('取消')}
                 </Button>
               </div>
             </div>

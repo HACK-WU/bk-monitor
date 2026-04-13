@@ -436,6 +436,66 @@ class ArchiveIssueResource(Resource):
         return _run_batch(validated_request_data["issues"], _action)
 
 
+class ReopenIssueResource(Resource):
+    """批量重新打开 Issue（已解决 → 未解决）"""
+
+    class RequestSerializer(serializers.Serializer):
+        issues = serializers.ListField(label="Issue 列表", child=IssueItemSerializer(), min_length=1)
+
+    def perform_request(self, validated_request_data):
+        operator = get_request_username()
+
+        def _action(issue):
+            """
+            将已解决的 Issue 重新打开。
+
+            Args:
+                issue: 要操作的 IssueDocument 实例。
+
+            Returns:
+                dict，包含 bk_biz_id、issue_id、status、update_time 字段。
+            """
+            issue.reopen(operator=operator)
+            return {
+                "bk_biz_id": issue.bk_biz_id,
+                "issue_id": issue.id,
+                "status": issue.status,
+                "update_time": issue.update_time,
+            }
+
+        return _run_batch(validated_request_data["issues"], _action)
+
+
+class RestoreIssueResource(Resource):
+    """批量恢复归档 Issue（归档 → 归档前状态）"""
+
+    class RequestSerializer(serializers.Serializer):
+        issues = serializers.ListField(label="Issue 列表", child=IssueItemSerializer(), min_length=1)
+
+    def perform_request(self, validated_request_data):
+        operator = get_request_username()
+
+        def _action(issue):
+            """
+            将归档的 Issue 恢复为归档前的状态（通过活动日志推断），无法确定时回退到 PENDING_REVIEW。
+
+            Args:
+                issue: 要操作的 IssueDocument 实例。
+
+            Returns:
+                dict，包含 bk_biz_id、issue_id、status、update_time 字段。
+            """
+            issue.restore(operator=operator)
+            return {
+                "bk_biz_id": issue.bk_biz_id,
+                "issue_id": issue.id,
+                "status": issue.status,
+                "update_time": issue.update_time,
+            }
+
+        return _run_batch(validated_request_data["issues"], _action)
+
+
 class UpdateIssuePriorityResource(Resource):
     """批量修改优先级"""
 

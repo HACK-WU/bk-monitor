@@ -37,6 +37,7 @@ import { usePopover } from './hooks/use-popover';
 import { useScenarioRenderer } from './hooks/use-scenario-renderer';
 
 import type {
+  ActionTableItem,
   AlertAllActionEnum,
   AlertContentNameEditInfo,
   AlertTableItem,
@@ -47,6 +48,7 @@ import type { AlertSavePromiseEvent } from './components/alert-content-detail/al
 import type { ActionScenario } from './scenarios/action-scenario';
 import type { AlertScenario } from './scenarios/alert-scenario';
 import type { IncidentScenario } from './scenarios/incident-scenario';
+import type { TimeRangeType } from '@/components/time-range/utils';
 import type { BkUiSettings } from '@blueking/tdesign-ui/.';
 import type { SelectOptions, SlotReturnValue } from 'tdesign-vue-next';
 
@@ -99,7 +101,7 @@ export default defineComponent({
     },
     /** 时间范围 [from, to] */
     timeRange: {
-      type: Array as PropType<(number | string)[]>,
+      type: Array as PropType<TimeRangeType>,
       default: () => [],
     },
     /** 滚动容器的 CSS 选择器（用于滚动优化及表头/滚动条吸附） */
@@ -118,8 +120,8 @@ export default defineComponent({
     displayColFieldsChange: (displayColFields: string[]) => Array.isArray(displayColFields),
     pageSizeChange: (pageSize: number) => typeof pageSize === 'number',
     sortChange: (sort: string | string[]) => typeof sort === 'string' || Array.isArray(sort),
-    showAlertDetail: (item: string, _defaultTab?: string) => typeof item === 'string',
-    showActionDetail: (item: string) => typeof item === 'string',
+    showAlertDetail: (row: AlertTableItem, _defaultTab?: string) => row,
+    showActionDetail: (row: ActionTableItem) => row,
     selectionChange: (selectedRowKeys: string[], options?: SelectOptions<any>) =>
       Array.isArray(selectedRowKeys) && options,
     openAlertDialog: (
@@ -168,7 +170,7 @@ export default defineComponent({
       clickPopoverTools,
       selectedRowKeys: toRef(props, 'selectedRowKeys'),
       clearSelected: () => handleSelectionChange(),
-      showDetailEmit: (id, defaultTab) => emit('showAlertDetail', id, defaultTab),
+      showDetailEmit: (row, defaultTab) => emit('showAlertDetail', row, defaultTab),
       openDialogEmit: (...args) => emit('openAlertDialog', ...args),
       saveContentNameEmit: (saveInfo, savePromiseEvent) => emit('saveAlertContentName', saveInfo, savePromiseEvent),
     });
@@ -198,6 +200,7 @@ export default defineComponent({
     const settings = computed(() => ({
       ...props.tableSettings,
       hasCheckAll: true,
+      showRowSize: false,
     }));
 
     /**

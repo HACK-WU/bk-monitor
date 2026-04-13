@@ -34,7 +34,7 @@ import {
   watch,
 } from 'vue';
 
-import { commonPageSizeSet, convertDurationArray, tryURLDecodeParse } from 'monitor-common/utils';
+import { commonPageSizeSet, convertDurationArray, copyText, tryURLDecodeParse } from 'monitor-common/utils';
 import FavoriteBox, {
   type IFavorite,
   type IFavoriteGroup,
@@ -62,6 +62,7 @@ import { useAlertDialogs } from './composables/use-alert-dialogs';
 import { useQuickFilter } from './composables/use-quick-filter';
 import { useAlarmTableColumns } from './composables/use-table-columns';
 import {
+  type ActionTableItem,
   type AlarmUrlParams,
   type AlertAllActionEnum,
   type AlertContentNameEditInfo,
@@ -80,6 +81,7 @@ const ALARM_CENTER_SHOW_FAVORITE = 'ALARM_CENTER_SHOW_FAVORITE';
 
 import { Message } from 'bkui-vue';
 import dayjs from 'dayjs';
+import { traceGenerateQueryString } from 'monitor-api/modules/apm_trace';
 import { handleTransformToTimestamp } from 'trace/components/time-range/utils';
 import { useI18n } from 'vue-i18n';
 
@@ -231,7 +233,10 @@ export default defineComponent({
     const showResidentBtn = shallowRef(false);
 
     const isCollapsed = shallowRef(false);
+    /* 当前选中的告警id */
     const detailId = shallowRef<string>('');
+    /* 当前选中的告警bizId */
+    const detailBizId = shallowRef<number>(undefined);
     const alarmDetailShow = shallowRef(false);
     /** table 选中的 rowKey 数组 */
     const selectedRowKeys = shallowRef<string[]>([]);
@@ -248,8 +253,6 @@ export default defineComponent({
 
     /** issue 第一个告警时间（用于确认告警详情默认时间范围） */
     const issueFirstAlarmTime = shallowRef<number | string>('');
-    /** issue bizId */
-    const issueBizId = shallowRef<number>(null);
 
     const { impactScopeDrawerShow, impactScopeResourceKey, impactScopeResource, handleImpactScopeClick } =
       useIssuesImpactScopeDrawer();
@@ -355,6 +358,7 @@ export default defineComponent({
     };
     /** 查询语句变化 */
     const handleQueryStringChange = (queryString: string) => {
+      handleCurrentPageChange(1);
       alarmStore.queryString = queryString;
     };
     /** 查询模式变化 */
@@ -382,12 +386,13 @@ export default defineComponent({
 
       if (alarmDetailShow.value) {
         detailUrlParams = {
+          /** 详情ID */
           detailId: detailId.value,
+          detailBizId: detailBizId.value,
+          /** 是否展示详情 */
           showDetail: JSON.stringify(alarmDetailShow.value),
           /** issue 首次告警时间 */
           issueFirstAlarmTime: String(issueFirstAlarmTime.value),
-          /** issue bizId*/
-          issueBizId: issueBizId.value,
         };
       }
 
@@ -453,13 +458,13 @@ export default defineComponent({
         currentPage,
         showDetail,
         detailId: queryDetailId,
+        detailBizId: queryDetailBizId,
         favorite_id: favoriteId,
         showResidentBtn: queryShowResidentBtn,
         /** 最后一次操作的快速过滤条件分类数据 */
         lastQuickFilterCategoryData,
         /** issue 相关参数 */
         issueFirstAlarmTime: queryIssueFirstAlarmTime,
-        issueBizId: queryIssueBizId,
         /** 以下是兼容事件中心的URL参数 */
         searchType,
         condition,
@@ -508,8 +513,8 @@ export default defineComponent({
         isShowFavorite.value = JSON.parse(localStorage.getItem(ALARM_CENTER_SHOW_FAVORITE) || 'false');
         alarmDetailShow.value = JSON.parse((showDetail as string) || 'false');
         detailId.value = (queryDetailId as string) || '';
-        issueFirstAlarmTime.value = queryIssueFirstAlarmTime as string;
-        issueBizId.value = queryIssueBizId ? Number(queryIssueBizId) : null;
+        detailBizId.value = queryDetailBizId ? Number(queryDetailBizId) : null;
+        issueFirstAlarmTime.value = (queryIssueFirstAlarmTime as string) || '';
         alarmStore.initAlarmService();
       } catch (error) {
         console.log('route query:', error);
@@ -517,17 +522,24 @@ export default defineComponent({
     }
 
     /**
-     * 展示告警详情
+     * @description 展示告警详情
+     * @param {AlertTableItem} row - 告警记录行数据
+     * @param {string} defaultTab - 默认选中的 Tab 页签名
      */
-    function handleShowAlertDetail(id: string, defaultTab?: string) {
+    function handleShowAlertDetail(row: AlertTableItem, defaultTab?: string) {
       alarmDetailDefaultTab.value = defaultTab || '';
-      detailId.value = id;
+      detailId.value = row.id;
+      detailBizId.value = row.bk_biz_id;
       handleDetailShowChange(true);
     }
 
-    /**  展示处理记录详情  */
-    function handleShowActionDetail(id: string) {
-      detailId.value = id;
+    /**
+     * @description 展示处理记录详情
+     * @param {ActionTableItem} row - 处理记录行数据
+     */
+    function handleShowActionDetail(row: ActionTableItem) {
+      detailId.value = row.id;
+      detailBizId.value = row.bk_biz_id as number;
       handleDetailShowChange(true);
     }
 
@@ -538,7 +550,7 @@ export default defineComponent({
     const handleIssuesShowDetail = (item: IssueItem) => {
       detailId.value = item.id;
       issueFirstAlarmTime.value = item.first_alert_time;
-      issueBizId.value = item.bk_biz_id;
+      detailBizId.value = item.bk_biz_id;
       handleDetailShowChange(true);
     };
 
@@ -588,14 +600,18 @@ export default defineComponent({
     const handlePreviousDetail = () => {
       let index = data.value.findIndex(item => item.id === detailId.value);
       index = index === -1 ? 0 : index;
-      detailId.value = (data.value as AlertTableItem[])[index === 0 ? data.value.length - 1 : index - 1].id;
+      const target = (data.value as AlertTableItem[])[index === 0 ? data.value.length - 1 : index - 1];
+      detailId.value = target.id;
+      detailBizId.value = target.bk_biz_id;
     };
 
     /** 下一个详情 */
     const handleNextDetail = () => {
       let index = data.value.findIndex(item => item.id === detailId.value);
       index = index === -1 ? 0 : index;
-      detailId.value = (data.value as AlertTableItem[])[index === data.value.length - 1 ? 0 : index + 1].id;
+      const target = (data.value as AlertTableItem[])[index === data.value.length - 1 ? 0 : index + 1];
+      detailId.value = target.id;
+      detailBizId.value = target.bk_biz_id;
     };
 
     /** issues 上一个详情*/
@@ -604,7 +620,7 @@ export default defineComponent({
       index = index === -1 ? 0 : index;
       const target = (data.value as IssueItem[])[index === 0 ? data.value.length - 1 : index - 1];
       issueFirstAlarmTime.value = target.first_alert_time;
-      issueBizId.value = target.bk_biz_id;
+      detailBizId.value = target.bk_biz_id;
       detailId.value = target.id;
     };
 
@@ -614,7 +630,7 @@ export default defineComponent({
       index = index === -1 ? 0 : index;
       const target = (data.value as IssueItem[])[index === data.value.length - 1 ? 0 : index + 1];
       issueFirstAlarmTime.value = target.first_alert_time;
-      issueBizId.value = target.bk_biz_id;
+      detailBizId.value = target.bk_biz_id;
       detailId.value = target.id;
     };
 
@@ -761,6 +777,49 @@ export default defineComponent({
       showResidentBtn.value = val;
     };
 
+    const handleCopyWhereQueryString = async (whereParams: CommonCondition[]) => {
+      const filters = whereParams.map(item => {
+        if (item.key === '*') {
+          return {
+            ...item,
+            operator: 'equal',
+            options: {},
+          };
+        }
+        const type = retrievalFilterFields.value.find(v => v.name === item.key)?.type || 'keyword';
+        return {
+          ...item,
+          value: [EFieldType.integer, EFieldType.long].includes(type as EFieldType)
+            ? item.value.map(v => {
+                const numberV = Number(v);
+                return numberV === 0 ? 0 : numberV || v;
+              })
+            : item.value,
+          operator: item.method,
+        };
+      });
+      if (filters.length) {
+        const copyStr = await traceGenerateQueryString({
+          filters,
+        }).catch(() => {
+          return '';
+        });
+        if (copyStr) {
+          copyText(copyStr, msg => {
+            Message({
+              message: msg,
+              theme: 'error',
+            });
+            return;
+          });
+          Message({
+            message: t('复制成功'),
+            theme: 'success',
+          });
+        }
+      }
+    };
+
     watch(
       () => data.value,
       () => {
@@ -800,6 +859,7 @@ export default defineComponent({
       retrievalFilterFields,
       residentSettingOnlyId,
       detailId,
+      detailBizId,
       alarmDetailShow,
       alertDialogShow,
       alertDialogType,
@@ -815,7 +875,6 @@ export default defineComponent({
       defaultFavoriteId,
       alarmDetailDefaultTab,
       showResidentBtn,
-      issueBizId,
       issueFirstAlarmTime,
       impactScopeDrawerShow,
       impactScopeResourceKey,
@@ -866,6 +925,7 @@ export default defineComponent({
       handleIssuesPriorityChange,
       handleIssuePreviousDetail,
       handleIssueNextDetail,
+      handleCopyWhereQueryString,
     };
   },
   render() {
@@ -935,6 +995,7 @@ export default defineComponent({
             selectFavorite={this.retrievalSelectFavorite}
             onBizIdsChange={this.handleBizIdsChange}
             onConditionChange={this.handleConditionChange}
+            onCopyWhere={this.handleCopyWhereQueryString}
             onFavoriteSave={this.handleFavoriteSave}
             onFilterModeChange={this.handleFilterModeChange}
             onQuery={this.handleQuery}
@@ -1002,6 +1063,13 @@ export default defineComponent({
                               onAssignClick={(id, data) =>
                                 this.handleIssuesDialogShow(IssuesBatchActionEnum.ASSIGN, id, data)
                               }
+                              onClearFilter={() => {
+                                if (this.alarmStore.filterMode === EMode.ui) {
+                                  this.handleConditionChange([]);
+                                  return;
+                                }
+                                this.handleQueryStringChange('');
+                              }}
                               onCurrentPageChange={this.handleCurrentPageChange}
                               onImpactScopeClick={this.handleImpactScopeClick}
                               onMarkResolved={(id: string) =>
@@ -1063,7 +1131,7 @@ export default defineComponent({
           {this.alarmStore.alarmType === AlarmType.ISSUES ? (
             <IssuesDetailSideSlider
               firstAlarmTime={this.issueFirstAlarmTime}
-              issueBizId={this.issueBizId}
+              issueBizId={this.detailBizId}
               issueId={this.detailId}
               show={this.alarmDetailShow}
               showStepBtn={this.data.length > 1}
@@ -1073,6 +1141,7 @@ export default defineComponent({
             />
           ) : (
             <AlarmCenterDetail
+              alarmBizId={this.detailBizId}
               alarmId={this.detailId}
               alarmType={this.alarmStore.alarmType}
               defaultTab={this.alarmDetailDefaultTab}

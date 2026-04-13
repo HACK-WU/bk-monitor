@@ -27,18 +27,18 @@ import { type PropType, defineComponent, nextTick, shallowRef, useTemplateRef, w
 
 import { Button, Dialog, Input, Message } from 'bkui-vue';
 import dayjs from 'dayjs';
+import { listIssueActivities } from 'monitor-api/modules/issue';
 import { useI18n } from 'vue-i18n';
 
 import MarkdownEditor from '../../../../../../components/markdown-editor/editor';
 import MarkdownViewer from '../../../../../../components/markdown-editor/viewer';
 import {
   IssueActiveNodeTypeEnum,
-  IssuesActiveNodeIconMap,
-  IssuesPriorityMap,
-  IssuesStatusMap,
+  ISSUES_ACTIVE_NODE_ICON_MAP,
+  ISSUES_PRIORITY_MAP,
+  ISSUES_STATUS_MAP,
 } from '../../../constant';
 import { followUpIssues } from '../../../services/issues-operations';
-import { fetchActivityListMock } from '../../mock-data';
 import BasicCard from '../basic-card/basic-card';
 import ClampText from './clamp-text';
 
@@ -61,7 +61,7 @@ export default defineComponent({
     const { t } = useI18n();
 
     const commonInput = useTemplateRef<InstanceType<typeof Input>>('commonInput');
-    const activeNodeMap = IssuesActiveNodeIconMap;
+    const activeNodeMap = ISSUES_ACTIVE_NODE_ICON_MAP;
 
     /** 评论输入框是否聚焦 */
     const isCommentInputFocus = shallowRef(false);
@@ -79,9 +79,9 @@ export default defineComponent({
     const activeList = shallowRef<IssueActivityItem[]>([]);
     const getActiveList = () => {
       loading.value = true;
-      fetchActivityListMock({
+      listIssueActivities({
         bk_biz_id: props.detail?.bk_biz_id,
-        id: props.detail?.id,
+        issue_id: props.detail?.id,
       }).then(data => {
         activeList.value = data;
       });
@@ -100,7 +100,6 @@ export default defineComponent({
     const handleCommentInputFocus = () => {
       isCommentInputFocus.value = true;
       nextTick(() => {
-        console.log('commonInput', commonInput.value);
         commonInput.value?.focus?.();
       });
     };
@@ -220,6 +219,8 @@ export default defineComponent({
                     class='send-btn'
                     disabled={!commentContent.value}
                     loading={commentLoading.value}
+                    loading-mode='spin'
+                    size='small'
                     theme='primary'
                     onClick={handleSendComment}
                   >
@@ -429,7 +430,7 @@ export default defineComponent({
         title: (
           <div class='title-row'>
             <span class='action'>
-              {statusNode.alias}：{IssuesStatusMap[item.to_value]?.alias}
+              {statusNode.alias}：{ISSUES_STATUS_MAP[item.to_value]?.alias}
             </span>
             <span
               class='time'
@@ -487,7 +488,7 @@ export default defineComponent({
         title: (
           <div class='title-row'>
             <span class='action'>
-              {priorityNode.alias}：{IssuesPriorityMap[item.to_value]?.alias}
+              {priorityNode.alias}：{ISSUES_PRIORITY_MAP[item.to_value]?.alias}
             </span>
             <span
               class='time'

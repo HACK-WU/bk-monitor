@@ -26,9 +26,10 @@
 import { type PropType, defineComponent, shallowRef, watch } from 'vue';
 
 import dayjs from 'dayjs';
+import { listIssueHistory } from 'monitor-api/modules/issue';
 
-import { fetchHistoryListMock } from '../../mock-data';
 import BasicCard from '../basic-card/basic-card';
+import EmptyStatus from '@/components/empty-status/empty-status';
 
 import type { IssueDetail, IssueHistoryItem } from '../../../typing';
 
@@ -50,7 +51,7 @@ export default defineComponent({
     /** 获取 Issue 历史列表*/
     const getIssuesHistoryList = async () => {
       loading.value = true;
-      historyList.value = await fetchHistoryListMock({
+      historyList.value = await listIssueHistory({
         bk_biz_id: props.detail.bk_biz_id,
         issue_id: props.detail.id,
       }).finally(() => {
@@ -61,7 +62,7 @@ export default defineComponent({
     /** 新开页展示issues详情 */
     const handleClick = (item: IssueHistoryItem) => {
       console.log('handleClick', item);
-      const hash = `#/alarm-center/?alarmType=issues&alarmId=${item.id}&showDetail=true&issueFirstAlarmTime=${item.first_alert_time}`;
+      const hash = `#/alarm-center/?alarmType=issues&detailId=${item.issue_id}&detailBizId=${item.bk_biz_id}&showDetail=true&issueFirstAlarmTime=${item.first_alert_time}`;
       const url = location.href.replace(location.hash, hash);
       window.open(url, '_blank');
     };
@@ -99,29 +100,33 @@ export default defineComponent({
         title={this.$t('历史 Issue')}
       >
         <div class='issues-history-list'>
-          {this.loading
-            ? this.renderSkeleton()
-            : this.historyList.map(item => (
+          {this.loading ? (
+            this.renderSkeleton()
+          ) : this.historyList.length ? (
+            this.historyList.map(item => (
+              <div
+                key={item.id}
+                class='issues-history-item'
+              >
                 <div
-                  key={item.id}
-                  class='issues-history-item'
+                  class='item-title'
+                  onClick={() => {
+                    this.handleClick(item);
+                  }}
                 >
-                  <div
-                    class='item-title'
-                    onClick={() => {
-                      this.handleClick(item);
-                    }}
-                  >
-                    {item.name}
-                  </div>
-                  <div
-                    class='item-time'
-                    v-bk-tooltips={{ content: dayjs(item.create_time * 1000).format('YYYY-MM-DD HH:mm:ss') }}
-                  >
-                    {dayjs(item.create_time * 1000).fromNow()}
-                  </div>
+                  {item.name}
                 </div>
-              ))}
+                <div
+                  class='item-time'
+                  v-bk-tooltips={{ content: dayjs(item.create_time * 1000).format('YYYY-MM-DD HH:mm:ss') }}
+                >
+                  {dayjs(item.create_time * 1000).fromNow()}
+                </div>
+              </div>
+            ))
+          ) : (
+            <EmptyStatus type='empty' />
+          )}
         </div>
       </BasicCard>
     );

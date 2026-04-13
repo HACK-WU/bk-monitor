@@ -15,7 +15,7 @@ import uuid
 from django_elasticsearch_dsl.registries import registry
 from elasticsearch_dsl import MetaField, field
 
-from bkmonitor.documents.base import BaseDocument, BulkActionType, Date
+from bkmonitor.documents.base import BaseDocument, BulkActionType, Date, Flattened
 from bkmonitor.documents.constants import ES_INDEX_SETTINGS
 from constants.issue import IssueActivityType, IssueStatus
 
@@ -47,7 +47,7 @@ class IssueDocument(BaseDocument):
     first_alert_time = Date(format=BaseDocument.DATE_FORMAT)
     last_alert_time = Date(format=BaseDocument.DATE_FORMAT)
 
-    impact_scope = field.Object(enabled=False)
+    impact_scope = Flattened()
 
     strategy_name = field.Text(fields={"raw": field.Keyword()})
     labels = field.Keyword(multi=True)
@@ -120,9 +120,11 @@ class IssueDocument(BaseDocument):
         )
 
     def resolve(self, operator: str) -> None:
-        """人工标记已解决：UNRESOLVED → RESOLVED"""
-        if self.status != IssueStatus.UNRESOLVED:
-            raise ValueError(f"Cannot resolve: current status={self.status}, expected={IssueStatus.UNRESOLVED}")
+        """人工标记已解决：UNRESOLVED → RESOLVED or PENDING_REVIEW → RESOLVED"""
+        if self.status not in IssueStatus.ACTIVE_STATUSES:
+            raise ValueError(
+                f"Cannot resolve: current status={self.status}, expected one of {IssueStatus.ACTIVE_STATUSES}"
+            )
         old_status = self.status
         self.status = IssueStatus.RESOLVED
         self.resolved_time = int(time.time())
@@ -135,9 +137,11 @@ class IssueDocument(BaseDocument):
         )
 
     def archive(self, operator: str) -> None:
-        """归档（实例级）：PENDING_REVIEW → ARCHIVED"""
-        if self.status != IssueStatus.PENDING_REVIEW:
-            raise ValueError(f"Cannot archive: current status={self.status}, expected={IssueStatus.PENDING_REVIEW}")
+        """归档（实例级）：PENDING_REVIEW → ARCHIVED or UNRESOLVED → ARCHIVED"""
+        if self.status not in IssueStatus.ACTIVE_STATUSES:
+            raise ValueError(
+                f"Cannot archive: current status={self.status}, expected one of {IssueStatus.ACTIVE_STATUSES}"
+            )
         old_status = self.status
         self.status = IssueStatus.ARCHIVED
         self.update_time = int(time.time())
@@ -145,6 +149,36 @@ class IssueDocument(BaseDocument):
         self._write_activities(
             [
                 (IssueActivityType.STATUS_CHANGE, old_status, IssueStatus.ARCHIVED, operator),
+            ]
+        )
+
+    def reopen(self, operator: str) -> None:
+        """重新打开：RESOLVED → UNRESOLVED"""
+        if self.status != IssueStatus.RESOLVED:
+            raise ValueError(f"Cannot reopen: current status={self.status}, expected={IssueStatus.RESOLVED}")
+        old_status = self.status
+        self.status = IssueStatus.UNRESOLVED
+        self.update_time = int(time.time())
+        self._persist_and_cache(active=True)
+        self._write_activities(
+            [
+                (IssueActivityType.STATUS_CHANGE, old_status, IssueStatus.UNRESOLVED, operator),
+            ]
+        )
+
+    def restore(self, operator: str) -> None:
+        """恢复归档：ARCHIVED → 归档前状态（从活动日志推断），无记录时回退到 PENDING_REVIEW"""
+        if self.status != IssueStatus.ARCHIVED:
+            raise ValueError(f"Cannot restore: current status={self.status}, expected={IssueStatus.ARCHIVED}")
+        target_status = self._get_pre_archive_status()
+        old_status = self.status
+        self.status = target_status
+        self.update_time = int(time.time())
+        # 恢复后若目标状态为活跃状态则写回缓存
+        self._persist_and_cache(active=target_status in IssueStatus.ACTIVE_STATUSES)
+        self._write_activities(
+            [
+                (IssueActivityType.STATUS_CHANGE, old_status, target_status, operator),
             ]
         )
 
@@ -162,6 +196,22 @@ class IssueDocument(BaseDocument):
         """
         if now is None:
             now = int(time.time())
+        extra_activities = []
+        if self.status == IssueStatus.PENDING_REVIEW:
+            old_status = self.status
+            self.status = IssueStatus.UNRESOLVED
+            extra_activities.append(
+                IssueActivityDocument(
+                    issue_id=self.id,
+                    bk_biz_id=self.bk_biz_id,
+                    activity_type=IssueActivityType.STATUS_CHANGE,
+                    from_value=old_status,
+                    to_value=IssueStatus.UNRESOLVED,
+                    operator=operator,
+                    time=now,
+                    create_time=now,
+                )
+            )
         self.update_time = now
         self._persist_and_cache(active=self.status in IssueStatus.ACTIVE_STATUSES)
         activity = IssueActivityDocument(
@@ -173,7 +223,7 @@ class IssueDocument(BaseDocument):
             time=now,
             create_time=now,
         )
-        IssueActivityDocument.bulk_create([activity])
+        IssueActivityDocument.bulk_create([activity, *extra_activities])
         return activity
 
     def update_priority(self, priority: str, operator: str) -> None:
@@ -182,18 +232,42 @@ class IssueDocument(BaseDocument):
             raise ValueError(f"Cannot update priority: current status={self.status} is not active")
         old_priority = self.priority
         self.priority = priority
+        activits = [
+            (
+                IssueActivityType.PRIORITY_CHANGE,
+                str(old_priority) if old_priority else None,
+                str(priority),
+                operator,
+            ),
+        ]
+        if self.status == IssueStatus.PENDING_REVIEW:
+            old_status = self.status
+            self.status = IssueStatus.UNRESOLVED
+            activits.append((IssueActivityType.STATUS_CHANGE, old_status, IssueStatus.UNRESOLVED, operator))
         self.update_time = int(time.time())
         self._persist_and_cache(active=True)
-        self._write_activities(
-            [
-                (
-                    IssueActivityType.PRIORITY_CHANGE,
-                    str(old_priority) if old_priority else None,
-                    str(priority),
-                    operator,
-                ),
-            ]
-        )
+        self._write_activities(activits)
+
+    def _get_pre_archive_status(self) -> str:
+        """
+        从活动日志中找到最近一次归档操作（STATUS_CHANGE to_value=ARCHIVED）之前的状态。
+        无法确定时兜底返回 PENDING_REVIEW。
+        """
+        try:
+            search = (
+                IssueActivityDocument.search(all_indices=True)
+                .filter("term", issue_id=self.id)
+                .filter("term", activity_type=IssueActivityType.STATUS_CHANGE)
+                .filter("term", to_value=IssueStatus.ARCHIVED)
+                .sort("-time")
+                .extra(size=1)
+            )
+            results = list(search.execute())
+            if results:
+                return results[0].from_value or IssueStatus.PENDING_REVIEW
+        except Exception:
+            logger.exception("Failed to get pre_archive_status from activity log, issue_id=%s", self.id)
+        return IssueStatus.PENDING_REVIEW
 
     def _persist_and_cache(self, active: bool) -> None:
         """
