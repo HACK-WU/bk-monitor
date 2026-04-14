@@ -26,6 +26,7 @@
 
 import { type PropType, computed, defineComponent } from 'vue';
 
+import { spaceTypeTag, tipsContent } from 'trace/components/space-select/tips-content';
 import { useI18n } from 'vue-i18n';
 
 import RetrievalFilter from '../../../../components/retrieval-filter/retrieval-filter';
@@ -262,18 +263,32 @@ export default defineComponent({
                   trigger: (options: ITriggerSlotOptions) => (
                     <SelectorTrigger
                       class='selector-trigger-space-select'
-                      tips={options.valueStrList
-                        .map(
-                          (item, index) =>
-                            `${index !== 0 ? `   , ${item.name}` : item.name}${item.id ? `(${item.id})` : ''}`
-                        )
-                        .join('')}
                       active={options.active}
                       hasRightSplit={true}
                       isError={options.error}
+                      tips={options.valueStrList.length ? tipsContent(options.valueStrList) : ''}
                     >
                       {{
-                        top: () => <span>{this.t('空间')}</span>,
+                        top: () => {
+                          if (
+                            options.valueStrList.length > 1 ||
+                            !options.valueStrList.length ||
+                            ['-1', '-2'].includes(String(options.valueStrList?.[0]?.id))
+                          ) {
+                            return <span>{this.t('空间')}</span>;
+                          }
+                          const tags = options.valueStrList[0]?.tags || [];
+                          return (
+                            <span>
+                              {tags.map(tag =>
+                                spaceTypeTag(tag.id, 'light', {
+                                  height: '20px',
+                                  marginRight: '4px',
+                                })
+                              )}
+                            </span>
+                          );
+                        },
                         bottom: () => (
                           <span class='selected-text'>
                             {options.valueStrList.map((item, index) => (
@@ -282,7 +297,7 @@ export default defineComponent({
                                 class='selected-text-item'
                               >
                                 {index !== 0 ? `   , ${item.name}` : item.name}
-                                {!!item.id && <span class='selected-text-id'>({item.id})</span>}
+                                {!!item.idDisplayName && <span class='selected-text-id'>({item.idDisplayName})</span>}
                               </span>
                             ))}
                           </span>
