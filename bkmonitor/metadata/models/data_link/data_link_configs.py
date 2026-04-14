@@ -803,6 +803,7 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
         storage_keys: list[str],
         json_fields: list[str],
         field_config_group: dict[str, Any],
+        original_json_fields: list[str],
         expires: str,
         flush_timeout: int | None,
     ) -> dict[str, Any]:
@@ -845,6 +846,7 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
                     "table": "{{name}}_{{bk_biz_id}}",
                     "storage_keys": {{storage_keys}},
                     "json_fields": {{json_fields}},
+                    "original_json_fields": {{original_json_fields}},
                     "field_config_group": {{field_config_group}},
                     "expires": "{{expires}}",
                     "flush_timeout": {{flush_timeout}}
@@ -862,6 +864,7 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
             "storage_keys": json.dumps(storage_keys),
             "json_fields": json.dumps(json_fields),
             "field_config_group": json.dumps(field_config_group),
+            "original_json_fields": json.dumps(original_json_fields),
             "expires": expires,
             "flush_timeout": json.dumps(flush_timeout),
         }
