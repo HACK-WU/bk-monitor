@@ -23,6 +23,8 @@ from io import StringIO
 from itertools import chain
 from typing import Any
 
+import arrow
+from bk_monitor_base.strategy import StrategyNotExistError, get_strategy, parse_metric_id
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count
@@ -59,7 +61,7 @@ from bkmonitor.models import (
 )
 from bkmonitor.models.bcs_cluster import BCSCluster
 from bkmonitor.share.api_auth_resource import ApiAuthResource
-from bkmonitor.strategy.new_strategy import Strategy, parse_metric_id
+from bkmonitor.utils.alert_drilling import clean_where_conditions, normalize_histogram_quantile_group_by
 from bkmonitor.utils.common_utils import count_md5
 from bkmonitor.utils.elasticsearch.handler import QueryStringGenerator
 from bkmonitor.utils.event_related_info import get_alert_relation_info
@@ -128,6 +130,7 @@ from monitor_web.aiops.metric_recommend.constant import (
 )
 from monitor_web.constants import AlgorithmType
 from monitor_web.models import CustomEventGroup
+from utils.strategy import fill_user_groups
 
 logger = logging.getLogger("root")
 
@@ -567,52 +570,20 @@ class ListSearchHistoryResource(Resource):
 class AlertDateHistogramResource(Resource):
     """
     查询告警分布直方图
-
-    该资源用于按时间维度统计告警数量分布，返回各状态告警在不同时间点的数量序列，
-    支持前端绘制告警趋势折线图或柱状图。
     """
 
     class RequestSerializer(AlertSearchSerializer):
         interval = serializers.CharField(label="聚合周期", default="auto")
 
     def perform_request(self, validated_request_data):
-        """
-        执行告警分布直方图查询
-
-        参数:
-            validated_request_data: 已验证的请求参数，包含:
-                - start_time: 查询开始时间（Unix时间戳，毫秒）
-                - end_time: 查询结束时间（Unix时间戳，毫秒）
-                - interval: 聚合周期，支持 "auto" 自动计算或指定如 "1h"、"1d"
-                - bk_biz_ids: 业务ID列表，用于权限过滤
-                - 其他继承自 AlertSearchSerializer 的过滤条件
-
-        返回值:
-            dict: 包含以下字段:
-                - series: 各状态的时序数据列表，每项包含 name、display_name、data
-                - unit: 数据单位（空字符串）
-
-        该方法实现完整的告警分布统计流程：
-        1. 提取并计算聚合时间间隔
-        2. 解析业务权限，区分已授权和未授权业务
-        3. 按时间切片分批查询ES（避免单次查询时间跨度过大）
-        4. 合并各切片结果，填充默认时间序列（确保时间轴连续）
-        5. 格式化输出为前端图表所需的数据结构
-        """
-        # 1. 提取时间参数和聚合间隔
         start_time = validated_request_data.pop("start_time")
         end_time = validated_request_data.pop("end_time")
         interval = validated_request_data.pop("interval")
-        # 根据时间范围自动计算合适的聚合间隔（如 auto 模式）
         interval = BaseQueryHandler.calculate_agg_interval(start_time, end_time, interval)
-
-        # 2. 解析业务权限，区分已授权和未授权业务
         if validated_request_data["bk_biz_ids"] is not None:
             authorized_bizs, unauthorized_bizs = AlertQueryHandler.parse_biz_item(validated_request_data["bk_biz_ids"])
             validated_request_data["authorized_bizs"] = authorized_bizs
             validated_request_data["unauthorized_bizs"] = unauthorized_bizs
-
-        # 3. 按时间切片分批查询ES，避免单次查询跨度过大导致性能问题
         results = resource.alert.alert_date_histogram_result.bulk_request(
             [
                 {
@@ -625,37 +596,19 @@ class AlertDateHistogramResource(Resource):
             ]
         )
 
-        # 4. 初始化各状态的数据字典，用于合并查询结果
-        # 根据传入的status参数确定需要返回哪些状态，如果没有指定则返回所有状态
-        raw_status = validated_request_data.get("status")
-        if raw_status:
-            # 用户指定了状态过滤条件，只返回这些状态的数据
-            target_statuses = set(raw_status) if isinstance(raw_status, list) else {raw_status}
-        else:
-            # 未指定状态过滤条件，返回所有状态
-            target_statuses = set(EVENT_STATUS_DICT.keys())
-
-        data = {status: {} for status in target_statuses}
+        data = {status: {} for status in EVENT_STATUS_DICT}
         for result in results:
             for status, series in result.items():
-                # 处理默认时间序列，确保时间轴连续无断点
                 if status == "default_time_series":
                     interval = series["interval"]
-                    # 对齐时间边界到间隔整数倍
                     start_time = series["start_time"] // interval * interval
                     end_time = series["end_time"] // interval * interval + interval
-                    # 生成完整的时间序列，时间戳转换为毫秒
                     default_time_series = {ts * 1000: 0 for ts in range(start_time, end_time, interval)}
-                    # 只为目标状态填充默认时间序列，确保各状态时间轴一致
-                    for sta in target_statuses:
+                    for sta in EVENT_STATUS_DICT:
                         data[sta].update(default_time_series)
                     continue
 
-                # 合并实际查询到的状态数据，只合并在目标状态列表中的数据
-                if status in target_statuses:
-                    data[status].update(series)
-
-        # 5. 格式化输出为前端图表所需的数据结构
+                data[status].update(series)
         return {
             "series": [
                 {"data": list(series.items()), "name": status, "display_name": EVENT_STATUS_DICT[status]}
@@ -710,6 +663,7 @@ class AlertDetailResource(Resource):
         result = AlertQueryHandler.clean_document(alert)
         result["plugin_display_name"] = PluginTranslator().translate([result["plugin_id"]])[result["plugin_id"]]
         result["extend_info"] = resource.alert.alert_related_info(ids=[alert_id]).get(alert_id, {})
+        self.clean_graph_panel_where(graph_panel)
         result["graph_panel"] = graph_panel
 
         topo_info = result["extend_info"].get("topo_info", "")
@@ -717,6 +671,15 @@ class AlertDetailResource(Resource):
         self.add_project_name(result)
         self.add_graph_extra_info(alert, result)
         return result
+
+    @staticmethod
+    def clean_graph_panel_where(graph_panel: dict | None) -> None:
+        if not graph_panel:
+            return
+
+        for target in graph_panel.get("targets", []):
+            for query_config in target.get("data", {}).get("query_configs", []):
+                query_config["where"] = clean_where_conditions(query_config.get("where", []))
 
     @classmethod
     def add_graph_extra_info(cls, alert, data):
@@ -895,14 +858,6 @@ class DeleteExperienceResource(Resource):
 class AlertEventCountResource(Resource):
     """
     获取告警关联的事件数量
-
-    根据告警ID列表，查询每个告警关联的事件数量。
-    告警分为两类分别处理：
-    - 简单告警：通过ES聚合查询，按dedupe_md5和时间范围统计事件数
-    - 关联告警（复合策略/FTA事件策略）：通过search_event接口批量查询事件总数
-
-    返回值:
-        dict: {alert_id: event_count} 告警ID到事件数量的映射
     """
 
     class RequestSerializer(serializers.Serializer):
@@ -910,31 +865,15 @@ class AlertEventCountResource(Resource):
 
     @classmethod
     def cal_simple_event_count(cls, simple_alerts):
-        """
-        计算简单告警的事件数量
-
-        参数:
-            simple_alerts: list[AlertDocument], 简单告警文档列表（非复合策略、非FTA事件策略的告警）
-
-        返回值:
-            dict: {alert_id: event_count} 告警ID到事件数量的映射
-
-        该方法通过ES聚合查询一次性统计所有简单告警的事件数量：
-        1. 构建每个告警的查询条件：按dedupe_md5精确匹配 + 时间范围过滤（begin_time ~ latest_time）
-        2. 构建ES搜索请求，使用terms过滤缩小候选文档范围
-        3. 为每个告警创建独立的filter聚合桶，实现单次查询获取所有告警的事件计数
-        4. 从聚合结果中提取各告警对应桶的doc_count作为事件数量
-        """
+        # 计算简单告警的事件数量
         if not simple_alerts:
             return {}
 
         now_time = int(time.time())
-        # 构建告警映射：alert_id -> {dedupe_md5, query条件}
         alert_mapping = {}
         for alert in simple_alerts:
             alert_mapping[alert.id] = {
                 "dedupe_md5": alert.dedupe_md5,
-                # 组合查询条件：时间范围 AND dedupe_md5精确匹配
                 "query": (
                     Q("range", time={"gte": alert.begin_time, "lte": alert.latest_time or now_time})
                     & Q("term", dedupe_md5=alert.dedupe_md5)
@@ -942,19 +881,17 @@ class AlertEventCountResource(Resource):
             }
 
         event_count = {}
-        # 构建ES搜索：先用terms过滤缩小候选文档范围，减少聚合计算量
+        # Step 2: 根据时间范围和MD5去查询告警信息
         search = EventDocument.search(all_indices=True)
         search = search.filter("terms", dedupe_md5=[alert["dedupe_md5"] for alert in alert_mapping.values()])
 
-        # 为每个告警创建独立的filter聚合桶，桶名为alert_id
         for alert_id, alert in alert_mapping.items():
+            # 为每个告警条件设置一个桶
             search.aggs.bucket(alert_id, "filter", alert["query"])
 
-        # 不需要返回文档本身，只需要聚合结果
         search = search.extra(size=0)
         search_result = search.execute()
 
-        # 从聚合结果中提取每个告警桶的文档计数
         for alert_id in alert_mapping:
             if not search_result.aggs:
                 continue
@@ -967,74 +904,39 @@ class AlertEventCountResource(Resource):
     @classmethod
     def cal_composite_event_count(cls, composite_alerts):
         """
-        计算关联告警（复合策略/FTA事件策略）的事件数量
-
-        参数:
-            composite_alerts: list[AlertDocument], 关联告警文档列表（复合策略或FTA事件策略的告警）
-
-        返回值:
-            dict: {alert_id: event_count} 告警ID到事件数量的映射
-
-        该方法通过search_event接口批量查询关联告警的事件数量：
-        1. 构建批量请求参数，每个告警只请求1条记录（page_size=1），仅需获取total总数
-        2. 调用bulk_request并行查询，忽略单个请求的异常避免影响整体结果
-        3. 从返回结果中提取total字段作为事件数量
+        计算关联告警的事件数量
         """
         if not composite_alerts:
             return {}
 
         event_count = {}
-        # 批量调用search_event接口，page_size=1因为只需要total计数，不需要实际事件数据
         results = resource.alert.search_event.bulk_request(
             [{"alert_id": alert.id, "page_size": 1} for alert in composite_alerts], ignore_exceptions=True
         )
-        # 按索引位置将结果与告警一一对应
         for index, result in enumerate(results):
             if result:
                 event_count[composite_alerts[index].id] = result["total"]
         return event_count
 
     def perform_request(self, validated_request_data):
-        """
-        执行请求，获取告警关联的事件数量
-
-        参数:
-            validated_request_data: dict, 经过序列化器校验的请求数据，包含:
-                - ids: list[str], 告警ID列表
-
-        返回值:
-            dict: {alert_id: event_count} 告警ID到事件数量的映射，未查到的告警默认为0
-
-        该方法的处理流程：
-        1. 根据告警ID批量获取告警文档，提取关键字段（时间范围、dedupe_md5等）
-        2. 按告警类型分类：简单告警 vs 关联告警（复合策略/FTA事件策略）
-        3. 分别调用对应的计算方法统计事件数量
-        4. 合并结果并返回，确保每个告警ID都有对应的计数值（默认为0）
-        """
         alert_ids = validated_request_data["ids"]
 
-        # Step 1: 批量获取告警文档，只取统计所需的关键字段以减少数据传输量
+        # Step 1: 先根据告警ID，查询对应的告警，将开始结束时间和md5字段拿出来
         alerts = AlertDocument.mget(
             alert_ids, fields=["id", "begin_time", "end_time", "latest_time", "dedupe_md5", "extra_info"]
         )
 
-        # Step 2: 按告警类型分类，不同类型采用不同的事件计数策略
         simple_alerts = []
         composite_alerts = []
         for alert in alerts:
             if alert.is_composite_strategy or alert.is_fta_event_strategy:
-                # 复合策略或FTA事件策略告警，需通过search_event接口查询
                 composite_alerts.append(alert)
             else:
-                # 简单告警，通过ES聚合查询统计
                 simple_alerts.append(alert)
 
-        # Step 3: 初始化所有告警的事件计数为0，确保未查到结果的告警也有默认值
         event_count = {}
         for alert_id in alert_ids:
             event_count.setdefault(alert_id, 0)
-
-        # Step 4: 分别计算两类告警的事件数量并合并结果
         event_count.update(self.cal_simple_event_count(simple_alerts))
         event_count.update(self.cal_composite_event_count(composite_alerts))
         return event_count
@@ -1438,24 +1340,8 @@ class AlertGraphQueryResource(ApiAuthResource):
                 if attrs["data_source_label"] == DataSourceLabel.BK_LOG_SEARCH and not attrs.get("index_set_id"):
                     raise ValidationError("index_set_id can not be empty.")
 
-                # 过滤掉无效的 where 条件
-                validated_where = []
-                for condition in attrs.get("where", []):
-                    if not isinstance(condition, dict):
-                        continue
-                    value = condition.get("value")
-                    # 过滤掉 value 为 None、空列表或只包含 None 的列表
-                    if value is None:
-                        continue
-                    if isinstance(value, list):
-                        # 移除列表中的 None，如果移除后列表为空则跳过该条件
-                        filtered_value = [v for v in value if v is not None]
-                        if not filtered_value:
-                            continue
-                        condition["value"] = filtered_value
-                    validated_where.append(condition)
-
-                attrs["where"] = validated_where
+                normalize_histogram_quantile_group_by(attrs)
+                attrs["where"] = clean_where_conditions(attrs.get("where", []))
                 return attrs
 
         id = serializers.IntegerField(label="事件ID")
@@ -1951,32 +1837,6 @@ class SearchEventResource(ApiAuthResource):
         return result
 
     def perform_request(self, validated_request_data):
-        """
-        执行告警关联事件的搜索请求
-
-        参数:
-            validated_request_data: dict, 经过序列化器校验的请求数据，包含:
-                - alert_id: 告警ID
-                - record_history: 是否记录搜索历史
-                - show_dsl: 是否返回ES查询DSL
-                - show_raw: 是否展示原始事件（不做策略类型适配）
-                - page/page_size: 分页参数
-                - 其他EventSearchSerializer定义的查询参数
-
-        返回值:
-            dict: 搜索结果，包含 total(总数) 和 events(事件列表)
-
-        处理流程:
-            1. 提取请求参数，获取告警文档
-            2. 根据告警策略类型选择不同的搜索方式:
-               - 关联策略(composite): 查询关联的子告警并适配为事件格式
-               - 自愈事件策略(fta_event): 查询关联的自愈事件
-               - 普通策略: 直接按dedupe_md5查询原始事件
-            3. 可选记录搜索历史（用于搜索收藏功能）
-
-        数据流:
-            请求参数 → 获取AlertDocument → 策略类型判断 → 对应Handler查询 → 返回事件列表
-        """
         alert_id = validated_request_data["alert_id"]
         record_history = validated_request_data.pop("record_history")
         show_dsl = validated_request_data.pop("show_dsl")
@@ -1989,13 +1849,10 @@ class SearchEventResource(ApiAuthResource):
             enabled=record_history and validated_request_data.get("query_string"),
         ):
             if alert.is_composite_strategy and not validated_request_data["show_raw"]:
-                # 关联策略告警: 查询被关联的子告警，并将其适配为事件格式展示
                 result = self.search_composite_alerts(alert, validated_request_data, show_dsl)
             elif alert.is_fta_event_strategy and not validated_request_data["show_raw"]:
-                # 自愈事件策略告警: 查询关联的自愈事件数据
                 result = self.search_fta_alerts(alert, validated_request_data, show_dsl)
             else:
-                # 普通策略告警: 直接通过dedupe_md5查询原始事件
                 handler = EventQueryHandler(
                     dedupe_md5=alert.dedupe_md5,
                     start_time=alert.begin_time,
@@ -2307,8 +2164,8 @@ class AlertTopNResource(Resource):
         )
 
         result = {
-            "doc_count": 0,  # 总文档数
-            "fields": [],  # 合并后的字段列表
+            "doc_count": 0,
+            "fields": [],
         }
         field_buckets_map = {}
 
@@ -2524,25 +2381,25 @@ class StrategySnapshotResource(Resource):
         changed_status = self.ConfigChangedStatus.UNCHANGED
         current_strategy = None
         try:
-            strategy = StrategyModel.objects.get(id=strategy_config["id"])
-            is_enabled = strategy.is_enabled
-            current_strategy = Strategy.from_models([strategy])[0]
-        except StrategyModel.DoesNotExist:
-            changed_status = self.ConfigChangedStatus.DELETED
-        else:
-            if int(strategy.update_time.timestamp()) != strategy_config["update_time"]:
+            current_strategy = get_strategy(bk_biz_id=alert.bk_biz_id, strategy_id=strategy_config["id"])
+            is_enabled = current_strategy["is_enabled"]
+            current_update_time = arrow.get(current_strategy["update_time"])
+            strategy_update_time = arrow.get(strategy_config["update_time"])
+            if current_update_time.int_timestamp != strategy_update_time.int_timestamp:
                 changed_status = self.ConfigChangedStatus.UPDATED
+        except StrategyNotExistError:
+            changed_status = self.ConfigChangedStatus.DELETED
 
         if current_strategy and "intelligent_detect" in strategy_config["items"][0]["query_configs"][0]:
             if not strategy_config["items"][0]["query_configs"][0]["intelligent_detect"].get("use_sdk", False):
                 # AIOPS算法在告警检测时会对query_config本身进行修改导致查询配置无法还原，此时直接使用最新的query_config
-                strategy_config["items"][0]["query_configs"][0] = current_strategy.items[0].query_configs[0].to_dict()
+                strategy_config["items"][0]["query_configs"][0] = current_strategy["items"][0]["query_configs"][0]
 
         strategy_config.update(strategy_status=changed_status)
         strategy_config["create_time"] = utc2datetime(strategy_config["create_time"])
         strategy_config["update_time"] = utc2datetime(strategy_config["update_time"])
         strategy_config["is_enabled"] = is_enabled
-        Strategy.fill_user_groups([strategy_config])
+        fill_user_groups([strategy_config])
         return strategy_config
 
 
