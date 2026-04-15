@@ -1,7 +1,7 @@
 # Issue 列表查询接口文档
 
-> **版本**: v1.0  
-> **更新时间**: 2026-03-16
+> **版本**: v1.1  
+> **更新时间**: 2026-04-15
 
 ---
 
@@ -33,6 +33,8 @@
 | `page_size` | `int` | 否 | `10` | 每页大小，最大 500 |
 | `show_aggs` | `bool` | 否 | `true` | 是否返回高级筛选聚合信息 |
 | `show_dsl` | `bool` | 否 | `false` | 是否返回 ES DSL 查询语句（用于调试） |
+| `trend_start_time` | `int` | 否 | — | 趋势图时间范围起点（秒级时间戳）。用于自定义趋势图展示的时间范围，**不传则默认使用本页 Issue 的实际告警时间边界** |
+| `trend_end_time` | `int` | 否 | — | 趋势图时间范围终点（秒级时间戳）。用于自定义趋势图展示的时间范围，**不传则默认使用本页 Issue 的实际告警时间边界** |
 
 > **时间字段说明**：`start_time` / `end_time` 均为 **可选** 参数。Issue 是长期存在的实体，常见场景是查看"所有活跃 Issue"而不限定时间范围。
 
@@ -47,6 +49,13 @@
 > - 传入 `start_time=1741334400, end_time=1741420800`，表示查询"在这个时间范围内活跃的 Issue"
 > - 包括：该时间范围内创建的 Issue + 该时间范围内解决的 Issue + 该时间范围内未解决的 Issue
 > - 未解决的 Issue（`resolved_time` 为 null）不受 `start_time` 约束，始终可见
+
+##### trend 时间范围说明
+
+- **推荐设置**：`trend_end_time` 应与 `end_time` **保持一致**
+- **点数计算规则**：趋势图点数为 `(trend_end_time - trend_start_time) / 3600 + 1`
+  - 例如：时间范围为 23 小时，则生成 24 个点
+  - 例如：时间范围为 24 小时，则生成 25 个点
 
 ---
 
@@ -112,6 +121,8 @@
 | `create_time` | 创建时间 | int（秒级时间戳） |
 | `update_time` | 更新时间 | int（秒级时间戳） |
 | `resolved_time` | 解决时间 | int（秒级时间戳） |
+| `impact_dimensions` | 影响范围维度过滤 | array | 只包含指定维度类型的 Issue，如 `["host", "cluster"]`，多值 OR 关系 |
+| `impact_scope.{维度}.{ID字段}` | 影响范围实例过滤 | array | 按具体实例 ID 精确过滤，如 `impact_scope.host.bk_host_id`，value 传字符串数组 |
 
 #### method 枚举
 
@@ -125,6 +136,134 @@
 | `gte` | 大于等于 |
 | `lt` | 小于 |
 | `lte` | 小于等于 |
+
+---
+
+### 影响范围过滤（impact_scope）
+
+影响范围过滤可通过 `conditions` 参数实现，支持**维度级**和**实例级**两种过滤方式。
+
+#### 1. 维度级过滤（impact_dimensions）
+
+过滤包含指定维度类型的 Issue，判断 Issue 的 `impact_scope` 是否包含某个维度。
+
+```json
+{
+  "key": "impact_dimensions",
+  "value": ["host", "cluster"],
+  "method": "eq"
+}
+```
+
+- `value` 为维度 key 数组，多个维度之间为 **OR** 关系（包含任一即命中）
+- 支持的维度 key：`set`、`host`、`service_instances`、`cluster`、`node`、`service`、`pod`、`app`、`apm_service`
+
+**示例**：过滤包含 host 或 cluster 维度的 Issue
+
+```json
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {
+      "key": "impact_dimensions",
+      "value": ["host", "cluster"],
+      "method": "eq"
+    }
+  ]
+}
+```
+
+#### 2. 实例级过滤（impact_scope.{维度}.{ID字段}）
+
+按具体实例 ID 精确过滤 Issue。
+
+**参数格式**：
+
+```json
+{
+  "key": "impact_scope.{维度key}.{ID字段名}",
+  "value": ["实例ID1", "实例ID2"],
+  "method": "eq"
+}
+```
+
+**关键说明**：
+
+1. **conditions key 是动态构建的**：`impact_scope.host.bk_host_id` 中的 `host` 和 `bk_host_id` 都不是固定值
+2. 维度 key 来源于 `impact_scope` 对象的第一层 key（如 `host`、`cluster`）
+3. ID 字段名来源于该维度 `instance_list` 元素的第一个除 `display_name` 外的 key
+
+**可用的 conditions key 示例**：
+
+| 维度 | ID 字段名 | conditions key |
+|------|----------|----------------|
+| `set` | `set_id` | `impact_scope.set.set_id` |
+| `host` | `bk_host_id` | `impact_scope.host.bk_host_id` |
+| `service_instances` | `bk_service_instance_id` | `impact_scope.service_instances.bk_service_instance_id` |
+| `cluster` | `bcs_cluster_id` | `impact_scope.cluster.bcs_cluster_id` |
+| `node` | `node` | `impact_scope.node.node` |
+| `service` | `service` | `impact_scope.service.service` |
+| `pod` | `pod` | `impact_scope.pod.pod` |
+| `apm_service` | `app_name`（第一个非 display_name 字段） | `impact_scope.apm_service.app_name` |
+
+**注意事项**：
+- `value` 必须传**字符串数组**，即使原始数据是整数（如 `bk_host_id`），也需要传 `"9185731"` 而非 `9185731`
+- 多个实例 ID 之间是 **OR** 关系（匹配任一即命中）
+
+**示例 1**：过滤影响了指定主机的 Issue
+
+```json
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {
+      "key": "impact_scope.host.bk_host_id",
+      "value": ["9185731", "10692392"],
+      "method": "eq"
+    }
+  ]
+}
+```
+
+**示例 2**：过滤影响了指定 BCS 集群的 Issue
+
+```json
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {
+      "key": "impact_scope.cluster.bcs_cluster_id",
+      "value": ["BCS-K8S-26322", "BCS-K8S-41193"],
+      "method": "eq"
+    }
+  ]
+}
+```
+
+#### 3. 组合使用
+
+影响范围过滤可与其他 conditions 自由组合，所有 conditions 之间为 **AND** 关系。
+
+```json
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {
+      "key": "priority",
+      "value": ["P0", "P1"],
+      "method": "eq"
+    },
+    {
+      "key": "impact_scope.host.bk_host_id",
+      "value": ["9185731"],
+      "method": "eq"
+    }
+  ],
+  "ordering": ["-update_time"],
+  "page": 1,
+  "page_size": 20
+}
+```
 
 ---
 
@@ -174,6 +313,26 @@
   "page_size": 20
 }
 ```
+
+### 示例 4：指定趋势图的时间范围
+
+```json
+{
+  "bk_biz_ids": [2],
+  "conditions": [
+    {"key": "priority", "value": ["P0", "P1"], "method": "eq"}
+  ],
+  "start_time": 1741334400,
+  "end_time": 1741420800,
+  "trend_start_time": 1741334400,
+  "trend_end_time": 1741420800,
+  "ordering": ["-update_time"],
+  "page": 1,
+  "page_size": 20
+}
+```
+
+> **说明**：`trend_start_time` / `trend_end_time` 用于自定义趋势图展示的时间范围，不传则以默认时间为准。
 
 ---
 
@@ -726,6 +885,7 @@ pod: 30
 
 - 格式：`[[毫秒时间戳, 告警数量], ...]`
 - 时间范围：由 Issue 自身的 `first_alert_time` / `last_alert_time` 决定，展示完整生命周期内的告警分布
+- **自定义时间范围**：通过 `trend_start_time` / `trend_end_time` 参数可指定趋势图的时间范围，不传则默认使用本页 Issue 的实际告警时间边界
 - 用途：用于前端 sparkline 小图展示
 - `alert_count` = `trend` 中所有时间段的告警数量之和
 
