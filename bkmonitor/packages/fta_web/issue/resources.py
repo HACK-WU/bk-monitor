@@ -8,17 +8,17 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
-import time
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 from rest_framework import serializers
 
-from bkmonitor.documents.issue import IssueActivityDocument, IssueDocument, IssueDocumentWriteError
+from bkmonitor.documents.issue import IssueActivityDocument, IssueDocument, IssueDocumentWriteError, IssueNotFoundError
 from bkmonitor.utils.request import get_request_username
-from constants.issue import IssueActivityType, IssuePriority, IssueStatus
-from core.drf_resource import Resource
+from constants.issue import IssuePriority, IssueStatus
+from core.drf_resource import Resource, api
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from fta_web.alert.utils import slice_time_interval
 from fta_web.issue.handlers.issue import IssueQueryHandler
@@ -26,10 +26,6 @@ from fta_web.issue.serializers import IssueSearchSerializer
 
 
 logger = logging.getLogger("root")
-
-
-class IssueNotFoundError(Exception):
-    """issue not found"""
 
 
 class IssueIDField(serializers.CharField):
@@ -79,18 +75,19 @@ def _get_issue_or_raise(issue_id: str, bk_biz_id: int | None = None) -> IssueDoc
 
 def _run_batch(
     issues: list[dict],
-    action_fn: Callable[[IssueDocument], dict],
+    action_fn: Callable[[int, str], dict],
     max_workers: int = 10,
 ) -> dict:
     """
     批量操作公共执行框架：
-    每条 Issue 的查询 + 写入作为一个完整任务单元，由 ThreadPoolExecutor 并发执行。
+    每条 Issue 的操作作为一个完整任务单元，由 ThreadPoolExecutor 并发执行。
     单条失败不影响其他条目，异常统一归入 failed 列表。
 
     Args:
         issues: Issue 条目列表，每项为 {"bk_biz_id": int, "issue_id": str}，至少 1 条。
                 每条携带明确的 bk_biz_id，支持跨业务空间批量操作，同时保证权限校验精确。
-        action_fn: 对单条 Issue 执行的业务操作，执行成功时返回该条目的结果 dict，失败时抛出异常。
+        action_fn: 对单条 Issue 执行的业务操作，接收 (bk_biz_id, issue_id)，
+                   执行成功时返回该条目的结果 dict，失败时抛出异常。
         max_workers: 线程池最大并发数，默认 10。
 
     Returns:
@@ -106,7 +103,7 @@ def _run_batch(
         - 失败：{"ok": False, "issue_id": ..., "message": ...}
 
         Args:
-            bk_biz_id: 该条目声明的业务 ID，用于校验 Issue 归属。
+            bk_biz_id: 该条目声明的业务 ID。
             issue_id: 要处理的 Issue ID。
 
         Returns:
@@ -115,8 +112,8 @@ def _run_batch(
             - 失败：{"ok": False, "issue_id": issue_id, "message": 错误信息}
         """
         try:
-            issue = _get_issue_or_raise(issue_id, bk_biz_id=bk_biz_id)
-            return {"ok": True, "result": action_fn(issue)}
+            result = action_fn(bk_biz_id, issue_id)
+            return {"ok": True, "result": result}
         except IssueNotFoundError as e:
             return {"ok": False, "bk_biz_id": bk_biz_id, "issue_id": issue_id, "message": str(e)}
         except IssueDocumentWriteError as e:
@@ -126,7 +123,7 @@ def _run_batch(
 
     succeeded = []
     failed = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(issues))) as executor:
         futures = [executor.submit(_process_one, item["bk_biz_id"], item["issue_id"]) for item in issues]
         for future in as_completed(futures):
             item = future.result()
@@ -156,8 +153,6 @@ class SearchIssueResource(Resource):
         page_size = serializers.IntegerField(label="每页大小", min_value=0, max_value=500, default=10)
         show_aggs = serializers.BooleanField(label="展示聚合统计信息", default=True)
         show_dsl = serializers.BooleanField(label="返回ES DSL查询语句", default=False)
-        trend_start_time = serializers.IntegerField(label="趋势图起始时间", required=False)
-        trend_end_time = serializers.IntegerField(label="趋势图结束时间", required=False)
 
     def perform_request(self, validated_request_data):
         show_aggs = validated_request_data.pop("show_aggs")
@@ -204,8 +199,9 @@ class IssueDetailResource(Resource):
             end_time = int(time.time())
             search = (
                 AlertDocument.search(start_time=start_time, end_time=end_time)
+                .filter("term", **{"event.bk_biz_id": issue.bk_biz_id})
                 .filter("term", issue_id=issue.id)
-                .sort({"begin_time": {"order": "desc"}})
+                .sort({"create_time": {"order": "desc"}})
                 .params(size=1)
                 .source(["event.description"])
             )
@@ -343,13 +339,14 @@ class AssignIssueResource(Resource):
         assignee = validated_request_data["assignee"]
         operator = get_request_username()
 
-        def _action(issue):
+        def _action(bk_biz_id, issue_id):
             """
             指派或改派 Issue 负责人。
             待审核状态执行首次指派，未解决状态执行改派，其他状态不允许操作。
 
             Args:
-                issue: 要操作的 IssueDocument 实例。
+                bk_biz_id: 业务 ID。
+                issue_id: Issue ID。
 
             Returns:
                 dict，包含 issue_id、status、assignee、update_time 字段。
@@ -357,22 +354,12 @@ class AssignIssueResource(Resource):
             Raises:
                 ValueError: Issue 当前状态不允许指派时抛出。
             """
-            if issue.status == IssueStatus.PENDING_REVIEW:
-                issue.assign(assignees=assignee, operator=operator)
-            elif issue.status == IssueStatus.UNRESOLVED:
-                issue.reassign(assignees=assignee, operator=operator)
-            else:
-                raise ValueError(
-                    f"Issue {issue.id} 当前状态 {issue.status} 不允许指派，"
-                    f"仅允许 {IssueStatus.PENDING_REVIEW} / {IssueStatus.UNRESOLVED}"
-                )
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": str(issue.id),
-                "status": str(issue.status),
-                "assignee": list(issue.assignee or []),
-                "update_time": issue.update_time,
-            }
+            return api.issue.assign(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                assignee=assignee,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -386,24 +373,22 @@ class ResolveIssueResource(Resource):
     def perform_request(self, validated_request_data):
         operator = get_request_username()
 
-        def _action(issue):
+        def _action(bk_biz_id, issue_id):
             """
             将 Issue 标记为已解决。
 
             Args:
-                issue: 要操作的 IssueDocument 实例。
+                bk_biz_id: 业务 ID。
+                issue_id: Issue ID。
 
             Returns:
                 dict，包含 issue_id、status、resolved_time、update_time 字段。
             """
-            issue.resolve(operator=operator)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": issue.id,
-                "status": issue.status,
-                "resolved_time": issue.resolved_time,
-                "update_time": issue.update_time,
-            }
+            return api.issue.resolve(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -417,23 +402,12 @@ class ArchiveIssueResource(Resource):
     def perform_request(self, validated_request_data):
         operator = get_request_username()
 
-        def _action(issue):
-            """
-            将 Issue 归档。
-
-            Args:
-                issue: 要操作的 IssueDocument 实例。
-
-            Returns:
-                dict，包含 issue_id、status、update_time 字段。
-            """
-            issue.archive(operator=operator)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": issue.id,
-                "status": issue.status,
-                "update_time": issue.update_time,
-            }
+        def _action(bk_biz_id, issue_id):
+            return api.issue.archive(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -447,23 +421,12 @@ class ReopenIssueResource(Resource):
     def perform_request(self, validated_request_data):
         operator = get_request_username()
 
-        def _action(issue):
-            """
-            将已解决的 Issue 重新打开。
-
-            Args:
-                issue: 要操作的 IssueDocument 实例。
-
-            Returns:
-                dict，包含 bk_biz_id、issue_id、status、update_time 字段。
-            """
-            issue.reopen(operator=operator)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": issue.id,
-                "status": issue.status,
-                "update_time": issue.update_time,
-            }
+        def _action(bk_biz_id, issue_id):
+            return api.issue.reopen(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -477,23 +440,12 @@ class RestoreIssueResource(Resource):
     def perform_request(self, validated_request_data):
         operator = get_request_username()
 
-        def _action(issue):
-            """
-            将归档的 Issue 恢复为归档前的状态（通过活动日志推断），无法确定时回退到 PENDING_REVIEW。
-
-            Args:
-                issue: 要操作的 IssueDocument 实例。
-
-            Returns:
-                dict，包含 bk_biz_id、issue_id、status、update_time 字段。
-            """
-            issue.restore(operator=operator)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": issue.id,
-                "status": issue.status,
-                "update_time": issue.update_time,
-            }
+        def _action(bk_biz_id, issue_id):
+            return api.issue.restore(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -512,23 +464,13 @@ class UpdateIssuePriorityResource(Resource):
         priority = validated_request_data["priority"]
         operator = get_request_username()
 
-        def _action(issue):
-            """
-            修改 Issue 优先级。
-
-            Args:
-                issue: 要操作的 IssueDocument 实例。
-
-            Returns:
-                dict，包含 issue_id、priority、update_time 字段。
-            """
-            issue.update_priority(priority=priority, operator=operator)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "issue_id": str(issue.id),
-                "priority": str(issue.priority),
-                "update_time": issue.update_time,
-            }
+        def _action(bk_biz_id, issue_id):
+            return api.issue.update_priority(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                priority=priority,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -543,28 +485,14 @@ class AddIssueFollowUpResource(Resource):
     def perform_request(self, validated_request_data):
         content = validated_request_data["content"]
         operator = get_request_username()
-        now = int(time.time())
 
-        def _action(issue):
-            """
-            向 Issue 写入一条跟进评论。
-
-            Args:
-                issue: 要操作的 IssueDocument 实例。
-
-            Returns:
-                dict，包含 activity_id、issue_id、activity_type、content、operator、time 字段。
-            """
-            activity = issue.add_comment(content=content, operator=operator, now=now)
-            return {
-                "bk_biz_id": issue.bk_biz_id,
-                "activity_id": activity.id,
-                "issue_id": issue.id,
-                "activity_type": IssueActivityType.COMMENT,
-                "content": content,
-                "operator": operator,
-                "time": now,
-            }
+        def _action(bk_biz_id, issue_id):
+            return api.issue.add_follow_up(
+                bk_biz_id=bk_biz_id,
+                issue_id=issue_id,
+                content=content,
+                operator=operator,
+            )
 
         return _run_batch(validated_request_data["issues"], _action)
 
@@ -578,9 +506,10 @@ class ListIssueActivitiesResource(Resource):
 
     def perform_request(self, validated_request_data):
         issue_id = validated_request_data["issue_id"]
+        bk_biz_id = validated_request_data["bk_biz_id"]
 
         # 校验 Issue 存在且归属当前业务（单条查询，bk_biz_id 为单个值）
-        _get_issue_or_raise(issue_id, bk_biz_id=validated_request_data["bk_biz_id"])
+        IssueDocument.get_issue_or_raise(issue_id, bk_biz_id=bk_biz_id)
 
         # 查询该 Issue 的全部活动日志，按时间降序排列（最近发生的在前）
         # 使用 all_indices=True 避免跨天漏查（活动日志与 Issue 可能跨天）
@@ -594,6 +523,7 @@ class ListIssueActivitiesResource(Resource):
 
         return [
             {
+                "bk_biz_id": hit.bk_biz_id,
                 "activity_id": hit.meta.id,
                 "activity_type": hit.activity_type,
                 "operator": hit.operator or "",
@@ -618,7 +548,7 @@ class ListIssueHistoryResource(Resource):
         bk_biz_id = validated_request_data["bk_biz_id"]
 
         # 校验当前 Issue 存在且归属当前业务
-        current_issue = _get_issue_or_raise(issue_id, bk_biz_id=bk_biz_id)
+        current_issue = IssueDocument.get_issue_or_raise(issue_id, bk_biz_id=bk_biz_id)
 
         # 查询同策略下所有已解决的历史 Issue（排除当前 Issue 自身），按解决时间降序排列，最多返回 200 条
         search = (
@@ -634,6 +564,7 @@ class ListIssueHistoryResource(Resource):
 
         return [
             {
+                "bk_biz_id": hit.bk_biz_id,
                 "issue_id": hit.meta.id,
                 "name": hit.name,
                 "status": hit.status,

@@ -9,6 +9,8 @@ export const updateIssuePriority = request('POST', 'fta/issue/issue/update_prior
 export const addIssueFollowUp = request('POST', 'fta/issue/issue/add_follow_up/');
 export const listIssueActivities = request('GET', 'fta/issue/issue/activities/');
 export const listIssueHistory = request('GET', 'fta/issue/issue/history/');
+export const issueDetail = request('GET', 'fta/issue/issue/detail/');
+export const issueSearch = request('POST', 'fta/issue/issue/search/');
 
 
 export default {
@@ -21,4 +23,6 @@ export default {
   addIssueFollowUp,
   listIssueActivities,
   listIssueHistory,
+  issueDetail,
+  issueSearch
 };
