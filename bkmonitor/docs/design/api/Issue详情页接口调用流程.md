@@ -56,7 +56,7 @@ Issue 详情页由以下接口协同完成数据获取：
 | `is_resolved` | `bool` | 是否已解决 |
 | `duration` | `string` | 存活时长 |
 | `impact_scope` | `object` | 影响范围 |
-| `aggregate_config` | `object` | 聚合配置（含 `aggregate_dimensions`） |
+| `aggregate_config` | `object` | 聚合配置（含 `aggregate_dimensions`，每项含 `field` 和 `display_name`） |
 
 **不再返回的字段**：`alert_ids`、`latest_alert_id`、`earliest_alert_id`、`alert_count`、`dimension_summary`、`trend`
 
@@ -113,7 +113,7 @@ Issue 详情页由以下接口协同完成数据获取：
 
 | 参数 | 来源字段 | 用途 |
 |------|---------|------|
-| `aggregate_dimensions` | `data.aggregate_config.aggregate_dimensions` | top_n 接口的 `fields` 参数 |
+| `aggregate_dimensions` | `data.aggregate_config.aggregate_dimensions` | 提取每项的 `field` 用于 top_n 接口的 `fields` 参数，`display_name` 用于维度展示名称 |
 
 | 接口 | 依赖 | 说明 |
 |------|------|------|
@@ -190,7 +190,10 @@ Issue 详情页由以下接口协同完成数据获取：
       }
     },
     "aggregate_config": {
-      "aggregate_dimensions": ["bk_target_ip", "bk_cloud_id"],
+      "aggregate_dimensions": [
+        {"field": "bk_target_ip", "display_name": "目标IP"},
+        {"field": "bk_cloud_id", "display_name": "采集器云区域ID"}
+      ],
       "conditions": [],
       "alert_levels": [1, 2]
     }
@@ -268,7 +271,7 @@ Issue 详情页由以下接口协同完成数据获取：
 | `query_string` | `string` | 否 | 查询字符串 |
 | `start_time` | `int` | 是 | 开始时间 |
 | `end_time` | `int` | 是 | 结束时间 |
-| `fields` | `string[]` | 是 | 统计维度字段列表，**来源于 detail 返回的 `aggregate_config.aggregate_dimensions`** |
+| `fields` | `string[]` | 是 | 统计维度字段列表，**来源于 detail 返回的 `aggregate_config.aggregate_dimensions[].field`**（需根据白名单判断是否加 `tags.` 前缀） |
 | `size` | `int` | 否 | 每个维度的桶数量，默认 10，建议设为 5（Top5） |
 
 #### 请求示例
@@ -323,7 +326,7 @@ Issue 详情页由以下接口协同完成数据获取：
 |--------|------|---------|
 | **百分比** | 接口不返回 `percentage` | 前端根据 `doc_count`（总数）和 `bucket.count` 计算：`percentage = count / doc_count * 100` |
 | **"其他"聚合** | 接口只返回 Top N 桶 | 前端计算：`其他.count = doc_count - sum(buckets[*].count)`，若 > 0 则追加"其他"项 |
-| **维度中文名** | 接口不返回维度中文名 | 前端维护 `field → display_name` 映射表，或从 `detail` 的 `impact_scope` 中提取 |
+| **维度中文名** | 接口不返回维度中文名 | 直接使用 `issue/detail` 返回的 `aggregate_dimensions[].display_name` |
 | **字符字段引号** | `is_char=true` 的字段，`id` 会被加上双引号 | 前端使用 `name` 字段展示，`id` 字段用于检索栏过滤 |
 
 ### 4.4 告警列表 — `POST /fta/alert/v2/alert/search/`
@@ -424,7 +427,7 @@ Issue 详情页由以下接口协同完成数据获取：
 | 设计稿元素 | 数据来源 | 字段 |
 |-----------|---------|------|
 | 维度分布进度条 | `alert/top_n` | `fields[*].buckets`（前端计算百分比和"其他"） |
-| 维度中文名 | 前端映射表 | 根据 `field` 名称映射 |
+| 维度中文名 | `issue/detail` 的 `aggregate_dimensions[].display_name` | 直接使用，无需前端映射 |
 
 ### 基本信息模块
 
@@ -508,7 +511,12 @@ Issue 详情页由以下接口协同完成数据获取：
 
 ### 6.4 维度字段名映射
 
-`aggregate_config.aggregate_dimensions` 中的维度名传入 `top_n` 接口的 `fields` 参数时，需要判断是否加 `tags.` 前缀。
+`aggregate_config.aggregate_dimensions` 现已从 `string[]` 变更为 `object[]`，每个元素包含 `field` 和 `display_name`。`field` 用于构建 `top_n` 接口的 `fields` 参数，`display_name` 直接用于前端展示维度中文名称。
+
+#### 前端使用方式
+
+1. **维度展示名称**：直接使用 `aggregate_dimensions[].display_name`，无需前端维护映射表
+2. **构建 top_n 请求**：从 `aggregate_dimensions[].field` 提取字段名，再根据内置字段白名单判断是否加 `tags.` 前缀
 
 #### 判断规则
 
@@ -539,13 +547,21 @@ const ALERT_BUILTIN_FIELDS = new Set([
 
 #### 完整示例
 
-假设 `detail` 接口返回的 `aggregate_config.aggregate_dimensions` 为 `["bk_cloud_id", "bk_target_ip", "device_name"]`：
+假设 `detail` 接口返回的 `aggregate_config.aggregate_dimensions` 为：
 
-| 维度名 | 是否内置字段 | `top_n` 的 `fields` 参数值 |
-|--------|:----------:|--------------------------|
-| `bk_cloud_id` | ✅ 是 | `bk_cloud_id` |
-| `bk_target_ip` | ❌ 否 | `tags.bk_target_ip` |
-| `device_name` | ❌ 否 | `tags.device_name` |
+```json
+[
+  {"field": "bk_cloud_id", "display_name": "采集器云区域ID"},
+  {"field": "bk_target_ip", "display_name": "目标IP"},
+  {"field": "device_name", "display_name": "设备名"}
+]
+```
+
+| 维度名 | display_name | 是否内置字段 | `top_n` 的 `fields` 参数值 |
+|--------|-------------|:----------:|--------------------------|
+| `bk_cloud_id` | 采集器云区域ID | ✅ 是 | `bk_cloud_id` |
+| `bk_target_ip` | 目标IP | ❌ 否 | `tags.bk_target_ip` |
+| `device_name` | 设备名 | ❌ 否 | `tags.device_name` |
 
 最终请求：
 

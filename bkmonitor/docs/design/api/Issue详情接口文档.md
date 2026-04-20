@@ -88,7 +88,14 @@ POST /fta/issue/issue/detail
     "is_resolved": false,
     "duration": "1d 1h",
     "impact_scope": {...},
-    "aggregate_config": {...}
+    "aggregate_config": {
+      "aggregate_dimensions": [
+        {"field": "bk_target_ip", "display_name": "目标IP"},
+        {"field": "bk_cloud_id", "display_name": "采集器云区域ID"}
+      ],
+      "conditions": [],
+      "alert_levels": [1, 2]
+    }
   }
 }
 ```
@@ -176,7 +183,10 @@ POST /fta/issue/issue/detail
 
 ```json
 {
-  "aggregate_dimensions": ["bk_target_ip", "bk_cloud_id"],
+  "aggregate_dimensions": [
+    {"field": "bk_target_ip", "display_name": "目标IP"},
+    {"field": "bk_cloud_id", "display_name": "采集器云区域ID"}
+  ],
   "conditions": [],
   "alert_levels": [1, 2]
 }
@@ -186,11 +196,15 @@ POST /fta/issue/issue/detail
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `aggregate_dimensions` | `string[]` | 聚合维度列表，用于 `alert/top_n` 接口的 `fields` 参数 |
+| `aggregate_dimensions` | `object[]` | 聚合维度列表，每项含 `field`（字段名）和 `display_name`（维度展示名称），用于 `alert/top_n` 接口的 `fields` 参数和维度统计展示 |
+| `aggregate_dimensions[].field` | `string` | 维度字段名（已去除 `tags.` 前缀），用于构建 `top_n` 接口的 `fields` 参数 |
+| `aggregate_dimensions[].display_name` | `string` | 维度中文展示名称，用于前端维度统计模块的标题展示 |
 | `conditions` | `object[]` | 聚合条件 |
 | `alert_levels` | `int[]` | 告警级别列表 |
 
-> **前端使用说明**：`aggregate_dimensions` 用于调用 `alert/top_n` 接口时构建 `fields` 参数。需要注意内置字段不加前缀，自定义字段需加 `tags.` 前缀，详见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 6.4 节。
+> **前端使用说明**：
+> - 维度统计模块的展示名称直接使用 `display_name` 字段，无需前端维护映射表
+> - 构建 `top_n` 接口的 `fields` 参数时，需根据 `field` 判断是否加 `tags.` 前缀（内置字段不加前缀，自定义字段加 `tags.` 前缀），详见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 6.4 节
 
 ---
 
@@ -225,9 +239,10 @@ POST /fta/alert/v2/alert/date_histogram/
 > **接口地址**：`POST /fta/alert/v2/alert/top_n/`
 >
 > **调用方式**：
-> 1. 从 detail 接口获取 `aggregate_config.aggregate_dimensions`
-> 2. 转换维度字段名（内置字段不加前缀，自定义字段加 `tags.` 前缀）
-> 3. 通过 `conditions` 传入 `issue_id` 过滤条件
+> 1. 从 detail 接口获取 `aggregate_config.aggregate_dimensions`（每项含 `field` 和 `display_name`）
+> 2. 使用 `display_name` 作为维度展示名称
+> 3. 提取 `field`，转换维度字段名（内置字段不加前缀，自定义字段加 `tags.` 前缀）构建 `top_n` 的 `fields` 参数
+> 4. 通过 `conditions` 传入 `issue_id` 过滤条件
 >
 > **详细说明**：参见 [Issue详情页接口调用流程.md](./Issue详情页接口调用流程.md) 第 4.3 节。
 
@@ -367,6 +382,7 @@ POST /fta/alert/v2/alert/search/
 
 | 设计稿元素 | 数据来源 | 说明 |
 |-----------|----------|------|
+| 维度展示名称 | `issue/detail` 的 `aggregate_dimensions[].display_name` | 直接使用，无需前端维护映射表 |
 | 维度分布进度条 | `alert/top_n` | Top5 + 其他，前端计算百分比 |
 
 ### 告警列表模块

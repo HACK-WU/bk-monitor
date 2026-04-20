@@ -394,7 +394,7 @@
 | `is_resolved` | `bool` | 是否已解决，根据 `resolved_time` 是否有值计算：有值则为 `true`，否则为 `false` |
 | `duration` | `string` | 存活时长，人类可读格式（如 `"1d 1h"`、`"30min"`） |
 | `impact_scope` | `object` | 影响范围快照，支持多维度（set/host/service_instances/cluster/node/service/pod/app/apm_service），见下方结构说明 |
-| `aggregate_config` | `object` | 聚合配置快照，含 `aggregate_dimensions` / `conditions` / `alert_levels` |
+| `aggregate_config` | `object` | 聚合配置快照，含 `aggregate_dimensions`（每项含 `field` 和 `display_name`）/ `conditions` / `alert_levels` |
 
 ---
 
@@ -647,7 +647,9 @@
           }
         },
         "aggregate_config": {
-          "aggregate_dimensions": ["bk_target_ip"],
+          "aggregate_dimensions": [
+            {"field": "bk_target_ip", "display_name": "目标IP"}
+          ],
           "conditions": [],
           "alert_levels": [1, 2]
         }
