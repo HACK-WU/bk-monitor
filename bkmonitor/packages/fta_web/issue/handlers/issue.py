@@ -235,9 +235,12 @@ class IssueQueryHandler(BaseBizQueryHandler):
 
             # impact_scope.{dim}.{id_field}: terms 聚合结果解析
             if actual_field.startswith("impact_scope."):
-                buckets = self._parse_impact_scope_buckets(search_result, actual_field, translators, char_add_quotes)
+                buckets = self._parse_impact_scope_buckets(search_result, field, translators, char_add_quotes)
+                bucket_count = None
+                if bucket_count_suffix:
+                    bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
                 result["fields"].append(
-                    {"field": field, "is_char": True, "bucket_count": len(buckets), "buckets": buckets}
+                    {"field": field, "is_char": True, "bucket_count": bucket_count, "buckets": buckets}
                 )
                 continue
 
@@ -290,11 +293,12 @@ class IssueQueryHandler(BaseBizQueryHandler):
 
         return buckets
 
-    def _parse_impact_scope_buckets(self, search_result, actual_field, translators, char_add_quotes):
+    def _parse_impact_scope_buckets(self, search_result, field, translators, char_add_quotes):
         """解析 impact_scope.{维度}.{ID字段} terms 聚合结果"""
+        actual_field = field.lstrip("+-")
         buckets = []
         if search_result.aggs:
-            for bucket in getattr(search_result.aggs, actual_field).buckets:
+            for bucket in getattr(search_result.aggs, field).buckets:
                 if bucket.key is not None:
                     buckets.append({"id": bucket.key, "name": bucket.key, "count": bucket.doc_count})
 
@@ -339,7 +343,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
             if len(parts) == 3 and parts[0] == "impact_scope":
                 dimension, id_field = parts[1], parts[2]
                 es_field = f"impact_scope.{dimension}.instance_list.{id_field}"
-                new_search_object = search_object.bucket(actual_field, "terms", field=es_field, size=size)
+                new_search_object = search_object.bucket(field, "terms", field=es_field, size=size)
                 return new_search_object
 
         # 其他字段走基类标准流程
