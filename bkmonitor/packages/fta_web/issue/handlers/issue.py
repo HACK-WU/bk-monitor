@@ -28,7 +28,7 @@ from bkmonitor.utils.time_tools import hms_string
 from constants.issue import ImpactScopeDimension, IssuePriority, IssueStatus
 from fta_web.alert.handlers.base import BaseBizQueryHandler, BaseQueryTransformer, QueryField
 from fta_web.alert.handlers.translator import BizTranslator, StrategyTranslator
-from fta_web.issue.handlers.translator import StatusTranslator, PriorityTranslator
+from fta_web.issue.handlers.translator import StatusTranslator, PriorityTranslator, ImpactDimensionsTranslator
 
 logger = logging.getLogger("fta_action.issue")
 
@@ -222,6 +222,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
             "priority": PriorityTranslator(),
             "bk_biz_id": BizTranslator(),
             "strategy_id": StrategyTranslator(),
+            "impact_dimensions": ImpactDimensionsTranslator(),
         }
 
         search_object = self.get_search_object()
@@ -253,20 +254,13 @@ class IssueQueryHandler(BaseBizQueryHandler):
 
             # impact_dimensions: filters 聚合结果解析
             if actual_field == "impact_dimensions":
-                buckets = self._parse_impact_dimensions_buckets(search_result)
-
-                bucket_count = len(buckets)
-                # 按 count 降序排列，数量多的优先
-                buckets = sorted(buckets, key=lambda x: x["count"], reverse=True)
-                # filters 聚合不支持 size 参数，手动截断
-                if size is not None and size > 0:
-                    buckets = buckets[:size]
-
+                buckets = self._parse_impact_dimensions_buckets(search_result, translators)
                 result["fields"].append(
+                    # bucket_count 直接获取维度总数
                     {
                         "field": field,
                         "is_char": False,
-                        "bucket_count": bucket_count,
+                        "bucket_count": len(ImpactScopeDimension.CHOICES),
                         "buckets": buckets,
                     }
                 )
@@ -274,44 +268,23 @@ class IssueQueryHandler(BaseBizQueryHandler):
 
             # impact_scope.{dim}.{id_field}: terms 聚合结果解析
             if actual_field.startswith("impact_scope."):
-                buckets = self._parse_impact_scope_buckets(search_result, field, translators, char_add_quotes)
-                bucket_count = None
-                if bucket_count_suffix:
-                    bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
+                buckets = self._parse_impact_scope_buckets(search_result, actual_field, translators, char_add_quotes)
                 result["fields"].append(
-                    {"field": field, "is_char": True, "bucket_count": bucket_count, "buckets": buckets}
+                    {"field": field, "is_char": True, "bucket_count": len(buckets), "buckets": buckets}
                 )
                 continue
 
-            # bk_biz_id：需要补充授权业务中数量为0的桶
-            elif actual_field == "bk_biz_id" and hasattr(self, "authorized_bizs"):
-                buckets = [
-                    {"id": bucket.key, "name": bucket.key, "count": bucket.doc_count}
-                    for bucket in getattr(search_result.aggs, field).buckets
-                ]
-                exist_bizs = {int(bucket["id"]) for bucket in buckets}
-                for bk_biz_id in self.authorized_bizs:
-                    if len(buckets) >= size:
-                        break
-                    if int(bk_biz_id) in exist_bizs:
-                        continue
-                    buckets.append({"id": bk_biz_id, "name": bk_biz_id, "count": 0})
-
-                if bucket_count_suffix:
-                    bucket_count = len(set(self.authorized_bizs) | exist_bizs)
-
             # 普通字段（含 id）：标准 terms 聚合结果解析
-            else:
-                bucket_count = None
-                if bucket_count_suffix:
-                    bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
+            bucket_count = None
+            if bucket_count_suffix:
+                bucket_count = getattr(search_result.aggs, f"{field}{bucket_count_suffix}").value
 
-                buckets = []
-                for bucket in getattr(search_result.aggs, field).buckets:
-                    if bucket_count_suffix and not bucket.key:
-                        bucket_count -= 1
-                    else:
-                        buckets.append({"id": bucket.key, "name": bucket.key, "count": bucket.doc_count})
+            buckets = []
+            for bucket in getattr(search_result.aggs, field).buckets:
+                if bucket_count_suffix and not bucket.key:
+                    bucket_count -= 1
+                else:
+                    buckets.append({"id": bucket.key, "name": bucket.key, "count": bucket.doc_count})
 
             if actual_field in translators:
                 translators[actual_field].translate_from_dict(buckets, "id", "name")
@@ -332,53 +305,31 @@ class IssueQueryHandler(BaseBizQueryHandler):
 
         return result
 
-    def _parse_impact_dimensions_buckets(self, search_result):
-        """解析 impact_dimensions filters 聚合结果，只返回实际有数据的维度
-
-        参数:
-            size: 返回的最大维度数量，None 表示不限制
-        """
+    def _parse_impact_dimensions_buckets(self, search_result, translators):
+        """解析 impact_dimensions filters 聚合结果，只返回实际有数据的维度"""
         buckets = []
         agg_result = getattr(search_result.aggs, "impact_dimensions", None)
         if agg_result:
             for dim, _ in ImpactScopeDimension.CHOICES:
-                bucket = getattr(agg_result.buckets, dim, None) if hasattr(agg_result.buckets, dim) else None
+                bucket = agg_result.buckets.get(dim)
                 count = bucket.doc_count if bucket else 0
                 if count == 0:
                     continue
                 display_name = str(ImpactScopeDimension.get_display_name(dim))
-                full_dim = ImpactScopeDimension.get_full_dimension(dim)
-                buckets.append({"id": full_dim, "name": display_name, "count": count})
+                buckets.append({"id": dim, "name": display_name, "count": count})
+
+        if "impact_dimensions" in translators:
+            translators["impact_dimensions"].translate_from_dict(buckets, "id", "name")
 
         return buckets
 
-    def _parse_impact_scope_buckets(self, search_result, field, translators, char_add_quotes):
+    def _parse_impact_scope_buckets(self, search_result, actual_field, translators, char_add_quotes):
         """解析 impact_scope.{维度}.{ID字段} terms 聚合结果"""
-        actual_field = field.lstrip("+-")
         buckets = []
         if search_result.aggs:
-            for bucket in getattr(search_result.aggs, field).buckets:
+            for bucket in getattr(search_result.aggs, actual_field).buckets:
                 if bucket.key is not None:
-                    display_name = None
-                    # 从 top_hits 子聚合中提取 display_name
-                    first_doc = getattr(getattr(bucket, "first_doc", None), "hits", None)
-                    if first_doc and first_doc.hits:
-                        source = first_doc.hits[0].to_dict().get("_source", {})
-                        if source:
-                            # 按 dimension 解析出 display_name 路径（AttrDict 用属性访问）
-                            parts = actual_field.split(".")
-                            if len(parts) >= 2:
-                                dimension, key = parts[1:3]
-                                instance_list = (
-                                    source.get("impact_scope", {}).get(dimension, {}).get("instance_list", [])
-                                )
-                                for instance in instance_list:
-                                    if str(instance.get(key, None)) == str(bucket.key):
-                                        display_name = instance.get("display_name", None)
-                                        break
-
-                    name = display_name if display_name is not None else bucket.key
-                    buckets.append({"id": bucket.key, "name": name, "count": bucket.doc_count})
+                    buckets.append({"id": bucket.key, "name": bucket.key, "count": bucket.doc_count})
 
         if actual_field in translators:
             translators[actual_field].translate_from_dict(buckets, "id", "name")
@@ -394,7 +345,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
         actual_field = field.lstrip("+-")
 
         if actual_field == "impact_dimensions":
-            # 直接去buckets的数量作为bucket_count
+            # 维度基数直接根据ImpactScopeDimension.CHOICES的数量获取
             return search_object
 
         if actual_field.startswith("impact_scope."):
@@ -412,14 +363,8 @@ class IssueQueryHandler(BaseBizQueryHandler):
         actual_field = field.lstrip("+-")
 
         if actual_field == "impact_dimensions":
-            # flattened 类型不支持对子路径使用 exists 查询，
-            # 改为查询 instance_list 中的具体 ID 字段是否存在
-            filters = {}
-            for dim, _ in ImpactScopeDimension.CHOICES:
-                id_field = ImpactScopeDimension.get_id_field(dim)
-                es_field = f"impact_scope.{dim}.instance_list.{id_field}"
-                filters[dim] = Q("exists", field=es_field)
-            new_search_object = search_object.bucket("impact_dimensions", "filters", filters=filters)
+            filters = {dim: Q("exists", field=f"impact_scope.{dim}") for dim, _ in ImpactScopeDimension.CHOICES}
+            new_search_object = search_object.bucket("impact_dimensions", "filters", filters=filters, size=size)
             return new_search_object
 
         if actual_field.startswith("impact_scope."):
@@ -427,11 +372,7 @@ class IssueQueryHandler(BaseBizQueryHandler):
             if len(parts) == 3 and parts[0] == "impact_scope":
                 dimension, id_field = parts[1], parts[2]
                 es_field = f"impact_scope.{dimension}.instance_list.{id_field}"
-                display_name_field = f"impact_scope.{dimension}.instance_list.display_name"
-                # terms 聚合 + top_hits 子聚合，获取第一个文档的 display_name
-                new_search_object = search_object.bucket(field, "terms", field=es_field, size=size).metric(
-                    "first_doc", "top_hits", size=1, _source=[display_name_field, es_field]
-                )
+                new_search_object = search_object.bucket(actual_field, "terms", field=es_field, size=size)
                 return new_search_object
 
         # 其他字段走基类标准流程
