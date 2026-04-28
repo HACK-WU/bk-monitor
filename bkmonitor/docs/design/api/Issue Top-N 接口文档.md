@@ -1,7 +1,7 @@
 # Issue Top-N 接口文档
 
-> **版本**: v2.0
-> **更新时间**: 2026-04-27
+> **版本**: v2.1
+> **更新时间**: 2026-04-28
 > **状态**: 已实现
 
 ---
@@ -55,7 +55,7 @@
 | `labels` | `true` | 标签（数组，ES 自动展开） |
 | `is_regression` | `false` | 是否回归 |
 | `impact_dimensions` | `false` | 影响范围维度统计（特殊字段，详见下方） |
-| `impact_scope.{维度}.{ID字段}` | `true` | 影响范围实例统计（特殊字段，详见下方） |
+| `impact_scope.{维度}` | `true` | 影响范围实例统计（特殊字段，详见下方） |
 
 > **`is_char` 字段说明**：`is_char: true` 的字段，返回的桶 `id` 值会自动包裹双引号（如 `"\"APM 服务响应超时\""`），`name` 不加引号。前端解析 `id` 时需注意去引号。
 
@@ -93,21 +93,21 @@
 
 统计 Issue 包含的影响范围维度分布。使用 filters 聚合，仅返回 `count > 0` 的维度，`size` 参数有效（按 count 降序截断）。
 
-**返回的 `id` 格式**：完整维度路径，如 `impact_scope.host.bk_host_id`（由 `ImpactScopeDimension.get_full_dimension()` 生成），而非短维度名。
+**返回的 `id` 格式**：两段式维度路径，如 `impact_scope.host`，即 `impact_scope.{维度名}`。
 
 **可用维度**：
 
-| 短维度名 | 完整维度路径（id 返回值） | 中文名 |
-|----------|--------------------------|--------|
-| `set` | `impact_scope.set.set_id` | 集群 |
-| `host` | `impact_scope.host.bk_host_id` | 主机 |
-| `service_instances` | `impact_scope.service_instances.bk_service_instance_id` | 服务实例 |
-| `cluster` | `impact_scope.cluster.bcs_cluster_id` | bcs集群 |
-| `node` | `impact_scope.node.node` | node |
-| `service` | `impact_scope.service.service` | service |
-| `pod` | `impact_scope.pod.pod` | pod |
-| `apm_app` | `impact_scope.apm_app.app_name` | apm_app |
-| `apm_service` | `impact_scope.apm_service.service_name` | apm_service |
+| 短维度名 | id 返回值 | 中文名 |
+|----------|-----------|--------|
+| `set` | `impact_scope.set` | 集群 |
+| `host` | `impact_scope.host` | 主机 |
+| `service_instances` | `impact_scope.service_instances` | 服务实例 |
+| `cluster` | `impact_scope.cluster` | bcs集群 |
+| `node` | `impact_scope.node` | node |
+| `service` | `impact_scope.service` | service |
+| `pod` | `impact_scope.pod` | pod |
+| `apm_app` | `impact_scope.apm_app` | apm_app |
+| `apm_service` | `impact_scope.apm_service` | apm_service |
 
 **请求示例**：
 ```json
@@ -125,42 +125,43 @@
     "is_char": false,
     "bucket_count": 6,
     "buckets": [
-        {"id": "impact_scope.host.bk_host_id", "name": "主机", "count": 150},
-        {"id": "impact_scope.cluster.bcs_cluster_id", "name": "bcs集群", "count": 80},
-        {"id": "impact_scope.set.set_id", "name": "集群", "count": 60}
-    ]
+                    {"id": "impact_scope.host", "name": "主机", "count": 150},
+                    {"id": "impact_scope.cluster", "name": "bcs集群", "count": 80},
+                    {"id": "impact_scope.set", "name": "集群", "count": 60}
+                ]
+            }
+        ]
+    }
 }
 ```
 
 > **注意**：`bucket_count` 仅统计 `count > 0` 的维度数量，不含 count 为 0 的维度。
 
----
-
-### 特殊字段：`impact_scope.{维度}.{ID字段}`
+### 特殊字段：`impact_scope.{维度}`
 
 统计各维度下具体实例的 Issue 分布。后端通过 top_hits 子聚合提取 `display_name` 用于翻译展示名。
 
-**字段格式**：`impact_scope.{dimension}.{id_field}`
+**字段格式**：`impact_scope.{dimension}`
 
-**维度与 ID 字段映射**：
+**可用维度**：
 
-| 维度 | ID 字段 | 完整字段写法 | 翻译来源 |
-|------|---------|-------------|---------|
-| `set` | `set_id` | `impact_scope.set.set_id` | CMDB 批量查询 |
-| `host` | `bk_host_id` | `impact_scope.host.bk_host_id` | CMDB 批量查询 |
-| `service_instances` | `bk_service_instance_id` | `impact_scope.service_instances.bk_service_instance_id` | CMDB 批量查询 |
-| `cluster` | `bcs_cluster_id` | `impact_scope.cluster.bcs_cluster_id` | 容器平台 API |
-| `node` | `node` | `impact_scope.node.node` | 容器平台 API |
-| `service` | `service` | `impact_scope.service.service` | 容器平台 API |
-| `pod` | `pod` | `impact_scope.pod.pod` | 容器平台 API |
-| `apm_app` | `app_name` | `impact_scope.apm_app.app_name` | APM 服务 |
-| `apm_service` | `service_name` | `impact_scope.apm_service.service_name` | APM 服务 |
+| 字段写法 | 翻译来源 |
+|----------|---------|
+| `impact_scope.set` | CMDB 批量查询 |
+| `impact_scope.host` | CMDB 批量查询 |
+| `impact_scope.service_instances` | CMDB 批量查询 |
+| `impact_scope.cluster` | 容器平台 API |
+| `impact_scope.node` | 容器平台 API |
+| `impact_scope.service` | 容器平台 API |
+| `impact_scope.pod` | 容器平台 API |
+| `impact_scope.apm_app` | APM 服务 |
+| `impact_scope.apm_service` | APM 服务 |
 
 **请求示例**：
 ```json
 {
     "bk_biz_ids": [2],
-    "fields": ["impact_scope.host.bk_host_id", "impact_scope.cluster.bcs_cluster_id"],
+    "fields": ["impact_scope.host", "impact_scope.cluster"],
     "size": 10
 }
 ```
@@ -168,13 +169,13 @@
 **响应示例**：
 ```json
 {
-    "field": "impact_scope.host.bk_host_id",
-    "is_char": true,
-    "bucket_count": 10,
-    "buckets": [
-        {"id": "\"1001\"", "name": "192.168.1.101", "count": 25},
-        {"id": "\"1002\"", "name": "192.168.1.102", "count": 18}
-    ]
+    "field": "impact_scope.host",
+                "is_char": true,
+                "bucket_count": 10,
+                "buckets": [
+                    {"id": "\"1001\"", "name": "192.168.1.101", "count": 25},
+                    {"id": "\"1002\"", "name": "192.168.1.102", "count": 18}
+                ]
 }
 ```
 
@@ -419,16 +420,19 @@
     "code": 200,
     "message": "OK",
     "data": {
-        "doc_count": 150,
+        "doc_count": 12,
         "fields": [
             {
                 "field": "impact_dimensions",
                 "is_char": false,
                 "bucket_count": 6,
                 "buckets": [
-                    {"id": "impact_scope.host.bk_host_id", "name": "主机", "count": 150},
-                    {"id": "impact_scope.cluster.bcs_cluster_id", "name": "bcs集群", "count": 80},
-                    {"id": "impact_scope.set.set_id", "name": "集群", "count": 60}
+                    {"id": "impact_scope.host", "name": "主机", "count": 5},
+                    {"id": "impact_scope.set", "name": "集群", "count": 3},
+                    {"id": "impact_scope.service_instances", "name": "服务实例", "count": 3},
+                    {"id": "impact_scope.cluster", "name": "bcs集群", "count": 2},
+                    {"id": "impact_scope.pod", "name": "pod", "count": 2},
+                    {"id": "impact_scope.apm_service", "name": "apm_service", "count": 1}
                 ]
             }
         ]
@@ -436,13 +440,13 @@
 }
 ```
 
-### 示例 7：统计主机维度的 Top-N 实例
+### 示例 7：统计集群维度的 Top-N 实例
 
 **请求**：
 ```json
 {
     "bk_biz_ids": [2],
-    "fields": ["impact_scope.host.bk_host_id"],
+    "fields": ["impact_scope.set"],
     "size": 20
 }
 ```
@@ -454,16 +458,15 @@
     "code": 200,
     "message": "OK",
     "data": {
-        "doc_count": 150,
+        "doc_count": 12,
         "fields": [
             {
-                "field": "impact_scope.host.bk_host_id",
+                "field": "impact_scope.set",
                 "is_char": true,
-                "bucket_count": 45,
+                "bucket_count": 2,
                 "buckets": [
-                    {"id": "\"1001\"", "name": "192.168.1.101", "count": 25},
-                    {"id": "\"1002\"", "name": "192.168.1.102", "count": 18},
-                    {"id": "\"1003\"", "name": "192.168.1.103", "count": 12}
+                    {"id": "\"5017605\"", "name": "蓝鲸PaaS平台/BCS-K8S-40340", "count": 3},
+                    {"id": "\"5070644\"", "name": "kihan-test/bcs-tke-test-BCS-K8S-41797", "count": 3}
                 ]
             }
         ]
