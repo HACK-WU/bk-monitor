@@ -28,10 +28,13 @@ import { type PropType, defineComponent } from 'vue';
 
 import { IssuesBatchActionEnum } from '../../constant';
 import {
+  archiveIssues,
   assignIssues,
   followUpIssues,
   resolveIssues,
   showOperationResult,
+  unArchiveIssues,
+  unResolveIssues,
   updateIssuesPriority,
 } from '../../services/issues-operations';
 import IssuesAssignDialog from '../issues-assign-dialog/issues-assign-dialog';
@@ -44,7 +47,7 @@ import type {
   IssueIdentifier,
   IssuePriorityType,
   IssuesBatchActionType,
-  IssuesOperationDialogEvent,
+  IssuesBatchOperationResponse,
   IssuesOperationDialogParams,
 } from '../../typing';
 
@@ -72,16 +75,16 @@ export default defineComponent({
   },
   emits: {
     'update:show': (value: boolean) => typeof value === 'boolean',
-    success: (dialogType: IssuesBatchActionType, event: IssuesOperationDialogEvent) =>
+    success: (dialogType: IssuesBatchActionType, event: IssuesBatchOperationResponse) =>
       dialogType != null && event != null,
   },
   setup(props, { emit }) {
     /**
-     * @description dialog 操作成功后统一回调，将子 dialog 返回的 succeeded 数组包装为 IssuesOperationDialogEvent
+     * @description dialog 操作成功后统一回调，将子 dialog 返回的 succeeded 数组包装为 IssuesBatchOperationResponse
      * @param {IssuesBatchActionType} dialogType - dialog 类型
-     * @param {IssuesOperationDialogEvent} event - dialog 操作成功后回调事件对象
+     * @param {IssuesBatchOperationResponse} event - dialog 操作成功后回调事件对象
      */
-    const handleConfirmSuccess = (dialogType: IssuesBatchActionType, event: IssuesOperationDialogEvent) => {
+    const handleConfirmSuccess = (dialogType: IssuesBatchActionType, event: IssuesBatchOperationResponse) => {
       if (!dialogType) return;
       emit('success', dialogType, event);
     };
@@ -106,7 +109,7 @@ export default defineComponent({
     const createConfirmHandler = <T extends Record<string, unknown> = Record<string, unknown>>(config: {
       buildParams: (payload: T) => Record<string, unknown>;
       dialogType: IssuesBatchActionType;
-      service: (params: any) => Promise<IssuesOperationDialogEvent>;
+      service: (params: any) => Promise<IssuesBatchOperationResponse>;
       successMessage: string;
     }) => {
       return async (event: AsyncDialogConfirmEvent<T>) => {
@@ -156,6 +159,30 @@ export default defineComponent({
       dialogType: IssuesBatchActionEnum.FOLLOW_UP,
     });
 
+    /** 重新打开 dialog 的 confirm 回调 */
+    const handleUnresolveConfirm = createConfirmHandler({
+      service: unResolveIssues,
+      buildParams: () => ({}),
+      successMessage: window.i18n.t('重新打开成功'),
+      dialogType: IssuesBatchActionEnum.UNRESOLVE,
+    });
+
+    /** 归档 dialog 的 confirm 回调 */
+    const handleArchiveConfirm = createConfirmHandler({
+      service: archiveIssues,
+      buildParams: () => ({}),
+      successMessage: window.i18n.t('归档成功'),
+      dialogType: IssuesBatchActionEnum.ARCHIVE,
+    });
+
+    /** 恢复归档 dialog 的 confirm 回调 */
+    const handleUnarchiveConfirm = createConfirmHandler({
+      service: unArchiveIssues,
+      buildParams: () => ({}),
+      successMessage: window.i18n.t('恢复成功'),
+      dialogType: IssuesBatchActionEnum.UNARCHIVE,
+    });
+
     return {
       handleConfirmSuccess,
       handleShowChange,
@@ -163,6 +190,9 @@ export default defineComponent({
       handleAssignConfirm,
       handlePriorityConfirm,
       handleFollowUpConfirm,
+      handleUnresolveConfirm,
+      handleArchiveConfirm,
+      handleUnarchiveConfirm,
     };
   },
   render() {
@@ -183,6 +213,30 @@ export default defineComponent({
           issuesData={this.issuesData}
           onCancel={() => this.handleShowChange(false)}
           onConfirm={this.handleResolveConfirm}
+          onUpdate:isShow={this.handleShowChange}
+        />
+        <IssuesResolveDialog
+          isShow={this.dialogType === IssuesBatchActionEnum.UNRESOLVE && this.show}
+          issuesData={this.issuesData}
+          tip={this.issuesData?.length > 1 ? window.i18n.t('确认批量重新打开？') : window.i18n.t('确认重新打开？')}
+          onCancel={() => this.handleShowChange(false)}
+          onConfirm={this.handleUnresolveConfirm}
+          onUpdate:isShow={this.handleShowChange}
+        />
+        <IssuesResolveDialog
+          isShow={this.dialogType === IssuesBatchActionEnum.ARCHIVE && this.show}
+          issuesData={this.issuesData}
+          tip={this.issuesData?.length > 1 ? window.i18n.t('确认批量归档？') : window.i18n.t('确认归档？')}
+          onCancel={() => this.handleShowChange(false)}
+          onConfirm={this.handleArchiveConfirm}
+          onUpdate:isShow={this.handleShowChange}
+        />
+        <IssuesResolveDialog
+          isShow={this.dialogType === IssuesBatchActionEnum.UNARCHIVE && this.show}
+          issuesData={this.issuesData}
+          tip={this.issuesData?.length > 1 ? window.i18n.t('确认批量恢复？') : window.i18n.t('确认恢复？')}
+          onCancel={() => this.handleShowChange(false)}
+          onConfirm={this.handleUnarchiveConfirm}
           onUpdate:isShow={this.handleShowChange}
         />
         <IssuesPriorityDialog

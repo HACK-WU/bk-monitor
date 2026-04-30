@@ -60,6 +60,7 @@ from fta_web.alert.handlers.translator import (
     MetricTranslator,
     PluginTranslator,
     StrategyTranslator,
+    TopoNodeTranslator,
 )
 from fta_web.alert.utils import is_include_promql
 
@@ -1093,6 +1094,39 @@ class AlertQueryHandler(BaseBizQueryHandler):
                 alert_ids = [0]
 
             return Q("ids", values=alert_ids)
+
+        elif condition["origin_key"] == "converge_id" and condition["key"] == "id":
+            # 收敛记录ID查询：通过 converge_id 批量获取动作实例，找到被收敛的告警ID列表
+            alert_ids = []
+            try:
+                action_instances = ActionInstanceDocument.mget(
+                    condition["value"], ["converge_id", "is_converge_primary"]
+                )
+                converge_ids = [inst.converge_id for inst in action_instances if inst and inst.is_converge_primary]
+                if converge_ids:
+                    queryset = ConvergeRelation.objects.filter(
+                        converge_id__in=converge_ids, converge_status=ConvergeStatus.SKIPPED
+                    ).only("alerts")
+                    alert_ids = list(chain(*[converge.alerts for converge in queryset]))
+            except Exception:
+                pass
+
+            if not alert_ids:
+                alert_ids = [0]
+
+            return Q("ids", values=list(set(alert_ids)))
+
+        elif condition["origin_key"] == "action_id" and condition["key"] == "id":
+            # 处理记录ID查询：通过 action_id 获取关联的告警ID列表
+            alert_ids, _ = get_alert_ids_by_action_id(condition["value"])
+            if not alert_ids:
+                alert_ids = [0]
+            return Q("ids", values=alert_ids)
+
+        elif condition["key"] == "event.ipv6":
+            # IPv6 地址查询：将缩写的 IPv6 地址展开为完整格式
+            condition["value"] = [exploded_ip(v) for v in condition["value"]]
+
         elif condition["key"] == "query_string":
             con_q = None
             for query_string in condition["value"]:
@@ -1467,13 +1501,15 @@ class AlertQueryHandler(BaseBizQueryHandler):
 
     def handle_aggs_notice_way(self, alert_ids):
         """通过ES聚合统计告警通知类型分布"""
-        notice_way_mapping = {
-            NoticeWay.SMS: _lazy("短信"),
-            NoticeWay.MAIL: _lazy("邮件"),
-            NoticeWay.WEIXIN: _lazy("微信"),
-            NoticeWay.QY_WEIXIN: _lazy("企业微信"),
-            NoticeWay.WX_BOT: _lazy("企业微信机器人"),
-        }
+        # 需要聚合的通知方式
+        notice_ways = [
+            NoticeWay.SMS,  # 短信
+            NoticeWay.MAIL,  # 邮件
+            NoticeWay.WEIXIN,  # 微信
+            NoticeWay.QY_WEIXIN,  # 企微
+            NoticeWay.VOICE,  # 语音
+            NoticeWay.WX_BOT,  # 群机器人
+        ]
         notice_way_count = defaultdict(int)
         alert_notice_ways = {}
 
@@ -1489,7 +1525,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                             "name": str(NoticeWay.NOTICE_WAY_MAPPING.get(way_key, way_key)),
                             "count": 0,
                         }
-                        for way_key in notice_way_mapping
+                        for way_key in notice_ways
                     ],
                 }
 
@@ -1497,8 +1533,8 @@ class AlertQueryHandler(BaseBizQueryHandler):
             alert_notice_ways = self._query_alert_notice_ways(alert_ids=alert_ids)
 
             # 统计每种通知方式的告警数量
-            for notice_ways in alert_notice_ways.values():
-                for way in notice_ways:
+            for ways in alert_notice_ways.values():
+                for way in ways:
                     notice_way_count[way] += 1
 
         except Exception as e:  # noqa: BLE001
@@ -1514,7 +1550,7 @@ class AlertQueryHandler(BaseBizQueryHandler):
                     "name": str(NoticeWay.NOTICE_WAY_MAPPING.get(way_key, way_key)),
                     "count": notice_way_count.get(way_key, 0),
                 }
-                for way_key in notice_way_mapping
+                for way_key in notice_ways
             ],
         }
 
@@ -1731,12 +1767,18 @@ class AlertQueryHandler(BaseBizQueryHandler):
         return event
 
     def top_n(self, fields: list, size=10, translators: dict = None, char_add_quotes=True):
+        if self.authorized_bizs is not None:
+            bk_biz_ids = self.authorized_bizs
+        else:
+            bk_biz_ids = self.bk_biz_ids
+
         translators = {
-            "metric": MetricTranslator(name_format="{name} ({id})", bk_biz_ids=self.bk_biz_ids),
+            "metric": MetricTranslator(name_format="{name} ({id})", bk_biz_ids=bk_biz_ids),
             "bk_biz_id": BizTranslator(),
             "strategy_id": StrategyTranslator(),
             "category": CategoryTranslator(),
             "plugin_id": PluginTranslator(),
+            "bk_topo_node": TopoNodeTranslator(bk_biz_ids=bk_biz_ids),  # noqa
         }
 
         result = super().top_n(fields, size, translators, char_add_quotes)

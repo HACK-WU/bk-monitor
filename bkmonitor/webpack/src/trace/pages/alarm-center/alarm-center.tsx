@@ -25,9 +25,10 @@
  */
 import {
   type ComponentPublicInstance,
-  type ShallowRef,
+  type Ref,
   computed,
   defineComponent,
+  inject,
   onBeforeMount,
   shallowRef,
   useTemplateRef,
@@ -56,9 +57,11 @@ import { useAlarmFilter } from './components/alarm-retrieval-filter/hooks/use-al
 import AlarmTable from './components/alarm-table/alarm-table';
 import AlarmTrendChart from './components/alarm-trend-chart/alarm-trend-chart';
 import AlertOperationDialogs from './components/alert-operation-dialogs/alert-operation-dialogs';
+import BizPermissionTips from './components/biz-permission-tips/biz-permission-tips';
 import QuickFiltering from './components/quick-filtering';
 import { useAlarmTable } from './composables/use-alarm-table';
 import { useAlertDialogs } from './composables/use-alert-dialogs';
+import { useLegacyEventCenterCompat } from './composables/use-legacy-event-center-compat';
 import { useQuickFilter } from './composables/use-quick-filter';
 import { useAlarmTableColumns } from './composables/use-table-columns';
 import {
@@ -85,6 +88,7 @@ import { traceGenerateQueryString } from 'monitor-api/modules/apm_trace';
 import { handleTransformToTimestamp } from 'trace/components/time-range/utils';
 import { useI18n } from 'vue-i18n';
 
+import { type AlarmCenterApmHooks, ALARM_CENTER_APM_HOOKS_KEY } from './alarm-center-apm';
 import { useIssuesImpactScopeDrawer } from './alarm-issues/components/issues-impact-scope-drawer/hooks/use-issues-impact-scope-drawer';
 import IssuesImpactScopeDrawer from './alarm-issues/components/issues-impact-scope-drawer/issues-impact-scope-drawer';
 import { useIssuesDialogs } from './alarm-issues/components/issues-operation-dialogs/hooks/use-issues-dialogs';
@@ -93,11 +97,12 @@ import { IssuesBatchActionEnum } from './alarm-issues/constant';
 import IssuesDetailSideSlider from './alarm-issues/issues-detail/issues-detail-sideslider';
 import IssuesTable from './alarm-issues/issues-table/issues-table';
 import IssuesToolbar from './alarm-issues/issues-toolbar/issues-toolbar';
-import { exportIssues, showOperationResult, updateIssuesPriority } from './alarm-issues/services/issues-operations';
+/* import { exportIssues } from './alarm-issues/services/issues-operations'; */
+import { showOperationResult, updateIssuesPriority } from './alarm-issues/services/issues-operations';
 import { saveAlertContentName } from './services/alert-services';
 import EmptyStatus from '@/components/empty-status/empty-status';
 
-import type { IssueItem, IssuePriorityType } from './alarm-issues/typing';
+import type { IssueItem, IssuePriorityType, IssuesBatchActionType } from './alarm-issues/typing';
 import type { AlertSavePromiseEvent } from './components/alarm-table/components/alert-content-detail/alert-content-detail';
 
 import './alarm-center.scss';
@@ -112,6 +117,9 @@ export default defineComponent({
     const route = useRoute();
     const alarmStore = useAlarmCenterStore();
     const appStore = useAppStore();
+
+    const apmHooks = inject<AlarmCenterApmHooks | null>(ALARM_CENTER_APM_HOOKS_KEY, null);
+
     const {
       handleGetUserConfig: handleGetResidentSettingUserConfig,
       handleSetUserConfig: handleSetResidentSettingUserConfig,
@@ -139,6 +147,7 @@ export default defineComponent({
       storageColumns,
       allTableFields,
       lockedTableFields,
+      fieldsWidthConfig,
     } = useAlarmTableColumns();
 
     const {
@@ -150,17 +159,18 @@ export default defineComponent({
       handleAlertDialogShow,
       handleAlertDialogHide,
       handleAlertDialogConfirm,
-    } = useAlertDialogs(data as ShallowRef<AlertTableItem[]>);
+    } = useAlertDialogs(data as Ref<AlertTableItem[]>);
 
     const {
       issuesDialogShow,
       issuesDialogType,
       issuesDialogData,
       issuesDialogParam,
+      updateIssueItems,
       handleIssuesDialogShow,
       handleIssuesDialogHide,
       handleIssuesDialogSuccess,
-    } = useIssuesDialogs(data as ShallowRef<IssueItem[]>);
+    } = useIssuesDialogs(data as Ref<IssueItem[]>);
 
     /**
      * @description 直接调用优先级变更接口，无需打开弹窗，成功后原地更新对应 Issue 行数据
@@ -180,13 +190,21 @@ export default defineComponent({
 
       showOperationResult(res, t('修改成功'));
 
-      // 接口成功，原地更新行数据
-      const item = res.succeeded?.[0];
-      if (item) {
-        targetRow.priority = item.priority;
-        targetRow.update_time = item.update_time;
-      }
+      updateIssueItems(res.succeeded);
     };
+
+    /** 兼容旧版「事件中心」(fta-solutions/pages/event) 的 URL 入口 */
+    const {
+      legacyBatchAction,
+      shouldAutoOpenFirstDetail,
+      showPermissionTips,
+      applyLegacyQueryStringInjection,
+      applyPromqlIfNeeded,
+      setupAutoOpenFirstDetailFlag,
+      computeShowPermissionTips,
+      dismissPermissionTips,
+      handleApplyPermission,
+    } = useLegacyEventCenterCompat();
 
     const favoriteBox = useTemplateRef<ComponentPublicInstance<typeof FavoriteBox>>('favoriteBox');
     const allFavoriteList = computed(() => {
@@ -217,18 +235,6 @@ export default defineComponent({
         };
       }
       return null;
-    });
-    const { getRetrievalFilterValueData } = useAlarmFilter(() => {
-      const [start, end] = handleTransformToTimestamp(alarmStore.timeRange);
-      return {
-        alarmType: alarmStore.alarmType,
-        commonFilterParams: {
-          ...alarmStore.commonFilterParams,
-          start_time: start,
-          end_time: end,
-        },
-        filterMode: alarmStore.filterMode,
-      };
     });
     const showResidentBtn = shallowRef(false);
 
@@ -287,6 +293,19 @@ export default defineComponent({
       }
       return filterFields;
     });
+    const { getRetrievalFilterValueData } = useAlarmFilter(() => {
+      const [start, end] = handleTransformToTimestamp(alarmStore.timeRange);
+      return {
+        alarmType: alarmStore.alarmType,
+        commonFilterParams: {
+          ...alarmStore.commonFilterParams,
+          start_time: start,
+          end_time: end,
+        },
+        filterMode: alarmStore.filterMode,
+        fields: retrievalFilterFields.value,
+      };
+    });
     /**
      * @description 检索栏常驻设置唯一id
      */
@@ -310,11 +329,13 @@ export default defineComponent({
     const handleAlarmTypeChange = (value: AlarmType) => {
       alarmStore.handleAlarmTypeChange(value);
       isFirstInit.value = true;
+      ordering.value = ''; // 清理排序
     };
 
     const updateIsCollapsed = (v: boolean) => {
       isCollapsed.value = v;
     };
+
     /** 快捷筛选 */
     const handleFilterValueChange = (filterValue: CommonCondition[], category: string) => {
       handleCurrentPageChange(1);
@@ -355,16 +376,19 @@ export default defineComponent({
     const handleConditionChange = (condition: CommonCondition[]) => {
       handleCurrentPageChange(1);
       alarmStore.conditions = condition;
+      apmHooks?.onConditionChange?.(condition);
     };
     /** 查询语句变化 */
     const handleQueryStringChange = (queryString: string) => {
       handleCurrentPageChange(1);
       alarmStore.queryString = queryString;
+      apmHooks?.onQueryStringChange?.(queryString);
     };
     /** 查询模式变化 */
     const handleFilterModeChange = (mode: EMode) => {
       handleCurrentPageChange(1);
       alarmStore.filterMode = mode;
+      apmHooks?.onFilterModeChange?.(mode);
     };
     const handleResidentConditionChange = (condition: CommonCondition[]) => {
       alarmStore.residentCondition = condition;
@@ -637,11 +661,17 @@ export default defineComponent({
     /**
      * @method autoShowAlertDialog 自动打开告警确认 | 告警屏蔽 dialog
      * @description 当移动端的 告警通知 中点击 告警确认 | 告警屏蔽，进入页面时，需要自动打开 告警确认 | 告警屏蔽 dialog
+     * 同时兼容旧版 fta-solutions/pages/event 的 ?batchAction=alarmConfirm|quickShield 入口
+     * 旧版安全策略：仅当 queryString 以 `action_id` 开头才自动弹出，避免误操作
      * @returns {boolean} 是否自动打开了告警确认 | 告警屏蔽 dialog
      */
     const autoShowAlertDialog = () => {
-      const alertAction = route?.query?.autoShowAlertAction as AlertAllActionEnum;
+      const isLegacy = !!route?.query?.batchAction;
+      const alertAction = (route?.query?.autoShowAlertAction as AlertAllActionEnum) || legacyBatchAction.value;
       const isCanAutoShowAlertDialog = CAN_AUTO_SHOW_ALERT_DIALOG_ACTIONS.includes(alertAction);
+      if (isLegacy && !/(^action_id).+/g.test(alarmStore.queryString || '')) {
+        return false;
+      }
       if (
         alarmStore.alarmType !== AlarmType.ALERT ||
         !data.value?.length ||
@@ -824,17 +854,33 @@ export default defineComponent({
       () => data.value,
       () => {
         if (autoShowAlertDialog()) return;
+        /** 旧版「移动端告警通知/首页搜索」入口要求自动展开第一条数据的详情 */
+        if (shouldAutoOpenFirstDetail.value && data.value?.length) {
+          shouldAutoOpenFirstDetail.value = false;
+          handleShowAlertDetail(data.value[0] as AlertTableItem);
+          return;
+        }
         // 如非自动打开dialog，则清空selectedRowKeys
         handleSelectedRowKeysChange();
       }
     );
-
-    onBeforeMount(() => {
+    /** 业务变化时刷新权限提示 */
+    watch(
+      () => alarmStore.bizIds,
+      () => computeShowPermissionTips()
+    );
+    onBeforeMount(async () => {
       getUrlParams();
+      /** 旧 URL 兼容：actionId / collectId / alertId / metricId 注入 queryString */
+      applyLegacyQueryStringInjection();
+      setupAutoOpenFirstDetailFlag();
+      computeShowPermissionTips();
+      /** PromQL 异步转换 queryString，需在首次表格请求触发前完成 */
+      await applyPromqlIfNeeded();
       setUrlParams();
     });
-
     return {
+      apmHooks,
       isFirstInit,
       quickFilterList,
       quickFilterLoading,
@@ -897,6 +943,7 @@ export default defineComponent({
       handleCurrentPageChange,
       handlePageSizeChange,
       handleSortChange,
+      fieldsWidthConfig,
       handleGetResidentSettingUserConfig,
       handleSetResidentSettingUserConfig,
       handleShowAlertDetail,
@@ -926,6 +973,9 @@ export default defineComponent({
       handleIssuePreviousDetail,
       handleIssueNextDetail,
       handleCopyWhereQueryString,
+      showPermissionTips,
+      dismissPermissionTips,
+      handleApplyPermission,
     };
   },
   render() {
@@ -970,12 +1020,14 @@ export default defineComponent({
           </FavoriteBox>
         </div>
         <div class='alarm-center'>
-          <AlarmCenterHeader
-            class='alarm-center-header'
-            isShowFavorite={this.isShowFavorite}
-            onAlarmTypeChange={this.handleAlarmTypeChange}
-            onFavoriteShowChange={this.handleFavoriteShowChange}
-          />
+          {!this.apmHooks && (
+            <AlarmCenterHeader
+              class='alarm-center-header'
+              isShowFavorite={this.isShowFavorite}
+              onAlarmTypeChange={this.handleAlarmTypeChange}
+              onFavoriteShowChange={this.handleFavoriteShowChange}
+            />
+          )}
           <AlarmRetrievalFilter
             class='alarm-center-filters'
             bizIds={this.alarmStore.bizIds}
@@ -1002,6 +1054,11 @@ export default defineComponent({
             onQueryStringChange={this.handleQueryStringChange}
             onResidentConditionChange={this.handleResidentConditionChange}
             onShowResidentBtnChange={this.handleShowResidentBtnChange}
+          />
+          <BizPermissionTips
+            show={this.showPermissionTips}
+            onApply={this.handleApplyPermission}
+            onClose={this.dismissPermissionTips}
           />
           <div class='alarm-center-main'>
             <TraceExploreLayout
@@ -1049,16 +1106,22 @@ export default defineComponent({
                           <IssuesToolbar
                             batchAction={action => this.handleIssuesDialogShow(action, this.selectedRowKeys)}
                             issuesIds={this.selectedRowKeys}
-                            onExport={async () => {
+                            /* onExport={async () => {
                               const selectedIds = new Set(this.selectedRowKeys);
                               const issues = (this.data as IssueItem[])
                                 .filter(item => selectedIds.has(item.id))
                                 .map(item => ({ bk_biz_id: item.bk_biz_id, issue_id: item.id }));
                               await exportIssues(issues);
                               Message({ theme: 'success', message: 'TODO 导出待联调' });
-                            }}
+                            }} */
                           >
                             <IssuesTable
+                              showEmptyOperation={
+                                this.alarmStore.filterMode === EMode.ui
+                                  ? this.alarmStore.conditions.length > 0 ||
+                                    this.alarmStore.residentCondition.length > 0
+                                  : this.alarmStore.queryString !== ''
+                              }
                               columns={this.tableSourceColumns}
                               data={this.data as IssueItem[]}
                               headerAffixedTop={tableAffixed}
@@ -1068,21 +1131,22 @@ export default defineComponent({
                               scrollContainerSelector={`.${CONTENT_SCROLL_ELEMENT_CLASS_NAME}`}
                               selectedRowKeys={this.selectedRowKeys}
                               sort={this.ordering}
+                              onAction={(type: IssuesBatchActionType, id: string) =>
+                                this.handleIssuesDialogShow(type, id)
+                              }
                               onAssignClick={(id, data) =>
                                 this.handleIssuesDialogShow(IssuesBatchActionEnum.ASSIGN, id, data)
                               }
                               onClearFilter={() => {
                                 if (this.alarmStore.filterMode === EMode.ui) {
                                   this.handleConditionChange([]);
+                                  this.handleResidentConditionChange([]);
                                   return;
                                 }
                                 this.handleQueryStringChange('');
                               }}
                               onCurrentPageChange={this.handleCurrentPageChange}
                               onImpactScopeClick={this.handleImpactScopeClick}
-                              onMarkResolved={(id: string) =>
-                                this.handleIssuesDialogShow(IssuesBatchActionEnum.RESOLVE, id)
-                              }
                               onPageSizeChange={this.handlePageSizeChange}
                               onPriorityChange={(id: string, priority: IssuePriorityType) =>
                                 this.handleIssuesPriorityChange(id, priority)

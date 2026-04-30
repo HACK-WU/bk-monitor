@@ -24,7 +24,7 @@
  * IN THE SOFTWARE.
  */
 
-import { type PropType, computed, defineComponent, reactive, shallowRef, useTemplateRef } from 'vue';
+import { type PropType, computed, defineComponent, reactive, shallowRef, useTemplateRef, watch } from 'vue';
 
 import { Button, Loading, Message, Popover } from 'bkui-vue';
 import dayjs from 'dayjs';
@@ -47,8 +47,10 @@ import type {
   ImpactScopeResource,
   ImpactScopeResourceKeyType,
   IssueActionType,
+  IssueActivityItem,
   IssueDetail,
   IssuePriorityType,
+  IssueStatusType,
 } from '../../../typing';
 
 import './issues-basic-info.scss';
@@ -62,9 +64,9 @@ export default defineComponent({
     },
   },
   emits: {
-    assigneeChange: (_users: string[]) => true,
-    priorityChange: (_priority: IssuePriorityType) => true,
-    confirm: (_type: IssueActionType) => true,
+    assigneeChange: (_users: string[], _activities: IssueActivityItem[]) => true,
+    priorityChange: (_priority: IssuePriorityType, _activities: IssueActivityItem[]) => true,
+    confirm: (_type: IssueStatusType, _activities: IssueActivityItem[]) => true,
     impactScopeClick: (_resourceKey: ImpactScopeResourceKeyType, _resource: ImpactScopeResource) => true,
   },
   setup(props, { emit }) {
@@ -105,6 +107,16 @@ export default defineComponent({
 
     /** 负责人列表 */
     const userList = shallowRef<string[]>([]);
+
+    watch(
+      () => props.detail,
+      val => {
+        userList.value = val?.assignee || [];
+      },
+      {
+        immediate: true,
+      }
+    );
 
     const loadings = reactive({
       priority: false,
@@ -149,15 +161,15 @@ export default defineComponent({
         ],
         priority: id,
       })
-        .then(({ succeeded }) => {
+        .then(({ succeeded, failed }) => {
           const activeItem = succeeded.find(item => item.issue_id === props.detail?.id);
           if (activeItem) {
             priorityPopover.value?.hide();
-            emit('priorityChange', id);
+            emit('priorityChange', id, activeItem.activities);
           }
           Message({
             theme: activeItem ? 'success' : 'error',
-            message: activeItem ? t('操作成功') : t('操作失败'),
+            message: activeItem ? t('操作成功') : failed[0]?.message,
           });
         })
         .finally(() => {
@@ -180,7 +192,7 @@ export default defineComponent({
     };
 
     const handleResponsiblePersonBlur = () => {
-      if (!userList.value.length) return;
+      if (!userList.value.length || JSON.stringify(props.detail.assignee) === JSON.stringify(userList.value)) return;
       loadings.assignee = true;
       assignIssues({
         issues: [
@@ -191,14 +203,14 @@ export default defineComponent({
         ],
         assignee: userList.value,
       })
-        .then(({ succeeded }) => {
+        .then(({ succeeded, failed }) => {
           const activeItem = succeeded.find(item => item.issue_id === props.detail?.id);
           if (activeItem) {
-            emit('assigneeChange', userList.value);
+            emit('assigneeChange', userList.value, activeItem.activities);
           }
           Message({
             theme: activeItem ? 'success' : 'error',
-            message: activeItem ? t('操作成功') : t('操作失败'),
+            message: activeItem ? t('操作成功') : failed[0]?.message,
           });
         })
         .finally(() => {
@@ -228,15 +240,15 @@ export default defineComponent({
           },
         ],
       })
-        .then(({ succeeded }) => {
+        .then(({ succeeded, failed }) => {
           const activeItem = succeeded.find(item => item.issue_id === props.detail?.id);
           if (activeItem) {
             handleDialogChange(false);
-            emit('confirm', actionType.value);
+            emit('confirm', activeItem.status, activeItem.activities);
           }
           Message({
             theme: activeItem ? 'success' : 'error',
-            message: activeItem ? t('操作成功') : t('操作失败'),
+            message: activeItem ? t('操作成功') : failed[0]?.message,
           });
         })
         .finally(() => {

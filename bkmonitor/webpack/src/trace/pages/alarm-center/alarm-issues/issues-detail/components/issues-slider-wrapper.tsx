@@ -23,10 +23,12 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { type PropType, computed, defineComponent, KeepAlive, shallowRef, watchEffect } from 'vue';
+import { type PropType, computed, defineComponent, KeepAlive, onMounted, shallowRef, watch } from 'vue';
 
 import { Loading, Tab } from 'bkui-vue';
 import { alertTopN } from 'monitor-api/modules/alert_v2';
+import { listIssueActivities } from 'monitor-api/modules/issue';
+import { random } from 'monitor-common/utils';
 import EmptyStatus from 'trace/components/empty-status/empty-status';
 import { type IWhereItem, EMode } from 'trace/components/retrieval-filter/typing';
 import { AlarmServiceFactory } from 'trace/pages/alarm-center/services/factory';
@@ -38,7 +40,7 @@ import {
 } from 'trace/pages/alarm-center/typings';
 import { useI18n } from 'vue-i18n';
 
-import { DIMENSION_NAME_MAP, DIMENSION_WHITE_LIST_FIELD, IssueDetailTabEnum } from '../../constant';
+import { IssueDetailTabEnum } from '../../constant';
 import DimensionStats from './dimension-stats/dimension-stats';
 import IssuesActivity from './issues-activity/issues-activity';
 import IssuesBasicInfo from './issues-basic-info/issues-basic-info';
@@ -48,9 +50,15 @@ import IssuesHistory from './issues-history/issues-history';
 import IssuesRetrievalFilter from './issues-retrieval-filter/issues-retrieval-filter';
 import IssuesTrendChart from './issues-trend-chart/issues-trend-chart';
 import { type TimeRangeType, DEFAULT_TIME_RANGE, handleTransformToTimestamp } from '@/components/time-range/utils';
+import useRequestAbort from '@/hooks/useRequestAbort';
 
-import type { ImpactScopeEvent, ImpactScopeResource, IssueDetail } from '../../typing';
-import type { ImpactScopeResourceKeyType, IssueDetailTabType, IssuePriorityType } from '../../typing/constants';
+import type { ImpactScopeEvent, ImpactScopeResource, IssueActivityItem, IssueDetail } from '../../typing';
+import type {
+  ImpactScopeResourceKeyType,
+  IssueDetailTabType,
+  IssuePriorityType,
+  IssueStatusType,
+} from '../../typing/constants';
 
 import './issues-slider-wrapper.scss';
 
@@ -69,11 +77,6 @@ export default defineComponent({
     detail: {
       type: Object as PropType<IssueDetail>,
       default: () => ({}),
-    },
-    /** Issue ID */
-    issueId: {
-      type: String,
-      default: '',
     },
     timeRange: {
       type: Array as PropType<TimeRangeType>,
@@ -104,9 +107,10 @@ export default defineComponent({
     /** 优先级变更 */
     priorityChange: (_v: IssuePriorityType) => true,
     /** 状态变更 */
-    statusAction: () => true,
+    statusAction: (_status: IssueStatusType) => true,
     /** 影响范围点击 */
     impactScopeClick: (impactScope: ImpactScopeEvent) => impactScope,
+    search: () => true,
   },
   setup(props, { emit }) {
     const { t } = useI18n();
@@ -115,27 +119,47 @@ export default defineComponent({
     const earliestAlertId = shallowRef('');
     const latestAlertIdLoading = shallowRef(false);
     const earliestAlertIdLoading = shallowRef(false);
+    const latestAlertAbortController = shallowRef<AbortController>(null);
+    const earliestAlertAbortController = shallowRef<AbortController>(null);
+    const searchRefreshKey = shallowRef(random(8));
     /** 告警事件数量 */
     const alertCount = shallowRef(0);
     /** 公共参数 */
-    const commonParams = computed(() => {
+    const commonParams = computed<Record<string, unknown>>(oldValue => {
       const issueIdCondition = { key: 'issue_id', value: [props.detail.id], method: 'eq' };
-      return {
+      const newValue = {
         bk_biz_ids: [props.detail.bk_biz_id],
         query_string: props.filterMode === EMode.ui ? '' : props.queryString,
         conditions: [issueIdCondition, ...(props.filterMode === EMode.ui ? props.conditions : [])],
       };
+      if (JSON.stringify(oldValue) === JSON.stringify(newValue)) {
+        return oldValue;
+      }
+      return newValue;
     });
     /** 维度统计数据 */
     const dimensionStatsData = shallowRef<AnalysisTopNDataResponse<AnalysisListItem>>({
       doc_count: 0,
       fields: [],
     });
+    /** 维度名称映射 */
+    const dimensionNameMap = computed(() => {
+      return (
+        props.detail?.aggregate_config?.aggregate_dimensions?.reduce((pre, cur) => {
+          pre[cur.field] = cur.display_name;
+          return pre;
+        }, {}) || {}
+      );
+    });
 
     const getAllAlertId = async () => {
       if (!props.detail?.id) {
         return;
       }
+      latestAlertAbortController.value?.abort();
+      earliestAlertAbortController.value?.abort();
+      latestAlertAbortController.value = null;
+      earliestAlertAbortController.value = null;
       latestAlertIdLoading.value = true;
       earliestAlertIdLoading.value = true;
       const [startTime, endTime] = handleTransformToTimestamp(props.timeRange);
@@ -150,22 +174,33 @@ export default defineComponent({
         show_overview: false,
         show_aggs: false,
       };
+      latestAlertAbortController.value = new AbortController();
+      earliestAlertAbortController.value = new AbortController();
       const latestResFn = async () => {
-        return await alarmService.getFilterTableList({
-          ...params,
-          ordering: ['-create_time'],
-        });
+        return await alarmService.getFilterTableList(
+          {
+            ...params,
+            ordering: ['-create_time'],
+          },
+          {
+            signal: latestAlertAbortController.value.signal,
+          }
+        );
       };
       const earliestResFn = async () => {
-        return await alarmService.getFilterTableList({
-          ...params,
-          ordering: ['create_time'],
-        });
+        return await alarmService.getFilterTableList(
+          {
+            ...params,
+            ordering: ['create_time'],
+          },
+          {
+            signal: earliestAlertAbortController.value.signal,
+          }
+        );
       };
       latestResFn()
         .then(res => {
           latestAlertId.value = res?.data?.[0]?.id || '';
-          console.log(latestAlertId.value);
           alertCount.value = res?.total || 0;
         })
         .finally(() => {
@@ -180,17 +215,16 @@ export default defineComponent({
         });
     };
 
+    const { run, signal } = useRequestAbort<AnalysisTopNDataResponse<AnalysisListItem>>(alertTopN);
     /** 获取维度统计数据 */
     const getDimensionStatsData = async () => {
-      if (!props.detail) return;
+      if (!props.detail.id) return;
       const [startTime, endTime] = handleTransformToTimestamp(props.timeRange);
-      dimensionStatsData.value = await alertTopN({
+      const data = await run({
         ...commonParams.value,
         start_time: startTime,
         end_time: endTime,
-        fields: props.detail?.aggregate_config?.aggregate_dimensions?.map(item =>
-          DIMENSION_WHITE_LIST_FIELD.includes(item) ? item : `tags.${item}`
-        ),
+        fields: props.detail?.aggregate_config?.aggregate_dimensions?.map(item => item.field),
         size: 5,
       })
         .then((data: AnalysisTopNDataResponse<AnalysisFieldAggItem>) => {
@@ -218,7 +252,7 @@ export default defineComponent({
 
               return {
                 ...item,
-                name: DIMENSION_NAME_MAP[item.field] || item.field,
+                name: dimensionNameMap.value[item.field] || item.field,
                 buckets,
               };
             }),
@@ -228,11 +262,50 @@ export default defineComponent({
           doc_count: 0,
           fields: [],
         }));
+
+      if (signal?.aborted) return;
+      dimensionStatsData.value = data;
     };
 
-    watchEffect(() => {
+    /** 活动列表 */
+    const activities = shallowRef<IssueActivityItem[]>([]);
+    const activityLoading = shallowRef(false);
+    const { run: getActiveListRun, signal: getActiveListSignal } =
+      useRequestAbort<IssueActivityItem[]>(listIssueActivities);
+    const getActiveList = async () => {
+      if (!props.detail?.id) return;
+      activityLoading.value = true;
+      const data = await getActiveListRun({
+        bk_biz_id: props.detail?.bk_biz_id,
+        issue_id: props.detail?.id,
+      });
+      if (getActiveListSignal?.aborted) return;
+      activities.value = data;
+      activityLoading.value = false;
+    };
+
+    watch(
+      () => props.detail?.id,
+      id => {
+        if (id) {
+          getActiveList();
+        }
+      }
+    );
+
+    watch(
+      [() => props.detail?.id, () => commonParams.value, () => props.timeRange, () => searchRefreshKey.value],
+      () => {
+        getDimensionStatsData();
+        getAllAlertId();
+      },
+      { deep: true }
+    );
+
+    onMounted(() => {
       getDimensionStatsData();
       getAllAlertId();
+      getActiveList();
     });
 
     const handleTabChange = (tab: IssueDetailTabType) => {
@@ -259,18 +332,25 @@ export default defineComponent({
     };
 
     /** 负责人变更 */
-    const handleAssigneeChange = (users: string[]) => {
+    const handleAssigneeChange = (users: string[], list: IssueActivityItem[]) => {
+      handleActivitiesChange(list);
       emit('assigneeChange', users);
     };
 
     /** 优先级变更 */
-    const handlePriorityChange = (priority: IssuePriorityType) => {
+    const handlePriorityChange = (priority: IssuePriorityType, list: IssueActivityItem[]) => {
+      handleActivitiesChange(list);
       emit('priorityChange', priority);
     };
 
     /** 状态变更 */
-    const handleResolved = () => {
-      emit('statusAction');
+    const handleStatusAction = (status: IssueStatusType, list: IssueActivityItem[]) => {
+      handleActivitiesChange(list);
+      emit('statusAction', status);
+    };
+
+    const handleActivitiesChange = (list: IssueActivityItem[]) => {
+      activities.value = list;
     };
 
     /**
@@ -283,6 +363,11 @@ export default defineComponent({
         resourceKey,
         resource,
       });
+    };
+
+    const handleSearch = () => {
+      searchRefreshKey.value = random(8);
+      emit('search');
     };
 
     const loadingRender = () => {
@@ -350,6 +435,7 @@ export default defineComponent({
               detail={props.detail}
               filterMode={props.filterMode}
               queryString={props.queryString}
+              refreshKey={searchRefreshKey.value}
               scrollContainerSelector={`.${leftPanelClass}`}
               timeRange={props.timeRange}
               onShowAlertDetail={handleShowAlertDetail}
@@ -367,6 +453,8 @@ export default defineComponent({
       dimensionStatsData,
       earliestAlertId,
       latestAlertId,
+      activities,
+      activityLoading,
       handleTabChange,
       getPanelComponent,
       handleConditionChange,
@@ -374,8 +462,11 @@ export default defineComponent({
       handleFilterModeChange,
       handleAssigneeChange,
       handlePriorityChange,
-      handleResolved,
+      handleStatusAction,
+      handleActivitiesChange,
       handleImpactScopeClick,
+      handleSearch,
+      searchRefreshKey,
     };
   },
   render() {
@@ -385,11 +476,13 @@ export default defineComponent({
           <IssuesRetrievalFilter
             conditions={this.conditions}
             filterMode={this.filterMode}
+            issueId={this.detail.id}
             queryString={this.queryString}
             timeRange={this.timeRange}
             onConditionChange={this.handleConditionChange}
             onFilterModeChange={this.handleFilterModeChange}
             onQueryStringChange={this.handleQueryStringChange}
+            onSearch={this.handleSearch}
           />
           <div class='issues-chart-wrapper'>
             <IssuesTrendChart
@@ -419,12 +512,17 @@ export default defineComponent({
           <IssuesBasicInfo
             detail={this.detail}
             onAssigneeChange={this.handleAssigneeChange}
-            onConfirm={this.handleResolved}
+            onConfirm={this.handleStatusAction}
             onImpactScopeClick={this.handleImpactScopeClick}
             onPriorityChange={this.handlePriorityChange}
           />
-          <IssuesActivity detail={this.detail} />
           <IssuesHistory detail={this.detail} />
+          <IssuesActivity
+            detail={this.detail}
+            list={this.activities}
+            loading={this.activityLoading}
+            onCommentChange={this.handleActivitiesChange}
+          />
         </div>
       </div>
     );

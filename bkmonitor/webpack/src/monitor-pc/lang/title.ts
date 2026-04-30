@@ -252,6 +252,11 @@ export default {
   批量指派负责人: 'Batch assign owner',
   批量修改优先级: 'Batch modify priority',
 
+  // Issues 详情
+  最近的告警: 'Recent alerts',
+  最早的告警: 'The earliest alarm',
+  首次告警时间: 'First alarm time',
+
   // Issues 活动节点
   首次出现: 'First occurrence',
   状态流转: 'Status transition',
@@ -260,7 +265,7 @@ export default {
   'Issue 合并': 'Issue merge',
 
   // Issues 详情组件
-  问题活动: 'Issue Activity',
+  活动: 'Activity',
   输入评论: 'Input comment',
   '历史 Issue': 'History Issue',
   优先级变更: 'Priority change',

@@ -26,21 +26,22 @@
 import { defineComponent, shallowRef, watch } from 'vue';
 
 import { Sideslider } from 'bkui-vue';
-import { convertDurationArray, random } from 'monitor-common/utils';
+import { issueDetail } from 'monitor-api/modules/issue';
+import { convertDurationArray } from 'monitor-common/utils';
 import { getDefaultTimezone, updateTimezone } from 'monitor-pc/i18n/dayjs';
 import { type IWhereItem, EMode } from 'trace/components/retrieval-filter/typing';
 
 import IssuesImpactScopeDrawer from '../components/issues-impact-scope-drawer/issues-impact-scope-drawer';
 import IssuesSliderHeader from './components/issues-slider-header';
 import IssuesSliderWrapper from './components/issues-slider-wrapper';
-import { fetchIssueDetailMock } from './mock-data';
 import RefreshRate from '@/components/refresh-rate/refresh-rate';
 import { mergeWhereList } from '@/components/retrieval-filter/utils';
 import TimeRange from '@/components/time-range/time-range';
+import useRequestAbort from '@/hooks/useRequestAbort';
 
 import type { CommonCondition } from '../../typings';
 import type { ImpactScopeEvent, ImpactScopeResource, IssueDetail } from '../typing';
-import type { ImpactScopeResourceKeyType, IssuePriorityType } from '../typing/constants';
+import type { ImpactScopeResourceKeyType, IssuePriorityType, IssueStatusType } from '../typing/constants';
 
 import './issues-detail-sideslider.scss';
 
@@ -79,7 +80,6 @@ export default defineComponent({
     const timeRange = shallowRef<(number | string)[]>(['now-1h', 'now']);
     const timezone = shallowRef(getDefaultTimezone());
     const refreshInterval = shallowRef(-1);
-    const refreshImmediate = shallowRef(random(4));
     let timer = null;
     // 筛选条件状态
     const conditions = shallowRef<IWhereItem[]>([]);
@@ -89,7 +89,6 @@ export default defineComponent({
     const impactScopeResource = shallowRef<ImpactScopeResource>(null);
     const impactScopeResourceKey = shallowRef<'' | ImpactScopeResourceKeyType>('');
     const impactScopeDrawerShow = shallowRef(false);
-
     /** 初始化默认查询时间范围 */
     const initTimeRange = () => {
       const firstAlarmTime = props.firstAlarmTime || 'now-1h';
@@ -97,22 +96,22 @@ export default defineComponent({
       timeRange.value = [Number.isNaN(time) ? firstAlarmTime : time * 1000, 'now'];
     };
 
+    const { run, signal } = useRequestAbort<IssueDetail>(issueDetail);
+
     /** 获取Issue详情数据 */
-    const getIssueDetailData = (hasLoading = true) => {
+    const getIssueDetailData = async (hasLoading = true) => {
       if (!props.show) return;
       if (hasLoading) {
         loading.value = true;
       }
-      fetchIssueDetailMock({
+
+      const res = await run({
         bk_biz_id: props.issueBizId,
         id: props.issueId,
-      })
-        .then(res => {
-          detail.value = res;
-        })
-        .catch(() => {
-          loading.value = false;
-        });
+      });
+      if (signal?.aborted) return;
+      detail.value = res;
+      loading.value = false;
     };
 
     watch(
@@ -121,6 +120,8 @@ export default defineComponent({
         if (props.show) {
           initTimeRange();
           getIssueDetailData();
+        } else {
+          detail.value = undefined;
         }
       },
       { immediate: true }
@@ -154,7 +155,7 @@ export default defineComponent({
 
     /** 强制刷新 */
     const handleImmediateRefresh = () => {
-      refreshImmediate.value = random(5);
+      timeRange.value = [...timeRange.value];
       getIssueDetailData();
     };
 
@@ -200,9 +201,9 @@ export default defineComponent({
     const handlePriorityChange = (priority: IssuePriorityType) => {
       detail.value = { ...detail.value, priority };
     };
-    /** 标记已解决 */
-    const handleStatusAction = () => {
-      getIssueDetailData(false);
+    /** issues 基础信息状态操作 */
+    const handleStatusAction = (status: IssueStatusType) => {
+      detail.value = { ...detail.value, status };
     };
 
     /** 影响范围点击 */

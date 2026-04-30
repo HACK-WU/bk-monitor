@@ -28,6 +28,7 @@
 // import { docCookies } from 'monitor-common/utils/utils';
 
 import {
+  type IFilterField,
   type IGetValueFnParams,
   type IWhereValueOptionsItem,
   EMode,
@@ -192,23 +193,28 @@ const commonIssuesFieldMap = {
     {
       zhId: '高',
       id: 'P0',
-      name: window.i18n.t('高'),
+      name: window.i18n.t('button-高'),
     },
     {
       zhId: '中',
       id: 'P1',
-      name: window.i18n.t('中'),
+      name: window.i18n.t('button-中'),
     },
     {
       zhId: '低',
       id: 'P2',
-      name: window.i18n.t('低'),
+      name: window.i18n.t('button-低'),
     },
   ],
 };
-
 export function useAlarmFilter(
-  options: () => { alarmType: AlarmType; commonFilterParams: Record<string, any>; filterMode: EMode }
+  options: () => {
+    alarmType: AlarmType;
+    commonFilterParams: Record<string, any>;
+    fields: IFilterField[];
+    filterMode: EMode;
+    preConditions?: any[];
+  }
 ) {
   let axiosController = new AbortController();
   let candidateValueMap: ICandidateValueMap = new Map();
@@ -246,16 +252,23 @@ export function useAlarmFilter(
       const searchValue = String(params.where?.[0]?.value?.[0] || '');
       const searchValueLower = searchValue.toLocaleLowerCase();
       const candidateItem = candidateValueMap.get(getMapKey(params));
-
       // 故障部分字段枚举值
       const paramsField = params?.fields?.[0];
+      const fieldType = options().fields?.find(item => item?.name === paramsField)?.type || '';
+      const isBoolean = fieldType === 'boolean';
       const listTranslate = (list: { id: number | string; name: string; zhId: string }[]) => {
         return list.map(item => ({
           id: item.id,
           name: item.name,
         }));
       };
-      if (options().alarmType === AlarmType.ALERT && Object.keys(commonAlertFieldMap).includes(paramsField)) {
+      if (isBoolean) {
+        const list = getBooleanValues().filter(item => item.name.includes(searchValueLower));
+        resolve({
+          count: list.length,
+          list,
+        });
+      } else if (options().alarmType === AlarmType.ALERT && Object.keys(commonAlertFieldMap).includes(paramsField)) {
         resolve({
           list: listTranslate(commonAlertFieldMap[paramsField]),
           count: commonAlertFieldMap[paramsField].length,
@@ -303,9 +316,12 @@ export function useAlarmFilter(
           .getRetrievalFilterValues(
             {
               ...options().commonFilterParams,
-              conditions: searchValue
-                ? [{ key: paramsField, method: 'include', value: [searchValue], options: { is_wildcard: true } }]
-                : [],
+              conditions: [
+                ...(options()?.preConditions || []),
+                ...(searchValue
+                  ? [{ key: paramsField, method: 'include', value: [searchValue], options: { is_wildcard: true } }]
+                  : []),
+              ],
               fields: params.fields,
               size: params.limit,
             },
@@ -355,4 +371,19 @@ export function useAlarmFilter(
   return {
     getRetrievalFilterValueData,
   };
+}
+
+function getBooleanValues() {
+  return JSON.parse(
+    JSON.stringify([
+      {
+        id: 'true',
+        name: 'true',
+      },
+      {
+        id: 'false',
+        name: 'false',
+      },
+    ])
+  );
 }

@@ -24,7 +24,7 @@
  * IN THE SOFTWARE.
  */
 
-import { type MaybeRef, isRef, shallowRef } from 'vue';
+import { type Ref, shallowRef } from 'vue';
 
 import { get } from '@vueuse/core';
 
@@ -34,7 +34,7 @@ import type {
   IssueIdentifier,
   IssueItem,
   IssuesBatchActionType,
-  IssuesOperationDialogEvent,
+  IssuesBatchOperationResponse,
   IssuesOperationDialogParams,
 } from '../../../typing';
 
@@ -46,7 +46,7 @@ export type UseIssuesDialogsReturnType = ReturnType<typeof useIssuesDialogs>;
  */
 export const useIssuesDialogs = (
   /** 原始数据 */
-  originalData: MaybeRef<IssueItem[]>
+  originalData: Ref<IssueItem[]>
 ) => {
   /** 是否显示 dialog */
   const issuesDialogShow = shallowRef(false);
@@ -79,61 +79,97 @@ export const useIssuesDialogs = (
   };
 
   /**
-   * @description 根据 dialog 操作成功事件，通过传入的操作数据对象原地更新对应 Issue 行
-   * @param {IssueItem[]} data - 当前操作的 Issue 数据对象数组
+   * @description 根据 dialog 操作成功事件，直接更新对应 Issue 行对象属性（依赖 deepRef 深响应式追踪属性变化触发重渲染）
    * @param {Array<T>} succeeded - dialog 操作成功回调中的 succeeded 数组，每项必须包含 issue_id
    * @returns {void}
    */
-  const updateIssueItems = <T extends { issue_id: IssueItem['id'] }>(data: IssueItem[], succeeded: T[]) => {
+  const updateIssueItems = <
+    T extends { activities?: unknown; bk_biz_id?: IssueItem['bk_biz_id']; issue_id: IssueItem['id'] },
+  >(
+    succeeded: T[]
+  ) => {
     if (!succeeded?.length) return;
-    const updatesMap = new Map(succeeded.map(({ issue_id, ...rest }) => [issue_id, rest]));
-    for (const item of data) {
+    const updatesMap = new Map(
+      succeeded.map(({ activities: _, bk_biz_id: __, issue_id, ...rest }) => [issue_id, rest])
+    );
+    for (const item of get(originalData)) {
       const updates = updatesMap.get(item.id);
       if (updates) {
         Object.assign(item, updates);
       }
     }
-    // originalData 为 shallowRef，原地修改元素属性不会自动触发响应式更新
-    if (isRef(originalData)) {
-      originalData.value = [...get(originalData)];
-    }
   };
 
   /**
    * @description 指派负责人
-   * @param {IssueItem[]} data 操作数据对象数组
-   * @param {IssuesOperationDialogEvent} event dialog回调事件对象
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
    */
   const handleAssignDialogSuccessCallback = (
-    data: IssueItem[],
-    event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.ASSIGN>
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.ASSIGN>
   ) => {
-    updateIssueItems(data, event.succeeded);
+    updateIssueItems(event.succeeded);
   };
 
   /**
    * @description 标记已解决
-   * @param {IssueItem[]} data 操作数据对象数组
-   * @param {IssuesOperationDialogEvent} event dialog回调事件对象
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
    */
   const handleResolvedDialogSuccessCallback = (
-    data: IssueItem[],
-    event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.RESOLVE>
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.RESOLVE>
   ) => {
     const list = event.succeeded.map(item => ({ ...item, is_resolved: item.status === IssueStatusEnum.RESOLVED }));
-    updateIssueItems(data, list);
+    updateIssueItems(list);
+  };
+
+  /**
+   * @description 重新打开
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
+   */
+  const handleUnresolveDialogSuccessCallback = (
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.UNRESOLVE>
+  ) => {
+    const list = event.succeeded.map(item => ({ ...item, is_resolved: item.status === IssueStatusEnum.RESOLVED }));
+    updateIssueItems(list);
+  };
+
+  /**
+   * @description 归档
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
+   */
+  const handleArchiveDialogSuccessCallback = (
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.ARCHIVE>
+  ) => {
+    updateIssueItems(event.succeeded);
+  };
+
+  /**
+   * @description 恢复归档
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
+   */
+  const handleUnarchiveDialogSuccessCallback = (
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.UNARCHIVE>
+  ) => {
+    updateIssueItems(event.succeeded);
   };
 
   /**
    * @description 优先级变更
-   * @param {IssueItem[]} data 操作数据对象数组
-   * @param {IssuesOperationDialogEvent} event dialog回调事件对象
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
    */
   const handlePriorityDialogSuccessCallback = (
-    data: IssueItem[],
-    event: IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.PRIORITY>
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.PRIORITY>
   ) => {
-    updateIssueItems(data, event.succeeded);
+    updateIssueItems(event.succeeded);
+  };
+
+  /**
+   * @description 添加跟进信息（待审核状态下跟进后状态可能变为未解决，需更新表格行）
+   * @param {IssuesBatchOperationResponse} event dialog回调事件对象
+   */
+  const handleFollowUpDialogSuccessCallback = (
+    event: IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.FOLLOW_UP>
+  ) => {
+    updateIssueItems(event.succeeded);
   };
 
   /**
@@ -197,32 +233,42 @@ export const useIssuesDialogs = (
   /**
    * @description dialog 提交操作成功后的回调事件，根据 dialogType 分发至对应业务方法
    * @param {IssuesBatchActionType} dialogType - dialog 类型
-   * @param {IssuesOperationDialogEvent} event - dialog 回调事件对象
+   * @param {IssuesBatchOperationResponse} event - dialog 回调事件对象
    */
   const handleIssuesDialogSuccess = <U extends IssuesBatchActionType>(
     dialogType: U,
-    event: IssuesOperationDialogEvent<U>
+    event: IssuesBatchOperationResponse<U>
   ) => {
-    const operationalData = getOperationalDataByIds(get(issuesDialogIds));
-    if (!operationalData?.length) return;
-
     switch (dialogType) {
       case IssuesBatchActionEnum.ASSIGN:
-        handleAssignDialogSuccessCallback(
-          operationalData,
-          event as IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.ASSIGN>
-        );
+        handleAssignDialogSuccessCallback(event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.ASSIGN>);
         break;
       case IssuesBatchActionEnum.RESOLVE:
         handleResolvedDialogSuccessCallback(
-          operationalData,
-          event as IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.RESOLVE>
+          event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.RESOLVE>
+        );
+        break;
+      case IssuesBatchActionEnum.UNRESOLVE:
+        handleUnresolveDialogSuccessCallback(
+          event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.UNRESOLVE>
+        );
+        break;
+      case IssuesBatchActionEnum.ARCHIVE:
+        handleArchiveDialogSuccessCallback(event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.ARCHIVE>);
+        break;
+      case IssuesBatchActionEnum.UNARCHIVE:
+        handleUnarchiveDialogSuccessCallback(
+          event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.UNARCHIVE>
         );
         break;
       case IssuesBatchActionEnum.PRIORITY:
         handlePriorityDialogSuccessCallback(
-          operationalData,
-          event as IssuesOperationDialogEvent<typeof IssuesBatchActionEnum.PRIORITY>
+          event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.PRIORITY>
+        );
+        break;
+      case IssuesBatchActionEnum.FOLLOW_UP:
+        handleFollowUpDialogSuccessCallback(
+          event as IssuesBatchOperationResponse<typeof IssuesBatchActionEnum.FOLLOW_UP>
         );
         break;
       default:
@@ -237,6 +283,7 @@ export const useIssuesDialogs = (
     issuesDialogType,
     issuesDialogData,
     issuesDialogParam,
+    updateIssueItems,
     handleIssuesDialogShow,
     handleIssuesDialogHide,
     handleIssuesDialogSuccess,

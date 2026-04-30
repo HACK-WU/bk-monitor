@@ -23,6 +23,7 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
+import { issueSearch, issueTopN } from 'monitor-api/modules/issue';
 import { type IFilterField, EFieldType } from 'trace/components/retrieval-filter/typing';
 
 import {
@@ -31,10 +32,9 @@ import {
   ISSUES_REGRESSION_MAP,
   ISSUES_STATUS_MAP,
 } from '../alarm-issues/constant';
-import { fetchMockIssues } from '../alarm-issues/issues-table/mock-data';
 import { type RequestOptions, AlarmService } from './base';
 
-import type { IssueItem } from '../alarm-issues/typing';
+import type { IssueItem, IssueSearchParams, IssueSearchResponse } from '../alarm-issues/typing';
 import type {
   AnalysisFieldAggItem,
   AnalysisTopNDataResponse,
@@ -108,7 +108,7 @@ const ISSUES_TABLE_COLUMNS: TableColumnItem[] = [
   {
     colKey: 'operation',
     title: window.i18n.t('操作'),
-    width: 120,
+    width: 150,
     fixed: 'right',
     is_default: true,
     is_locked: true,
@@ -150,7 +150,8 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'name',
     alias: window.i18n.t('Issue 名称'),
-    type: EFieldType.text,
+    type: EFieldType.keyword,
+    isEnableOptions: true,
     methods: [
       {
         alias: '=',
@@ -237,7 +238,8 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'strategy_name',
     alias: window.i18n.t('策略名称'),
-    type: EFieldType.text,
+    type: EFieldType.keyword,
+    isEnableOptions: true,
     methods: [
       {
         alias: '=',
@@ -337,9 +339,25 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
     ],
   },
   {
+    name: 'impact_dimensions',
+    alias: window.i18n.t('影响范围维度'),
+    type: EFieldType.keyword,
+    isEnableOptions: true,
+    methods: [
+      {
+        alias: '=',
+        value: 'eq',
+      },
+      {
+        alias: '!=',
+        value: 'neq',
+      },
+    ],
+  },
+  {
     name: 'first_alert_time',
     alias: window.i18n.t('首次告警时间'),
-    type: EFieldType.integer,
+    type: EFieldType.date,
     methods: [
       {
         alias: '=',
@@ -370,7 +388,7 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'last_alert_time',
     alias: window.i18n.t('最近告警时间'),
-    type: EFieldType.integer,
+    type: EFieldType.date,
     methods: [
       {
         alias: '=',
@@ -401,7 +419,7 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'create_time',
     alias: window.i18n.t('创建时间'),
-    type: EFieldType.integer,
+    type: EFieldType.date,
     methods: [
       {
         alias: '=',
@@ -432,7 +450,7 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'update_time',
     alias: window.i18n.t('更新时间'),
-    type: EFieldType.integer,
+    type: EFieldType.date,
     methods: [
       {
         alias: '=',
@@ -463,7 +481,7 @@ export const ISSUES_FILTER_FIELDS: IFilterField[] = [
   {
     name: 'resolved_time',
     alias: window.i18n.t('解决时间'),
-    type: EFieldType.integer,
+    type: EFieldType.date,
     methods: [
       {
         alias: '=',
@@ -524,11 +542,17 @@ export class IssuesService extends AlarmService<AlarmType.ISSUES> {
     params: Partial<CommonFilterParams>,
     options?: RequestOptions
   ): Promise<FilterTableResponse<T>> {
-    const data = await fetchMockIssues(
+    // 计算告警趋势图时间范围：trend_end_time 跟随 end_time，trend_start_time 为往前 24 小时
+    const trendEndTime = params.end_time;
+    const trendStartTime = trendEndTime ? trendEndTime - 24 * 60 * 60 : undefined;
+
+    const data = await issueSearch<Partial<IssueSearchParams>, IssueSearchResponse>(
       {
         ...params,
         show_aggs: false,
         show_dsl: false,
+        trend_end_time: trendEndTime,
+        trend_start_time: trendStartTime,
       },
       options
     )
@@ -545,7 +569,7 @@ export class IssuesService extends AlarmService<AlarmType.ISSUES> {
     return data as FilterTableResponse<T>;
   }
   async getQuickFilterList(params: Partial<CommonFilterParams>, options?: RequestOptions): Promise<QuickFilterItem[]> {
-    const data = await fetchMockIssues(
+    const data = await issueSearch<Partial<IssueSearchParams>, IssueSearchResponse>(
       {
         ...params,
         page_size: 0, // 不返回告警列表数据
@@ -620,10 +644,17 @@ export class IssuesService extends AlarmService<AlarmType.ISSUES> {
     return data;
   }
 
-  async getRetrievalFilterValues(_params: Partial<CommonFilterParams>, _config = {}) {
-    return {
+  async getRetrievalFilterValues(params: Partial<CommonFilterParams>, config = {}) {
+    const data = await issueTopN(
+      {
+        ...params,
+        need_time_partition: true,
+      },
+      config
+    ).catch(() => ({
       doc_count: 0,
       fields: [],
-    };
+    }));
+    return data;
   }
 }

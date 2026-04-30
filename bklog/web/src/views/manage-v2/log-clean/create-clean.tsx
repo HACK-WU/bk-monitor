@@ -2,7 +2,7 @@
  * Tencent is pleased to support the open source community by making
  * 蓝鲸智云PaaS平台 (BlueKing PaaS) available.
  *
- * Copyright (C) 2017-2025 Tencent.  All rights reserved.
+ * Copyright (C) 2021 THL A29 Limited, a Tencent company.  All rights reserved.
  *
  * 蓝鲸智云PaaS平台 (BlueKing PaaS) is licensed under the MIT License.
  *
@@ -24,17 +24,46 @@
  * IN THE SOFTWARE.
  */
 
-import { request } from 'monitor-api/base';
+import { defineComponent } from 'vue';
 
-import type { IssueDetail, IssueDetailParams } from '../typing';
+// import useLocale from '@/hooks/use-locale';
+import { useRoute, useRouter } from 'vue-router/composables';
+import useStore from '@/hooks/use-store';
+import StepClean from '../log-collection/components/create-operation/step3-clean';
 
-export const detailIssue = request('GET', '/fta/issue/issue/detail/');
+import './create-clean.scss';
 
-/**
- * 异步获取 Issue 详情 Mock 数据
- * @param id Issue ID，不传则随机生成
- * @param delayMs 延迟时间（毫秒），不传则随机 200-800ms
- */
-export const fetchIssueDetailMock = async (params: IssueDetailParams): Promise<IssueDetail> => {
-  return await detailIssue(params);
-};
+export default defineComponent({
+  name: 'CreateClean',
+
+  setup() {
+    // const { t } = useLocale();
+    const route = useRoute();
+    const router = useRouter();
+    const store = useStore();
+
+    const goList = () => {
+      const { backRoute, ...reset } = route.query;
+      const routeName = 'log-clean-list';
+      router.push({
+        name: routeName,
+        query: {
+          ...reset,
+          spaceUid: store.state.spaceUid,
+        },
+      });
+    };
+
+    return () => {
+      return (
+        <div class='v2-create-clean-main'>
+          <StepClean
+            isCleanField={true}
+            on-change-submit={goList}
+            on-cancel={goList}
+          />
+        </div>
+      );
+    };
+  },
+});

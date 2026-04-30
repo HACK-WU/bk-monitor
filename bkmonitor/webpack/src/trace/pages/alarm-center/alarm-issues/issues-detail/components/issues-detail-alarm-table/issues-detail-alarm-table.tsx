@@ -94,6 +94,10 @@ export default defineComponent({
     horizontalScrollAffixedBottom: {
       type: Object as PropType<{ container: string }>,
     },
+    refreshKey: {
+      type: String,
+      default: '',
+    },
   },
   emits: {
     showAlertDetail: (_id: string, _defaultTab?: string) => true,
@@ -144,6 +148,20 @@ export default defineComponent({
       pageSize: pageSize.value,
     }));
 
+    const commonParams = computed<Record<string, unknown>>(oldValue => {
+      const newValue = {
+        conditions: [
+          { key: 'issue_id', value: [props.detail.id], method: 'eq' },
+          ...(props.filterMode === EMode.ui ? props.conditions : []),
+        ],
+        query_string: props.filterMode === EMode.queryString ? props.queryString : '',
+      };
+      if (JSON.stringify(oldValue) === JSON.stringify(newValue)) {
+        return oldValue;
+      }
+      return newValue;
+    });
+
     // 获取数据
     const fetchData = async () => {
       if (!props.detail?.id) {
@@ -156,26 +174,22 @@ export default defineComponent({
       // 创建新的中止控制器
       abortController = new AbortController();
       const { signal } = abortController;
-
-      loading.value = true;
-      data.value = [];
-
       const [startTime, endTime] = handleTransformToTimestamp(props.timeRange);
 
       const params = {
         bk_biz_id: props.detail.bk_biz_id,
         bk_biz_ids: [props.detail.bk_biz_id],
-        conditions: [
-          { key: 'issue_id', value: [props.detail.id], method: 'eq' },
-          ...(props.filterMode === EMode.ui ? props.conditions : []),
-        ],
-        query_string: props.filterMode === EMode.queryString ? props.queryString : '',
+        ...commonParams.value,
         start_time: startTime,
         end_time: endTime,
         page_size: pageSize.value,
         page: page.value,
         ordering: ordering.value ? [ordering.value] : [],
+        // 仅触发watchEffect
+        ...(props.refreshKey ? {} : {}),
       };
+      loading.value = true;
+      data.value = [];
 
       try {
         const res = await alarmService.value.getFilterTableList(params, { signal });

@@ -508,6 +508,11 @@ export class DataQuery implements IDataQuery {
       if (value === undefined && isExist) {
         isExist = false;
       }
+      // 兼容endpoint_name 数组结构 特殊处理 apm 接口 和 DB tab 特殊结构
+      if (itemKey === 'endpoint_name' && Array.isArray(value) && value[0]?.value) {
+        total[itemKey] = value[0]?.value;
+        return total;
+      }
       value =
         this.isMultiple || ['pod_name_list'].includes(itemKey)
           ? Array.isArray(value)
@@ -749,7 +754,7 @@ export class PanelModel implements IPanelModel {
       if (target?.query_configs?.length) {
         for (const item of target.query_configs) {
           if (item.promql) {
-            promqlSet.add(JSON.stringify(item.promql));
+            promqlSet.add(String(item.promql));
           } else {
             const metricId = getMetricId(
               item.data_source_label,
@@ -771,9 +776,10 @@ export class PanelModel implements IPanelModel {
     }
     let promqlString = '';
     for (const promql of promqlSet) {
-      promqlString = `promql=${promql}`;
+      promqlString = promql;
     }
-    return promqlString || `queryString=${queryString}`;
+    if (!promqlString && !queryString) return undefined;
+    return promqlString ? { promql: promqlString } : { queryString };
   }
   public toStrategy() {
     const queries = this.targets
