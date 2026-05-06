@@ -280,13 +280,13 @@ class IssueDetailResource(Resource):
 
 **实现说明**：
 
-`IssueQueryHandler.clean_document` 方法会调用 `add_dimension_display_name()` 为每个维度补充 `display_name` 字段（若缺失）：
+`IssueQueryHandler.clean_document` 方法会调用 `enrich_impact_scope()` 为每个维度补充 `display_name` 字段（若缺失）：
 
 ```python
 # bkmonitor/packages/fta_web/issue/handlers/issue.py
 
-def add_dimension_display_name(impact_scope: dict) -> dict:
-    """为 impact_scope 中每个维度添加 display_name 字段"""
+def enrich_impact_scope(impact_scope: dict) -> dict:
+    """丰富 impact_scope 数据：为每个维度添加 display_name，为每个实例渲染 alert_query_fields"""
     for dimension_key, dimension_data in impact_scope.items():
         if isinstance(dimension_data, dict):
             dimension_data["display_name"] = ImpactScopeDimension.get_display_name(dimension_key)

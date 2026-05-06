@@ -519,7 +519,7 @@ def clean_document(cls, doc: IssueDocument) -> dict:
     cleaned["priority_display"] = IssuePriority.CHOICES 中文映射
     # impact_scope 添加 display_name 字段后返回
     impact_scope = data.get("impact_scope", {})
-    cleaned["impact_scope"] = add_dimension_display_name(impact_scope)
+    cleaned["impact_scope"] = enrich_impact_scope(impact_scope)
     cleaned["aggregate_config"] = data.get("aggregate_config", {})
     return cleaned
 ```
@@ -527,7 +527,7 @@ def clean_document(cls, doc: IssueDocument) -> dict:
 清洗要点：
 - `duration`：Issue 存活时长 = now - create_time（未解决）或 resolved_time - create_time（已解决）
 - `status_display` / `priority_display`：枚举值的中文映射
-- `impact_scope`：添加 `display_name` 字段后返回（由 `add_dimension_display_name()` 函数处理）
+- `impact_scope`：添加 `display_name` 字段后返回（由 `enrich_impact_scope()` 函数处理）
 - `aggregate_config`：Issue 特有的 Object 字段直接透传
 
 ---
@@ -1131,8 +1131,8 @@ class ImpactScopeDimension:
 ```python
 from bkmonitor.constants.issue import ImpactScopeDimension
 
-def add_dimension_display_name(impact_scope: dict) -> dict:
-    """为 impact_scope 中每个维度添加 display_name 字段"""
+def enrich_impact_scope(impact_scope: dict) -> dict:
+    """丰富 impact_scope 数据：为每个维度添加 display_name，为每个实例渲染 alert_query_fields"""
     for dimension_key, dimension_data in impact_scope.items():
         dimension_data["display_name"] = ImpactScopeDimension.get_display_name(dimension_key)
     return impact_scope

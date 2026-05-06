@@ -225,42 +225,100 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
     """
     按关联告警汇总影响范围快照。
 
-    aggregate_dimensions 来自 IssueDocument.aggregate_config["aggregate_dimensions"]，
-    非空时按维度类型收窄输出 key；为空时全量输出。
-    输出格式：每个资源维度均为 {count, instance_list, link_tpl}，
-    支持 CMDB Set / Host / ServiceInstance / K8S 集群/节点/Pod/Service / APM 应用/服务。
+    参数:
+        issue_id: Issue 文档 ID，用于检索关联的 AlertDocument 集合
+        aggregate_dimensions: 聚合维度列表，来自 IssueDocument.aggregate_config["aggregate_dimensions"]；
+            非空时按维度类型收窄输出 key（仅保留与维度对应的资源类型）；
+            为空时全量输出所有资源维度
+
+    返回值:
+        dict — 以资源维度名为 key，每个维度格式为:
+        {
+            "count": int,           # 该维度下实例总数
+            "instance_list": list,  # 实例详情列表（最多50条）
+            "link_tpl": str|None    # 前端跳转链接模板，支持 {field} 占位符
+        }
+        支持的资源维度 key: set / host / service_instances / cluster / node / pod / service / apm_app / apm_service
+
+    该方法实现完整的影响范围汇总流程，包含：
+    1. 初始化各类资源的去重容器（Set / Host / ServiceInstance / K8S 集群 / APM 应用）
+    2. 分批遍历 issue 关联的所有 AlertDocument，逐条解析：
+       a. dimensions 字段解析与标准化（去除 "tags." 前缀，提取 topo_node / cluster_display）
+       b. 关键字段提取（target_type / target / bk_host_id / bk_service_instance_id / bk_biz_id）
+       c. CMDB Set 统计：按 bk_topo_node 归属收集 Set→Hosts/SIs 映射，缺少展示名时加入待查询队列
+       d. K8S Cluster 统计：按 bcs_cluster_id 聚合 Node / Service / Pod 实例
+       e. APM 统计：按 app_name 聚合 Service 实例，支持从 target 字段回退拆分
+    3. 批量补全 CMDB Set 展示名（按业务分组查询 SetManager）
+    4. 序列化为统一格式输出，每个维度截取前 50 条实例
+    5. 聚合维度收窄：根据 aggregate_dimensions 过滤非相关资源维度 key
     """
+    # ── 步骤1：初始化各类资源的去重容器 ──────────────────────────────────────
+    # sets — CMDB 集群维度，按 set_node 去重
+    # 示例: {"set|5043076": {"display_name": "DB数据库生产环境/db.es.es", "hosts": {"1804751"}, "service_instances": {"14041299"}}}
     sets: dict[str, dict] = {}
+
+    # pending_set_names — 缺少展示名的集群，待循环结束后批量查询 CMDB 补全
+    # 示例: {"set|5179871": 5017605}
     pending_set_names: dict[str, int] = {}
-    # 升级为 {key: {"display_name": str, "bk_biz_id": int|None}}，
-    # 以便每条实例携带归属业务，统一拼装 ?bizId={bk_biz_id}#/... 跳转链接
+
+    # all_hosts — 全局主机去重表，携带 display_name + bk_biz_id，用于拼装跳转链接 ?bizId={bk_biz_id}#/...
+    # 示例: {"9185731": {"display_name": "21.249.64.16", "bk_biz_id": 5017605}}
     all_hosts: dict[str, dict] = {}
+
+    # all_sids — 全局服务实例去重表
+    # 示例: {"14041299": {"display_name": "11.181.33.209_es-es_datanode_9200", "bk_biz_id": 5043076}}
     all_sids: dict[str, dict] = {}
+
+    # k8s_clusters — K8S 集群维度，按 bcs_cluster_id 去重
+    # 示例: {"BCS-K8S-26322": {
+    #     "display_name": "TC-ZY-SZ-TEST-26322-INNER(BCS-K8S-26322)",
+    #     "bk_biz_id": 5017605,
+    #     "nodes": {"21.249.64.16": "BCS-K8S-26322/21.249.64.16"},
+    #     "services": {"bkmonitor-operator-stack-kube-state-metrics": "BCS-K8S-26322/bkmonitor-operator-stack-kube-state-metrics"},
+    #     "pods": {"light-prom-exporter-flkq7": "BCS-K8S-26322/light-prom-exporter-flkq7"},
+    # }}
     k8s_clusters: dict[str, dict] = {}
+
+    # apm_apps — APM 应用维度，按 app_name 去重
+    # 示例: {"nf": {
+    #     "services": {"nf.pushsvr": ("nf/nf.pushsvr", 5016913)},
+    #     "bk_biz_id": 5016913,
+    # }}
     apm_apps: dict[str, dict] = {}
 
+    # ── 步骤2：分批遍历关联 AlertDocument，逐条解析资源归属 ──────────────────
+    # 使用 search_after 分页，按 id 排序保证遍历稳定性和去重正确性
     base_search = AlertDocument.search(all_indices=True).filter("term", issue_id=issue_id)
     for hits in _iter_alert_hit_batches(base_search, sort_fields=["id"]):
         for hit in hits:
             hit_dict = hit.to_dict()
 
-            # ── dimensions 解析（normalize "tags." 前缀）──────────────────────
+            # ── 步骤 2a：dimensions 字段解析与标准化 ──────────────────────────
+            # dim_map: 将所有维度 key→value 映射，"tags." 前缀的 key 去掉前缀后也存一份
+            # dim_topo_nodes: bk_topo_node 维度的值列表（用于非 HOST/SERVICE 场景）
+            # dim_cluster_display: 格式化后的 K8S 集群展示名
             dim_map: dict[str, Any] = {}
             dim_topo_nodes: list[str] = []
             dim_cluster_display: str = ""
 
             for d in hit_dict.get("dimensions") or []:
                 k, v = d.get("key", ""), d.get("value")
+                # bk_topo_node 特殊处理：值为列表，需展平到 dim_topo_nodes
                 if k == "bk_topo_node":
                     dim_topo_nodes.extend(v if isinstance(v, list) else ([str(v)] if v else []))
                 elif k and v is not None:
                     dim_map[k] = v
+                    # 去除 "tags." 前缀后存一份，兼容两种命名字段
                     if k.startswith("tags."):
                         dim_map[k[5:]] = v
+                    # 提取 K8S 集群展示名（格式: "cluster_id(展示名)" → "展示名(cluster_id)"）
                     if k in ("tags.bcs_cluster_id", "bcs_cluster_id"):
                         dim_cluster_display = _format_cluster_display(d.get("display_value", ""), str(v))
 
-            # ── 关键字段提取 ──────────────────────────────────────────────────
+            # ── 步骤 2b：关键字段提取 ──────────────────────────────────────────
+            # target_type: 告警目标类型，决定资源归属维度（HOST/SERVICE/K8S-*/APM-SERVICE）
+            # target: 告警目标标识，K8S 场景为节点/服务/Pod 名称，APM 场景为 "app:service"
+            # host_key / sid: CMDB 主机/服务实例的唯一标识，用于去重
             target_type = (
                 hit_dict.get("target_type")
                 or dim_map.get("target_type", "")
@@ -280,10 +338,15 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                 or ""
             )
 
-            # ── CMDB Set 统计 ────────────────────────────────────────────────
-            # AlertDocument 顶层未声明 bk_biz_id 字段，业务 ID 实际存放在 event.bk_biz_id 中，
+            # ── 步骤 2c：CMDB Set 统计 ──────────────────────────────────────────
+            # 按 bk_topo_node 中 "set|" 开头的节点归属，收集 Set→Hosts/SIs 映射关系。
+            # HOST/SERVICE 类型：从告警顶层 / event 层读取 bk_topo_node，并利用
+            #   dimension_translation 翻译展示名
+            # 其他类型（K8S 宿主机等）：使用 dimensions 中提取的 dim_topo_nodes，
+            #   展示名留空，待循环结束后通过 CMDB 批量补全
+            # 业务 ID 提取：AlertDocument 顶层未声明 bk_biz_id，实际存放在 event.bk_biz_id 中，
             # 与 Alert.bk_biz_id 的读取逻辑（top_event.get("bk_biz_id")）以及
-            # alert/manager/tasks.py 中的取法保持一致。
+            # alert/manager/tasks.py 中的取法保持一致
             bk_biz_id = hit_dict.get("bk_biz_id") or (hit_dict.get("event") or {}).get("bk_biz_id")
             try:
                 bk_biz_id = int(bk_biz_id) if bk_biz_id else None
@@ -304,20 +367,27 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                 topo_nodes = dim_topo_nodes
                 topo_translation = []
 
+            # 过滤出 "set|" 开头的拓扑节点，每个 set_node 格式为 "set|{set_id}"
             set_nodes = [n for n in topo_nodes if str(n).startswith("set|")]
             for set_node in set_nodes:
+                # 首次遇到该 Set 节点时初始化条目
                 if set_node not in sets:
                     if topo_translation:
+                        # HOST/SERVICE 场景：优先从 dimension_translation 提取展示名
                         display_name = _build_set_display_name(set_node, topo_translation)
                     else:
+                        # K8S 等场景：展示名留空，加入待查询队列，循环结束后批量补全
                         display_name = ""
                         if bk_biz_id and set_node not in pending_set_names:
                             pending_set_names[set_node] = bk_biz_id
                     sets[set_node] = {"display_name": display_name, "hosts": set(), "service_instances": set()}
 
+                # 将主机和服务实例归属到当前 Set
                 entry = sets[set_node]
+                # 将主机归属到当前 Set，同时维护全局主机去重表 all_hosts
                 if host_key:
                     entry["hosts"].add(host_key)
+                    # setdefault 确保首次记录的 display_name / bk_biz_id 不被后续覆盖
                     all_hosts.setdefault(
                         host_key,
                         {
@@ -330,6 +400,7 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                             "bk_biz_id": bk_biz_id,
                         },
                     )
+                # SERVICE 类型告警：将服务实例归属到当前 Set
                 if target_type == "SERVICE" and sid:
                     entry["service_instances"].add(sid)
                     all_sids.setdefault(
@@ -340,6 +411,7 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                         },
                     )
 
+            # 兜底：HOST/SERVICE 类型但未命中任何 Set 节点的主机，仍需记入 all_hosts
             if target_type in ("HOST", "SERVICE") and host_key and host_key not in all_hosts:
                 all_hosts[host_key] = {
                     "display_name": (
@@ -348,25 +420,31 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                     "bk_biz_id": bk_biz_id,
                 }
 
-            # ── K8S Cluster 统计（与 CMDB Set 并行，不互斥）────────────────
+            # ── 步骤 2d：K8S Cluster 统计（与 CMDB Set 并行，不互斥）──────────────
+            # 按 bcs_cluster_id 聚合 K8S 资源（Node / Service / Pod），与 CMDB Set 统计互不排斥，
+            # 即同一告警可能同时贡献到 Set 和 K8S Cluster
             if target_type and target_type.startswith("K8S"):
                 cluster_id = dim_map.get("bcs_cluster_id")
                 if cluster_id:
+                    # setdefault 确保同一集群只初始化一次
                     entry = k8s_clusters.setdefault(
                         cluster_id,
                         {
                             "display_name": "",
                             "bk_biz_id": bk_biz_id,
-                            "nodes": {},
-                            "services": {},
-                            "pods": {},
+                            "nodes": {},  # {node_name: "cluster_id/node_name"}
+                            "services": {},  # {service_name: "cluster_id/service_name"}
+                            "pods": {},  # {pod_name: "cluster_id/pod_name"}
                         },
                     )
+                    # 补全集群展示名（仅首次非空时写入）
                     if dim_cluster_display and not entry["display_name"]:
                         entry["display_name"] = dim_cluster_display
+                    # 补全业务 ID（仅当条目中尚未记录时写入）
                     if not entry.get("bk_biz_id") and bk_biz_id:
                         entry["bk_biz_id"] = bk_biz_id
 
+                    # 根据 target_type 将目标实例记入对应子维度
                     if target_type == "K8S-NODE" and target:
                         entry["nodes"][target] = f"{cluster_id}/{target}"
                     elif target_type == "K8S-SERVICE" and target:
@@ -374,6 +452,7 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                     elif target_type == "K8S-POD" and target:
                         entry["pods"][target] = f"{cluster_id}/{target}"
 
+                    # 从 dimensions 中补充 node / service / pod（某些告警目标非 K8S 类型但维度中含 K8S 字段）
                     if node := dim_map.get("node") or dim_map.get("node_name"):
                         entry["nodes"][node] = f"{cluster_id}/{node}"
                     if svc := dim_map.get("service") or dim_map.get("service_name"):
@@ -381,40 +460,51 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                     if pod := dim_map.get("pod") or dim_map.get("pod_name"):
                         entry["pods"][pod] = f"{cluster_id}/{pod}"
 
-            # ── APM 统计 ────────────────────────────────────────────────────
+            # ── 步骤 2e：APM 统计 ──────────────────────────────────────────────
+            # 按 app_name 聚合 APM 服务，支持从 target 字段回退拆分（格式 "app:service"）
             elif target_type == "APM-SERVICE":
                 app_name = dim_map.get("app_name")
                 service_name = dim_map.get("service_name")
+                # 回退逻辑：dimensions 中缺少 app_name 时，从 target 字段按 ":" 拆分
                 if not app_name and target and ":" in target:
                     app_name, service_name = target.split(":", 1)
                 if app_name:
                     entry = apm_apps.setdefault(app_name, {"services": {}, "bk_biz_id": bk_biz_id})
                     if service_name:
+                        # services 值为 (display_name, bk_biz_id) 元组
                         entry["services"][service_name] = (f"{app_name}/{service_name}", bk_biz_id)
 
-    # ── K8S set 展示名：循环结束后按业务批量填充 ────────────────────────────
+    # ── 步骤3：批量补全 CMDB Set 展示名 ──────────────────────────────────────
+    # 循环结束后，按业务分组查询 SetManager，避免逐条请求 CMDB
     if pending_set_names:
+        # 按业务 ID 分组，每组一次性批量查询该业务下的所有 Set
         biz_to_set_nodes: dict[int, list[str]] = {}
         for set_node, biz_id in pending_set_names.items():
             biz_to_set_nodes.setdefault(biz_id, []).append(set_node)
 
         for biz_id, nodes in biz_to_set_nodes.items():
+            # 获取租户 ID 和业务名称，用于拼装展示名 "{biz_name}/{set_name}"
             bk_tenant_id = bk_biz_id_to_bk_tenant_id(biz_id)
             biz_obj = BusinessManager.get(biz_id)
             biz_name = biz_obj.bk_biz_name if biz_obj else str(biz_id)
 
+            # 批量查询 Set 对象
             set_ids = [int(n.split("|")[1]) for n in nodes if "|" in n]
             set_map = SetManager.mget(bk_tenant_id=bk_tenant_id, bk_set_ids=set_ids)
 
+            # 回填展示名：查询成功用实际名称，失败回退到 set_id 或原始 set_node
             for set_node in nodes:
                 set_id_str = set_node.split("|")[1] if "|" in set_node else ""
                 set_obj = set_map.get(int(set_id_str)) if set_id_str else None
                 set_name = set_obj.bk_set_name if set_obj else (set_id_str or set_node)
                 sets[set_node]["display_name"] = f"{biz_name}/{set_name}"
 
-    # ── 序列化 ──────────────────────────────────────────────────────────────
+    # ── 步骤4：序列化为统一输出格式 ──────────────────────────────────────────
+    # 每个资源维度格式: {count, instance_list(最多50条), link_tpl}
+    # link_tpl 为前端跳转链接模板，支持 {field} 占位符替换
     result: dict[str, Any] = {}
 
+    # 过滤掉 "__unknown_set__" 等无效 Set 节点
     valid_sets = {k: v for k, v in sets.items() if k != "__unknown_set__"}
     if valid_sets:
         result["set"] = {
@@ -451,6 +541,7 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
 
     if k8s_clusters:
         if len(k8s_clusters) > 1:
+            # 多集群场景：输出集群级汇总，不展开子资源（避免跨集群混淆）
             result["cluster"] = {
                 "count": len(k8s_clusters),
                 "instance_list": [
@@ -463,6 +554,7 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                 ),
             }
         else:
+            # 单集群场景：展开子资源维度（node / service / pod），提供更细粒度的实例列表
             cid, cdata = next(iter(k8s_clusters.items()))
             cluster_biz_id = cdata.get("bk_biz_id")
             if cdata["nodes"]:
@@ -527,7 +619,8 @@ def _build_impact_scope(issue_id: str, aggregate_dimensions: list[str] | None = 
                 ),
             }
 
-    # 聚合维度收窄：非空时仅保留与维度类型对应的 key
+    # ── 步骤5：聚合维度收窄 ──────────────────────────────────────────────────
+    # 根据 aggregate_dimensions 过滤非相关资源维度 key，仅保留与维度类型对应的输出
     allowed_keys = _allowed_scope_keys(aggregate_dimensions or [])
     if allowed_keys is not None:
         result = {k: v for k, v in result.items() if k in allowed_keys}
