@@ -257,11 +257,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -304,11 +304,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
     type: EFieldType.text,
     methods: [
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -344,11 +344,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -368,11 +368,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -392,11 +392,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -416,11 +416,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -440,11 +440,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -464,11 +464,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -488,11 +488,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -512,11 +512,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -536,11 +536,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -559,11 +559,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -583,11 +583,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -607,11 +607,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -639,11 +639,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -663,18 +663,18 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
   },
   {
     name: 'bk_topo_node',
-    alias: 'cmdb集群',
+    alias: 'cmdb拓扑',
     type: EFieldType.keyword,
     isEnableOptions: true,
     methods: [
@@ -687,11 +687,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
         value: 'neq',
       },
       {
-        alias: '包含',
+        alias: window.i18n.t('包含'),
         value: 'include',
       },
       {
-        alias: '不包含',
+        alias: window.i18n.t('不包含'),
         value: 'exclude',
       },
     ],
@@ -711,11 +711,11 @@ export const ALERT_FILTER_FIELDS: IFilterField[] = [
   //       value: 'neq',
   //     },
   //     {
-  //       alias: '包含',
+  //       alias: window.i18n.t('包含'),
   //       value: 'include',
   //     },
   //     {
-  //       alias: '不包含',
+  //       alias: window.i18n.t('不包含'),
   //       value: 'exclude',
   //     },
   //   ],
@@ -809,6 +809,7 @@ export class AlertService extends AlarmService {
   ): Promise<AnalysisTopNDataResponse<AnalysisFieldAggItem>> {
     const paramsClone = _.cloneDeep(params);
     // #if IS_APM_MONITOR
+    paramsClone.bk_biz_ids = [Number(window.bk_biz_id)];
     if (paramsClone.query_string) {
       // 语句模式
       paramsClone.query_string = `(${paramsClone.query_string}) AND ${window.APM_QUERY_STRING || ''}`;
@@ -835,6 +836,7 @@ export class AlertService extends AlarmService {
   ): Promise<FilterTableResponse<T>> {
     const paramsClone = _.cloneDeep(params);
     // #if IS_APM_MONITOR
+    paramsClone.bk_biz_ids = [Number(window.bk_biz_id)];
     if (paramsClone.query_string) {
       // 语句模式
       paramsClone.query_string = `(${paramsClone.query_string}) AND ${window.APM_QUERY_STRING || ''}`;
@@ -900,6 +902,7 @@ export class AlertService extends AlarmService {
   async getQuickFilterList(params: Partial<CommonFilterParams>, options?: RequestOptions): Promise<QuickFilterItem[]> {
     const paramsClone = _.cloneDeep(params);
     // #if IS_APM_MONITOR
+    paramsClone.bk_biz_ids = [Number(window.bk_biz_id)];
     if (paramsClone.query_string) {
       // 语句模式
       paramsClone.query_string = `(${paramsClone.query_string}) AND ${window.APM_QUERY_STRING || ''}`;
@@ -938,7 +941,7 @@ export class AlertService extends AlarmService {
             continue;
           }
           // 告警状态
-          if (['NOT_SHIELDED_ABNORMAL', 'SHIELDED_ABNORMAL', 'RECOVERED'].includes(item.id)) {
+          if (['NOT_SHIELDED_ABNORMAL', 'SHIELDED_ABNORMAL', 'RECOVERED', 'CLOSED'].includes(item.id)) {
             alarmStatusList.push({
               ...item,
               ...AlarmStatusIconMap[item.id],
@@ -988,6 +991,7 @@ export class AlertService extends AlarmService {
   async getRetrievalFilterValues(params: Partial<CommonFilterParams>, config = {}) {
     const paramsClone = _.cloneDeep(params);
     // #if IS_APM_MONITOR
+    paramsClone.bk_biz_ids = [Number(window.bk_biz_id)];
     if (paramsClone.query_string) {
       // 语句模式
       paramsClone.query_string = `(${paramsClone.query_string}) AND ${window.APM_QUERY_STRING || ''}`;

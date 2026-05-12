@@ -102,13 +102,16 @@ class ImpactScopeDimension:
     #
     # 结构说明：
     #   - key: 简化两段式维度标识 "impact_scope.{dimension}"
-    #   - value: 列表，每个元素为一组查询条件（元素之间为"或"关系，任一命中即匹配）
-    #     - keys: AlertDocument 中可查询的字段列表（同组内也为"或"关系）
-    #       - "event.XXX" → 走顶层 term 查询
-    #       - "tags.XXX"  → 走 event.tags nested 查询
+    #   - value: 列表，每个元素为一组查询条件
+    #     - keys: AlertDocument 中可查询的字段列表
+    #       - "event.XXX"     → 走顶层 term 查询
+    #       - "tags.XXX"      → 走 event.tags nested 查询
+    #       - "query_string"  → 走 query_string 查询（value_tpl 为完整查询语句）
     #     - value_tpl: 值模板，{field} 占位符对应 instance_list 中的字段名
-    #     - condition: 同组内 keys 之间的逻辑关系，"or" 表示任一命中即匹配，"and" 表示必须同时满足
-    #       列表内多个元素之间始终为"或"关系，condition 只控制同一元素内 keys 的关系
+    #     - condition: 元素间的组合逻辑
+    #       - "or"  → 该元素与列表中其他元素为"或"关系，任一命中即匹配
+    #       - "and" → 该元素与列表中其他元素为"与"关系，必须同时满足
+    #       同一元素内多个 keys 之间始终为"或"关系
     #
     # 后端在返回 impact_scope 时，会将 value_tpl 中的占位符替换为实例的实际值，
     # 渲染后的结果存放在 instance_list 每个实例的 alert_query_fields 字段中

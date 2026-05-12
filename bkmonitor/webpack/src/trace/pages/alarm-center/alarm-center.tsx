@@ -70,10 +70,12 @@ import {
   type AlertAllActionEnum,
   type AlertContentNameEditInfo,
   type AlertTableItem,
+  type ColumnResizeContext,
   type CommonCondition,
   AlarmType,
   CAN_AUTO_SHOW_ALERT_DIALOG_ACTIONS,
   CONTENT_SCROLL_ELEMENT_CLASS_NAME,
+  getDefaultAlarmCenterBizIds,
 } from './typings';
 import { useAlarmCenterStore } from '@/store/modules/alarm-center';
 import { useAppStore } from '@/store/modules/app';
@@ -197,10 +199,12 @@ export default defineComponent({
     const {
       legacyBatchAction,
       shouldAutoOpenFirstDetail,
+      shouldAutoOpenSingleAlertDetailFromActionIdQuery,
       showPermissionTips,
       applyLegacyQueryStringInjection,
       applyPromqlIfNeeded,
       setupAutoOpenFirstDetailFlag,
+      setupAutoOpenSingleAlertDetailFromActionIdQueryFlag,
       computeShowPermissionTips,
       dismissPermissionTips,
       handleApplyPermission,
@@ -524,7 +528,9 @@ export default defineComponent({
         if (bizIds) {
           /** 兼容事件中心的bizIds */
           if (typeof bizIds === 'string') {
-            alarmStore.bizIds = Number.isNaN(Number(bizIds)) ? tryURLDecodeParse(bizIds, [-1]) : [Number(bizIds)];
+            alarmStore.bizIds = Number.isNaN(Number(bizIds))
+              ? tryURLDecodeParse(bizIds, getDefaultAlarmCenterBizIds())
+              : [Number(bizIds)];
           } else {
             alarmStore.bizIds = bizIds.map(item => Number(item));
           }
@@ -754,7 +760,7 @@ export default defineComponent({
         alarmStore.residentCondition = [];
         alarmStore.quickFilterValue = favoriteConfig?.componentData?.quickFilterValue || [];
         alarmStore.filterMode = favoriteConfig?.componentData?.filterMode || EMode.ui;
-        alarmStore.bizIds = favoriteConfig?.componentData?.bizIds || [-1];
+        alarmStore.bizIds = favoriteConfig?.componentData?.bizIds || getDefaultAlarmCenterBizIds();
       } else {
         alarmStore.conditions = [];
         alarmStore.residentCondition = [];
@@ -860,6 +866,20 @@ export default defineComponent({
           handleShowAlertDetail(data.value[0] as AlertTableItem);
           return;
         }
+        /**
+         * 告警通知链接：queryString 以 action_id 检索且列表总数仅 1 条时自动打开告警详情
+         *（与旧版 `(^action_id)` 入口策略一致，见 useLegacyEventCenterCompat）
+         */
+        if (
+          shouldAutoOpenSingleAlertDetailFromActionIdQuery.value &&
+          alarmStore.alarmType === AlarmType.ALERT &&
+          total.value === 1 &&
+          data.value?.length === 1
+        ) {
+          shouldAutoOpenSingleAlertDetailFromActionIdQuery.value = false;
+          handleShowAlertDetail(data.value[0] as AlertTableItem);
+          return;
+        }
         // 如非自动打开dialog，则清空selectedRowKeys
         handleSelectedRowKeysChange();
       }
@@ -877,6 +897,8 @@ export default defineComponent({
       computeShowPermissionTips();
       /** PromQL 异步转换 queryString，需在首次表格请求触发前完成 */
       await applyPromqlIfNeeded();
+      /** 须在 PromQL 可能改写 queryString 之后再判定 action_id 单条自动展开 */
+      setupAutoOpenSingleAlertDetailFromActionIdQueryFlag();
       setUrlParams();
     });
     return {
@@ -1175,6 +1197,10 @@ export default defineComponent({
                             selectedRowKeys={this.selectedRowKeys}
                             sort={this.ordering}
                             timeRange={this.alarmStore.timeRange}
+                            onColumnResizeChange={(ctx: ColumnResizeContext) => {
+                              if (ctx?.columnsWidth)
+                                this.fieldsWidthConfig = { ...this.fieldsWidthConfig, ...ctx.columnsWidth };
+                            }}
                             onCurrentPageChange={this.handleCurrentPageChange}
                             onDisplayColFieldsChange={displayColFields => {
                               this.storageColumns = displayColFields;

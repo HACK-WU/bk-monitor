@@ -409,7 +409,7 @@ export default {
 
   // 告警中心
   'PromQL 策略暂时不支持维度分析': 'PromQL strategies do not support dimension analysis',
-  异常检测点: 'Abnormal detection point',
+  异常点: 'Abnormal point',
 
   // APM-告警模板
   查看各服务告警情况: 'View alarm situation of each service',
@@ -473,4 +473,6 @@ export default {
   归档成功: 'Archive successfully',
   恢复成功: 'Restore successfully',
   重新打开成功: 'Reopen successfully',
+  请选择Issue聚合维度: 'Please select Issue aggregation dimension',
+  请选择Issue聚合生效告警级别: 'Please select effective alert level for Issue aggregation',
 };
