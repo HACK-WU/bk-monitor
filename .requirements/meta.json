@@ -1,0 +1,68 @@
+{
+  "requirements": {
+    "integration/2026-06-15-TAPD授权与建单": {
+      "id": "REQ-20260615-001",
+      "feature": "TAPD授权与建单",
+      "created": "2026-06-15",
+      "updated": "2026-06-15",
+      "status": "设计中",
+      "tags": [
+        "feat",
+        "integration"
+      ],
+      "version": 4,
+      "depends_on": [],
+      "changelog": [
+        "初始创建",
+        "2026-06-15 v3: 完成数据模型质疑审查",
+        "2026-06-15 v4: 完成技术设计（7 个子需求）"
+      ],
+      "commits": [],
+      "docs": [
+        {
+          "path": "requirement.md",
+          "type": "requirement"
+        },
+        {
+          "path": "review/challenge-report.md",
+          "type": "review"
+        },
+        {
+          "path": "design/DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S01_数据模型设计_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S02_用户态授权_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S03_应用态授权_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S04_查询项目列表_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S05_查询已关联项目_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S06_查询授权状态_DESIGN.md",
+          "type": "design"
+        },
+        {
+          "path": "design/S07_异步刷新Token_DESIGN.md",
+          "type": "design"
+        }
+      ],
+      "role": "standalone",
+      "parent_id": null,
+      "child_ids": []
+    }
+  }
+}
