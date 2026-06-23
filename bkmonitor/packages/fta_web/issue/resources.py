@@ -8,14 +8,23 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+import json
+
 import logging
+import secrets
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
-from rest_framework import serializers
+from django.conf import settings
+from django.http import HttpResponseRedirect
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import serializers, exceptions
+from rest_framework.decorators import api_view
 
+from api.tapd.default import GetWorkspaceInfoResource, UserOauthTokenResource
+from bkm_space.utils import bk_biz_id_to_space_uid
 from bkmonitor.documents.issue import (
     IssueActivityDocument,
     IssueDocument,
@@ -23,19 +32,30 @@ from bkmonitor.documents.issue import (
     IssueNotFoundError,
 )
 from bkmonitor.issue_merge import IssueFrozenError
-from bkmonitor.models.issue import IssueMergeRelation
+from bkmonitor.models import IssueMergeRelation, TapdWorkspaceBinding
+from bkmonitor.utils.cipher import AESCipher
 from bkmonitor.utils.request import get_request_username
 from bkmonitor.utils.thread_backend import ThreadPool
+from bkmonitor.utils.user import set_local_username
+from constants.common import DEFAULT_TENANT_ID
 from constants.issue import IssuePriority, IssueStatus, IssueActivityType
 from core.drf_resource import Resource, api, resource
 from core.errors.api import BKAPIError
+from core.errors.common import HTTP404Error
 from fta_web.alert.handlers.alert import AlertQueryHandler
 from fta_web.alert.utils import slice_time_interval
 from fta_web.issue.handlers.issue import (
     IssueQueryHandler,
 )
 from fta_web.issue.serializers import IssueSearchSerializer
-
+from fta_web.issue.utils.tapd_token import (
+    save_tapd_token,
+    generate_signed_state,
+    verify_signed_state,
+    _get_frontend_base,
+    generate_install_url,
+    try_bind_importable,
+)
 
 logger = logging.getLogger("root")
 
@@ -1529,3 +1549,322 @@ class GetTapdFieldsResource(Resource):
             )
 
         return result
+
+
+class ListUserTapdWorkspaceResource(Resource):
+    """查询当前用户有权限的 TAPD 项目列表（冷启动去关联用）
+
+    端点：GET /fta/issue/tapd/user_workspace/?bk_biz_id=xxx
+    数据源：TAPD 用户态 API（Bearer Token，从 Redis 解密获取）。
+
+    TODO: 当前 TAPD 用户态 API 尚未提供文档（T-01），用户态列表返回空。
+          app 已授权列表（get_granted_workspaces）作为降级源。
+    """
+
+    class RequestSerializer(serializers.Serializer):
+        bk_biz_id = serializers.IntegerField(label="蓝鲸业务ID")
+
+    def perform_request(self, validated_request_data):
+        bk_biz_id = validated_request_data["bk_biz_id"]
+        space_uid = bk_biz_id_to_space_uid(bk_biz_id)
+        tenant_id = DEFAULT_TENANT_ID
+
+        # 获取当前用户信息（用于 importable 自动关联的 create_user）
+        request = getattr(self, "request", None)
+        username = getattr(getattr(request, "user", None), "username", "")
+
+        # 生成 signed_state（应用态 cb 用），payload 含 nonce → 写入 session（B-03 Session 校验用）
+        nonce = secrets.token_urlsafe(8)
+        payload = {
+            "bk_biz_id": bk_biz_id,
+            "bk_tenant_id": tenant_id,
+            "space_uid": space_uid,
+            "initiator": username,
+            "nonce": nonce,
+            "exp": int(time.time()) + 900,  # 15min TTL
+        }
+        signed_state = generate_signed_state(payload)
+
+        # nonce 存入 session，B-03 回调时校验
+        if request:
+            request.session[f"tapd_install_nonce_{bk_biz_id}"] = nonce
+        install_url = generate_install_url(signed_state)
+
+        # 查本地 binding（用于四态标记的【本地存在】侧）
+        local_bindings = {
+            str(b["tapd_workspace_id"]): b
+            for b in TapdWorkspaceBinding.objects.filter(bk_tenant_id=tenant_id, space_uid=space_uid).values(
+                "tapd_workspace_id", "tapd_workspace_name", "create_user"
+            )
+        }
+
+        # TODO(T-01): 接入 TAPD 用户态 API 获取用户可见项目列表。
+        #   Dependency: TAPD 需开放「获取用户可见项目」接口。
+        #   接入后将 local_bindings 与远程列表交叉 → 返回四态标记。
+
+        # 降级：用 app 级 get_granted_workspaces 作为数据源（仅返回 app 已授权项目）
+        try:
+            granted = api.tapd.get_granted_workspaces(bk_biz_id=bk_biz_id)
+        except Exception as e:
+            logger.warning("GetGrantedWorkspaces failed for B-01 fallback: %s", e)
+            granted = []
+
+        items = []
+        any_unbound_or_stale = False
+        for ws in granted:
+            ws_id = str(ws.get("id") or ws.get("workspace_id", ""))
+            if not ws_id:
+                continue
+            in_local = ws_id in local_bindings
+            in_granted = True
+
+            if in_local and in_granted:
+                status = "bound"
+            elif in_local and not in_granted:
+                status = "stale"
+                any_unbound_or_stale = True
+            elif not in_local and in_granted:
+                status = "importable"
+                # 静默尝试创建本地 binding
+                if try_bind_importable(ws_id, bk_biz_id, tenant_id, username):
+                    status = "bound"
+            else:
+                status = "unbound"
+                any_unbound_or_stale = True
+
+            items.append({"workspace_id": ws_id, "workspace_name": ws.get("name") or ws_id, "is_bound": status})
+
+        # install_url 仅在存在 unbound 或 stale 时返回
+        if not any_unbound_or_stale:
+            install_url = ""
+
+        return {
+            "total": len(items),
+            "items": items,
+            "has_more": False,
+            "install_url": install_url,
+            "method": "GET",
+        }
+
+
+class UnbindTapdWorkspaceResource(Resource):
+    """解除 TAPD 项目与当前业务的关联
+
+    仅删除本地 TapdWorkspaceBinding，不在 TAPD 侧撤回应用授权。
+    端点：POST /fta/issue/tapd/workspace/unbind/
+    """
+
+    class RequestSerializer(serializers.Serializer):
+        bk_biz_id = serializers.IntegerField(label="蓝鲸业务ID", required=True)
+        workspace_id = serializers.CharField(label="TAPD项目ID", required=True)
+
+    def perform_request(self, validated_request_data: dict) -> dict:
+        bk_biz_id: int = validated_request_data["bk_biz_id"]
+        workspace_id: str = validated_request_data["workspace_id"]
+        space_uid = bk_biz_id_to_space_uid(bk_biz_id)
+        tenant_id = DEFAULT_TENANT_ID
+
+        binding_qs = TapdWorkspaceBinding.objects.filter(
+            bk_tenant_id=tenant_id,
+            space_uid=space_uid,
+            tapd_workspace_id=workspace_id,
+        )
+        if not binding_qs.exists():
+            raise HTTP404Error(
+                message=f"TAPD 项目 {workspace_id} 未与当前业务关联",
+            )
+
+        # 删除 binding（不存在时 delete() 返回 (0, {})）
+        deleted_count, _ = binding_qs.delete()
+        logger.info(
+            "UnbindTapdWorkspace: delete binding biz=%s ws=%s tenant=%s count=%s",
+            bk_biz_id,
+            workspace_id,
+            tenant_id,
+            deleted_count,
+        )
+
+        return {"success": True}
+
+
+def _redirect(path: str) -> HttpResponseRedirect:
+    """302 重定向到前端路径（不带 query string，由前端路由根据路径显示结果）。"""
+    return HttpResponseRedirect(f"{_get_frontend_base()}{path}")
+
+
+@api_view(["GET"])
+@csrf_exempt
+def tapd_app_install_callback(request):
+    """TAPD `open_app_install` 回调 — 应用态授权。
+
+    Query params: code, resource, signed_state
+    1. 解析 signed_state → 验签、验过期、Session nonce
+    2. 提取 workspace_id → 调 app 级 Basic Auth 获取 name
+    3. upsert TapdWorkspaceBinding（create_user = initiator）
+    4. 清理 Session nonce → 302 重定向前端 /tapd/workspace?bind=success
+    """
+    signed_state = request.query_params.get("signed_state", "")
+
+    if not signed_state:
+        return _redirect("/tapd/workspace?bind=error&reason=missing_state")
+
+    # 1) 解析并验签 signed_state
+    try:
+        payload = verify_signed_state(signed_state)
+    except exceptions.ValidationError as e:
+        logger.warning("B-03 signed_state verification failed: %s", e.detail)
+        return _redirect("/tapd/workspace?bind=error&reason=invalid_state")
+
+    bk_biz_id = payload["bk_biz_id"]
+    tenant_id = payload.get("bk_tenant_id", DEFAULT_TENANT_ID)
+    space_uid = payload["space_uid"]
+    initiator = payload["initiator"]
+
+    # 1b) Session nonce 校验（防篡改）
+    nonce = payload.get("nonce", "")
+    session_key = f"tapd_install_nonce_{bk_biz_id}"
+    stored_nonce = request.session.get(session_key)
+    if not nonce or not stored_nonce or nonce != stored_nonce:
+        logger.warning(
+            "B-03 nonce mismatch: received=%s stored=%s biz=%s",
+            nonce,
+            stored_nonce,
+            bk_biz_id,
+        )
+        return _redirect("/tapd/workspace?bind=error&reason=nonce_mismatch")
+
+    # 解码 resource JSON 获取 workspace_id
+    resource_json = request.query_params.get("resource", "{}")
+    try:
+        resource = json.loads(resource_json) if resource_json else {}
+    except Exception:
+        logger.warning("B-03 invalid resource JSON: %s", resource_json)
+        return _redirect("/tapd/workspace?bind=error&reason=invalid_resource")
+
+    workspace_id = str(resource.get("workspace_id", ""))
+    if not workspace_id:
+        logger.warning("B-03 missing workspace_id")
+        return _redirect("/tapd/workspace?bind=error&reason=missing_workspace")
+
+    # 2) 获取项目信息（app 级 Basic Auth）
+    try:
+        info = GetWorkspaceInfoResource().request(workspace_id=int(workspace_id))
+        ws = info.get("Workspace", {})
+        ws_name = ws.get("name") or ws.get("pretty_name") or str(workspace_id)
+    except BKAPIError:
+        logger.exception("B-03 get_workspace_info failed: ws=%s", workspace_id)
+        return _redirect("/tapd/workspace?bind=error&reason=workspace_info_failed")
+    except Exception:
+        logger.exception("B-03 get_workspace_info unexpected error: ws=%s", workspace_id)
+        return _redirect("/tapd/workspace?bind=error&reason=workspace_info_failed")
+
+    # 3) upsert binding
+    set_local_username(initiator)
+    TapdWorkspaceBinding.objects.update_or_create(
+        bk_tenant_id=tenant_id,
+        space_uid=space_uid,
+        tapd_workspace_id=workspace_id,
+        defaults={
+            "bk_biz_id": bk_biz_id,
+            "tapd_workspace_name": ws_name,
+            "create_user": initiator,
+            "update_user": initiator,
+        },
+    )
+    logger.info(
+        "TapdWorkspaceBinding upserted: tenant=%s space=%s ws=%s name=%s initiator=%s",
+        tenant_id,
+        space_uid,
+        workspace_id,
+        ws_name,
+        initiator,
+    )
+
+    # 4) 清理 Session nonce
+    request.session.pop(session_key, None)
+
+    return _redirect("/tapd/workspace?bind=success")
+
+
+@api_view(["GET"])
+@csrf_exempt
+def tapd_user_oauth_callback(request):
+    """TAPD 用户态 OAuth 回调。
+
+    Query params: code, state, resource（可选）
+    1. Session 验证 state（格式: {username}:{nonce}:{bk_biz_id}）
+    2. 用 code 换取 access_token（UserOauthTokenResource）
+    3. 加密 token → 存入 Redis（TTL = expires_in），key = tapd_uat:{tenant}:{user}
+    4. 删除 Session state 防止重放
+    5. 302 重定向前端 /tapd/bind?auth=success
+    """
+    code = request.query_params.get("code", "")
+    state = request.query_params.get("state", "")
+
+    if not code or not state:
+        return _redirect("/tapd/bind?auth=error&reason=missing_params")
+
+    # state = "{username}:{nonce}:{bk_biz_id}"
+    state_parts = state.rsplit(":", 2)
+    if len(state_parts) != 3:
+        logger.warning("B-05 invalid state format: %s", state)
+        return _redirect("/tapd/bind?auth=error&reason=invalid_state")
+
+    username_received, nonce_received, bk_biz_id_str = state_parts
+    try:
+        bk_biz_id = int(bk_biz_id_str)
+    except (ValueError, TypeError):
+        return _redirect("/tapd/bind?auth=error&reason=invalid_biz_id")
+
+    # Session 中存储完整 state
+    session_key = f"tapd_oauth_state_{bk_biz_id}"
+    state_stored = request.session.get(session_key)
+    if not state_stored or state_stored != state:
+        logger.warning(
+            "B-05 state mismatch: received=%s stored=%s",
+            state[:30],
+            state_stored,
+        )
+        return _redirect("/tapd/bind?auth=error&reason=invalid_state")
+
+    # 删除 session state（防止重放）
+    request.session.pop(session_key, None)
+
+    # code 换 token（Basic Auth，client_id:client_secret）
+    try:
+        redirect_uri = getattr(settings, "TAPD_OAUTH_CALLBACK_URL", "")
+        if not redirect_uri:
+            base = settings.TAPD_REDIRECT_URI
+            if not base.endswith("/"):
+                base += "/"
+            redirect_uri = f"{base}oauth_callback/"
+
+        token_resp = UserOauthTokenResource().request(
+            code=code,
+            redirect_uri=redirect_uri,
+        )
+    except BKAPIError:
+        logger.exception("B-05 exchange token failed")
+        return _redirect("/tapd/bind?auth=error&reason=token_exchange_failed")
+    except Exception:
+        logger.exception("B-05 exchange token unexpected error")
+        return _redirect("/tapd/bind?auth=error&reason=token_exchange_failed")
+
+    access_token = token_resp.get("access_token", "")
+    expires_in = token_resp.get("expires_in", 7200)
+    if not access_token:
+        logger.warning("B-05 empty access_token from TAPD")
+        return _redirect("/tapd/bind?auth=error&reason=empty_token")
+
+    # 存 Redis（AESCipher 加密），key 按 (tenant, username)
+    tenant_id = DEFAULT_TENANT_ID
+    save_tapd_token(
+        tenant_id=tenant_id,
+        username=username_received,
+        token_data=token_resp,
+        expires_in=expires_in,
+        state=state,
+        cipher=AESCipher(settings.SECRET_KEY),
+    )
+
+    return _redirect("/tapd/bind?auth=success")
