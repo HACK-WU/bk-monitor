@@ -590,8 +590,8 @@ APM_TRACE_DIAGRAM_CONFIG = {}
 APM_DORIS_STORAGE_CONFIG = {}
 # APM profile v4接入配置
 APM_PROFILE_V4_BIZ_WHITE_LIST = []
+APM_PROFILING_DEFAULT_USE_BKDATA_V4 = False
 APM_PROFILE_V4_DORIS_BINDING_CLUSTER = ""
-APM_PROFILE_V4_DATABUS_PREFER_CLUSTER = ""
 # {2:["foo", "bar"], 3:["baz"]}
 APM_PROFILING_ENABLED_APPS = {}
 # dis/enable profiling for all apps
@@ -1250,6 +1250,12 @@ BKCHAT_MANAGE_URL = os.getenv("BKAPP_BKCHAT_MANAGE_URL", "")
 # aidev的apigw地址
 AIDEV_API_BASE_URL = os.getenv("BKAPP_AIDEV_API_BASE_URL", "")
 
+# TAPD API 基础URL
+TAPD_API_BASE_URL = os.getenv("BKAPP_TAPD_API_BASE_URL", os.getenv("TAPD_API_BASE_URL", ""))
+# 对于 TAPD API 有权限的应用ID和密钥
+TAPD_APP_ID = os.getenv("BKAPP_TAPD_APP_ID", os.getenv("TAPD_APP_ID", ""))
+TAPD_APP_SECRET = os.getenv("BKAPP_TAPD_APP_SECRET", os.getenv("TAPD_APP_SECRET", ""))
+
 BK_NODEMAN_HOST = AGENT_SETUP_URL = os.getenv("BK_NODEMAN_SITE_URL") or os.getenv(
     "BKAPP_NODEMAN_OUTER_HOST", get_service_url("bk_nodeman", bk_paas_host=BK_PAAS_HOST)
 )
@@ -1299,8 +1305,6 @@ BK_INCIDENT_APIGW_URL = os.getenv("BKAPP_INCIDENT_APIGW_URL", "")
 ENABLE_BK_INCIDENT_PLUGIN = os.getenv("ENABLE_BK_INCIDENT_PLUGIN", "false").lower() == "true"
 # 是否打开故障通知
 ENABLE_BK_INCIDENT_NOTICE = os.getenv("ENABLE_BK_INCIDENT_NOTICE", "false").lower() == "true"
-# 内置故障通知配置(动态变量)
-BK_INCIDENT_BUILTIN_CONFIG = {}
 
 # IAM
 BK_IAM_SYSTEM_ID = "bk_monitorv3"
@@ -1788,6 +1792,9 @@ APM_SERVICE_CACHE_APPLICATIONS = []
 
 # 企业微信模块化（layouts）消息通知灰度业务列表
 WECOM_LAYOUTS_BIZ_LIST = []
+
+# 是否默认开启 APM 指标维度分组接入
+APM_METRIC_GROUP_DIMENSIONS_ENABLED = False
 
 # 允许 APM 配置指标分组维度的白名单，格式：["2"](整业务) 或 ["2-app_name"](单应用)
 APM_METRIC_GROUP_DIMENSIONS_WHITELIST = []

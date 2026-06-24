@@ -24,7 +24,7 @@
  * IN THE SOFTWARE.
  */
 
-import { shallowRef, watchEffect } from 'vue';
+import { shallowRef, watch, watchEffect } from 'vue';
 
 import { listServiceK8sTargets } from 'monitor-api/modules/apm_container';
 
@@ -81,7 +81,10 @@ export const useTraceSpanK8s = (options: UseTraceSpanK8sOptions) => {
       service_name: serviceName,
       app_name: appName,
     });
-    targetList.value = result.target_list;
+    targetList.value = result.target_list.map(item => ({
+      ...item,
+      display_name: item[item.resource_type],
+    }));
   };
 
   /**
@@ -92,14 +95,21 @@ export const useTraceSpanK8s = (options: UseTraceSpanK8sOptions) => {
     await getTargetList();
     if (targetList.value?.length && !hasTarget(currentTarget.value)) {
       currentTarget.value = targetList.value[0];
-      sceneList.value = currentTarget.value?.scenario_list ?? [];
-      scene.value = sceneList.value[0];
-      groupBy.value = currentTarget.value?.resource_type;
     }
     loading.value = false;
   };
 
   watchEffect(handleRequest);
+
+  watch(
+    currentTarget,
+    () => {
+      sceneList.value = currentTarget.value?.scenario_list ?? [];
+      scene.value = sceneList.value[0];
+      groupBy.value = currentTarget.value?.resource_type;
+    },
+    { immediate: true, deep: true }
+  );
 
   return {
     scene,
