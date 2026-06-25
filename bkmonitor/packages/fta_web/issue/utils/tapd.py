@@ -10,16 +10,16 @@ specific language governing permissions and limitations under the License.
 
 import base64
 import secrets
-from urllib.parse import urlencode,quote
+from urllib.parse import urlencode, quote
 
-from bkmonitor.utils.request import get_request_username
+
+from bkmonitor.utils.request import get_request_username, get_request
 
 from rest_framework.exceptions import ValidationError
 from fta_web.constants import TapdOauthEndpoint
 
 from bkm_space.utils import bk_biz_id_to_space_uid
 from bkmonitor.models import TapdWorkspaceBinding
-from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id
 import logging
 
 logger = logging.getLogger("root")
@@ -179,6 +179,7 @@ def verify_signed_state(signed_state: str) -> dict:
         raise ValidationError({"detail": f"missing_fields: {missing}"})
     return payload
 
+
 def generate_install_url(
     bk_biz_id: int,
     bk_tenant_id: str,
@@ -217,7 +218,7 @@ def generate_install_url(
     # cb 中内嵌 signed_state
     cb = f"{backend_callback.rstrip('/')}?signed_state={signed_state}"
     params = {
-        "client_id":settings.TAPD_APP_ID,
+        "client_id": settings.TAPD_APP_ID,
         "test": 0,
         "cb": cb,
     }
@@ -227,37 +228,41 @@ def generate_install_url(
 
 def generate_auth_url(
     bk_biz_id: int,
-    bk_tenant_id:str,
+    bk_tenant_id: str,
     redirect_uri_real: str,
-    redirect_uri_verify: str,
     backend_callback: str,
 ) -> str:
-    """生成 TAPD OAuth 授权 URL，state 使用 base64url JSON signed_state 自包含格式。
+    """生成 TAPD 用户态 OAuth 授权 URL，state 使用 Session 存储的 nonce。
 
     :param bk_biz_id: 蓝鲸业务 ID
+    :param bk_tenant_id: 租户 ID
     :param redirect_uri_real: 含 # 的真实前端地址，B-05 回调后 302 重定向目标
-    :param redirect_uri_verify: 传给 TAPD OAuth 做 code 校验的 redirect_uri
-    :param backend_callback: 后端 OAuth 回调地址（由调用方通过 reverse + build_absolute_uri 构建）
+    :param backend_callback: 后端 OAuth 回调地址（由调用方通过 build_absolute_uri 构建）
     """
-    # redirect_uri_verify 不能为空
-    if not redirect_uri_verify:
-        raise ValidationError("redirect_uri_verify is empty")
     if not backend_callback:
         raise ValidationError("backend_callback is empty")
 
-    payload = {
+    # state 使用随机 nonce，写入 Session 供 B-05 回调校验
+    request = get_request()
+    if not request:
+        raise ValidationError("request context is empty")
+
+    nonce = secrets.token_urlsafe(16)
+    state = f"{nonce}:{bk_biz_id}"
+    # backend_callback 统一去掉末尾斜杠，确保 authorize 和 exchange token 时完全一致
+    backend_callback = backend_callback.rstrip("/")
+    request.session[f"tapd_oauth_state_{bk_biz_id}"] = {
+        "nonce": nonce,
         "bk_biz_id": bk_biz_id,
         "bk_tenant_id": bk_tenant_id,
         "username": get_request_username(),
-        "nonce": secrets.token_urlsafe(8),
-        "exp": int(time.time()) + 900,  # 15min TTL
         "redirect_uri_real": redirect_uri_real,
-        "redirect_uri_verify": redirect_uri_verify,
+        "backend_callback": backend_callback,
+        "exp": int(time.time()) + 900,  # 15min TTL
     }
-    state = generate_signed_state(payload)
 
-    backend_callback = quote(backend_callback.rstrip("/"), safe='')
-    scope = quote("story#read story#write bug#read bug#write", safe='')
+    backend_callback = quote(backend_callback, safe="")
+    scope = quote("story#read story#write bug#read bug#write", safe="")
     return (
         f"{TapdOauthEndpoint.authorize()}"
         f"?response_type=code"

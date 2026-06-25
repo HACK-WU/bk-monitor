@@ -102,9 +102,8 @@ class IssueViewSet(ResourceViewSet):
             # 从 POST body 提取参数
             bk_biz_id = body.get("bk_biz_id")
             redirect_uri_real = body.get("redirect_uri_real")
-            redirect_uri_verify = body.get("redirect_uri_verify")
 
-            if not all([bk_biz_id, redirect_uri_real, redirect_uri_verify]):
+            if not all([bk_biz_id, redirect_uri_real]):
                 return True  # 参数不完整，交由后续序列化器校验
 
             # 构建 OAuth 回调地址（绝对 URL）
@@ -123,7 +122,6 @@ class IssueViewSet(ResourceViewSet):
                 int(bk_biz_id),
                 bk_tenant_id,
                 redirect_uri_real=redirect_uri_real,
-                redirect_uri_verify=redirect_uri_verify,
                 backend_callback=backend_callback,
             )
             # 使用 CustomException（非 DRF PermissionDenied）以保证
