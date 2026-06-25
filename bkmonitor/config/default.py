@@ -1256,9 +1256,7 @@ TAPD_API_BASE_URL = os.getenv("BKAPP_TAPD_API_BASE_URL", os.getenv("TAPD_API_BAS
 TAPD_APP_ID = os.getenv("BKAPP_TAPD_APP_ID", os.getenv("TAPD_APP_ID", ""))
 TAPD_APP_SECRET = os.getenv("BKAPP_TAPD_APP_SECRET", os.getenv("TAPD_APP_SECRET", ""))
 # TAPD OAuth 授权基础URL（用户态授权跳转、code换token）
-TAPD_OAUTH_BASE_URL = os.getenv("BKAPP_TAPD_OAUTH_BASE_URL", os.getenv("TAPD_OAUTH_BASE_URL", TAPD_API_BASE_URL))
-# TAPD 用户态 OAuth 回调地址（TAPD 授权后重定向回监控平台）
-TAPD_REDIRECT_URI = os.getenv("BKAPP_TAPD_REDIRECT_URI", os.getenv("TAPD_REDIRECT_URI", ""))
+TAPD_OAUTH_BASE_URL = os.getenv("BKAPP_TAPD_OAUTH_BASE_URL", os.getenv("TAPD_OAUTH_BASE_URL", ""))
 
 BK_NODEMAN_HOST = AGENT_SETUP_URL = os.getenv("BK_NODEMAN_SITE_URL") or os.getenv(
     "BKAPP_NODEMAN_OUTER_HOST", get_service_url("bk_nodeman", bk_paas_host=BK_PAAS_HOST)

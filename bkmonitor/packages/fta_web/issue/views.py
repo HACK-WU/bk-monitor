@@ -17,7 +17,6 @@ from core.drf_resource.viewsets import ResourceRoute, ResourceViewSet
 from fta_web.issue.resources import ListUserTapdWorkspaceResource, UnbindTapdWorkspaceResource
 from core.drf_resource.exceptions import CustomException
 from bk_monitor_base.metadata.utils.request import get_request_username
-
 from fta_web.issue.utils.tapd import generate_auth_url
 
 
@@ -94,6 +93,8 @@ class IssueViewSet(ResourceViewSet):
 
         def has_permission(self, request, view) -> bool:
             # 仅在 B-01 (action=tapd/user_workspace) 时生效
+            # return  True
+
             if getattr(view, "action", "") != "tapd/user_workspace":
                 return True
 
@@ -106,9 +107,8 @@ class IssueViewSet(ResourceViewSet):
             if not all([bk_biz_id, redirect_uri_real, redirect_uri_verify]):
                 return True  # 参数不完整，交由后续序列化器校验
 
-            # 补全为绝对 URL：TAPD OAuth 要求 redirect_uri 必须是绝对 URI
-            if not redirect_uri_verify.startswith("http"):
-                redirect_uri_verify = request.build_absolute_uri("/").rstrip("/") + redirect_uri_verify
+            # 构建 OAuth 回调地址（绝对 URL）
+            backend_callback = request.build_absolute_uri("/fta/issue/tapd/oauth_callback/")
 
             # 检查 Redis tapd_uat:{tenant_id}:{username} 中是否有有效 token
             from fta_web.issue.utils.tapd import get_tapd_token
@@ -124,6 +124,7 @@ class IssueViewSet(ResourceViewSet):
                 bk_tenant_id,
                 redirect_uri_real=redirect_uri_real,
                 redirect_uri_verify=redirect_uri_verify,
+                backend_callback=backend_callback,
             )
             # 使用 CustomException（非 DRF PermissionDenied）以保证
             # MonitorJSONRenderer 能输出 {"result":false, "code":403, "data":{"auth_url":...}}

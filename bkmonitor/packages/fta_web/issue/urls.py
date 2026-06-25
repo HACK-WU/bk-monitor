@@ -18,7 +18,7 @@ router = ResourceRouter()
 router.register(r"", IssueViewSet, basename="issue")
 
 urlpatterns = [
-    re_path(r"^tapd/oauth_callback/$", tapd_user_oauth_callback),
-    re_path(r"^tapd/app_install_callback/$", tapd_app_install_callback),
+    re_path(r"^tapd/oauth_callback/$", tapd_user_oauth_callback, name="tapd_user_oauth_callback"),
+    re_path(r"^tapd/app_install_callback/$", tapd_app_install_callback, name="tapd_app_install_callback"),
     re_path(r"^", include(router.urls)),
 ]

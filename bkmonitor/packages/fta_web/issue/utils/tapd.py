@@ -10,13 +10,19 @@ specific language governing permissions and limitations under the License.
 
 import base64
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode,quote
+
+from bkmonitor.utils.request import get_request_username
 
 from rest_framework.exceptions import ValidationError
+from fta_web.constants import TapdOauthEndpoint
 
 from bkm_space.utils import bk_biz_id_to_space_uid
 from bkmonitor.models import TapdWorkspaceBinding
-from fta_web.issue.resources import logger
+from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id
+import logging
+
+logger = logging.getLogger("root")
 
 """TAPD 用户态 AccessToken 加密存储工具（Redis + AESCipher）
 
@@ -173,60 +179,93 @@ def verify_signed_state(signed_state: str) -> dict:
         raise ValidationError({"detail": f"missing_fields: {missing}"})
     return payload
 
-
-def _get_frontend_base() -> str:
-    """获取前端基础 URL（用于回调重定向）。"""
-    return getattr(settings, "BK_MONITOR_SAAS_URL", getattr(settings, "BKAPP_FRONTEND_URL", "/")).rstrip("/")
-
-
-def generate_install_url(signed_state: str) -> str:
+def generate_install_url(
+    bk_biz_id: int,
+    bk_tenant_id: str,
+    space_uid: str,
+    initiator: str,
+    redirect_uri_real: str,
+    redirect_uri_verify: str,
+    backend_callback: str,
+) -> str:
     """构建 open_app_install URL（B-01 install_url 模板）。
 
-    cb 参数为完整回调 URL（含 signed_state），整体 URL 编码后嵌入。
-    前端替换 #selected_workspace_id={workspace_id} 中的占位符。
+    :param bk_biz_id: 蓝鲸业务 ID
+    :param bk_tenant_id: 租户 ID
+    :param space_uid: 空间 UID
+    :param initiator: 发起授权的用户
+    :param redirect_uri_real: 含 # 的真实前端地址，回调后 302 重定向目标
+    :param redirect_uri_verify: 传给 TAPD OAuth 做 code 校验的 redirect_uri
+    :param backend_callback: 后端应用安装回调地址（由调用方通过 reverse + build_absolute_uri 构建）
     """
-    base_cb = settings.TAPD_REDIRECT_URI
-    if not base_cb.endswith("/"):
-        base_cb += "/"
-    # cb 中内嵌 signed_state（整体 URL 编码）
-    cb = f"{base_cb}app_install_callback/?signed_state={signed_state}"
+    if not backend_callback:
+        raise ValidationError("backend_callback is empty")
+
+    # 生成 signed_state（应用态），nonce 写入 session 供 B-03 回调校验
+    nonce = secrets.token_urlsafe(8)
+    payload = {
+        "bk_biz_id": bk_biz_id,
+        "bk_tenant_id": bk_tenant_id,
+        "space_uid": space_uid,
+        "initiator": initiator,
+        "nonce": nonce,
+        "exp": int(time.time()) + 900,  # 15min TTL
+        "redirect_uri_real": redirect_uri_real,
+        "redirect_uri_verify": redirect_uri_verify,
+    }
+    signed_state = generate_signed_state(payload)
+    # cb 中内嵌 signed_state
+    cb = f"{backend_callback.rstrip('/')}?signed_state={signed_state}"
     params = {
-        "client_id": getattr(settings, "TAPD_CLIENT_ID", None) or settings.TAPD_APP_ID,
-        "test": 1,
+        "client_id":settings.TAPD_APP_ID,
+        "test": 0,
         "cb": cb,
     }
-    oauth_base = getattr(settings, "TAPD_OAUTH_BASE_URL", settings.TAPD_API_BASE_URL)
-    url = f"{oauth_base.rstrip('/')}/open_app_install"
+    url = TapdOauthEndpoint.open_app_install()
     return f"{url}?{urlencode(params)}#selected_workspace_id={{workspace_id}}"
 
 
-def generate_auth_url(bk_biz_id: int, request) -> str:
-    """生成 TAPD OAuth 授权 URL（未编码，前端自行处理）。
+def generate_auth_url(
+    bk_biz_id: int,
+    bk_tenant_id:str,
+    redirect_uri_real: str,
+    redirect_uri_verify: str,
+    backend_callback: str,
+) -> str:
+    """生成 TAPD OAuth 授权 URL，state 使用 base64url JSON signed_state 自包含格式。
 
-    state 格式：{username}:{nonce}:{bk_biz_id}，完整存入 Session。
+    :param bk_biz_id: 蓝鲸业务 ID
+    :param redirect_uri_real: 含 # 的真实前端地址，B-05 回调后 302 重定向目标
+    :param redirect_uri_verify: 传给 TAPD OAuth 做 code 校验的 redirect_uri
+    :param backend_callback: 后端 OAuth 回调地址（由调用方通过 reverse + build_absolute_uri 构建）
     """
-    username = getattr(request.user, "username", "")
-    nonce = secrets.token_urlsafe(8)
-    state = f"{username}:{nonce}:{bk_biz_id}"
+    # redirect_uri_verify 不能为空
+    if not redirect_uri_verify:
+        raise ValidationError("redirect_uri_verify is empty")
+    if not backend_callback:
+        raise ValidationError("backend_callback is empty")
 
-    session_key = f"tapd_oauth_state_{bk_biz_id}"
-    request.session[session_key] = state
+    payload = {
+        "bk_biz_id": bk_biz_id,
+        "bk_tenant_id": bk_tenant_id,
+        "username": get_request_username(),
+        "nonce": secrets.token_urlsafe(8),
+        "exp": int(time.time()) + 900,  # 15min TTL
+        "redirect_uri_real": redirect_uri_real,
+        "redirect_uri_verify": redirect_uri_verify,
+    }
+    state = generate_signed_state(payload)
 
-    redirect_uri = getattr(settings, "TAPD_OAUTH_CALLBACK_URL", "")
-    if not redirect_uri:
-        # 兜底：用 REDIRECT_URI + oauth_callback 路径
-        base = settings.TAPD_REDIRECT_URI
-        if not base.endswith("/"):
-            base += "/"
-        redirect_uri = f"{base}oauth_callback/"
-
+    backend_callback = quote(backend_callback.rstrip("/"), safe='')
+    scope = quote("story#read story#write bug#read bug#write", safe='')
     return (
-        f"https://tapd.woa.com/oauth/authorize"
-        f"?client_id={settings.TAPD_APP_ID}"
-        f"&response_type=code"
-        f"&redirect_uri={redirect_uri}"
-        f"&scope=user_space"
+        f"{TapdOauthEndpoint.authorize()}"
+        f"?response_type=code"
+        f"&client_id={settings.TAPD_APP_ID}"
+        f"&redirect_uri={backend_callback}"
+        f"&scope={scope}"
         f"&state={state}"
+        f"&auth_by=user"
     )
 
 

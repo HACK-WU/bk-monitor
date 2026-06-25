@@ -11,7 +11,6 @@ specific language governing permissions and limitations under the License.
 import json
 
 import logging
-import secrets
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -34,9 +33,10 @@ from bkmonitor.documents.issue import (
 from bkmonitor.issue_merge import IssueFrozenError
 from bkmonitor.models import IssueMergeRelation, TapdWorkspaceBinding
 from bkmonitor.utils.cipher import AESCipher
-from bkmonitor.utils.request import get_request_username
+from bkmonitor.utils.request import get_request_username, get_request
 from bkmonitor.utils.thread_backend import ThreadPool
 from bkmonitor.utils.user import set_local_username
+from bkmonitor.utils.tenant import bk_biz_id_to_bk_tenant_id, space_uid_to_bk_tenant_id
 from constants.common import DEFAULT_TENANT_ID
 from constants.issue import IssuePriority, IssueStatus, IssueActivityType
 from core.drf_resource import Resource, api, resource
@@ -48,11 +48,9 @@ from fta_web.issue.handlers.issue import (
     IssueQueryHandler,
 )
 from fta_web.issue.serializers import IssueSearchSerializer
-from fta_web.issue.utils.tapd_token import (
+from fta_web.issue.utils.tapd import (
     save_tapd_token,
-    generate_signed_state,
     verify_signed_state,
-    _get_frontend_base,
     generate_install_url,
     try_bind_importable,
 )
@@ -1554,7 +1552,8 @@ class GetTapdFieldsResource(Resource):
 class ListUserTapdWorkspaceResource(Resource):
     """查询当前用户有权限的 TAPD 项目列表（冷启动去关联用）
 
-    端点：GET /fta/issue/tapd/user_workspace/?bk_biz_id=xxx
+    端点：POST /fta/issue/tapd/user_workspace/
+    Body: { bk_biz_id, redirect_uri_real, redirect_uri_verify }
     数据源：TAPD 用户态 API（Bearer Token，从 Redis 解密获取）。
 
     TODO: 当前 TAPD 用户态 API 尚未提供文档（T-01），用户态列表返回空。
@@ -1563,32 +1562,39 @@ class ListUserTapdWorkspaceResource(Resource):
 
     class RequestSerializer(serializers.Serializer):
         bk_biz_id = serializers.IntegerField(label="蓝鲸业务ID")
+        redirect_uri_real = serializers.CharField(label="含#的真实前端地址", max_length=512)
+        redirect_uri_verify = serializers.CharField(label="不含#的校验地址", max_length=512)
 
     def perform_request(self, validated_request_data):
         bk_biz_id = validated_request_data["bk_biz_id"]
+        redirect_uri_real = validated_request_data.get("redirect_uri_real", "")
+        redirect_uri_verify = validated_request_data.get("redirect_uri_verify", "")
+
+        # 补全为绝对 URL：TAPD OAuth 要求 redirect_uri 必须是绝对 URI
+        if redirect_uri_verify and not redirect_uri_verify.startswith("http"):
+            request = get_request()
+            if request:
+                redirect_uri_verify = request.build_absolute_uri("/").rstrip("/") + redirect_uri_verify
+
         space_uid = bk_biz_id_to_space_uid(bk_biz_id)
-        tenant_id = DEFAULT_TENANT_ID
+        tenant_id = space_uid_to_bk_tenant_id(space_uid)
 
         # 获取当前用户信息（用于 importable 自动关联的 create_user）
-        request = getattr(self, "request", None)
-        username = getattr(getattr(request, "user", None), "username", "")
+        username = get_request_username()
 
-        # 生成 signed_state（应用态 cb 用），payload 含 nonce → 写入 session（B-03 Session 校验用）
-        nonce = secrets.token_urlsafe(8)
-        payload = {
-            "bk_biz_id": bk_biz_id,
-            "bk_tenant_id": tenant_id,
-            "space_uid": space_uid,
-            "initiator": username,
-            "nonce": nonce,
-            "exp": int(time.time()) + 900,  # 15min TTL
-        }
-        signed_state = generate_signed_state(payload)
+        # 构建应用安装回调地址（绝对 URL）
+        request = get_request()
 
-        # nonce 存入 session，B-03 回调时校验
-        if request:
-            request.session[f"tapd_install_nonce_{bk_biz_id}"] = nonce
-        install_url = generate_install_url(signed_state)
+        backend_callback = request.build_absolute_uri("/fta/issue/tapd/app_install_callback/") if request else ""
+        install_url = generate_install_url(
+            bk_biz_id=bk_biz_id,
+            bk_tenant_id=tenant_id,
+            space_uid=space_uid,
+            initiator=username,
+            redirect_uri_real=redirect_uri_real,
+            redirect_uri_verify=redirect_uri_verify,
+            backend_callback=backend_callback,
+        )
 
         # 查本地 binding（用于四态标记的【本地存在】侧）
         local_bindings = {
@@ -1662,7 +1668,7 @@ class UnbindTapdWorkspaceResource(Resource):
         bk_biz_id: int = validated_request_data["bk_biz_id"]
         workspace_id: str = validated_request_data["workspace_id"]
         space_uid = bk_biz_id_to_space_uid(bk_biz_id)
-        tenant_id = DEFAULT_TENANT_ID
+        tenant_id = space_uid_to_bk_tenant_id(space_uid)
 
         binding_qs = TapdWorkspaceBinding.objects.filter(
             bk_tenant_id=tenant_id,
@@ -1792,11 +1798,10 @@ def tapd_user_oauth_callback(request):
     """TAPD 用户态 OAuth 回调。
 
     Query params: code, state, resource（可选）
-    1. Session 验证 state（格式: {username}:{nonce}:{bk_biz_id}）
-    2. 用 code 换取 access_token（UserOauthTokenResource）
+    1. state 为 signed_state（base64url JSON + HMAC-SHA256），自包含签名+过期
+    2. 用 code 换取 access_token（UserOauthTokenResource），redirect_uri 取 state 中的 redirect_uri_verify
     3. 加密 token → 存入 Redis（TTL = expires_in），key = tapd_uat:{tenant}:{user}
-    4. 删除 Session state 防止重放
-    5. 302 重定向前端 /tapd/bind?auth=success
+    4. 302 重定向前端 redirect_uri_real
     """
     code = request.query_params.get("code", "")
     state = request.query_params.get("state", "")
@@ -1804,44 +1809,38 @@ def tapd_user_oauth_callback(request):
     if not code or not state:
         return _redirect("/tapd/bind?auth=error&reason=missing_params")
 
-    # state = "{username}:{nonce}:{bk_biz_id}"
-    state_parts = state.rsplit(":", 2)
-    if len(state_parts) != 3:
-        logger.warning("B-05 invalid state format: %s", state)
-        return _redirect("/tapd/bind?auth=error&reason=invalid_state")
-
-    username_received, nonce_received, bk_biz_id_str = state_parts
+    # 1) 解析并验签 signed_state
     try:
-        bk_biz_id = int(bk_biz_id_str)
-    except (ValueError, TypeError):
-        return _redirect("/tapd/bind?auth=error&reason=invalid_biz_id")
-
-    # Session 中存储完整 state
-    session_key = f"tapd_oauth_state_{bk_biz_id}"
-    state_stored = request.session.get(session_key)
-    if not state_stored or state_stored != state:
-        logger.warning(
-            "B-05 state mismatch: received=%s stored=%s",
-            state[:30],
-            state_stored,
-        )
+        payload = verify_signed_state(state)
+    except exceptions.ValidationError as e:
+        logger.warning("B-05 signed_state verification failed: %s", e.detail)
         return _redirect("/tapd/bind?auth=error&reason=invalid_state")
 
-    # 删除 session state（防止重放）
-    request.session.pop(session_key, None)
+    bk_biz_id = payload.get("bk_biz_id")
+    if not bk_biz_id:
+        logger.warning("B-05 missing bk_biz_id in state payload")
+        return _redirect("/tapd/bind?auth=error&reason=missing_biz_id")
+
+    username = payload.get("username", "")
+    if not username:
+        logger.warning("B-05 missing username in state payload")
+        return _redirect("/tapd/bind?auth=error&reason=missing_username")
 
     # code 换 token（Basic Auth，client_id:client_secret）
-    try:
-        redirect_uri = getattr(settings, "TAPD_OAUTH_CALLBACK_URL", "")
-        if not redirect_uri:
+    # redirect_uri 必须和 authorize 时传给 TAPD 的一致，从 state 中提取
+    redirect_uri_verify = payload.get("redirect_uri_verify", "")
+    if not redirect_uri_verify:
+        redirect_uri_verify = getattr(settings, "TAPD_OAUTH_CALLBACK_URL", "")
+        if not redirect_uri_verify:
             base = settings.TAPD_REDIRECT_URI
             if not base.endswith("/"):
                 base += "/"
-            redirect_uri = f"{base}oauth_callback/"
+            redirect_uri_verify = f"{base}oauth_callback/"
 
+    try:
         token_resp = UserOauthTokenResource().request(
             code=code,
-            redirect_uri=redirect_uri,
+            redirect_uri=redirect_uri_verify,
         )
     except BKAPIError:
         logger.exception("B-05 exchange token failed")
@@ -1857,14 +1856,20 @@ def tapd_user_oauth_callback(request):
         return _redirect("/tapd/bind?auth=error&reason=empty_token")
 
     # 存 Redis（AESCipher 加密），key 按 (tenant, username)
-    tenant_id = DEFAULT_TENANT_ID
+    tenant_id = payload.get("bk_tenant_id") or bk_biz_id_to_bk_tenant_id(bk_biz_id)
     save_tapd_token(
         tenant_id=tenant_id,
-        username=username_received,
+        username=username,
         token_data=token_resp,
         expires_in=expires_in,
         state=state,
         cipher=AESCipher(settings.SECRET_KEY),
     )
 
+    # 302 重定向到 redirect_uri_real（含 # 的前端地址）
+    redirect_uri_real = payload.get("redirect_uri_real", "")
+    if redirect_uri_real:
+        return HttpResponseRedirect(redirect_uri_real)
+
+    # fallback 到旧路径
     return _redirect("/tapd/bind?auth=success")
