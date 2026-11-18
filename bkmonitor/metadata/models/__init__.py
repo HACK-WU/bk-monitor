@@ -31,14 +31,18 @@ from .custom_report import (
 from .data_link import (  # noqa
     BasereportSinkConfig,
     ConditionalSinkConfig,
+    ChannelBindingConfig,
     DataBusConfig,
     DataIdConfig,
     DataLink,
     ESStorageBindingConfig,
     LogDataBusConfig,
     LogResultTableConfig,
+    GraphRelationBindingConfig,
     ResultTableConfig,
+    SurrealDBBindingConfig,
     VMStorageBindingConfig,
+    VmQueryClusterConfig,
     DorisStorageBindingConfig,
 )
 from .data_source import DataSource, DataSourceOption, DataSourceResultTable
@@ -54,6 +58,7 @@ from .influxdb_cluster import (
     InfluxDBProxyStorage,
     InfluxDBTagInfo,
 )
+from .bk_collector import BkCollectorDeployPolicy, BkCollectorDeployScene
 from .ping_server import PingServerSubscriptionConfig
 from .record_rule import RecordRule, RecordRuleV4, ResultTableFlow
 from .entity_relation import (
@@ -65,6 +70,7 @@ from .entity_relation import (
 from .result_table import (
     CMDBLevelRecord,
     ESFieldQueryAliasOption,
+    GraphRelationV4DataLinkOption,
     ResultTable,
     ResultTableField,
     ResultTableFieldOption,
@@ -92,6 +98,7 @@ from .storage import (
     SpaceRelatedStorageInfo,
     StorageClusterRecord,
     StorageResultTable,
+    SurrealDBStorage,
 )
 from .vm import AccessVMRecord, SpaceVMInfo, VMShortLinkRecord
 
@@ -113,6 +120,7 @@ __all__ = [
     "ResultTableOption",
     "ResultTableFieldOption",
     "ESFieldQueryAliasOption",
+    "GraphRelationV4DataLinkOption",
     # storage
     "ClusterInfo",
     "KafkaTopicInfo",
@@ -122,6 +130,7 @@ __all__ = [
     "StorageResultTable",
     "ESStorage",
     "DorisStorage",
+    "SurrealDBStorage",
     "BkDataStorage",
     "ArgusStorage",
     "StorageClusterRecord",
@@ -137,6 +146,8 @@ __all__ = [
     "LogSubscriptionConfig",
     # ping server
     "PingServerSubscriptionConfig",
+    "BkCollectorDeployPolicy",
+    "BkCollectorDeployScene",
     # common
     "Label",
     # bcs
@@ -166,6 +177,9 @@ __all__ = [
     "RecordRuleV4",
     "ResultTableFlow",
     "BkBaseResultTable",
+    "GraphRelationBindingConfig",
+    "SurrealDBBindingConfig",
+    "VmQueryClusterConfig",
     # resource relation
     "EntityMeta",
     "CustomRelationStatus",

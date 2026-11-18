@@ -23,17 +23,18 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { type PropType, defineComponent, onMounted, provide, shallowReactive, watch } from 'vue';
+import { type PropType, defineComponent, onMounted, onUnmounted, provide, shallowReactive, watch } from 'vue';
 
 import * as authMap from 'monitor-pc/pages/event-center/authority-map';
 import { storeToRefs } from 'pinia';
-import EmptyStatus from 'trace/components/empty-status/empty-status';
 import EventDetailHead from 'trace/pages/alarm-center/alarm-detail/components/event-detail-head';
 
 import { useAlarmCenterDetailStore } from '../../../../../../store/modules/alarm-center-detail';
 import { getAuthorityMap, useAuthorityStore } from '../../../../../../store/modules/authority';
+import { AlarmType } from '../../../../typings';
 import DetailCommon from '../../../../common-detail/common-detail';
 
+import type { AlarmCenterPanelTabType } from '@/pages/alarm-center/utils/constant';
 import type { IAuthority } from '@/typings/authority';
 import type { TdPrimaryTableProps } from '@blueking/tdesign-ui/.';
 
@@ -42,6 +43,7 @@ import './issues-detail-alarm-panel.scss';
 export default defineComponent({
   name: 'IssuesDetailAlarmPanel',
   props: {
+    refreshKey: { type: String, default: '' },
     /** 告警ID */
     alarmId: {
       type: String,
@@ -53,6 +55,11 @@ export default defineComponent({
     headerAffixedTop: {
       type: Object as PropType<TdPrimaryTableProps['headerAffixedTop']>,
       default: () => null,
+    },
+    /** 告警详情页签（视图/日志/调用链等）默认选中项 */
+    defaultTab: {
+      type: String as PropType<'' | AlarmCenterPanelTabType>,
+      default: '',
     },
   },
   setup(props) {
@@ -68,16 +75,22 @@ export default defineComponent({
     provide('authority', authority);
 
     watch(
-      () => props.alarmId,
-      newVal => {
-        if (newVal) {
-          alarmId.value = newVal;
-          bizId.value = props.bizId;
+      () => [props.alarmId, props.bizId, props.refreshKey],
+      () => {
+        if (props.alarmId) {
+          const sameAlarm = alarmCenterDetailStore.alarmType === AlarmType.ALERT && bizId.value === +props.bizId && alarmId.value === props.alarmId;
+          alarmCenterDetailStore.alarmType = AlarmType.ALERT;
+          bizId.value = +props.bizId;
+          alarmId.value = props.alarmId;
+          if (sameAlarm) alarmCenterDetailStore.getAlertDetailData();
         }
       },
       { immediate: true }
     );
 
+    onUnmounted(() => {
+      if (alarmId.value === props.alarmId) alarmCenterDetailStore.reset();
+    });
     const init = async () => {
       authority.auth = await getAuthorityMap(authMap);
     };
@@ -91,7 +104,6 @@ export default defineComponent({
     };
   },
   render() {
-    if (!this.alarmDetail) return <EmptyStatus type={'empty'} />;
     return (
       <div class='issues-detail-alarm-panel'>
         <EventDetailHead
@@ -101,7 +113,10 @@ export default defineComponent({
           showFullScreenBtn={false}
           showStepBtn={false}
         />
-        <DetailCommon headerAffixedTop={this.headerAffixedTop} />
+        <DetailCommon
+          defaultTab={this.defaultTab}
+          headerAffixedTop={this.headerAffixedTop}
+        />
       </div>
     );
   },

@@ -7,6 +7,7 @@
 
   .collection-box {
     display: flex;
+    flex-shrink: 0;
     align-items: center;
     justify-content: center;
     width: 32px;
@@ -25,6 +26,47 @@
       background-color: #eaebf0;
     }
   }
+
+  .subbar-container {
+    flex: 1;
+    min-width: 0;
+
+    .retrieve-type-switch {
+      flex-shrink: 0;
+    }
+
+    .box-biz-select {
+      display: grid;
+      grid-template-columns: minmax(0, max-content) auto;
+      justify-content: flex-start;
+      min-width: 0;
+
+      // 与索引集共用一列，提供 400px 的首选宽度；列宽不足时占位随之收缩。
+      &:has(> .bklog-v3-indexset-container)::before {
+        grid-area: 1 / 1;
+        width: 400px;
+        max-width: 100%;
+        pointer-events: none;
+        content: '';
+      }
+
+      .bklog-v3-indexset-container {
+        grid-area: 1 / 1;
+        min-width: 0;
+      }
+
+      .retrieve-tab-item-title {
+        grid-area: 1 / 2;
+      }
+    }
+
+    .box-right-option {
+      position: static;
+      flex-shrink: 0;
+      align-self: stretch;
+      margin-left: auto;
+    }
+  }
 }
 
 // 场景模式下二级导航栏始终吸顶
@@ -32,5 +74,6 @@
   .v3-bklog-toolbar {
     position: sticky;
     top: 0;
+    z-index: 20;
   }
 }

@@ -11,13 +11,16 @@ specific language governing permissions and limitations under the License.
 import datetime
 import logging
 import re
+import time
 
 from django.utils import timezone
 
 from apm.constants import ProfileApiType
 from apm.core.discover.profile.base import Discover
 from apm.models.profile import ProfileService
+from apm.models.topo import TopoNode
 from apm.utils.report_event import EventReportHelper
+from constants.apm import TelemetryDataType
 
 logger = logging.getLogger("apm")
 
@@ -28,7 +31,7 @@ class ServiceDiscover(Discover):
     MAX_DIMENSION_COMBINATION_LIMIT = 3000
     LARGE_SERVICE_SIZE = 10000
 
-    def discover(self, start_time: int, end_time: int):
+    def discover(self, start_time: int, end_time: int) -> None:
         check_time = timezone.now()
         logger.info(f"[ProfileServiceDiscover] start at {check_time}")
 
@@ -38,7 +41,7 @@ class ServiceDiscover(Discover):
             self.get_builder()
             .with_api_type(ProfileApiType.AGGREGATE)
             .with_time(start_time, end_time)
-            .with_metric_fields("count(1)")
+            .with_metric_fields("count(*) AS count")
             .with_dimension_fields("service_name,sample_type,type")
             .with_offset_limit(0, self.MAX_DIMENSION_COMBINATION_LIMIT)
             .execute()
@@ -85,6 +88,12 @@ class ServiceDiscover(Discover):
                 if sampler:
                     period = sampler.get("period", "")
                     period_type = sampler.get("period_type", "")
+                    if svr and col_type and sample_type:
+                        # DiscoverHandler 传入的窗口与旧计数均为截至 end_time 的最近 10 分钟。
+                        is_large = result_dict["count"] > self.LARGE_SERVICE_SIZE
+                    else:
+                        # 例如 type 为空时，旧查询会省略类型过滤，计数可能包含多个类型。
+                        is_large = self.is_large_service(end_time, svr, col_type, sample_type)
                     instances.append(
                         ProfileService(
                             bk_biz_id=self.bk_biz_id,
@@ -96,12 +105,34 @@ class ServiceDiscover(Discover):
                             data_type=col_type,
                             last_check_time=check_time,
                             sample_type=sample_type,
-                            is_large=self.is_large_service(end_time, svr, col_type, sample_type),
+                            is_large=is_large,
                         )
                     )
 
         # Final: 保存到数据库
         self._upsert(instances, check_time)
+        service_names: set[str] = {instance.name for instance in instances if instance.name}
+        TopoNode.upsert_telemetry_nodes(
+            self.bk_biz_id,
+            self.app_name,
+            TelemetryDataType.PROFILING.value,
+            service_names,
+            TopoNode.get_empty_extra_data(),
+        )
+        heartbeat_success: bool = TopoNode.touch_heartbeat(
+            self.bk_biz_id,
+            self.app_name,
+            TelemetryDataType.PROFILING.value,
+            {name: int(check_time.timestamp()) for name in service_names},
+            int(time.time()),
+        )
+        logger.info(
+            "[ProfileServiceDiscover] bk_biz_id=%s app_name=%s services=%s heartbeat_success=%s",
+            self.bk_biz_id,
+            self.app_name,
+            len(service_names),
+            heartbeat_success,
+        )
 
     def _upsert(self, instances, check_time):
         """创建/更新到数据库"""

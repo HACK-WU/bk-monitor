@@ -33,6 +33,8 @@ declare global {
     timezone: string;
     MONITOR_URL: string;
     BK_LOGIN_URL: string;
+    BK_LOG_ACCESS_GUIDE_URL?: string;
+    BK_LOG_PERMISSION_GUIDE_URL?: string;
     BK_SHARED_RES_URL: string;
     VERSION: string;
     AJAX_URL_PREFIX: string;
@@ -42,6 +44,10 @@ declare global {
     __IS_MONITOR_COMPONENT__?: boolean; // 是否是监控组件
     __IS_MONITOR_TRACE__?: boolean; // 是否是监控Trace组件
     __IS_MONITOR_APM__?: boolean; // 是否是监控APM组件
+    __bk_zIndex_manager?: {
+      zIndex?: number;
+      nextZIndex?: () => number;
+    };
     IS_EXTERNAL: boolean | string; // 开发环境是 'false'，生产环境是 boolean
     __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: boolean;
     bk_log_search_url: string;
@@ -52,6 +58,18 @@ declare global {
     REAL_TIME_LOG_MAX_LENGTH: number | string; // 实时日志最大长度
     REAL_TIME_LOG_SHIFT_LENGTH: number | string; // 实时日志超过此长度删除部分日志
     __BKLOG_SEGMENT_POP_COUNTER__?: number;
+    MONITOR_APM_APP_NAME?: string; // 监控APM应用名称
+    MONITOR_APM_SERVICE_NAME?: string; // 监控APM服务名称
+    BKLOG_RUM_SDK?: string;
+    BKLOG_RUM_ENDPOINT?: string;
+    BKLOG_RUM_TOKEN?: string;
+    BKLOG_RUM_ENABLED?: boolean | string;
+    BKLOG_RUM?: {
+      enabled?: boolean;
+      endpoint?: string;
+      sdk?: string;
+      token?: string;
+    };
   }
 
   interface Scheduler {
@@ -78,5 +96,6 @@ declare module 'vue/types/vue' {
   interface Vue {
     $bkMessage?: (p: Partial<object>) => void;
     $bkPopover?: (...args: any[]) => void;
+    $BK_EL?: { zIndex?: number };
   }
 }

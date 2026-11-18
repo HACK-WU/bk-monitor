@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Tencent is pleased to support the open source community by making 蓝鲸智云 - 监控平台 (BlueKing - Monitor) available.
 Copyright (C) 2017-2025 Tencent. All rights reserved.
@@ -8,6 +7,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 """
+
 from functools import partial
 
 from django.utils.translation import gettext as _
@@ -32,10 +32,16 @@ class FrontendCollectConfigDetailResource(Resource):
     class RequestSerializer(serializers.Serializer):
         bk_biz_id = serializers.IntegerField(label="业务ID")
         id = serializers.IntegerField(label="采集配置ID")
+        params_format = serializers.ChoiceField(choices=("stored", "configmap"), default="stored")
         with_target_info = serializers.BooleanField(label="是否返回采集目标配置", default=True)
 
     def perform_request(self, params):
-        config_detail = resource.collecting.collect_config_detail(id=params["id"], bk_biz_id=params["bk_biz_id"])
+        config_detail = resource.collecting.collect_config_detail(
+            id=params["id"],
+            bk_biz_id=params["bk_biz_id"],
+            resolve_target=False,
+            **({"params_format": "configmap"} if params.get("params_format") == "configmap" else {}),
+        )
 
         # 基本信息
         basic_info = {
@@ -62,12 +68,19 @@ class FrontendCollectConfigDetailResource(Resource):
                     config_json.extend(config_json.pop(key).pop("auth_json"))
                     break
         for item in config_json:
-            if item["mode"] != "collector":
-                item["mode"] = "plugin"
+            mode = "collector" if item["mode"] == "collector" else "plugin"
+            value = config_detail["params"][mode].get(item["name"], item["default"])
+            if (
+                item["type"] == "file"
+                and item.get("multiple") is True
+                and isinstance(value, list)
+                and all(isinstance(row, dict) and "uid" in row and "filename" in row for row in value)
+            ):
+                value = [{key: row[key] for key in ("uid", "filename")} for row in value]
             runtime_params.append(
                 {
                     "name": item["description"] or item["name"],
-                    "value": config_detail["params"][item["mode"]].get(item["name"], item["default"]),
+                    "value": value,
                     "type": item["type"],
                 }
             )
@@ -124,7 +137,9 @@ class FrontendCollectConfigTargetInfoResource(Resource):
 
     def perform_request(self, params):
         table_data = []
-        config_detail = resource.collecting.collect_config_detail(id=params["id"], bk_biz_id=params["bk_biz_id"])
+        config_detail = resource.collecting.collect_config_detail(
+            id=params["id"], bk_biz_id=params["bk_biz_id"], with_agent_status=False
+        )
 
         if config_detail["target_node_type"] == TargetNodeType.INSTANCE:
             for item in config_detail["target"]:
@@ -144,6 +159,7 @@ class FrontendCollectConfigTargetInfoResource(Resource):
                 bk_obj_id=config_detail["target_node_type"],
                 bk_inst_ids=template_ids,
                 bk_inst_type=config_detail["target_object_type"],
+                with_agent_status=False,
             )
             for item in nodes:
                 table_data.append(

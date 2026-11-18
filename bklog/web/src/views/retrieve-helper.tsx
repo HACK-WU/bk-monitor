@@ -26,29 +26,34 @@
 
 import { Ref } from 'vue';
 
+import { getSelectionRanges } from '@/common/selection-util';
 import { parseTableRowData } from '@/common/util';
 import { getLocationQueryParams } from '@/utils';
 
 import AiAssitantHelper from '@/global/ai-assitant/ai-assitant-helper';
 import RetrieveBase from './retrieve-core/base';
 import { GradeFieldValueType, type GradeConfiguration, type GradeSetting } from './retrieve-core/interface';
-import OptimizedHighlighter from './retrieve-core/optimized-highlighter';
+import {
+  buildPageHighlightKeyword,
+  clearPageHighlightKeywords,
+  getPageHighlightOptions,
+  pageHighlightState as pageHighlightStateRef,
+  setPageHighlightKeywords,
+  setPageHighlightOptions,
+  type PageHighlightAccuracy,
+} from './retrieve-core/page-highlight';
 import RetrieveEvent from './retrieve-core/retrieve-events';
 import { RouteQueryTab } from './retrieve-v3/index.type';
 
 export enum STORAGE_KEY {
-  // eslint-disable-next-line no-unused-vars
   STORAGE_KEY_FAVORITE_SHOW = 'STORAGE_KEY_FAVORITE_SHOW',
-  // eslint-disable-next-line no-unused-vars
   STORAGE_KEY_FAVORITE_VIEW_CURRENT_CHANGE = 'STORAGE_KEY_FAVORITE_VIEW_CURRENT_CHANGE',
-  // eslint-disable-next-line no-unused-vars
   STORAGE_KEY_FAVORITE_WIDTH = 'STORAGE_KEY_FAVORITE_WIDTH',
 }
 
 export { GradeConfiguration, GradeSetting, RetrieveEvent };
 // 滚动条查询条件
 const GLOBAL_SCROLL_SELECTOR = '.retrieve-v2-index.scroll-y';
-
 
 class RetrieveHelper extends RetrieveBase {
   scrollEventAdded = false;
@@ -99,15 +104,12 @@ class RetrieveHelper extends RetrieveBase {
    * @param lineSpacing 行间距，默认为0，如果 > 0，点击位置在行间距内也判定为点击在选择区域内
    */
   isClickOnSelection(e: MouseEvent, lineSpacing = 0) {
-    const selection = window.getSelection();
+    // 事件 target 用于定位 shadow root：Trace 宿主下 document 选区会被 retarget 到 shadow host，
+    // 矩形会退化成整个宿主容器，导致容器内任意点击都被判定为点在选区上
+    const ranges = getSelectionRanges(e.target as Node);
 
     // 如果没有选中文本，直接返回 false
-    if (!selection || selection.isCollapsed) {
-      return false;
-    }
-
-    const rangeCount = selection.rangeCount;
-    if (rangeCount === 0) {
+    if (!ranges.length) {
       return false;
     }
 
@@ -118,7 +120,11 @@ class RetrieveHelper extends RetrieveBase {
     };
 
     // 遍历所有选中的范围
-    for (const range of Array.from({ length: rangeCount }, (_, i) => selection.getRangeAt(i))) {
+    for (const range of ranges) {
+      if (range.collapsed) {
+        continue;
+      }
+
       // 获取范围的边界矩形
       const rects = range.getClientRects();
 
@@ -131,10 +137,10 @@ class RetrieveHelper extends RetrieveBase {
         const expandedBottom = rect.bottom + lineSpacing;
 
         if (
-          clickPoint.x >= rect.left
-          && clickPoint.x <= rect.right
-          && clickPoint.y >= expandedTop
-          && clickPoint.y <= expandedBottom
+          clickPoint.x >= rect.left &&
+          clickPoint.x <= rect.right &&
+          clickPoint.y >= expandedTop &&
+          clickPoint.y <= expandedBottom
         ) {
           return true;
         }
@@ -182,8 +188,8 @@ class RetrieveHelper extends RetrieveBase {
         }
       }
       Object.assign(memoryObj, {
-        [bizAppKey]: idList
-      })
+        [bizAppKey]: idList,
+      });
       localStorage.setItem('MONITOR_LOG_RECENT_INDEX_SET_ID', JSON.stringify(memoryObj));
     }
     this.indexSetIdList = idList;
@@ -194,56 +200,50 @@ class RetrieveHelper extends RetrieveBase {
   }
 
   /**
-   * // 初始化 Mark.js 实例
-   * @param target
+   * 页面内高亮状态。
+   * 最终方案不再创建 mark.js/IntersectionObserver 实例，高亮由文本渲染阶段消费该响应式状态。
    */
-  setMarkInstance(target?: (() => HTMLElement) | HTMLElement | Ref<HTMLElement> | string) {
-    this.markInstance = new OptimizedHighlighter({
-      target: target ?? (() => document.getElementById(this.logRowsContainerId)),
-      chunkStrategy: 'fixed',
-    });
+  pageHighlightState = pageHighlightStateRef;
+
+  setMarkInstance(_target?: (() => HTMLElement) | HTMLElement | Ref<HTMLElement> | string) {
+    // no-op: kept as lifecycle boundary for callers; render-time highlighter has no DOM instance to initialize.
   }
 
   destroyMarkInstance() {
-    this.markInstance?.destroy();
+    clearPageHighlightKeywords();
   }
 
-  highlightElement(target) {
-    this.markInstance?.highlightElement(target);
+  highlightElement(_target?: HTMLElement) {
+    // no-op: newly rendered text consumes pageHighlightState during its own render/append stage.
+  }
+
+  setHighlightCaseSensitive(caseSensitive: boolean) {
+    setPageHighlightOptions({ caseSensitive });
+  }
+
+  setHighlightRegExpMode(regExpMark: boolean) {
+    setPageHighlightOptions({ regExpMark });
+  }
+
+  setHighlightAccuracy(accuracy: PageHighlightAccuracy) {
+    setPageHighlightOptions({ accuracy });
   }
 
   /**
-   * 高亮关键词
+   * 高亮关键词：只更新页面内高亮状态，不扫描/改写已经渲染的 DOM。
    * @param keywords 关键词
-   * @param reset 是否重置
-   * @param _afterMarkFn 高亮后回调
    */
-  highLightKeywords(keywords?: string[], reset = true, _afterMarkFn?: () => void) {
-    if (!this.markInstance) {
-      return;
-    }
+  highLightKeywords(keywords?: string[], _reset = true, _afterMarkFn?: () => void) {
+    const options = getPageHighlightOptions();
+    const highlightKeywords = (keywords ?? [])
+      .map((keyword, index) => buildPageHighlightKeyword(keyword, index, this.RGBA_LIST, options))
+      .filter((keyword): keyword is NonNullable<typeof keyword> => Boolean(keyword));
 
-    const { caseSensitive, regExpMark, accuracy } = this.markInstance.getMarkOptions();
-    this.markInstance.setObserverConfig({ root: document.getElementById(this.logRowsContainerId) });
-    this.markInstance.unmark();
-    const formatRegStr = !regExpMark;
-    this.markInstance.highlight(
-      (keywords ?? []).map((keyword, index) => {
-        const colorPair = this.RGBA_LIST[index % this.RGBA_LIST.length];
-        return {
-          text: keyword,
-          className: `highlight-${index}`,
-          backgroundColor: colorPair[0],
-          color: colorPair[1],
-          textReg: this.getRegExp(keyword, caseSensitive ? '' : 'i', accuracy === 'exactly', formatRegStr),
-        };
-      }),
-      reset,
-    );
+    setPageHighlightKeywords(highlightKeywords, this.RGBA_LIST);
   }
 
   updateMarkElement() {
-    this.markInstance.incrementalUpdate();
+    // no-op: rendering is state-driven.
   }
 
   isMatchedGroup(group, fieldValue, isGradeMatchValue) {
@@ -317,7 +317,7 @@ class RetrieveHelper extends RetrieveBase {
       // 收集所有匹配的日志级别
       for (const match of matches) {
         const groups = match.groups || {};
-        Object.keys(groups).forEach((level) => {
+        Object.keys(groups).forEach(level => {
           if (groups[level]) levelSet.add(level.toUpperCase());
         });
       }
@@ -341,8 +341,8 @@ class RetrieveHelper extends RetrieveBase {
       const logSegment = target.slice(0, 1000);
       options.settings.forEach((item: GradeSetting) => {
         if (item.enable && item.id !== 'others') {
-          this.isMatchedGroup(item, logSegment, options.valueType === GradeFieldValueType.VALUE)
-            && levels.push(item.id);
+          this.isMatchedGroup(item, logSegment, options.valueType === GradeFieldValueType.VALUE) &&
+            levels.push(item.id);
         }
       });
 
@@ -512,8 +512,8 @@ class RetrieveHelper extends RetrieveBase {
   routeQueryTabValueFix(indexSetItem, tabValue?: string | string[], isUnionSearch = false) {
     const isclusteringEnable = () => {
       return (
-        (indexSetItem?.scenario_id === 'log' && indexSetItem.collector_config_id !== null)
-        || indexSetItem?.scenario_id === 'bkdata'
+        (indexSetItem?.scenario_id === 'log' && indexSetItem.collector_config_id !== null) ||
+        indexSetItem?.scenario_id === 'bkdata'
       );
     };
 
@@ -579,7 +579,7 @@ class RetrieveHelper extends RetrieveBase {
    */
   private convertToMatchableString(value: any): null | string {
     // 如果值为 null 或 undefined，返回 null
-    if (value == null) {
+    if (value === null || value === undefined) {
       return null;
     }
 

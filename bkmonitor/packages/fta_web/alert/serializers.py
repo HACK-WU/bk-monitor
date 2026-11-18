@@ -17,6 +17,7 @@ from bkm_space.utils import space_uid_to_bk_biz_id
 from bkmonitor.documents import ActionInstanceDocument, AlertDocument
 from bkmonitor.utils.request import get_request
 from core.drf_resource import resource
+from fta_web.alert.handlers.fulltext import MAX_FULLTEXT_VALUES
 from fta_web.models.alert import AlertFeedback, AlertSuggestion, SearchFavorite
 
 
@@ -64,8 +65,43 @@ class SearchFavoriteSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "search_type", "params", "create_user", "create_time", "update_user", "update_time"]
 
 
+def validate_fulltext_condition_value_count(conditions):
+    """
+    验证全文检索条件值的数量是否超过限制。
+
+    Args:
+        conditions: 条件列表，每个条件应包含 key、value 等字段
+
+    Returns:
+        list: 验证通过后的原始条件列表
+
+    Raises:
+        ValidationError: 当 query_string 条件值数量超过 MAX_FULLTEXT_VALUES 限制时
+    """
+    # 边界检查：确保 conditions 是非空列表
+    if not conditions or not isinstance(conditions, list | tuple):
+        return conditions
+
+    value_count = sum(
+        1
+        for condition in conditions
+        # 防御性检查：确保 condition 是字典类型
+        if isinstance(condition, dict) and condition.get("key") == "query_string"
+        for value in (condition.get("value") or [])
+        if value is not None and str(value).strip()
+    )
+    if value_count > MAX_FULLTEXT_VALUES:
+        raise ValidationError(
+            _("query_string condition values exceed limit {limit}, got {count}").format(
+                limit=MAX_FULLTEXT_VALUES, count=value_count
+            )
+        )
+    return conditions
+
+
 class SearchConditionSerializer(serializers.Serializer):
     key = serializers.CharField(label="匹配字段")
+    # 保持松散 ListField：conditions 可含 bool/number；勿对所有条件强制 CharField(max_length)
     value = serializers.ListField(label="匹配值")
     method = serializers.ChoiceField(
         label="匹配方法", choices=["eq", "neq", "include", "exclude", "gt", "gte", "lt", "lte"], default="eq"
@@ -93,6 +129,53 @@ class ActionIDField(serializers.CharField):
         return value
 
 
+class TriggerConditionField(serializers.Field):
+    """
+    告警触发条件（展示用）。
+
+    只接受前端从告警详情中提取的必要标量，不接受文案、整份 strategy 或 origin_alarm。
+    显式传 null 表示"无需追加触发条件文案"，与"未传该字段"（走回退查询）语义不同。
+    """
+
+    CONDITION_FIELDS = {
+        "algorithm": {"type", "check_window", "count"},
+        "no_data": {"type", "continuous"},
+    }
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            raise ValidationError(_("trigger_condition 必须为对象"))
+
+        # 先确认 type 是字符串：直接把 list/dict 当作字典键会抛 TypeError（unhashable），
+        # 变成 500 而不是字段校验错误
+        condition_type = data.get("type")
+        if not isinstance(condition_type, str):
+            raise ValidationError(_("trigger_condition.type 仅支持 algorithm、no_data"))
+
+        allowed_fields = self.CONDITION_FIELDS.get(condition_type)
+        if not allowed_fields:
+            raise ValidationError(_("trigger_condition.type 仅支持 algorithm、no_data"))
+
+        unknown_fields = set(data) - allowed_fields
+        if unknown_fields:
+            raise ValidationError(_("trigger_condition 不支持的字段：{}").format(",".join(sorted(unknown_fields))))
+
+        missing_fields = allowed_fields - {"type"} - set(data)
+        if missing_fields:
+            raise ValidationError(_("trigger_condition 缺少字段：{}").format(",".join(sorted(missing_fields))))
+
+        value = {"type": condition_type}
+        for field_name in sorted(allowed_fields - {"type"}):
+            field_value = data[field_name]
+            if not isinstance(field_value, int) or isinstance(field_value, bool) or field_value <= 0:
+                raise ValidationError(_("trigger_condition.{} 必须为正整数").format(field_name))
+            value[field_name] = field_value
+        return value
+
+    def to_representation(self, value):
+        return value
+
+
 class AllowedBizIdsField(serializers.ListField):
     child = serializers.IntegerField()
 
@@ -116,6 +199,29 @@ class AlertSearchSerializer(BaseSearchSerializer):
     start_time = serializers.IntegerField(label="开始时间")
     end_time = serializers.IntegerField(label="结束时间")
     username = serializers.CharField(required=False, label="负责人")
+    allow_partial = serializers.BooleanField(label="是否允许返回部分结果", default=True)
+
+    def validate_conditions(self, value):
+        """
+        验证搜索条件列表，检查全文检索值数量是否超限。
+
+        Args:
+            value: 搜索条件列表（SearchConditionSerializer 列表）
+
+        Returns:
+            list: 验证通过后的条件列表
+
+        Raises:
+            ValidationError: 当条件值数量超过限制或数据格式错误时
+        """
+        # 前置校验：确保 value 是列表类型
+        if value is None:
+            return []
+
+        if not isinstance(value, list | tuple):
+            raise ValidationError(_("conditions must be a list, got {type}").format(type=type(value).__name__))
+
+        return validate_fulltext_condition_value_count(value)
 
 
 class ActionSearchSerializer(BaseSearchSerializer):

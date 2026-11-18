@@ -26,15 +26,15 @@
 
 import { type PropType, computed, defineComponent } from 'vue';
 
-import { Message, Popover } from 'bkui-vue';
+import { Popover } from 'bkui-vue';
 import { bkTooltips } from 'bkui-vue/lib/directives';
-import { copyText } from 'monitor-common/utils';
 import { useI18n } from 'vue-i18n';
 import { Tippy } from 'vue-tippy';
 
 import CrossAppTag from '../../../static/img/cross-app-tag.png';
 import { SPAN_KIND_MAPS } from '../../../store/constant';
 import { useTraceStore } from '../../../store/modules/trace';
+import MessageTooltip from '../../message-tooltip/message-tooltip';
 import { useChildrenHiddenInject, useSpanBarCurrentInject } from '../hooks';
 import ArrowRightShapeIcon from '../icons/arrow-right-shape.svg';
 import ErrorIcon from '../icons/error.svg';
@@ -45,9 +45,16 @@ import TimelineRow from './timeline-row';
 import TimelineRowCell from './timeline-row-cell';
 import { type ViewedBoundsFunctionType, createViewedBoundsFunc, formatDuration } from './utils';
 
-import type { Span } from '../typings';
+import type { Span, SpanLlmType } from '../typings';
 
 import './span-bar-row.scss';
+
+/** LLM Span 语义层级标签，与后端 llm_detail.span_type 对齐；图标由样式按 is-* 类名挂载 */
+const SPAN_LLM_LABELS: Record<SpanLlmType, string> = {
+  AGENT: 'Agent',
+  LLM: '模型',
+  TOOL: '工具',
+};
 
 const SpanBarRowProps = {
   className: {
@@ -101,6 +108,14 @@ const SpanBarRowProps = {
   },
   showErrorIcon: {
     type: Boolean,
+  },
+  /**
+   * span_id → status.message（仅错误 span，且 message 非空）。
+   * 按需加载详情时接口不下发 span.attributes，错误文案由此回退，由父级 list-view 统一构建。
+   */
+  spanStatusMessageMap: {
+    type: Object as PropType<Map<string, string>>,
+    default: () => new Map<string, string>(),
   },
   // getViewedBounds: Function as PropType<ViewedBoundsFunctionType>,
   // traceStartTime: {
@@ -171,40 +186,6 @@ export default defineComponent({
       emit('toggleCollapse', groupID, status);
     };
 
-    /** 文本复制 */
-    function handleCopyText(text: string) {
-      let msgStr = t('复制成功');
-      copyText(text, errMsg => {
-        msgStr = errMsg as string;
-      });
-      Message({ theme: 'success', message: msgStr });
-    }
-
-    /**
-     * @description: span错误icon hover 鼠标移入弹出内容详情 popover
-     * @param title popover 标题
-     * @param detail 需要展示的kv结构数据
-     */
-    const handleErrorPopoverContent = (title: string, detail: string) => {
-      return (
-        <div class='span-row-content-popover'>
-          <div class='span-row-content-popover-title'>
-            <span class='title-text'>{title}</span>
-            {detail ? (
-              <i
-                class='icon-monitor icon-mc-copy'
-                v-bk-tooltips={{ content: t('复制'), delay: 200, boundary: 'window' }}
-                onClick={() => {
-                  handleCopyText(detail);
-                }}
-              />
-            ) : null}
-          </div>
-          <div class='span-row-content-popover-main'>{detail || '--'}</div>
-        </div>
-      );
-    };
-
     return {
       detailToggle,
       childrenToggle,
@@ -214,7 +195,6 @@ export default defineComponent({
       ellipsisDirection,
       showDuration,
       handleToggleCollapse,
-      handleErrorPopoverContent,
       t,
     };
   },
@@ -279,7 +259,8 @@ export default defineComponent({
     let errorDescription = '';
     if (showErrorIcon) {
       const item = attributes?.find?.(attr => attr.key === 'span.status_message');
-      errorDescription = item?.value || '';
+      // 按需加载详情时接口不下发 attributes，回退到父级传入的 original_data status.message 索引
+      errorDescription = item?.value || this.spanStatusMessageMap.get(spanID) || '';
     }
 
     let longLabel: string;
@@ -299,6 +280,9 @@ export default defineComponent({
       5: 'icon-bei',
     };
     const isShowKindIcon = !isVirtual && source !== 'ebpf' && !!kindIcons?.[kind];
+    // 后端新增语义层级时前端没有对应文案与配色，直接不展示标签，避免渲染出 undefined
+    const spanLlmType = span?.llm_detail?.span_type;
+    const spanLlmLabel = spanLlmType ? SPAN_LLM_LABELS[spanLlmType] : '';
 
     return (
       <TimelineRow
@@ -385,22 +369,24 @@ export default defineComponent({
                       class={`${kindIcons[kind]} icon-monitor kind-icon`}
                     />
                   )}
+                  {spanLlmLabel && (
+                    <span class={`span-llm-tag is-${spanLlmType.toLowerCase()}`}>
+                      <span class='tag-icon' />
+                      <span>{this.t(spanLlmLabel)}</span>
+                    </span>
+                  )}
                   {showErrorIcon && (
-                    <Popover
+                    <MessageTooltip
                       key={label}
-                      extCls='span-error-icon'
-                      v-slots={{
-                        content: () => this.handleErrorPopoverContent(this.t('错误信息'), errorDescription),
-                      }}
+                      detail={errorDescription}
                       placement='bottom'
-                      popoverDelay={[300, 0]}
                     >
                       <img
                         class='error-icon'
                         alt='error'
                         src={ErrorIcon}
                       />
-                    </Popover>
+                    </MessageTooltip>
                   )}
                   {span?.icon && (
                     <img

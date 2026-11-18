@@ -11,6 +11,7 @@ specific language governing permissions and limitations under the License.
 import logging
 import time
 from datetime import datetime
+from urllib.parse import quote, urlencode
 
 import arrow
 from django.conf import settings
@@ -205,6 +206,11 @@ class IncidentNoticeHelper:
             "level": level,
             "begin_time": duration_info["duration_range"][0],
             "notify_time": notify_time,
+            "sms_event_time": kwargs.get("operate_time"),
+            "sms_level": incident.level,
+            "sms_alert_count": len(incident.snapshot.content.incident_alerts)
+            if incident.snapshot and incident.snapshot.content
+            else incident.alert_count or 0,
             "business_name": business_name,
             "incident_reason": incident_reason,
             "status": status,
@@ -212,6 +218,8 @@ class IncidentNoticeHelper:
             "number": alert_stats,
             "assignees": assignees,
             "url": url,
+            "process_url": cls._get_process_url(incident),
+            "noise_config_url": cls._get_noise_config_url(incident),
             "bk_biz_id": incident.bk_biz_id,
             "incident_id": incident.incident_id,
         }
@@ -371,6 +379,40 @@ class IncidentNoticeHelper:
         # 构建故障详情页面URL
         site_url = settings.BK_MONITOR_HOST.rstrip("/")
         return f"{site_url}/?bizId={incident.bk_biz_id}#/trace/incident/detail/{incident_doc_id or incident.id}"
+
+    @classmethod
+    def _get_process_url(cls, incident: IncidentDocument) -> str:
+        """构建 BKFara 故障分析过程 URL。"""
+        extra_info = incident.extra_info or {}
+        if hasattr(extra_info, "to_dict"):
+            extra_info = extra_info.to_dict()
+        if extra_info.get("notice_source") != "bkfara":
+            return ""
+
+        scope_id = extra_info.get("scope_id")
+        task_id = extra_info.get("task_id")
+        if not scope_id or task_id in (None, ""):
+            return ""
+
+        site_url = settings.BK_INCIDENT_SAAS_HOST.rstrip("/")
+        scope_path = quote(str(scope_id), safe="")
+        query = urlencode({"incident_task_id": task_id})
+        return f"{site_url}/{scope_path}/record/fault/{incident.incident_id}?{query}"
+
+    @classmethod
+    def _get_noise_config_url(cls, incident: IncidentDocument) -> str:
+        """构建故障所属 BKFARA 空间的降噪配置 URL。"""
+        extra_info = incident.extra_info or {}
+        if hasattr(extra_info, "to_dict"):
+            extra_info = extra_info.to_dict()
+        scope_id = extra_info.get("scope_id")
+        site_url = settings.BK_INCIDENT_SAAS_HOST.rstrip("/")
+        if extra_info.get("notice_source") != "bkfara" or not scope_id or not site_url:
+            return ""
+
+        # 降噪配置属于空间，无需等待分析任务生成，也不能用监控业务 ID 推测空间。
+        scope_path = quote(str(scope_id), safe="")
+        return f"{site_url}/{scope_path}/space/setting/noise"
 
     @classmethod
     def _get_alert_owners(cls, incident: IncidentDocument) -> list[str]:

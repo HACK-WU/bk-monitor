@@ -44,8 +44,11 @@ from apps.log_search.constants import (
     FieldBuiltInEnum,
     SearchScopeEnum,
     DorisFieldTypeEnum,
+    MixedStorageFieldTypeNormalizer,
 )
+from apps.log_search.exceptions import GetAllFieldsException
 from apps.log_search.models import (
+    TAG_TYPE_INNER,
     IndexSetFieldsConfig,
     LogIndexSet,
     LogIndexSetData,
@@ -60,7 +63,9 @@ from apps.utils.local import (
     get_request_external_username,
     get_request_username,
 )
+from apps.utils.log import logger
 from apps.utils.thread import MultiExecuteFunc
+from bkm_space.utils import space_uid_to_bk_biz_id
 
 INNER_COMMIT_FIELDS = ["dteventtime", "report_time"]
 INNER_PRODUCE_FIELDS = [
@@ -187,14 +192,31 @@ class UnifyQueryMappingHandler:
         final_fields_list = copy.deepcopy(self._final_fields)
         return final_fields_list
 
+    @staticmethod
+    def _fill_field_tag(field: dict) -> None:
+        """按字段类型与聚合能力回填前端字段分类标签。"""
+        tag = "metric"
+        if field.get("field_type") == "date":
+            tag = "timestamp"
+        elif field.get("es_doc_values"):
+            tag = "dimension"
+        field["tag"] = tag
+
     def get_final_fields(self):
         """获取最终字段"""
         fields_result = self.get_all_index_fields()
         if not fields_result:
-            # 如果一个字段都不存在，就用快照字段兜底
-            if self.index_set.fields_snapshot:
-                return self.index_set.fields_snapshot.get("fields", [])
-            return []
+            # 一个字段都没取到，用快照兜底。快照可能由历史版本的接口生成并带 SQL 类型，
+            # 这里按同样的规则规范化后再返回，避免增量接口正常、缓存接口仍显示未知类型。
+            if not self.index_set.fields_snapshot:
+                return []
+            snapshot_fields = copy.deepcopy(self.index_set.fields_snapshot.get("fields", []))
+            for field in snapshot_fields:
+                if not MixedStorageFieldTypeNormalizer.is_sql_field_type(field.get("field_type")):
+                    continue
+                field["field_type"] = MixedStorageFieldTypeNormalizer.normalize_field_type(field)
+                self._fill_field_tag(field)
+            return snapshot_fields
 
         fields_list: list = []
         for field in fields_result:
@@ -225,7 +247,9 @@ class UnifyQueryMappingHandler:
         # doris需要映射字段类型，根据新的类型获取操作列表
         indices_list = self.indices.split(",")
 
-        is_doris = str(IndexSetTag.get_tag_id("Doris")) in list(self.index_set.tag_ids) or DORIS_CLUSTER_TYPE in {
+        is_doris = str(IndexSetTag.get_tag_id("Doris", tag_type=TAG_TYPE_INNER)) in list(
+            self.index_set.tag_ids
+        ) or DORIS_CLUSTER_TYPE in {
             storage_cluster_type
             for storage_cluster_type in CollectorConfig.get_storage_cluster_type_map_by_table_ids(indices_list).values()
         }
@@ -239,15 +263,17 @@ class UnifyQueryMappingHandler:
                     "thedate",
                     "__shard_key__",
                 ]
+        else:
+            # 索引组可能不带 Doris 标签、采集存储也全是 elasticsearch，
+            # 但默认检索路由混挂了 Doris 分析表，UQ 会把 SQL 类型一起返回。
+            # 只改 field_type；field_operator 与 es_doc_values 保持上游计算出的原值，
+            # 不扩展查询能力。类型统一后，能力位判定与原生 Doris 路径保持一致。
+            for field in fields_list:
+                if MixedStorageFieldTypeNormalizer.is_sql_field_type(field["field_type"]):
+                    field["field_type"] = MixedStorageFieldTypeNormalizer.normalize_field_type(field)
 
         for field in fields_list:
-            # @TODO tag：兼容前端代码，后面需要删除
-            tag = "metric"
-            if field.get("field_type") == "date":
-                tag = "timestamp"
-            elif field.get("es_doc_values"):
-                tag = "dimension"
-            field["tag"] = tag
+            self._fill_field_tag(field)
 
         fields_list = self.add_clustered_fields(fields_list)
         fields_list = self.virtual_fields(fields_list)
@@ -474,6 +500,62 @@ class UnifyQueryMappingHandler:
         }
         result = UnifyQueryApi.query_field_map(params)
         return result.get("data", [])
+
+    @staticmethod
+    def get_fields_by_table_id(bk_biz_id: int, table_id: str):
+        """通过 UQ metadata 路由查询单个 RT 的 mapping。"""
+        params = {
+            "bk_biz_id": bk_biz_id,
+            "data_source": settings.UNIFY_QUERY_DATA_SOURCE,
+            "table_id": table_id,
+        }
+        result = UnifyQueryApi.query_field_map(params)
+        return result.get("data", [])
+
+    @classmethod
+    def get_fields_by_result_tables(cls, index_set: LogIndexSet) -> dict:
+        """按 RT 查询 UQ mapping，返回与 ES mapping 的非合并结果一致的结构。"""
+        from apps.log_search.handlers.index_set import BaseIndexSetHandler
+
+        indexes = index_set.get_indexes(has_applied=True)
+        if not indexes:
+            return {}
+
+        default_bk_biz_id = space_uid_to_bk_biz_id(index_set.space_uid)
+        multi_execute_func = MultiExecuteFunc()
+
+        for index in indexes:
+            result_table_id = index["result_table_id"]
+            multi_execute_func.append(
+                result_key=result_table_id,
+                func=cls.get_fields_by_table_id,
+                params={
+                    "bk_biz_id": index.get("bk_biz_id") or default_bk_biz_id,
+                    "table_id": BaseIndexSetHandler.get_rt_id(index_set.index_set_id, result_table_id),
+                },
+                multi_func_params=True,
+            )
+
+        multi_result = multi_execute_func.run(return_exception=True)
+        successful_result = {}
+        first_exception = None
+        for result_table_id, field_result in multi_result.items():
+            if isinstance(field_result, Exception):
+                first_exception = first_exception or field_result
+                logger.warning(
+                    "get fields from unifyquery for result table(%s) of index set(%s) failed: %s",
+                    result_table_id,
+                    index_set.index_set_id,
+                    field_result,
+                )
+                continue
+            successful_result[result_table_id] = (field_result, [])
+
+        if not successful_result and first_exception:
+            raise GetAllFieldsException(
+                GetAllFieldsException.MESSAGE.format(index_set_id=index_set.index_set_id, e=first_exception)
+            )
+        return successful_result
 
     def _combine_description_field(self, fields_list=None, scope=None):
         if fields_list is None:
@@ -771,6 +853,8 @@ class UnifyQueryMappingHandler:
         for x in final_fields_list:
             field_name = x["field_name"]
             if fields_type.get(field_name):
+                # 字段类型已在上游统一为 ES 类型，能力位直接按规范化后的类型判定，
+                # 与原生 Doris 路径保持一致。
                 if x["field_type"] in fields_type.get(field_name):
                     continue
                 type_msg = str(_("或者")).join(fields_type.get(x["field_name"]))

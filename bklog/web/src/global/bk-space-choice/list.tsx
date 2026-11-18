@@ -33,15 +33,10 @@ import './list.scss';
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css';
 
 export enum ETagsType {
-  // eslint-disable-next-line no-unused-vars
   BCS = 'bcs',
-  // eslint-disable-next-line no-unused-vars
   BKCC = 'bkcc',
-  // eslint-disable-next-line no-unused-vars
   BKCI = 'bkci',
-  // eslint-disable-next-line no-unused-vars
   BKSAAS = 'bksaas',
-  // eslint-disable-next-line no-unused-vars
   MONITOR = 'monitor',
 }
 
@@ -66,6 +61,9 @@ export interface IListItem {
 }
 
 export type ThemeType = 'dark' | 'light';
+
+// 骨架屏行数，按列表可视高度 240px / 行高 32px 铺满
+const SKELETON_ROW_COUNT = 7;
 
 // const DEFAULT_BIZ_ID = 'DEFAULT_BIZ_ID';
 
@@ -102,6 +100,10 @@ export default defineComponent({
       type: Array as () => IListItem[],
       default: () => [],
     },
+    loading: {
+      type: Boolean,
+      default: false,
+    },
   },
   emits: ['handleClickOutSide', 'handleClickMenuItem', 'openDialog'],
   setup(props, { emit }) {
@@ -127,6 +129,15 @@ export default defineComponent({
       emit('handleClickMenuItem', item);
     };
 
+    // 常用分组的分隔线落在常用列表最后一项上，不依赖它前面是否还有置顶结果
+    const isLastCommonItem = (item: IListItem) => {
+      if (!props.commonList.length || item.type === 'group-title') {
+        return false;
+      }
+      const last = props.commonList[props.commonList.length - 1];
+      return item.id === last.id && item.space_uid === last.space_uid;
+    };
+
     // 判断当前项是否被键盘选中
     const isKeyboardSelected = (item: IListItem) => {
       if (props.selectedIndex < 0 || item.type === 'group-title') {
@@ -139,15 +150,30 @@ export default defineComponent({
       return selectableIndex === props.selectedIndex;
     };
 
+    // 空间列表加载中的骨架占位，避免只渲染首屏预加载的单个空间造成误解
+    const renderSkeleton = () => (
+      <div class='list-skeleton'>
+        {Array.from({ length: SKELETON_ROW_COUNT }).map((_, index) => (
+          <div
+            key={index}
+            class='list-skeleton-item'
+          >
+            <span class='list-skeleton-bar' />
+          </div>
+        ))}
+      </div>
+    );
+
     // 渲染函数
     return () => (
       <div class={['biz-list-wrap', props.theme]}>
-        {props.list.length > 0 ? (
+        {props.loading ? (
+          renderSkeleton()
+        ) : props.list.length > 0 ? (
           // 滚动加载
           <RecycleScroller
             class={['list-scroller']}
             scopedSlots={{
-              // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: reason
               default: ({ item, index }: { item: IListItem; index: number }) => (
                 <div
                   key={item.id || item.name + index}
@@ -162,7 +188,7 @@ export default defineComponent({
                       props.theme,
                       { checked: item.space_uid === props.checked },
                       { 'keyboard-selected': isKeyboardSelected(item) },
-                      props.commonList.length > 0 && index === props.commonList.length ? 'last-common-item' : '',
+                      isLastCommonItem(item) ? 'last-common-item' : '',
                     ]}
                     onClick={() => handleSelected(item)}
                   >

@@ -708,7 +708,9 @@ class CollectorPluginMeta(OperateRecordModelBase):
     @property
     def is_split_measurement(self):
         db_name = f"{self.plugin_type}_{self.plugin_id}".lower()
-        group_result = api.metadata.query_time_series_group(bk_biz_id=0, time_series_group_name=db_name)
+        group_result = api.metadata.query_time_series_group(
+            bk_tenant_id=self.bk_tenant_id, time_series_group_name=db_name
+        )
         return bool(group_result)
 
 
@@ -1026,7 +1028,7 @@ class PluginVersionHistory(OperateRecordModelBase):
             "logo": logo_base64,
             "collector_json": self.config.collector_json,
             "config_json": self.config.config_json,
-            "metric_json": self.info.metric_json,
+            "metric_json": [dict(table) for table in self.info.metric_json],
             "description_md": self.info.description_md,
             "config_version": self.config_version,
             "info_version": self.info_version,

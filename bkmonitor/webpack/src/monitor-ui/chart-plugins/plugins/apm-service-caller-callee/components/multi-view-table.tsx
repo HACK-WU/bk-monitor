@@ -114,6 +114,8 @@ export default class MultiViewTable extends tsc<IMultiViewTableProps, IMultiView
     limit: 10,
     limitList: [10, 20, 50],
   };
+  /** 刷新会先清空 tableListData，沿用上次条数避免分页卸载后样式丢失 */
+  paginationCount = 0;
   tableAppendWidth = 0;
   simpleList = [];
   prefix = ['growth_rates', 'proportions', 'success_rate', 'exception_rate', 'timeout_rate'];
@@ -245,8 +247,21 @@ export default class MultiViewTable extends tsc<IMultiViewTableProps, IMultiView
   }
 
   @Watch('tableListData', { immediate: true })
-  handleListData(_val: IListItem[]) {
+  handleListData(val: IListItem[]) {
     this.filterOpt = {};
+    if (val?.length) {
+      this.paginationCount = val.length;
+      const maxPage = Math.ceil(this.paginationCount / this.pagination.limit) || 1;
+      if (this.pagination.current > maxPage) {
+        this.pagination.current = 1;
+      }
+    } else if (!this.isLoading) {
+      this.paginationCount = 0;
+    }
+  }
+
+  get showPagination() {
+    return this.paginationCount > this.pagination.limit;
   }
 
   get showTableList() {
@@ -1151,28 +1166,32 @@ export default class MultiViewTable extends tsc<IMultiViewTableProps, IMultiView
             )
           )}
         </div>
-        {this.tableListData?.length > this.pagination.limit && (
-          <bk-pagination
-            class='mt-8'
-            align='right'
-            count={this.tableListData.length}
-            current={this.pagination.current}
-            limit={this.pagination.limit}
-            limit-list={this.pagination.limitList}
-            show-limit={false}
-            size='small'
-            show-total-count
-            on-change={this.pageChange}
-            on-limit-change={this.limitChange}
-            {...{
-              on: {
-                'update:current': v => {
-                  this.pagination.current = v;
+        {/* 容器需常驻：后面的侧栏/弹窗带 transfer，其节点会被移到 body，
+            分页器若直接挂在这一层，重新显示时会以已移走的节点为插入参照而被 Vue 静默跳过 */}
+        <div class='multi-view-pagination'>
+          {this.showPagination && (
+            <bk-pagination
+              class='mt-8'
+              align='right'
+              count={this.tableListData?.length || this.paginationCount}
+              current={this.pagination.current}
+              limit={this.pagination.limit}
+              limit-list={this.pagination.limitList}
+              show-limit={false}
+              size='small'
+              show-total-count
+              on-change={this.pageChange}
+              on-limit-change={this.limitChange}
+              {...{
+                on: {
+                  'update:current': v => {
+                    this.pagination.current = v;
+                  },
                 },
-              },
-            }}
-          />
-        )}
+              }}
+            />
+          )}
+        </div>
         {/* 维度趋势图侧栏 */}
         <bk-sideslider
           width={640}

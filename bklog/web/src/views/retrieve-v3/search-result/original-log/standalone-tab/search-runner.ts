@@ -36,7 +36,7 @@ export const buildStandaloneSearchPayload = (routeQuery: Record<string, any>): S
   const begin = toNumber(routeQuery.begin, 0);
   const startTime = toNumber(routeQuery.start_time, 0);
   const endTime = toNumber(routeQuery.end_time, 0);
-  const bkBizId = toNumber(routeQuery.bizId || routeQuery.bk_biz_id, 0);
+  const bkBizId = routeQuery.bizId || routeQuery.bk_biz_id;
 
   const query: Record<string, any> = {
     bk_biz_id: bkBizId,
@@ -73,9 +73,10 @@ export const requestStandaloneSearch = async (payload: StandaloneSearchPayload) 
     withCredentials: true,
     responseType: 'blob',
     data: payload.query,
-    headers: payload.routeQuery.spaceUid || payload.routeQuery.space_uid
-      ? { 'X-Bk-Space-Uid': payload.routeQuery.spaceUid || payload.routeQuery.space_uid }
-      : undefined,
+    headers:
+      payload.routeQuery.spaceUid || payload.routeQuery.space_uid
+        ? { 'X-Bk-Space-Uid': payload.routeQuery.spaceUid || payload.routeQuery.space_uid }
+        : undefined,
   });
 
   const body = await readBlobRespToJson(response.data);
@@ -85,7 +86,6 @@ export const requestStandaloneSearch = async (payload: StandaloneSearchPayload) 
 
   return body.data;
 };
-
 
 const parseRowIndex = (value: any) => {
   const numberValue = Number(value);

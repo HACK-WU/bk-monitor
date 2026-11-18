@@ -41,6 +41,7 @@ from monitor_web.scene_view.builtin import (
     post_handle_view_list_config,
     post_handle_view_config,
 )
+from monitor_web.scene_view.builtin.host import get_host_metric_bk_biz_id
 from monitor_web.strategies.metric_cache.process_dimensions import get_process_extra_dimensions
 
 logger = logging.getLogger(__name__)
@@ -244,9 +245,13 @@ class GetSceneViewResource(ApiAuthResource):
         # ---
         # view场景开关
         view_switches = serializers.DictField(label="view场景开关", required=False, default={})
+        # 新客户端可处理 Pod 内存图的原生 PromQL 模板；旧客户端继续接收原有查询配置。
+        supports_pod_memory_promql = serializers.BooleanField(required=False, default=False)
         # ---
 
         def validate(self, params):
+            if params["scene_id"] == "host" and params["id"] in ("host", "process"):
+                get_host_metric_bk_biz_id(params["bk_biz_id"])
             return validate_scene_type(params)
 
     @classmethod

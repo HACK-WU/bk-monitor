@@ -22,6 +22,7 @@ from rest_framework.exceptions import ValidationError
 
 from bkm_ipchooser.handlers import topo_handler
 from bkmonitor.data_source import load_data_source
+from bkmonitor.data_source.unify_query.query import UnifyQuery
 from bkmonitor.models import (
     BCSCluster,
     BCSContainer,
@@ -670,7 +671,7 @@ class GetVariableValue(Resource):
 
         return [{"label": k, "value": v} for v, k in value_dict.items()]
 
-    def query_dimension(self, bk_biz_id, params):
+    def query_dimension(self, bk_biz_id: int, params: dict[str, Any]) -> list[dict[str, Any]]:
         """
         查询维度
         """
@@ -772,7 +773,7 @@ class GetVariableValue(Resource):
                 params["filter_dict"] = {}
             params["filter_dict"]["cookies"] = cookies_filter
 
-        # 6、查询维度的值，通过调用对应data_source的query_dimensions方法查询
+        # 6、查询维度的值，通过调用 UnifyQuery 的 query_dimensions 方法查询
         # 其中，CustomTimeSeriesDataSource和BkMonitorTimeSeriesDataSource是
         # 调用InfluxdbDimensionFetcher.query_dimensions查询维度的值
         data_source_class = load_data_source(data_source_label, data_type_label)
@@ -788,7 +789,13 @@ class GetVariableValue(Resource):
             index_set_id=index_set_id,
             query_string=params.get("query_string", ""),
         )
-        records = data_source.query_dimensions(
+        query = UnifyQuery(
+            bk_biz_id=bk_biz_id,
+            bk_tenant_id=data_source.bk_tenant_id,
+            data_sources=[data_source],
+            expression="",
+        )
+        records = query.query_dimensions(
             dimension_field=fields,
             limit=GRAPH_MAX_SLIMIT,
             start_time=start_time * 1000,
@@ -901,12 +908,11 @@ class GetVariableValue(Resource):
             obj_id_to_obj_name = {n.bk_obj_id: n.bk_obj_name for n in topo_tree.convert_to_flat_nodes()}
             result = [{"label": obj_id_to_obj_name.get(str(v), v), "value": v} for v in dimensions]
         elif dimension_field == "bk_target_service_instance_id":
-            bk_target_service_instance_list = api.cmdb.get_service_instance_by_id(
-                bk_biz_id=bk_biz_id, service_instance_ids=dimensions
+            service_instances = api.cmdb.get_service_instance_by_id(
+                bk_biz_id=bk_biz_id, service_instance_ids=[v for v in dimensions if str(v).isdecimal()]
             )
-            result = [
-                {"label": item.name, "value": item.service_instance_id} for item in bk_target_service_instance_list
-            ]
+            id_to_names = {str(item.service_instance_id): item.name for item in service_instances}
+            result = [{"label": id_to_names.get(str(v), v), "value": v} for v in dimensions]
         elif dimension_field == "bk_inst_id":
             topo_tree = api.cmdb.get_topo_tree(bk_biz_id=bk_biz_id)
             id_to_names = {}

@@ -261,36 +261,40 @@ class BCSPod(BCSBase, BCSBaseResources):
         bk_tenant_id: str = params["bk_tenant_id"]
 
         for p in api.kubernetes.fetch_k8s_pod_list_by_cluster(bk_tenant_id=bk_tenant_id, bcs_cluster_id=bcs_cluster_id):
-            bcs_cluster_id = p.get("bcs_cluster_id")
-            bcs_pod = BCSPod()
-            bcs_pod.bk_biz_id = bk_biz_id
-            bcs_pod.bcs_cluster_id = bcs_cluster_id
-            bcs_pod.name = p.get("name")
-            bcs_pod.namespace = p.get("namespace")
-            bcs_pod.node_name = p.get("node_name")
-            bcs_pod.node_ip = p.get("node_ip")
-            bcs_pod.workload_type = p.get("workload_type")
-            bcs_pod.workload_name = p.get("workload_name")
-            bcs_pod.total_container_count = p.get("total_container_count")
-            bcs_pod.ready_container_count = p.get("ready_container_count")
-            bcs_pod.pod_ip = p.get("pod_ip", "")
-            bcs_pod.images = ",".join(p.get("image_id_list", []))
-            bcs_pod.restarts = p.get("restarts")
+            yield BCSPod.from_api_item(p, bk_biz_id)
 
-            bcs_pod.resource_requests_cpu = force_float(p.get("requests_cpu", 0))
-            bcs_pod.resource_requests_memory = p.get("requests_memory")
-            bcs_pod.resource_limits_cpu = force_float(p.get("limits_cpu", 0))
-            bcs_pod.resource_limits_memory = p.get("limits_memory")
+    @staticmethod
+    def from_api_item(p, bk_biz_id):
+        bcs_cluster_id = p.get("bcs_cluster_id")
+        bcs_pod = BCSPod()
+        bcs_pod.bk_biz_id = bk_biz_id
+        bcs_pod.bcs_cluster_id = bcs_cluster_id
+        bcs_pod.name = p.get("name")
+        bcs_pod.namespace = p.get("namespace")
+        bcs_pod.node_name = p.get("node_name")
+        bcs_pod.node_ip = p.get("node_ip")
+        bcs_pod.workload_type = p.get("workload_type")
+        bcs_pod.workload_name = p.get("workload_name")
+        bcs_pod.total_container_count = p.get("total_container_count")
+        bcs_pod.ready_container_count = p.get("ready_container_count")
+        bcs_pod.pod_ip = p.get("pod_ip", "")
+        bcs_pod.images = ",".join(p.get("image_id_list", []))
+        bcs_pod.restarts = p.get("restarts")
 
-            bcs_pod.created_at = p.get("created_at")
-            bcs_pod.status = p.get("status")
-            bcs_pod.last_synced_at = timezone.now()
-            bcs_pod.deleted_at = None
+        bcs_pod.resource_requests_cpu = force_float(p.get("requests_cpu", 0))
+        bcs_pod.resource_requests_memory = p.get("requests_memory")
+        bcs_pod.resource_limits_cpu = force_float(p.get("limits_cpu", 0))
+        bcs_pod.resource_limits_memory = p.get("limits_memory")
 
-            # 唯一键
-            bcs_pod.unique_hash = bcs_pod.get_unique_hash()
-            bcs_pod.api_labels = p.get("labels", {})
-            yield bcs_pod
+        bcs_pod.created_at = p.get("created_at")
+        bcs_pod.status = p.get("status")
+        bcs_pod.last_synced_at = timezone.now()
+        bcs_pod.deleted_at = None
+
+        # 唯一键
+        bcs_pod.unique_hash = bcs_pod.get_unique_hash()
+        bcs_pod.api_labels = p.get("labels", {})
+        return bcs_pod
 
     def render_workload(self, bk_biz_id, render_type="list"):
         return f"{self.workload_type}:{self.workload_name}"
@@ -499,6 +503,8 @@ class BCSPod(BCSBase, BCSBaseResources):
     def get_instance_with_cache(cls, name, bcs_cluster_id, namespace=None):
         """
         获取实例（带缓存）
+        不指定 namespace 时，同一集群不同命名空间可能有同名 Pod（如同名 StatefulSet 的 Pod），
+        只返回唯一匹配；匹配到多个时抛出 MultipleObjectsReturned，且不缓存
         """
         from bkmonitor.utils.dynamic_settings import redis_cache
 
@@ -508,7 +514,7 @@ class BCSPod(BCSBase, BCSBaseResources):
 
         # 如果没有Redis缓存，直接查询数据库
         if redis_cache is None:
-            return cls.get_instance(**filter_kwargs)
+            return cls.get_unique_instance(**filter_kwargs)
 
         pod_cache_key = f"bcs_pod:{bcs_cluster_id}:{namespace}:{name}"
         # 尝试从缓存获取
@@ -517,12 +523,23 @@ class BCSPod(BCSBase, BCSBaseResources):
             return cls(**json.loads(result))
 
         # 缓存未命中，查询数据库
-        instance = cls.get_instance(**filter_kwargs)
+        instance = cls.get_unique_instance(**filter_kwargs)
         # 如果查询到实例，设置缓存
         if instance:
             redis_cache.set(pod_cache_key, instance._serialize_pod(), timeout=3600)
 
         return instance
+
+    @classmethod
+    def get_unique_instance(cls, **params):
+        """
+        获取唯一实例，没有匹配时返回 None，匹配到多个时抛出 MultipleObjectsReturned
+        最多取两条即可判断是否唯一
+        """
+        instances = list(cls.objects.filter(**params)[:2])
+        if len(instances) > 1:
+            raise cls.MultipleObjectsReturned(f"more than one pod matches {params}")
+        return instances[0] if instances else None
 
     def _serialize_pod(self) -> str:
         """

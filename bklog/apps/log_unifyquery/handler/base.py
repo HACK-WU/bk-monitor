@@ -21,7 +21,7 @@ from apps.feature_toggle.plugins.constants import LOG_DESENSITIZE
 from apps.log_clustering.models import ClusteringConfig
 from apps.log_desensitize.handlers.desensitize import DesensitizeHandler
 from apps.log_desensitize.models import DesensitizeConfig, DesensitizeFieldConfig
-from apps.log_desensitize.utils import expand_nested_data, merge_nested_data
+from apps.log_desensitize.utils import expand_nested_data, merge_nested_data, sync_text_fields
 from apps.log_esquery.esquery.builder.query_string_builder import QueryStringBuilder
 from apps.log_esquery.exceptions import (
     BaseSearchIndexSetDataDoseNotExists,
@@ -53,9 +53,11 @@ from apps.log_search.permission import Permission
 from apps.log_search.utils import handle_es_query_error
 from apps.log_unifyquery.constants import BASE_OP_MAP, MAX_LEN_DICT, SEARCH_AFTER_KEY
 from apps.log_unifyquery.handler.mapping import UnifyQueryMappingHandler
+from apps.log_unifyquery.partial import is_partial_result
 from apps.log_unifyquery.utils import deal_time_format, transform_advanced_addition
 from apps.utils.cache import cache_five_minute
 from apps.utils.core.cache.cmdb_host import CmdbHostCache
+from apps.utils.function import get_field_value
 from apps.utils.ipchooser import IPChooser
 from apps.utils.local import (
     get_local_param,
@@ -73,7 +75,6 @@ from apps.feature_toggle.handlers.toggle import FeatureToggleObject
 from apps.api import MonitorApi
 from apps.log_databus.models import CollectorConfig
 from apps.log_databus.constants import EtlConfig
-from apps.log_search.constants import ASYNC_SORTED
 from bkm_space.utils import space_uid_to_bk_biz_id
 
 
@@ -96,7 +97,9 @@ def fields_config(name: str, is_active: bool = False):
 
 
 class UnifyQueryHandler:
-    def __init__(self, params):
+    allow_partial_es_results = False
+
+    def __init__(self, params, *, allow_partial_results=False):
         self.search_params: dict[str, Any] = params
 
         # 必需参数，索引集id列表
@@ -111,6 +114,11 @@ class UnifyQueryHandler:
 
         # 必需参数，业务id
         self.bk_biz_id = self.search_params["bk_biz_id"]
+
+        if allow_partial_results:
+            biz_id = self._resolve_partial_results_biz_id()
+            if biz_id:
+                self.allow_partial_es_results = FeatureToggleObject.switch("retrieve_partial_es_results", biz_id=biz_id)
 
         # 查询语句
         self.query_string = self.search_params.get("keyword", "")
@@ -263,6 +271,23 @@ class UnifyQueryHandler:
                 raise e
             return {"list": []}
 
+    @property
+    def export_result_window(self):
+        index_set = self.index_info_list[0]["index_set_obj"]
+        return index_set.result_window or MAX_RESULT_WINDOW
+
+    def project_export_rows(self, result):
+        """把查询结果投影成待写出的导出行。"""
+        return self._deal_query_result(result)["origin_log_list"]
+
+    def export_scroll_batch(self, search_dict):
+        """滚动取一批并投影成导出行，返回 (本批导出行, 是否已到末尾)。
+
+        取数不走子类重写的滚动原语：场景化在其上挂了后置鉴权，导出已在创建入口鉴权。
+        """
+        result = UnifyQueryHandler.query_ts_raw_with_scroll(search_dict)
+        return self.project_export_rows(result), bool(result.get("done"))
+
     def _enhance(self):
         """
         语法增强
@@ -359,23 +384,30 @@ class UnifyQueryHandler:
 
     @staticmethod
     def init_time_field(index_set_id: int, scenario_id: str = None) -> tuple:
+        log_index_set_obj = LogIndexSet.objects.filter(index_set_id=index_set_id).first()
         if not scenario_id:
-            scenario_id = LogIndexSet.objects.filter(index_set_id=index_set_id).first().scenario_id
+            scenario_id = log_index_set_obj.scenario_id
         # get timestamp field
-        if scenario_id in [Scenario.BKDATA, Scenario.LOG]:
-            return "dtEventTimeStamp", TimeFieldTypeEnum.DATE.value, TimeFieldUnitEnum.SECOND.value
+        if not log_index_set_obj.is_group and scenario_id in [Scenario.BKDATA, Scenario.LOG]:
+            return "dtEventTimeStamp", TimeFieldTypeEnum.DATE.value, TimeFieldUnitEnum.MILLISECOND.value
         else:
-            log_index_set_obj = LogIndexSet.objects.filter(index_set_id=index_set_id).first()
             time_field = log_index_set_obj.time_field
             time_field_type = log_index_set_obj.time_field_type
             time_field_unit = log_index_set_obj.time_field_unit
             if time_field:
                 return time_field, time_field_type, time_field_unit
+            if log_index_set_obj.is_group:
+                child_index_set_ids = log_index_set_obj.get_child_index_set_ids()
+                if not child_index_set_ids:
+                    raise BaseSearchIndexSetException(
+                        BaseSearchIndexSetException.MESSAGE.format(index_set_id=index_set_id)
+                    )
+                return UnifyQueryHandler.init_time_field(child_index_set_ids[0])
             index_set_obj: LogIndexSetData = LogIndexSetData.objects.filter(index_set_id=index_set_id).first()
             if not index_set_obj:
                 raise BaseSearchIndexSetException(BaseSearchIndexSetException.MESSAGE.format(index_set_id=index_set_id))
             time_field = index_set_obj.time_field
-            return time_field, TimeFieldTypeEnum.DATE.value, TimeFieldUnitEnum.SECOND.value
+            return time_field, TimeFieldTypeEnum.DATE.value, TimeFieldUnitEnum.MILLISECOND.value
 
     def _deal_addition(self, ip_field):
         addition_ip_list: list = []
@@ -533,6 +565,10 @@ class UnifyQueryHandler:
         )
 
     def _init_desensitize(self) -> bool:
+        # 查询原始日志时不进行脱敏  original_search参数不由用户传入
+        if self.search_params.get("original_search", False):
+            return False
+
         is_desensitize = self.search_params.get("is_desensitize", True)
 
         if not is_desensitize:
@@ -647,7 +683,7 @@ class UnifyQueryHandler:
         log_list = []
         origin_log_list = []
         for log in result_dict["list"]:
-            log = merge_nested_data(log)
+            log = merge_nested_data(log, on_conflict="keep")
             if (self.field_configs or self.text_fields_field_configs) and self.is_desensitize:
                 log = self._log_desensitize(log)
             log = self._add_cmdb_fields(log)
@@ -655,26 +691,10 @@ class UnifyQueryHandler:
             # 联合索引 增加索引集id信息
             log.update({"__index_set_id__": int(self.index_set_ids[0])})
             if self.export_fields:
-                new_origin_log = {}
-                for _export_field in self.export_fields:
-                    # 此处是为了虚拟字段[__set__, __module__, ipv6]可以导出
-                    if _export_field in log:
-                        new_origin_log[_export_field] = log[_export_field]
-                    # 处理a.b.c的情况
-                    elif "." in _export_field:
-                        # 在log中找不到时,去log的子级查找
-                        key, *field_list = _export_field.split(".")
-                        _result = log.get(key, {})
-                        for _field in field_list:
-                            if isinstance(_result, dict) and _field in _result:
-                                _result = _result[_field]
-                            else:
-                                _result = ""
-                                break
-                        new_origin_log[_export_field] = _result
-                    else:
-                        new_origin_log[_export_field] = log.get(_export_field, "")
-                origin_log = new_origin_log
+                # 兼容虚拟字段[__set__, __module__, ipv6]与 a.b.c 形式的嵌套字段取值
+                origin_log = {
+                    _export_field: get_field_value(log, _export_field) for _export_field in self.export_fields
+                }
             else:
                 origin_log = log
             _index = log.pop("__index", None)
@@ -756,39 +776,38 @@ class UnifyQueryHandler:
 
     def _log_desensitize(self, log: dict = None):
         """
-        字段脱敏
+        日志字段脱敏
+
+        展开 dotted key 后按配置脱敏并同步原文字段，返回前统一折叠为嵌套结构，
+        保证脱敏开关、是否配置原文字段时返回结构一致
         """
         if not log:
             return log
 
         # 展开object对象
         log = expand_nested_data(log)
-        # 保存一份未处理之前的log字段 用于脱敏之后的日志原文处理
-        log_content_tmp = copy.deepcopy(log)
 
-        # 字段脱敏处理
-        log = self.desensitize_handler.transform_dict(log)
+        # 字段脱敏处理，同时记录实际发生的替换，用于原文字段同步
+        hits = []
+        log = self.desensitize_handler.transform_dict(log, hits=hits)
 
-        # 原文字段应用其他字段的脱敏结果
-        if not self.text_fields:
-            return log
-
-        for text_field in self.text_fields:  # ["log"]
-            # 判断原文字段是否存在log中
-            if text_field not in log.keys():
-                continue
-
-            for _config in self.field_configs:
-                field_name = _config["field_name"]
-                if field_name not in log.keys() or field_name == text_field:
-                    continue
-                log[text_field] = log[text_field].replace(str(log_content_tmp[field_name]), str(log[field_name]))
-
-        # 处理原文字段自身绑定的脱敏逻辑
         if self.text_fields:
+            # 原文字段应用其他字段的脱敏结果
+            log = sync_text_fields(
+                log,
+                self.text_fields,
+                hits,
+                self.desensitize_handler,
+                index_set_id=self.index_set_ids[0] if self.index_set_ids else None,
+            )
+
+            # 处理原文字段自身绑定的脱敏逻辑
             log = self.text_fields_desensitize_handler.transform_dict(log)
-        # 折叠object对象
-        log = merge_nested_data(log)
+
+        # 折叠object对象：无论是否配置原文字段都需要还原嵌套结构，
+        # 否则未配置原文字段时会将 dotted key 形态直接返回给调用方
+        # 冲突字段（同层标量键与前缀子路径并存）保留扁平键，避免整次检索失败
+        log = merge_nested_data(log, on_conflict="keep")
         return log
 
     @classmethod
@@ -826,6 +845,9 @@ class UnifyQueryHandler:
         nested_dict = self.nested_dict_from_dotted_key(dotted_dict=highlight)
         return self.update_nested_dict(log, nested_dict)
 
+    def _resolve_partial_results_biz_id(self) -> int | None:
+        return self.bk_biz_id
+
     def search(self, search_type="default", is_export=False):
         """
         search
@@ -859,10 +881,14 @@ class UnifyQueryHandler:
         search_dict["from"] = self.search_params["begin"]
         search_dict["limit"] = once_size
         search_dict["highlight"] = {"enable": self.highlight}
+        if self.allow_partial_es_results and not is_export:
+            search_dict["allow_partial_es_results"] = True
 
         # 预查询
         result = self.query_ts_raw(search_dict, pre_search=pre_search)
-        if pre_search and len(result["list"]) != once_size:
+        if pre_search and (
+            len(result["list"]) != once_size or (self.allow_partial_es_results and is_partial_result(result))
+        ):
             # 全量查询
             result = self.query_ts_raw(search_dict)
         result = self._deal_query_result(result)
@@ -893,15 +919,7 @@ class UnifyQueryHandler:
 
         if not response.get("series"):
             return {"aggs": {}}
-
-        # 组装结果
-        return_data = self.obtain_result_data(
-            interval,
-            group_field,
-            response,
-        )
-
-        return return_data
+        return self.obtain_result_data(interval, group_field, response)
 
     @staticmethod
     def obtain_result_data(interval, group_field, response):
@@ -999,8 +1017,10 @@ class UnifyQueryHandler:
         params["metric_merge"] = "a"
         params["step"] = interval
         params["order_by"] = []
+        if self.allow_partial_es_results:
+            params["allow_partial_es_results"] = True
 
-        response = self.query_ts_reference(params)
+        response = self.query_ts_reference(params, raise_exception=self.allow_partial_es_results)
 
         return response
 
@@ -1234,19 +1254,24 @@ class UnifyQueryHandler:
             if search_result.get("done", False):
                 break
 
-    def _get_user_sorted_list(self, sorted_fields):
-        index_set_id = self.index_info_list[0]["index_set_id"]
-        config = UserIndexSetFieldsConfig.get_config(index_set_id=index_set_id, username=self.request_username)
-        if not config:
-            return [[sorted_field, ASYNC_SORTED] for sorted_field in sorted_fields]
-        user_sort_list = config.sort_list
-        user_sort_fields = [i[0] for i in user_sort_list]
-        for sorted_field in sorted_fields:
-            if sorted_field in user_sort_fields:
-                continue
-            user_sort_list.append([sorted_field, ASYNC_SORTED])
-
-        return user_sort_list
+    @classmethod
+    def verify_sort_list_item(cls, index_set_id: int, sort_list: list):
+        """只获取字段并校验排序，避免初始化检索时生成默认字段配置。"""
+        index_set = LogIndexSet.objects.get(index_set_id=index_set_id)
+        end_time = arrow.now()
+        mapping_handler = UnifyQueryMappingHandler(
+            indices=",".join(index["result_table_id"] for index in index_set.get_indexes(has_applied=True)),
+            index_set_id=index_set_id,
+            scenario_id=index_set.scenario_id,
+            storage_cluster_id=index_set.storage_cluster_id,
+            time_field=UnifyQueryMappingHandler.get_time_field(index_set_id, index_set),
+            start_time=end_time.shift(days=-1).int_timestamp * 1000,
+            end_time=end_time.int_timestamp * 1000,
+            bk_biz_id=space_uid_to_bk_biz_id(index_set.space_uid),
+            only_search=True,
+            index_set=index_set,
+        )
+        cls.check_sort_list(mapping_handler.final_fields, sort_list)
 
     def fields(self, scope="default"):
         index_info = self.index_info_list[0]
@@ -1501,7 +1526,12 @@ class UnifyQueryHandler:
 
         # 2. 直接使用传入的参数，填充必要的table_id和bk_biz_id参数信息
         search_dict = params.copy()
-        search_dict["bk_biz_id"] = space_uid_to_bk_biz_id(index_set.space_uid)
+        bk_biz_id = LogIndexSet.resolve_search_bk_biz_id(index_set, search_dict.get("bk_biz_id"))
+        if index_set.is_platform_index and bk_biz_id is None:
+            from rest_framework.exceptions import ValidationError
+
+            raise ValidationError(_("平台级索引集检索必须传入 bk_biz_id"))
+        search_dict["bk_biz_id"] = bk_biz_id
         if "query_list" in search_dict and search_dict["query_list"]:
             for query_item in search_dict["query_list"]:
                 if isinstance(query_item, dict):

@@ -42,7 +42,7 @@
 ### 3.3 Kind / Status / Namespace / Tenant
 
 - `DataLinkKind`：BKBase 组件类型枚举（`DataId`、`ResultTable`、`VmStorageBinding`、`ElasticSearchBinding`、`DorisBinding`、`Databus` 等）。
-- `DataLinkResourceStatus`：资源状态（`Initializing`、`Creating`、`Pending`、`Ok`、`Failed`、`Reconciling`、`Terminating`）。
+- `DataLinkResourceStatus`：资源状态（`Initializing`、`Creating`、`Pending`、`Ok`、`Failed`、`Reconciling`、`Terminating`、`Terminated`）。
 - `namespace`：按数据域隔离，常见为 `bkmonitor`（时序）/ `bklog`（日志）。
 - `bk_tenant_id`：租户隔离字段；开启多租户模式时会写入 BKBase 配置中的 `tenant`。
 
@@ -115,7 +115,7 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 
 | 关联对象 | 关联字段 | 说明 |
 | --- | --- | --- |
-| `DataLink` -> 各 `*Config` | `data_link_name` | 同一条链路下的组件实例归组键，删除链路时按它反查组件并逆序清理。 |
+| `DataLink` -> 各 `*Config` | `data_link_name` | 同一条链路下的组件实例归组键，停用链路时仅按它清理 Databus，其余组件保留。 |
 | 各 `*Config` 资源唯一键 | `(bk_tenant_id, namespace, name)` | 通过 `update_or_create` 保证幂等更新。 |
 | `DataBusConfig` -> Sink 速查 | `sink_names` | 本地存储为 `kind:name` 列表，便于检索与排障。 |
 
@@ -172,12 +172,37 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 | `SYSTEM_PROC_PERF` | 系统进程性能 | `compose_system_proc_configs` | `ResultTableConfig` + `VMStorageBindingConfig` + `BasereportSinkConfig` + `DataBusConfig` | `VM` |
 | `SYSTEM_PROC_PORT` | 系统进程端口 | `compose_system_proc_configs` | `ResultTableConfig` + `VMStorageBindingConfig` + `BasereportSinkConfig` + `DataBusConfig` | `VM` |
 | `BK_LOG` | 日志链路 | `compose_log_configs` | `ResultTableConfig` + `ESStorageBindingConfig` + `DorisStorageBindingConfig` + `DataBusConfig` | `ES` |
-| `BK_STANDARD_V2_EVENT` | 标准自定义事件 | `compose_custom_event_configs` | `ResultTableConfig` + `ESStorageBindingConfig` + `DataBusConfig` | `ES` |
+| `BK_STANDARD_V2_EVENT` | 标准自定义事件 | `compose_custom_event_configs` | `ResultTableConfig` + ES/Doris Binding + `DataBusConfig` | 由 RT `default_storage` 选择 ES / Doris |
 
 说明：
 
 - 联邦子集群策略在组装阶段重点产出 `ConditionalSink` + `Databus` 路由配置；其策略映射中仍包含其他组件类型，用于统一生命周期管理和清理。
 - 日志链路支持 ES 与 Doris，至少需要一个存储绑定，否则抛出 `ValueError("至少需要一个存储绑定配置")`。
+
+单租户系统事件（Data ID `1000`）通过
+`metadata.task.tasks.create_single_tenant_system_event_datalink()` 创建，`init_tenant()` 会自动调用。
+该入口将现有数据源注册到 `bklog`，复用 `BASE_EVENT_V1` 配置及 `gse_system_event` 预置清洗逻辑，
+继续写入原 `gse_system_event` 结果表的 ES 集群和写入别名。
+计算平台业务 ID 默认取 `DEFAULT_BKDATA_BIZ_ID`，可通过 `data_bk_biz_id` 指定；
+单租户内置链路的 `kafka_cluster_name` 默认为空字符串，为空时使用默认 Kafka 集群，也可传入名称指定集群。
+完整 V4 链路下发成功后才清理旧 Transfer 的 Consul 配置；组装或下发失败时保留旧配置。
+重复执行会复用已注册的 Data ID 和链路组件，并重试未完成的旧配置清理。
+
+日志链路的 `log_v4_data_link.doris_storage_config` 和自定义格式链路的
+`custom_format_v4_data_link.doris_storage_config` 均支持自定义分词规则，例如：
+
+```json
+{
+  "storage_keys": [],
+  "tokenizers": {
+    "log": "._=:,"
+  }
+}
+```
+
+`tokenizers` 按字段名配置分词字符串，下发到 `DorisBinding.spec.storage_config.tokenizers`，
+与 `field_config_group` 同级。省略或设置为 `null` 时不下发该键；显式 `{}` 原样下发。
+`field_config_group` 保持原样透传。存量链路修改分词配置后需重新下发才能生效。
 
 ---
 
@@ -194,16 +219,18 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 
 ### 6.2 删除链路（`DataLink.delete_data_link`）
 
-1. 从 `STRATEGY_RELATED_COMPONENTS` 取当前策略对应组件列表。
-2. 逆序遍历组件类型并查询 `data_link_name` 相关实例。
-3. 对每个组件执行 `delete_config()`（先删 BKBase，再删本地）。
-4. 最后删除 `DataLink` 本身。
+1. 所有链路策略统一只查询当前租户、命名空间和 `data_link_name` 下的 Databus。
+2. 对每个 Databus 执行 `delete_config()`（先删 BKBase，再删本地）。
+3. 保留 `DataLink`、ResultTable、存储绑定、其他组件及结果表映射，避免停用后丢失 RT 与物理表的关联。
 
 ### 6.3 状态与配置查询
 
 - 配置模型属性 `component_status` -> `service.get_data_link_component_status`。
 - 配置模型属性 `component_config` -> `service.get_data_link_component_config`。
 - 状态查询会走 `get_bkbase_component_status_with_retry`（4 次指数退避）。
+- 定时刷新按 `(bk_tenant_id, namespace, kind)` 调用 `list_data_link`，使用同一份响应发现并同步远端组件配置、刷新本地组件状态；新发现组件的 `data_link_name` 初始为空，可信的非空响应中未出现的本地组件记为 `Terminated`。
+- Databus 的 `spec` 按白名单将 `subTaskNum`、`batch`、`preferCluster` 同步记录到 `DataBusConfig.options`；保留显式 `null`，远端移除的配置也会从本地记录中移除。`options` 仅用于记录，暂不参与主动配置渲染。
+- 空列表、接口异常或无法完整解析的响应不会覆盖本地状态；链路整体状态按 `data_link_name` 汇总为 `Ok`、`Terminated` 或 `Pending`。
 
 ### 6.4 基础采集链路特点
 
@@ -220,7 +247,7 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 - `compose_configs(...)`：策略分发入口。
 - `apply_data_link(...)`：链路申请主流程。
 - `apply_data_link_with_retry(configs)`：重试下发。
-- `delete_data_link()`：链路删除。
+- `delete_data_link()`：停用链路，仅删除 Databus 并保留其他组件关系。
 - `sync_metadata(data_source, table_id, storage_cluster_name)`：普通链路元数据同步。
 - `sync_basereport_metadata(...)`：基础采集链路元数据同步。
 
@@ -255,8 +282,11 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 - 所有组件配置通过 `utils.compose_config(tpl, render_params, ...)` 渲染 Jinja2 模板并转 JSON。
 - 若模板渲染后 JSON 解析失败，返回空字典并记录错误日志。
 
-### 8.2 DataId 命名（`compose_bkdata_data_id_name`）
+### 8.2 DataId 注册与引用
 
+- `DataSource.register_to_bkbase` 注册数据源时，先按当前 `bk_tenant_id + namespace + bk_data_id` 查找 `DataIdConfig`；未命中时允许按规则生成名称并完成注册；
+- DataLink 是 DataId 的调用方：复用既有 Databus 时沿用其 `data_id_name`；新建 Databus 时只能通过 `get_registered_bkdata_data_id_name` 引用已注册的 `DataIdConfig`，未命中则直接抛错，不能自行生成名称；
+- 新 DataId 的名称生成规则如下：
 - 先清洗特殊字符，再处理中文拼音；
 - 空格去除，`-` 转 `_`，连续下划线压缩；
 - 长度受限时会截断并追加 5 位 MD5 后缀；
@@ -269,6 +299,37 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 - 负数前缀场景改写为 `bkm_neg_...`；
 - 结果名整体受 BKBase 40 长度限制，超长时截断并追加哈希；
 - 联邦子集群策略会加 `_fed` 后缀。
+
+### 8.4 随机名称与持久化身份
+
+`compose_bkdata_data_id_name` / `compose_bkdata_table_id` 保留旧规则，DataId 申请与轮询仍使用它们。
+已有 DataId 注册、普通时序/插件/图谱/联邦链路和预计算输出的新身份使用
+`generate_bkdata_resource_name(scene, source_id)`：`bkm_<场景>_<来源ID>_<12位随机串>`，最长 40 字符。
+调用时使用 `DataLinkNameScene` 枚举，例如 `DataLinkNameScene.FEDERAL_PROXY`，不直接传短码。
+来源是 DataId 或规则主键；为容纳最长 19 位来源 ID 和 12 位随机串，资源名中的场景值保留为 2–3 位短码。
+
+| 枚举成员 | 资源名短码 | 场景 |
+| --- | --- | --- |
+| `DATA_ID` | `did` | 已有 DataId 注册 |
+| `STANDARD_V2_TIME_SERIES` | `ts` | 标准 V2 时序 |
+| `STANDARD_PLUGIN` | `std` | 标准插件 |
+| `EXPORTER_PLUGIN` | `exp` | Exporter 插件 |
+| `GRAPH` | `gr` | 图谱链路 |
+| `GRAPH_VM` | `gvm` | 图谱 VM 输出 |
+| `GRAPH_SURREALDB` | `gdb` | 图谱 SurrealDB 输出 |
+| `RECORD_RULE` | `rr` | 预计算输出 |
+| `FEDERAL_PROXY` | `fp` | 联邦父集群 |
+| `FEDERAL_SUBSET` | `fs` | 联邦子集群 |
+
+- 沿用 compose 中的组件查询及创建/更新流程，首次创建时分配随机名称并一次写入完整配置，再下发 BKBase；重试复用已保存名称。
+- DataLink 主名称与 DataId 名独立，通过 BkBaseResultTable、DataBusConfig 保存关联。
+- 普通时序/插件/图谱/联邦始终复用已有组件身份，不受组件复用灰度开关关闭影响；歧义直接报错。
+- RT、Binding 和 DataBus 可以不同名，所有引用必须读取实际实例及保存的引用。
+- 预计算在规则声明时将输出身份保存于 dst_vm_table_id，后续本地映射与 Flow 均复用；BKBase 输出 RT/Binding 由 Flow 自动创建。
+- 健康检查、采样和路由回填只读取已登记身份，不用生成函数推测资源。
+- 联邦优先使用正常组件关联，缺少关联时通过完整 VMRT 和实际 RT 引用兜底；Proxy 修复历史归属，Subset 只引用共享 Binding。
+- 联邦 V3 source 从实际登记或远端查询恢复，不再推测名称；正常链路不扫描无关的历史 VMRT 映射。
+- 不重命名存量资源，不修改 DataId 申请/轮询及 relation.py 的历史关联回填、重建逻辑。
 
 ---
 
@@ -295,6 +356,55 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 - 使用 `ClusterConfig.sync_cluster_config(cluster)` 将 Kafka/ES 等集群注册到 BKBase；
 - Kafka 会同步到 `bklog` 与 `bkmonitor` 两个 namespace；
 - 同步成功后会更新 `cluster.registered_to_bkbase = True`。
+
+Doris 创建使用 `ClusterInfo` 的域名、查询端口、用户名、密码和版本，专属参数存入
+`default_settings`（例如 `{"write_port": 8030, "table_bucket_num": 16}`）。修改 Doris 时，
+该对象按顶层键合并；未传的键保持原值，嵌套对象整体替换。
+
+ES/Doris 仅实际下发字段发生变化时触发同步。只修改 `custom_option`、`description`、
+`display_name` 等管理字段不会调用 BKBase。Doris 同步前要求本地 `host/port/write_port/user/password`
+完整有效；历史 `origin_config` 不用于补齐必需字段，缺失时应在修改请求中显式补齐。
+校验失败或 BKBase 请求失败会回滚创建/修改的本地事务，远端成功操作不受数据库事务回滚保护。
+
+---
+
+### 9.4 VM Query 集群反向同步与查询
+
+`VmQueryClusterConfig` 是独立的只读镜像模型，记录 `VmQueryCluster` 的资源身份、
+查询域名、部署信息、`monitorStorageClusters` 关系、状态及完整远端快照。
+它不依赖 `ClusterInfo` 或 `ClusterConfig`，也不参与 DataLink 编排、下发和远端删除。
+`metadata.name` 与 `spec.clusterName` 分别保存在 `name` 和 `cluster_name`。
+
+部署时先执行 Metadata 的 `0277_vm_query_cluster_config` 建表迁移，再启动同步任务。
+现有每小时集群同步及租户初始化会拉取 `bkmonitor` 下的 `vmqueryclusters`；
+也可在 Django 环境中按租户手动同步：
+
+```python
+from metadata.task.bkbase import sync_bkbase_vm_query_clusters
+
+success = sync_bkbase_vm_query_clusters(bk_tenant_id="system")
+```
+
+同步不受 `SYNC_BKBASE_CLUSTER_INFO_UPDATE` 限制。完整列表通过校验后才整体落库；
+远端消失的资源标记为 `Terminated`，保留最后的字段及原始快照，重新出现时恢复远端状态。
+成功返回空列表会标记该租户和 namespace 的全部 VM Query 失效；请求失败或列表非法时，
+本地记录及同步时间均保持不变。`last_synced_at` 表示最后一次成功对账时间，
+失效记录的 `origin_config` 仍是最后一次见到该资源时的远端响应。
+
+Admin 使用现有 `admin.datalink.component_list`、`component_detail`、`component_config`，
+指定 `kind="VmQueryCluster"`。列表和详情展示本地结构化字段、状态及快照，并保留失效项；
+列表支持 `search` 按资源 `name` 模糊匹配，以及 `vmstorage` 按
+`monitor_storage_clusters` 数组成员精确匹配（不是子串匹配）。两者可组合使用，
+过滤在租户、namespace 范围内且先于分页执行。
+`component_config`（或详情的 `include=["component_config"]`）按需读取 BKBase 实时配置。
+
+`admin.vm_query.query` 按 `bk_tenant_id + namespace + name` 查找本地镜像，再使用
+`cluster_domain` 无认证直查 VM select，拒绝失效集群与客户端 URL/路径/Header 覆盖。
+支持 `mode=instant + time` 或 `mode=range + start/end/step`，表达式使用 `query` 原样传递，
+时间参数为 Unix 秒。裸域名默认 HTTP 8481；请求路径固定为
+`/select/0/prometheus/api/v1/query` 或 `query_range`，通过 POST form 发送，不跟随重定向。
+查询超时 30 秒、跨度最多 31 天、每序列最多 11000 点；响应最多 5 MiB、1000 条序列和
+100000 个总采样点，超限明确报错，不静默截断。请求与结果均不经 Admin 服务直连 VM。
 
 ---
 
@@ -347,3 +457,89 @@ conditionalSink2 --> vmBinding3[VmStorageBinding]
 - `metadata/models/data_link/service.py`
 - `metadata/models/data_link/utils.py`
 - `metadata/models/data_link/constants.py`
+
+
+## 自定义事件使用 Doris
+
+仅覆盖 metadata 接入与查询路由；页面、事件维度自动发现及告警业务逻辑不在本次支持范围。
+未传 `default_storage` 的事件仍按原流程创建 ES 存储；不新增 RT option。
+部署时先执行 metadata 迁移 `0285_doris_storage_config`，再启用新配置。
+新增字段允许 NULL，迁移后的旧进程仍可创建 DorisStorage；新代码将旧进程写入的 NULL 按空配置处理，
+新代码创建记录时仍默认保存空对象。
+
+### 新建事件
+
+调用 `metadata.create_event_group`（集群 ID 替换为目标租户下的 Doris 集群）：
+
+```json
+{
+  "bk_tenant_id": "system",
+  "bk_data_id": 123,
+  "bk_biz_id": 2,
+  "event_group_name": "doris_events",
+  "label": "other_rt",
+  "operator": "admin",
+  "default_storage": "doris",
+  "default_storage_config": {
+    "storage_cluster_id": 201,
+    "expire_days": 7,
+    "table_type": "duplicate_table",
+    "doris_storage_config": {
+      "storage_keys": ["time", "event_name", "target"],
+      "json_fields": ["event", "dimensions"],
+      "original_json_fields": [],
+      "field_config_group": {},
+      "flush_timeout": 10
+    }
+  }
+}
+```
+
+`doris_storage_config` 另支持 `tokenizers`，格式与现有日志 Doris Binding 参数一致。
+未传配置时保存为空对象，列表和字段组按空值下发，`tokenizers` 不下发，`flush_timeout` 为 null。
+需要保留嵌套对象时显式填写示例中的 `json_fields`。表类型默认仍为 `primary_table`；示例使用
+`duplicate_table` 保留重复事件，不将同一时间、名称、目标的不同事件覆盖。
+新建事件沿用现有默认启用事件 V4 链路的行为。
+
+### 切换已有 ES 事件
+
+调用 `metadata.modify_result_table`：
+
+```json
+{
+  "bk_tenant_id": "system",
+  "table_id": "2_bkmonitor_event_123.__default__",
+  "operator": "admin",
+  "default_storage": "doris",
+  "external_storage": {
+    "doris": {
+      "storage_cluster_id": 201,
+      "expire_days": 7,
+      "table_type": "duplicate_table",
+      "doris_storage_config": {
+        "storage_keys": ["time", "event_name", "target"],
+        "json_fields": ["event", "dimensions"]
+      }
+    }
+  }
+}
+```
+
+`table_id` 使用实际事件组结果表 ID。Transfer 事件须通过原有方式启用
+`enable_v4_event_group_data_link`，再切换到 Doris；不新增或隐式开启其他开关。
+若通过修改结果表的 `option` 参数启用开关，应读取并保留已有 options 后提交，因为该参数存在全量替换语义。
+
+切换后 Databus 仅写入当前目标；保留旧 ES Storage 和 Binding 供历史查询使用，不搬迁历史数据。
+查询路由沿用 `StorageClusterRecord` 时间分段，由 `default_storage` 决定当前存储。
+
+### 更新 Doris 参数
+
+仍调用 `metadata.modify_result_table`，只传 `external_storage.doris` 中需要更新的存储字段。
+例如修改刷新间隔时，提交完整的 `doris_storage_config` 对象并将 `flush_timeout` 改为新值；
+该 JSON 对象整体替换，省略该字段则保留原值。事件链路会重新下发。
+现有日志和自定义格式链路继续读取各自 RT options，不与这个字段合并。
+
+### 验证范围
+
+本地测试覆盖创建、配置更新、ES/Doris Binding 选择、重复刷新、历史资源保留、存储回填和租户路由。
+真实 Doris 写入及 UnifyQuery 跨时间段查询仍需在测试环境联调；不以配置生成测试代替在线验收。

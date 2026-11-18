@@ -26,6 +26,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 
 import { VIEW_BUSINESS } from '@/common/authority-map';
+import { isMonitorIframeContext } from '@/common/embed-layout-query';
 import useResizeObserve from '@/hooks/use-resize-observe';
 import useRetrieveEvent from '@/hooks/use-retrieve-event';
 import useStore from '@/hooks/use-store';
@@ -34,11 +35,23 @@ import { BK_LOG_STORAGE, type RouteParams, SEARCH_MODE_DIC } from '@/store/store
 import RequestPool from '@/store/request-pool';
 import RouteUrlResolver, { RetrieveUrlResolver } from '@/store/url-resolver';
 import RetrieveHelper, { RetrieveEvent } from '@/views/retrieve-helper';
+import { retrieveRowCacheService, storageHealthService } from '@/storage';
 import { useRoute, useRouter } from 'vue-router/composables';
 
-import { getSceneFieldKeys, getDefaultOp, getSceneConfig, getAllSceneFieldOpKeys } from './search-bar/scene-filter/scene-config';
-import { resetRetrieveData } from './search-bar/scene-filter/scene-retrieve-utils';
+import {
+  getSceneFieldKeys,
+  getDefaultOp,
+  getSceneConfig,
+  getAllSceneFieldOpKeys,
+} from './search-bar/scene-filter/scene-config';
+import { cancelPendingRetrieveRequests, resetRetrieveData } from './search-bar/scene-filter/scene-retrieve-utils';
 import { isFeatureToggleOn } from '@/hooks/use-feature-toggle';
+import {
+  DEFAULT_SCENE_ACTIVE,
+  omitRouteIndexId,
+  shouldKeepSceneOnSpaceChange,
+} from '@/global/bk-space-choice/space-switch-route';
+import { shouldStripIndexIdOnEmptyScene } from './scene-empty-view';
 
 import $http from '@/api';
 import { RetrieveType } from '../retrieve-v2/sub-bar/retrieve-type-switch';
@@ -139,7 +152,7 @@ export default () => {
   const bkBizId = computed(() => store.state.bkBizId);
 
   const indexSetIdList = computed(() => store.state.indexItem.ids.filter(id => id?.length ?? false));
-  const fromMonitor = computed(() => route.query.from === 'monitor');
+  const isMonitorIframe = computed(() => isMonitorIframeContext(route.query));
 
   /**
    * 扁平化索引集列表
@@ -152,7 +165,7 @@ export default () => {
       '--left-field-setting-width': `${leftFieldSettingWidth.value}px`,
       '--left-collection-width': `${isFavoriteShown.value ? favoriteWidth.value : 0}px`,
       '--trend-graph-height': `${trendGraphHeight.value}px`,
-      '--header-height': fromMonitor.value ? '0px' : '52px',
+      '--header-height': isMonitorIframe.value ? '0px' : '52px',
       '--scene-toolbar-height': isSceneMode.value ? `${52 + (hasSceneFilterTags.value ? 34 : 0)}px` : '0px',
     };
   });
@@ -236,10 +249,11 @@ export default () => {
    * 拉取索引集列表
    * @param beforeResolveFn 在结果返回解析之后，尚未进行路由解析之前的处理函数
    */
-  const getIndexSetList = (beforeResolveFn?: () => void) => {
+  const getIndexSetList = (beforeResolveFn?: () => void, options: { isSpaceChanging?: boolean } = {}) => {
     store.commit('updateIndexSetQueryResult', {
-      origin_log_list: [],
-      list: [],
+      row_keys: [],
+      row_query_key: '',
+      cached_count: 0,
       exception_msg: '',
       is_error: false,
     });
@@ -453,24 +467,40 @@ export default () => {
           RetrieveHelper.fire(RetrieveEvent.TREND_GRAPH_PENDING);
 
           resolveAdditionKeyword().then(async () => {
-            if (isFeatureToggleOn('scene_search', [String(store.state.bkBizId), String(store.state.spaceUid)])) {
+            const isExternal = store.state.isExternal;
+            if (
+              !isExternal &&
+              isFeatureToggleOn('scene_search', [String(store.state.bkBizId), String(store.state.spaceUid)])
+            ) {
               if (store.state.indexItem.retrieve_type === RetrieveType.Scene) {
                 // 场景化检索：请求场景配置，从URL获取筛选参数
                 const sceneCleared = await requestSceneConfigs();
                 if (!sceneCleared && store.getters.isSceneFilterEmpty) {
                   RetrieveHelper.setSearchingValue(false);
+                  resetRetrieveData(store);
+                  // 首屏/刷新保留分享 URL；切业务才摘旧业务 indexId，避免子组件用旧 ID 拉数。
+                  if (
+                    shouldStripIndexIdOnEmptyScene({
+                      hasRouteIndexId: !!route.params?.indexId,
+                      isSpaceChanging: !!options.isSpaceChanging,
+                    })
+                  ) {
+                    stripRouteIndexId();
+                  }
                   return;
                 }
               } else {
                 requestSceneConfigs();
               }
+            } else if (isExternal && store.state.indexItem.retrieve_type === RetrieveType.Scene) {
+              // PO 环境下隐藏场景化检索，若 URL 携带 retrieve_type=scene 则回退到常规检索
+              clearSceneRetrieveToNormal(store.getters['retrieve/sceneConfigList']);
             }
 
             store
               .dispatch('requestIndexSetFieldInfo')
               .then(resp => {
                 RetrieveHelper.fire(RetrieveEvent.TREND_GRAPH_SEARCH);
-                RetrieveHelper.fire(RetrieveEvent.LEFT_FIELD_INFO_UPDATE);
 
                 if (
                   route.query.tab === 'origin' ||
@@ -503,18 +533,12 @@ export default () => {
                   RetrieveHelper.setSearchingValue(false);
                 }
 
+                RetrieveHelper.fire(RetrieveEvent.LEFT_FIELD_INFO_UPDATE);
                 setSearchMode();
                 setDefaultRouteUrl();
-                if (indexId) {
-                  router.replace({
-                    params: { ...route.params, indexId },
-                    query: {
-                      ...route.query,
-                      ...queryTab,
-                      unionList: unionList ? JSON.stringify(unionList) : undefined,
-                    },
-                  });
-                }
+                const { ids, isUnionIndex, items } = store.state.indexItem;
+                const currentQueryTab = RetrieveHelper.routeQueryTabValueFix(items?.[0], route.query.tab, isUnionIndex);
+                syncIndexIdToRoute(isUnionIndex ? undefined : ids[0], isUnionIndex ? ids : undefined, currentQueryTab);
               })
               .catch(err => {
                 console.error('requestIndexSetFieldInfo failed:', err);
@@ -538,12 +562,11 @@ export default () => {
           }
         }
 
-        const queryTab = RetrieveHelper.routeQueryTabValueFix(
-          store.state.indexItem.items?.[0],
-          route.query.tab,
-          store.getters.isUnionSearch,
-        );
-
+        // const queryTab = RetrieveHelper.routeQueryTabValueFix(
+        //   store.state.indexItem.items?.[0],
+        //   route.query.tab,
+        //   store.getters.isUnionSearch,
+        // );
       })
       .catch(err => {
         // 任何异常（请求失败 / then 内同步代码抛错）都要确保 loading 能退出
@@ -556,6 +579,33 @@ export default () => {
           exception_msg: err?.message || 'get-index-set-list-failed',
         });
       });
+  };
+
+  /**
+   * 同步索引集到路由：有新 indexId 则写入，否则从 params 删除旧 indexId。
+   * Vue Router 3 对 params.indexId = undefined 不会摘掉路径参数，必须 delete。
+   */
+  const stripRouteIndexId = () => {
+    if (!route.params?.indexId) {
+      return;
+    }
+    router.replace({
+      params: omitRouteIndexId(route.params ?? {}),
+      query: route.query,
+    });
+  };
+
+  const syncIndexIdToRoute = (indexId?: string, unionList?: string[], queryTab: Record<string, any> = {}) => {
+    const nextParams = indexId ? { ...(route.params ?? {}), indexId } : omitRouteIndexId(route.params ?? {});
+
+    router.replace({
+      params: nextParams,
+      query: {
+        ...route.query,
+        ...queryTab,
+        unionList: unionList ? JSON.stringify(unionList) : undefined,
+      },
+    });
   };
 
   // 解析默认URL为前端参数
@@ -639,7 +689,7 @@ export default () => {
       // 读取 URL 中的操作符参数: field[op]=op，无则使用本地存储中的 op，再无则从字段配置取默认操作符
       const opFromUrl = route.query[`${fieldKey}[op]`];
       const storedTuple = sceneDisplayFields?.find(([k]) => k === fieldKey);
-      const opFromStorage = (Array.isArray(storedTuple) && storedTuple.length >= 2) ? storedTuple[1] : undefined;
+      const opFromStorage = Array.isArray(storedTuple) && storedTuple.length >= 2 ? storedTuple[1] : undefined;
       const defaultOp = getDefaultOp(fieldOpsMap.get(fieldKey));
       const op = opFromUrl || opFromStorage || defaultOp;
 
@@ -658,37 +708,53 @@ export default () => {
   });
 
   const handleSpaceIdChange = () => {
+    cancelPendingRetrieveRequests();
+    // 与切换场景 tab 相同：取消请求后必须清字段/结果 loading，否则空筛选提前返回会永久转圈
+    resetRetrieveData(store);
+
+    const keepScene = shouldKeepSceneOnSpaceChange(store.state.indexItem.retrieve_type, route.query.retrieve_type);
+
     const { start_time, end_time, timezone, datePickerValue } = store.state.indexItem;
     store.commit('resetIndexsetItemParams', {
       start_time,
       end_time,
       timezone,
       datePickerValue,
+      retrieve_type: keepScene ? RetrieveType.Scene : 'normal',
+      scene_active: keepScene ? DEFAULT_SCENE_ACTIVE : '',
+      scene_filter_values: {},
     });
     store.commit('updateState', { indexId: '' });
     store.commit('updateUnionIndexList', []);
     RetrieveHelper.setIndexsetId([], null);
 
-    getIndexSetList();
+    getIndexSetList(undefined, { isSpaceChanging: true });
     store.dispatch('requestFavoriteList');
   };
 
   watch(spaceUid, () => {
+    const keepScene = shouldKeepSceneOnSpaceChange(store.state.indexItem.retrieve_type, route.query.retrieve_type);
+
     handleSpaceIdChange();
     const routeQuery = route.query ?? {};
 
     if (routeQuery.spaceUid !== spaceUid.value) {
       const resolver = new RouteUrlResolver({ route });
+      const nextParams = omitRouteIndexId(route.params ?? {});
+
+      const nextQuery: Record<string, any> = {
+        ...resolver.getDefUrlQuery(['start_time', 'end_time', 'format', 'interval', 'search_mode', 'timezone']),
+        spaceUid: spaceUid.value,
+        bizId: bkBizId.value,
+      };
+      if (keepScene) {
+        nextQuery.retrieve_type = RetrieveType.Scene;
+        nextQuery.scene_active = DEFAULT_SCENE_ACTIVE;
+      }
 
       router.replace({
-        params: {
-          indexId: undefined,
-        },
-        query: {
-          ...resolver.getDefUrlQuery(['start_time', 'end_time', 'format', 'interval', 'search_mode', 'timezone']),
-          spaceUid: spaceUid.value,
-          bizId: bkBizId.value,
-        },
+        params: nextParams,
+        query: nextQuery,
       });
     }
   });
@@ -757,8 +823,10 @@ export default () => {
   const isSearchResultStickyTop = computed(() => {
     if (isSceneMode.value) {
       // 场景模式下，表头吸顶时机：字段筛选面板 + 趋势图都滚出后
-      return sceneFilterPanelHeight.value > 0
-        && sceneScrollTop.value >= sceneFilterPanelHeight.value + trendGraphHeight.value;
+      return (
+        sceneFilterPanelHeight.value > 0 &&
+        sceneScrollTop.value >= sceneFilterPanelHeight.value + trendGraphHeight.value
+      );
     }
     return searchResultTop.value === subBarHeight.value + trendGraphHeight.value;
   });
@@ -772,10 +840,16 @@ export default () => {
   onUnmounted(() => {
     RequestPool.cancelAll();
     RetrieveHelper.destroy();
+    const activeRowQueryKey = store.state.indexSetQueryResult.row_query_key;
+    if (activeRowQueryKey) {
+      storageHealthService.clearActiveQuery(activeRowQueryKey);
+      retrieveRowCacheService.releaseQuery(activeRowQueryKey);
+    }
     // 清理掉当前查询结果，避免下次进入空白展示，同时释放检索页大对象引用。
     store.commit('resetIndexSetQueryResult', {
-      origin_log_list: [],
-      list: [],
+      row_keys: [],
+      row_query_key: '',
+      cached_count: 0,
       is_error: false,
       exception_msg: '',
     });

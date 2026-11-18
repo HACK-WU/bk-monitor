@@ -50,6 +50,7 @@ from apps.log_databus.handlers.collector_scenario import CollectorScenario
 from apps.log_databus.handlers.collector_scenario.utils import build_es_option_type
 from apps.log_databus.models import CollectorConfig, CollectorPlugin
 from apps.log_databus.utils.es_config import get_es_config, is_version_less_than
+from apps.log_databus.utils.storage_config import build_storage_retention_config, get_storage_retention
 from apps.log_search.constants import (
     DEFAULT_TIME_FIELD,
     FieldBuiltInEnum,
@@ -60,7 +61,7 @@ from apps.log_search.constants import (
 )
 from apps.log_search.models import Scenario
 from apps.utils import is_match_variate
-from apps.utils.codecs import unicode_str_decode
+from apps.utils.codecs import unicode_str_decode, unicode_str_decode_keep_non_ascii
 from apps.utils.db import array_group
 
 
@@ -74,6 +75,10 @@ class EtlStorage:
     separator_node_name = "bk_separator_object"
     path_separator_node_name = "bk_separator_object_path"
     separator_key_is_index = False
+
+    # 会被清洗引擎写成 JSON 容器的用户字段类型，Doris 需要把它们声明为 JSON 列。
+    # 取值走 _get_output_type 换算：object / flattened -> dict，nested -> nested。
+    V4_JSON_FIELD_TYPES = ("object", "flattened", "nested")
 
     @classmethod
     def get_instance(cls, etl_config=None):
@@ -144,6 +149,16 @@ class EtlStorage:
         """
         raise NotImplementedError(_("V4版本clean_rules构建功能暂未实现"))
 
+    def customize_result_table_config(
+        self,
+        params: dict,
+        etl_params: dict,
+        current_result_table_config: dict,
+        es_version: str,
+        storage_cluster_type: str,
+    ) -> None:
+        """在通用结果表参数组装完成后，允许具体清洗类型追加字段或 mapping 配置。"""
+
     @staticmethod
     def _is_v4_reserved_field(field_name: str) -> bool:
         return field_name.lower() in V4_RESERVED_FIELD_NAMES
@@ -155,7 +170,7 @@ class EtlStorage:
                 continue
             field_name = field.get("alias_name") or field["field_name"]
             if cls._is_v4_reserved_field(field_name):
-                raise ValidationError(_("字段名与V4清洗保留字段冲突，请更换字段名") + f"：{field_name}")
+                raise ValidationError(_("字段名与保留字段冲突，请更换字段名") + f"：{field_name}")
 
     @staticmethod
     def _get_path_regexp(etl_params: dict, built_in_config: dict) -> str:
@@ -205,6 +220,7 @@ class EtlStorage:
                         "key_index": field_name,
                         "alias": field_name,
                         "output_type": "string",
+                        "default_value": None,
                     },
                 }
             )
@@ -277,12 +293,16 @@ class EtlStorage:
             "yyyyMMddTHHmmssZ": {"format": "%Y%m%dT%H%M%S%:z", "zone": None},
             "yyyyMMddTHHmmss.SSSSSSZ": {"format": "%Y%m%dT%H%M%S.%6f%:z", "zone": None},
             "yyyy-MM-ddTHH:mm:ss.SSSZ": {"format": "%Y-%m-%dT%H:%M:%S.%3f%:z", "zone": None},
-            "yyyy-MM-ddTHH:mm:ss.SSSSSSZ": {"format": "%Y-%m-%dT%H:%M:%S.%6fZ", "zone": None},
-            "YYYY-MM-DDTHH:mm:ss.SSSSSSZ": {"format": "%Y-%m-%dT%H:%M:%S.%6fZ", "zone": None},
+            # 这两条的 format 以字面量 Z 结尾（不是 %z/%:z 时区占位），bkbase 无从推断时区，
+            # zone 必须给值，否则 zone=None 会被判解析失败：ES 侧静默回退 utctime（时间全错），
+            # doris 侧 time_fallback 不生效直接零入库
+            "yyyy-MM-ddTHH:mm:ss.SSSSSSZ": {"format": "%Y-%m-%dT%H:%M:%S.%6fZ", "zone": 0},
+            "YYYY-MM-DDTHH:mm:ss.SSSSSSZ": {"format": "%Y-%m-%dT%H:%M:%S.%6fZ", "zone": 0},
             "ISO8601": {"format": "%+", "zone": None},
             "yyyy-MM-ddTHH:mm:ssZ": {"format": "%Y-%m-%dT%H:%M:%S%:z", "zone": None},
             "yyyy-MM-ddTHH:mm:ss.SSSSSSZZ": {"format": "%Y-%m-%dT%H:%M:%S.%6f%:z", "zone": None},
             "yyyy.MM.dd-HH.mm.ss:SSS": {"format": "%Y.%m.%d-%H.%M.%S:%3f", "zone": 0},
+            "YYYY.MM.dd-HH.mm.ss:SSS": {"format": "%Y.%m.%d-%H.%M.%S:%3f", "zone": 0},
             "date_hour_minute_second": {"format": "%Y-%m-%dT%H:%M:%S", "zone": 0},
             "date_hour_minute_second_millis": {"format": "%Y-%m-%dT%H:%M:%S.%3f", "zone": 0},
             "basic_date_time": {"format": "%Y%m%dT%H%M%S.%3f%z", "zone": None},
@@ -303,6 +323,8 @@ class EtlStorage:
         if not format_config:
             # 如果找不到映射，使用默认配置
             zone = time_zone if time_zone is not None else 0
+            if storage_cluster_type == DORIS_CLUSTER_TYPE:
+                return {"format": "%Y-%m-%d %H:%M:%S", "zone": zone}
             return {
                 "from": {"format": "%Y-%m-%d %H:%M:%S", "zone": zone},
                 "interval_format": None,
@@ -312,6 +334,7 @@ class EtlStorage:
 
         # zone=None表示格式本身内嵌了时区信息（如%z、%:z），此时忽略用户time_zone
         # zone=0表示格式不含时区信息，可被用户time_zone覆盖
+        # 注意 zone 一旦给了非 None 值就会覆盖串内偏移，所以真时区占位格式必须保持 None
         zone = format_config["zone"]
         if zone is not None and time_zone is not None:
             zone = time_zone
@@ -634,6 +657,10 @@ class EtlStorage:
     ) -> list:
         """
         构建V4版本的dtEventTimeStampNanos字段规则（从bk_separator_object提取用户指定的时间字段）
+
+        doris 同样产出该字段：bkbase 依据 is_time_field 规则自动生成的 dtEventTimeStamp 是 long 列、
+        按 millis 截断，亚秒精度存不住；dtEventTimeStampNanos 落成 string 列原样保留微秒，
+        是 doris 上微秒精度的唯一载体，检索侧再通过别名让 dtEventTimeStamp 透明取到它。
         :param built_in_config: 内置配置，包含_nanos_time_field信息
         :return: dtEventTimeStampNanos字段规则列表
         """
@@ -647,8 +674,6 @@ class EtlStorage:
             nanos_v4_time_parsing = self._convert_v3_to_v4_time_format(
                 v3_time_format, time_zone=nanos_time_field.get("time_zone"), storage_cluster_type=storage_cluster_type
             )
-            # 纳秒级时间解析的输出应为strict_date_optional_time_nanos格式字符串，与ES mapping保持一致
-            nanos_v4_time_parsing["to"] = "strict_date_optional_time_nanos"
 
             # 用户自定义时间字段（纳秒级）解析失败时，同样按序回退到采集器utctime
             time_fallback = self._build_utctime_fallback()
@@ -677,9 +702,14 @@ class EtlStorage:
             }
 
             if storage_cluster_type == STORAGE_CLUSTER_TYPE:
+                # to 是 in_place_time_parsing 专有键，纳秒输出需与 ES mapping 的
+                # strict_date_optional_time_nanos 保持一致
+                nanos_v4_time_parsing["to"] = "strict_date_optional_time_nanos"
                 nanos_time_rules["operator"]["time_format"] = None
                 nanos_time_rules["operator"]["in_place_time_parsing"] = nanos_v4_time_parsing
             elif storage_cluster_type == DORIS_CLUSTER_TYPE:
+                # doris 只认扁平 time_format，带 to 会被 bkbase 拒绝；
+                # 该结构在清洗阶段不做解析，原样透传，微秒得以完整保留
                 nanos_time_rules["operator"]["time_format"] = nanos_v4_time_parsing
                 nanos_time_rules["operator"]["in_place_time_parsing"] = None
 
@@ -706,11 +736,18 @@ class EtlStorage:
 
             temp_output_id = f"__ext_json_temp_{self.separator_node_name}"
 
+            # bkbase 缺省 error_strategy 为 drop：保留清洗失败日志时 separator_node 可能为 null 或非对象，
+            # delete 会因输入类型不符整条丢弃，需与上游 json_de 的策略保持一致
+            delete_error_strategy = "null" if self.is_retain_content_enabled(etl_params) else "drop"
             rules.append(
                 {
                     "input_id": self.separator_node_name,
                     "output_id": temp_output_id,
-                    "operator": {"type": "delete", "key_index": exclude_keys},
+                    "operator": {
+                        "type": "delete",
+                        "key_index": exclude_keys,
+                        "error_strategy": delete_error_strategy,
+                    },
                 }
             )
 
@@ -736,6 +773,95 @@ class EtlStorage:
             )
         return rules
 
+    def _build_storage_config_v4(
+        self,
+        rules: list,
+        field_list: list,
+        built_in_config: dict,
+        storage_cluster_type: str = STORAGE_CLUSTER_TYPE,
+        fields: list | None = None,
+        etl_params: dict | None = None,
+    ) -> dict:
+        """
+        构建V4数据链路的存储配置，ES与Doris二选一
+        :param rules: 已生成的clean_rules
+        :param field_list: 结果表字段列表
+        :param built_in_config: 内置配置
+        :param storage_cluster_type: 存储类型
+        :param fields: 用户配置的清洗字段，用于提取 Doris 字段自定义分词符
+        :param etl_params: 清洗参数，用于提取原文自定义分词符
+        :return: 待合入log_v4_data_link的存储配置；非ES/Doris时返回空字典
+        """
+        if storage_cluster_type == STORAGE_CLUSTER_TYPE:
+            return {
+                "es_storage_config": {
+                    "unique_field_list": built_in_config["option"]["es_unique_field_list"],
+                    "timezone": 8,
+                }
+            }
+
+        if storage_cluster_type != DORIS_CLUSTER_TYPE:
+            return {}
+
+        json_output_types = {self._get_output_type(field_type) for field_type in self.V4_JSON_FIELD_TYPES}
+        json_fields = {rule["output_id"] for rule in rules if rule["operator"].get("output_type") in json_output_types}
+
+        # 聚类场景（etl_flat）的字段是原样透传的，option 里没有 es_type，不能直接下标取值
+        need_analysis_fields = {
+            field["field_name"] for field in field_list if (field.get("option") or {}).get("es_type") == "text"
+        }
+
+        doris_storage_config = {
+            "storage_keys": built_in_config["option"]["es_unique_field_list"],
+            # 集合迭代顺序随进程变化，排序后下发避免同一份配置在bkbase侧反复产生无意义变更
+            "json_fields": sorted(json_fields),
+            "field_config_group": {"search_zh": sorted(need_analysis_fields)},
+            # "flush_timeout": None
+        }
+        tokenizers = self._build_doris_tokenizers_v4(fields or [], etl_params or {}, need_analysis_fields)
+        # 未配置自定义分词时不下发该键，避免存量采集项的 DorisBinding 产生变更
+        if tokenizers:
+            doris_storage_config["tokenizers"] = tokenizers
+
+        return {"doris_storage_config": doris_storage_config}
+
+    def _build_doris_tokenizers_v4(self, fields: list, etl_params: dict, analyzed_fields: set) -> dict:
+        """
+        构建 Doris 字段自定义分词规则，格式为 {字段名: 分词字符串}，如 {"log": "._=:,"}
+        :param fields: 用户配置的清洗字段
+        :param etl_params: 清洗参数
+        :param analyzed_fields: 入库为分词类型的字段名，自定义分词只对这些字段生效
+        """
+        tokenizers = {"log": etl_params.get("original_text_tokenize_on_chars", "")}
+        for field in fields:
+            if field.get("is_delete") or not field.get("is_analyzed"):
+                continue
+            target_field = field["field_name"]
+            if field.get("alias_name") and self.etl_config in [EtlConfig.BK_LOG_JSON]:
+                target_field = field["alias_name"]
+            tokenizers[target_field] = field.get("tokenize_on_chars", "")
+
+        return {
+            field_name: unicode_str_decode_keep_non_ascii(tokenize_on_chars)
+            for field_name, tokenize_on_chars in sorted(tokenizers.items())
+            if tokenize_on_chars and field_name in analyzed_fields
+        }
+
+    @staticmethod
+    def is_retain_content_enabled(etl_params: dict) -> bool:
+        """
+        是否保留清洗失败日志。仅用于 V4 清洗链路：未保留原文时，清洗失败的数据没有可读内容，
+        留在库里只占存储，因此在 V4 里把 enable_retain_content 收敛为 retain_original_text 的子开关。
+
+        仅限 V4：V3（Transfer）侧 option 的取值不走这里，保持原样下发。V3 的分隔符/正则 transformer
+        并不读取该 option（`TransformMapBySeparator` / `TransformMapByRegexp` 恒返回 nil error），
+        改动 V3 取值既无法带来丢弃效果，又会让存量采集项行为漂移。
+        :param etl_params: 清洗参数
+        """
+        if not etl_params.get("retain_original_text"):
+            return False
+        return bool(etl_params.get("enable_retain_content"))
+
     def _build_parse_failure_field_v4(self, etl_params: dict) -> list:
         """
         构建V4版本的清洗失败标记字段规则
@@ -743,6 +869,9 @@ class EtlStorage:
         :return: 清洗失败标记字段规则列表
         """
         rules = []
+        # 仅由 record_parse_failure 决定，不与 retain_original_text 联动：分隔符/正则在两条链路上
+        # 都没有丢弃失败记录的能力，若此时抹掉 __parse_failure，失败记录会退化成「字段全空且无法
+        # 判断失败原因」的数据，比保留标记更糟。须与 get_result_table_fields 的判定保持一致。
         if etl_params.get("record_parse_failure"):
             rules.append(
                 {
@@ -888,7 +1017,9 @@ class EtlStorage:
                 result["analyzer"][analyzer_name]["tokenizer"] = "standard"
         return result
 
-    def get_result_table_fields(self, fields, etl_params, built_in_config, es_version="5.X"):
+    def get_result_table_fields(
+        self, fields, etl_params, built_in_config, es_version="5.X", storage_cluster_type=STORAGE_CLUSTER_TYPE
+    ):
         """
         META
         """
@@ -943,7 +1074,7 @@ class EtlStorage:
                 },
             )
 
-        # 增加清洗失败标记
+        # 增加清洗失败标记（结果表字段为 V3/V4 共用，不随 retain_original_text 联动）
         if etl_params.get("record_parse_failure"):
             field_list.append(
                 {
@@ -996,8 +1127,10 @@ class EtlStorage:
             if not is_match_variate(target_field):
                 raise ValidationError(_("字段名不符合变量规则"))
 
-            if field["field_type"] == FieldDataTypeEnum.FLATTENED.value and is_version_less_than(
-                es_version, MIN_FLATTENED_SUPPORT_VERSION
+            if (
+                storage_cluster_type == STORAGE_CLUSTER_TYPE
+                and field["field_type"] == FieldDataTypeEnum.FLATTENED.value
+                and is_version_less_than(es_version, MIN_FLATTENED_SUPPORT_VERSION)
             ):
                 raise ValidationError(_(f"ES版本{es_version}不支持 flattened 字段类型"))
 
@@ -1176,7 +1309,7 @@ class EtlStorage:
             "default_storage_config": {
                 "cluster_id": storage_cluster_id,
                 "storage_cluster_id": storage_cluster_id,
-                "retention": retention,
+                **build_storage_retention_config(storage_cluster_type, retention),
                 "date_format": date_format,
                 "slice_size": slice_size,
                 "slice_gap": slice_gap,
@@ -1190,12 +1323,13 @@ class EtlStorage:
             "is_time_field_only": True,
             "bk_biz_id": instance.get_bk_biz_id(),
             "label": instance.category_id,
-            "labels": labels or {},
             "option": {},
             "field_list": [],
             "warm_phase_days": 0,
             "warm_phase_settings": {},
         }
+        if labels is not None:
+            params["labels"] = labels
         index_settings = index_settings or {}
         if total_shards_per_node is not None and total_shards_per_node > 0:
             index_settings.update({"index.routing.allocation.total_shards_per_node": total_shards_per_node})
@@ -1206,8 +1340,10 @@ class EtlStorage:
 
         # 获取结果表是否已经创建，如果创建则选择更新
         table_id = ""
+        current_result_table_config = {}
         try:
-            table_id = TransferApi.get_result_table({"table_id": params["table_id"]}).get("table_id")
+            current_result_table_config = TransferApi.get_result_table({"table_id": params["table_id"]})
+            table_id = current_result_table_config.get("table_id")
         except ApiResultError:
             pass
 
@@ -1255,6 +1391,16 @@ class EtlStorage:
         self.add_metadata_path_configs(etl_path_regexp, result_table_config)
 
         params.update(result_table_config)
+
+        # 基类只提供扩展时机，不感知 __ext_json 等清洗类型私有语义。
+        # 此处已有完整 field_list 和 mapping_settings，子类可以在异步下发前做最终定制。
+        self.customize_result_table_config(
+            params=params,
+            etl_params=etl_params,
+            current_result_table_config=current_result_table_config,
+            es_version=es_version,
+            storage_cluster_type=storage_cluster_type,
+        )
 
         # 用户清洗字段可能与内置 scenario 字段同名（如 Windows 事件采集的 winEventProviderName），
         # field_list 重复会导致下发 metadata 时 table_id+field_name 唯一键冲突，modify_result_table 整体失败。
@@ -1322,9 +1468,9 @@ class EtlStorage:
             instance.table_id = table_id
             instance.save()
 
-        if is_nanos:
-            instance.is_nanos = True
-            instance.save()
+        if hasattr(instance, "is_nanos") and instance.is_nanos != is_nanos:
+            instance.is_nanos = is_nanos
+            instance.save(update_fields=["is_nanos"])
 
         return {"table_id": instance.table_id, "params": params}
 
@@ -1420,7 +1566,7 @@ class EtlStorage:
             collector_config["storage_cluster_id"] = result_table_storage["cluster_config"]["cluster_id"]
             collector_config["storage_cluster_name"] = result_table_storage["cluster_config"].get("cluster_name", "")
             collector_config["storage_display_name"] = result_table_storage["cluster_config"].get("display_name", "")
-            collector_config["retention"] = result_table_storage["storage_config"].get("retention")
+            collector_config["retention"] = get_storage_retention(result_table_storage["storage_config"])
             collector_config["allocation_min_days"] = result_table_storage["storage_config"].get("warm_phase_days")
 
         # 字段
@@ -1762,7 +1908,7 @@ class EtlStorage:
             "default_storage_config": {
                 "cluster_id": storage_cluster_id,
                 "storage_cluster_id": storage_cluster_id,
-                "retention": retention,
+                **build_storage_retention_config(storage_cluster_type, retention),
                 "date_format": date_format,
                 "slice_size": slice_size,
                 "slice_gap": slice_gap,

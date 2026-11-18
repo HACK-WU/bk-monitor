@@ -54,6 +54,8 @@ class DetectMixin:
     def detect(self, data_points):
         if not data_points:
             return []
+        # 回看改写可能让同一 record_id 的多个取值进入同一批，只检测最后一条，异常输出与检测缓存保持一致。
+        data_points = list({point.record_id: point for point in data_points}.values())
 
         algorithm_group = defaultdict(list)
         for _config in self.algorithms:
@@ -79,6 +81,8 @@ class DetectMixin:
                 # 使用白名单方式提取控制参数
                 # 只提取 EXTRA_CONFIG_KEYS 中定义的参数
                 extra_config = {k: algorithm_config[k] for k in EXTRA_CONFIG_KEYS if k in algorithm_config}
+                # level 是检测框架上下文，不属于用户算法配置；NewSeries 用它隔离各告警级别的活跃生命周期状态。
+                extra_config["algorithm_level"] = level
 
                 detector = detector_cls(algorithm_config, algorithm_unit, extra_config=extra_config)
 
@@ -181,9 +185,9 @@ class DetectMixin:
             timestamp = int(timestamp)
             latest_point_with_all = max([latest_point_with_all, d.timestamp])
 
-            check_result = CheckResult(self.strategy.id, self.id, dimensions_md5, level)
             if redis_pipeline is None:
-                redis_pipeline = check_result.CHECK_RESULT
+                redis_pipeline = CheckResult.begin_pipeline_batch()
+            check_result = CheckResult(self.strategy.id, self.id, dimensions_md5, level)
 
             if d.record_id in anomaly_record_ids:
                 name = f"{timestamp}|{ANOMALY_LABEL}"
@@ -192,6 +196,11 @@ class DetectMixin:
 
             try:
                 # 1. 缓存数据(检测结果缓存) type:SortedSet
+                # 回看改写同一时间点时先清掉该时间点的旧成员，避免成员数把恢复窗口裁掉。
+                if getattr(d, "replaces_check_result", False):
+                    check_result.CHECK_RESULT.zremrangebyscore(
+                        check_result.check_result_cache_key, timestamp, timestamp
+                    )
                 kwargs = {name: timestamp}
                 check_result.add_check_result_cache(ttl=strategy_ttl, **kwargs)
 

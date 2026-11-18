@@ -85,16 +85,41 @@ export abstract class K8sBasePromqlGenerator {
    * @method createCommonPromqlMethod
    * @description 创建通用的Promql方法
    * @param {K8sBasePromqlGeneratorContext} context 生成器上下文
+   * @param {boolean} usePod 是否使用网络指标的 pod 标签
    * @returns {string} 通用的Promql方法
    */
-  static createCommonPromqlMethod(context: K8sBasePromqlGeneratorContext): string {
+  static createCommonPromqlMethod(context: K8sBasePromqlGeneratorContext, usePod = false): string {
     if (context.groupByField === K8sTableColumnKeysEnum.CLUSTER) return '$method by(bcs_cluster_id)';
-    if (context.groupByField === K8sTableColumnKeysEnum.CONTAINER) return '$method by(pod_name,container_name)';
+    if (context.groupByField === K8sTableColumnKeysEnum.POD)
+      return `$method by(namespace,${usePod ? 'pod' : 'pod_name'})`;
+    if (context.groupByField === K8sTableColumnKeysEnum.CONTAINER)
+      return '$method by(namespace,pod_name,container_name)';
     if (context.groupByField === K8sTableColumnKeysEnum.INGRESS) return '$method by(ingress,namespace)';
     if (context.groupByField === K8sTableColumnKeysEnum.SERVICE) return '$method by(service,namespace)';
     if (context.groupByField === K8sTableColumnKeysEnum.NODE) return '$method by(node)';
-    return `$method by(${context.groupByField === K8sTableColumnKeysEnum.WORKLOAD ? 'workload_kind,workload_name' : context.groupByField})`;
+    return `$method by(${context.groupByField === K8sTableColumnKeysEnum.WORKLOAD ? 'namespace,workload_kind,workload_name' : context.groupByField})`;
   }
+
+  /**
+   * 创建包含运行中 init / 原生 Sidecar 的容器 limit 查询。
+   */
+  static createContainerResourceLimit(
+    context: K8sBasePromqlGeneratorContext,
+    isCPU = true,
+    withTimeShift = true,
+    onlyNameSpace = false
+  ) {
+    const resource = isCPU ? 'cpu' : 'memory';
+    const unit = isCPU ? 'core' : 'byte';
+    const filter = `resource="${resource}",unit="${unit}",${K8sBasePromqlGenerator.createCommonPromqlContent(context, onlyNameSpace)}`;
+    const timeShift = withTimeShift ? ' $time_shift' : '';
+    return `(kube_pod_container_resource_limits{${filter}}${timeShift} or (
+      kube_pod_init_container_resource_limits{${filter}}${timeShift}
+      * on(namespace,pod,container) group_left()
+      (kube_pod_init_container_status_running{bcs_cluster_id="${context.bcs_cluster_id}"}${timeShift} == 1)
+    ))`;
+  }
+
   /**
    * @static 静态方法
    * @method createWorkLoadRequestOrLimit
@@ -107,28 +132,28 @@ export abstract class K8sBasePromqlGenerator {
   static createWorkLoadRequestOrLimit(context: K8sBasePromqlGeneratorContext, isLimit: boolean, isCPU = true) {
     if (isCPU) {
       if (isLimit)
-        return `($method by (workload_kind, workload_name) ((count by (workload_kind, workload_name, pod_name, namespace) (rate(container_cpu_usage_seconds_total{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"}[1m] $time_shift) ) * 0 + 1) *
+        return `($method by (namespace, workload_kind, workload_name) ((count by (workload_kind, workload_name, pod_name, namespace) (rate(container_cpu_usage_seconds_total{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"}[1m] $time_shift) ) * 0 + 1) *
       on(pod_name, namespace)
       group_right(workload_kind, workload_name)
       $method by (pod_name, namespace) (
-        kube_pod_container_resource_limits_cpu_cores{${K8sBasePromqlGenerator.createCommonPromqlContent(context, true)}} $time_shift
+        ${K8sBasePromqlGenerator.createContainerResourceLimit(context, true, true, true)}
       )))`;
-      return `($method by (workload_kind, workload_name) ((count by (workload_kind, workload_name, pod_name, namespace) (rate(container_cpu_usage_seconds_total{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"}[1m] $time_shift)) * 0 + 1) *
+      return `($method by (namespace, workload_kind, workload_name) ((count by (workload_kind, workload_name, pod_name, namespace) (rate(container_cpu_usage_seconds_total{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"}[1m] $time_shift)) * 0 + 1) *
       on(pod_name, namespace)
       group_right(workload_kind, workload_name)
       $method by (pod_name, namespace) (kube_pod_container_resource_requests_cpu_cores{${K8sBasePromqlGenerator.createCommonPromqlContent(context, true)}} $time_shift)))`;
     }
     if (isLimit)
-      return `($method by (workload_kind, workload_name)
+      return `($method by (namespace, workload_kind, workload_name)
         ((count by (workload_kind, workload_name, pod_name, namespace) (
       container_memory_working_set_bytes{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"} $time_shift
     ) * 0 + 1) *
     on(pod_name, namespace)
     group_right(workload_kind, workload_name)
     $method by (pod_name, namespace) (
-      kube_pod_container_resource_limits_memory_bytes{${K8sBasePromqlGenerator.createCommonPromqlContent(context, true)}} $time_shift
+      ${K8sBasePromqlGenerator.createContainerResourceLimit(context, false, true, true)}
     )))`;
-    return `($method by (workload_kind, workload_name)
+    return `($method by (namespace, workload_kind, workload_name)
                 ((count by (workload_kind, workload_name, pod_name, namespace) (
               container_memory_working_set_bytes{${K8sBasePromqlGenerator.createCommonPromqlContent(context)},container_name!="POD"} $time_shift
             ) * 0 + 1) *

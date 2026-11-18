@@ -182,7 +182,7 @@ export const STATUS_LIST = {
     label: '观察中',
     key: 'recovering',
     icon: 'mc-visual',
-  }, 
+  },
   已恢复: {
     color: '#1CAB88',
     bgColor: '#E8FFF5',
@@ -198,45 +198,58 @@ export const STATUS_LIST = {
   },
 };
 
+/** 需要点击跳转页面的事件类型 */
+export const EVENTS_NEED_JUMP_PAGE = new Set(['tmp_events', 'alert_system_events', 'k8s_warning_events']);
+
+/** 跳转前需要校验数据可用性的事件类型 */
+export const EVENTS_NEED_AVAILABILITY_CHECK = new Set(['tmp_events', 'k8s_warning_events']);
+
+/** 需要点击打开全部子事件侧滑的事件类型（保持现有行为） */
+export const EVENTS_NEED_ALL_SUB_EVENTS = new Set([
+  'incident_manage_events',
+  'incident_ticket_events',
+  'tencent_cloud_notice_events',
+]);
+
 export const EVENTS_TYPE_MAP = {
-  default: {
+  general: {
     iconType: '',
-    keypath: '（共 {0} 个{1}，展示 {2} 如下）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath: '（共 {0} 个事件，示例如下）',
+    keypath2: '（共 {0} 个事件，示例如下）',
   },
   k8s_warning_events: {
     iconType: 'bcs',
     keypath: '（共 {0} 个{1}，展示 {2} 如下）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   deployment_events: {
     iconType: 'bkci',
     keypath: '（共 {0} 个{1}，展示 {2} 如下）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   alert_system_events: {
     iconType: 'host',
     keypath: '（共 {0} 个{1}，展示 {2} 如下）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   tmp_events: {
     iconType: 'tmp',
     keypath: '（共 {0} 个{1}，展示 {2} 如下）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   incident_manage_events: {
     iconType: 'manage',
-    keypath: '（共 {0} 个{1}）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath: '（共 {0} 个{1}，展示 {2} 如下）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   incident_ticket_events: {
     iconType: 'ticket',
-    keypath: '（共 {0} 个{1}）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath: '（共 {0} 个{1}，展示 {2} 如下）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
   tencent_cloud_notice_events: {
     iconType: 'tencent_cloud',
-    keypath: '（共 {0} 个{1}）',
-    keypath2: '（共 {0} 个{1}）',
+    keypath: '（共 {0} 个{1}，展示 {2} 如下）',
+    keypath2: '（共 {0} 个{1}，示例如下）',
   },
 };

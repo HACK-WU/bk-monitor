@@ -23,14 +23,16 @@
  * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
  * IN THE SOFTWARE.
  */
-import { computed, defineAsyncComponent, defineComponent, onMounted, ref, type Ref } from 'vue';
+import { computed, defineAsyncComponent, defineComponent, nextTick, onMounted, ref, type Ref } from 'vue';
 import jsCookie from 'js-cookie';
 import { useRoute } from 'vue-router/composables';
 
 import { getFeatureToggleStatus } from './hooks/use-feature-toggle';
+import { isMonitorIframeContext } from './common/embed-layout-query';
 import useLocale from './hooks/use-locale';
 import useStore from './hooks/use-store';
 import { join } from '@/global/utils/path';
+import platformConfigStore from '@/store/modules/platform-config';
 
 import './app.scss';
 
@@ -42,10 +44,12 @@ const NoticeComponent = defineAsyncComponent(() =>
   ]).then(([component]) => (component as any).default ?? component),
 );
 const AuthDialog = () => import(/* webpackChunkName: 'auth-dialog' */ '@/components/common/auth-dialog.vue');
-const GlobalSettingDialog = () => import(/* webpackChunkName: 'global-setting-dialog' */ '@/components/global-setting/index');
+const GlobalSettingDialog = () =>
+  import(/* webpackChunkName: 'global-setting-dialog' */ '@/components/global-setting/index');
 const HeadNav = () => import(/* webpackChunkName: 'head-nav' */ '@/global/head-navi/index');
 
-const isHeadlessEntry = () => new URLSearchParams(window.location.hash.split('?')[1] || window.location.search).get('hl') === '1';
+const isHeadlessEntry = () =>
+  new URLSearchParams(window.location.hash.split('?')[1] || window.location.search).get('hl') === '1';
 if (isHeadlessEntry()) {
   import(/* webpackChunkName: 'demand-import-lite' */ './common/demand-import-lite');
 } else {
@@ -57,6 +61,10 @@ export default defineComponent({
     const route = useRoute();
     const store = useStore();
     const { $t } = useLocale();
+
+    // 延续旧 App.vue created() 中的初始化，通过 base.js 加载平台名称、Logo、favicon 和标题配置。
+    // 导航只读取配置，不会主动加载；需保留在根组件初始化阶段，避免路由切换时重复请求。
+    platformConfigStore.fetchConfig();
 
     const noticeComponentHeight = ref(0);
     const refNoticeComponent: Ref<any | null> = ref(null);
@@ -72,7 +80,7 @@ export default defineComponent({
       '--notice-component-height': `${noticeComponentHeight.value}px`,
     }));
 
-    const isAsIframe = computed(() => route.query.from === 'monitor');
+    const isAsIframe = computed(() => isMonitorIframeContext(route.query));
     const showAlert = computed(() => store.state.showAlert);
 
     const isShowGlobalDialog = computed(() => store.state.isShowGlobalDialog);
@@ -119,12 +127,11 @@ export default defineComponent({
      * 公告状态变化
      * @param v
      */
-    const showAlertChange = (v: boolean) => {
+    const showAlertChange = async (v: boolean) => {
       store.commit('updateState', { showAlert: v });
 
-      if (refNoticeComponent.value) {
-        noticeComponentHeight.value = refNoticeComponent.value.$el.offsetHeight;
-      }
+      await nextTick();
+      noticeComponentHeight.value = v ? (refNoticeComponent.value?.$el?.offsetHeight ?? 0) : 0;
     };
 
     /**
@@ -134,7 +141,7 @@ export default defineComponent({
       if (!isAsIframe.value && !isHeadless.value) {
         return (
           <NoticeComponent
-            ref='refNoticeComponent'
+            ref={refNoticeComponent}
             api-url={join((window as any).SITE_URL, '/notice/announcements/')}
             on-show-alert-change={showAlertChange}
           />
@@ -233,9 +240,10 @@ export default defineComponent({
 
     onMounted(() => {
       const platform = window.navigator.platform.toLowerCase();
-      const fontFamily =        platform.indexOf('win') === 0
-        ? 'Microsoft Yahei, pingFang-SC, Helvetica, Aria, sans-serif'
-        : 'pingFang-SC, Microsoft Yahei, Helvetica, Aria, sans-serif';
+      const fontFamily =
+        platform.indexOf('win') === 0
+          ? 'Microsoft Yahei, pingFang-SC, Helvetica, Aria, sans-serif'
+          : 'pingFang-SC, Microsoft Yahei, Helvetica, Aria, sans-serif';
       document.body.style['font-family'] = fontFamily;
       store.commit('updateState', { runVersion: window.RUN_VER || '' });
 

@@ -29,28 +29,31 @@ from django.utils.http import urlencode
 from rest_framework.reverse import reverse
 
 from apps.api import TransferApi
-from apps.feature_toggle.handlers.toggle import FeatureToggleObject
-from apps.feature_toggle.plugins.constants import UNIFY_QUERY_SEARCH_EXPORT
 from apps.log_databus.constants import DORIS_CLUSTER_TYPE, DORIS_DEFAULT_EXPIRE_DAYS
 from apps.log_databus.models import CollectorConfig
 from apps.log_search.constants import (
     ASYNC_COUNT_SIZE,
     MAX_GET_ATTENTION_SIZE,
+    MAX_ASYNC_COUNT,
+    MAX_QUICK_EXPORT_ASYNC_COUNT,
+    ExportSearchType,
     ExportStatus,
-    ExportType,
     IndexSetType,
 )
 from apps.log_search.exceptions import (
-    MissAsyncExportException,
     PreCheckAsyncExportException,
     DuplicateUnifyQueryExportException,
 )
-from apps.log_search.handlers.search.search_handlers_esquery import SearchHandler, UnionSearchHandler
+from apps.log_search.export.history import (
+    paginate_export_history,
+    sharded_export_history_queryset,
+    sharded_job_history_item,
+)
+from apps.log_search.handlers.search.search_handlers_esquery import UnionSearchHandler
 from apps.log_search.models import AsyncTask, LogIndexSet
 from apps.log_unifyquery.handler.base import UnifyQueryHandler
 from apps.models import model_to_dict
 from apps.utils.db import array_chunk
-from apps.utils.drf import DataPageNumberPagination
 from apps.utils.local import (
     get_request,
     get_request_app_code,
@@ -73,28 +76,38 @@ class UnifyQueryAsyncExportHandlers:
         export_fields=None,
         index_set_ids: list = None,
         export_file_type: str = "txt",
+        request_bk_biz_id=None,
     ):
         self.index_set_id = index_set_id
         self.bk_biz_id = bk_biz_id
+        self.request_bk_biz_id = bk_biz_id if request_bk_biz_id is None else request_bk_biz_id
         self.index_set_ids = index_set_ids
         self.search_dict = search_dict
-        search_dict = copy.deepcopy(self.search_dict)
-        search_dict["index_set_ids"] = [index_set_id]
-        search_dict["export_fields"] = export_fields
-        self.unify_query_handler = UnifyQueryHandler(search_dict)
+        self.request_param = copy.deepcopy(search_dict)
+        if self.request_param is not None:
+            self.request_param["bk_biz_id"] = self.request_bk_biz_id
+        # 导出历史查询不携带检索参数，按需构造检索 handler
+        self.unify_query_handler = None
+        if search_dict is not None:
+            query_params = copy.deepcopy(search_dict)
+            query_params["index_set_ids"] = [index_set_id]
+            query_params["export_fields"] = export_fields
+            self.unify_query_handler = UnifyQueryHandler(query_params)
         self.request_user = get_request_external_username() or get_request_username()
         self.is_external = bool(get_request_external_username())
         self.export_file_type = export_file_type
 
     def async_export(self, is_quick_export: bool = False):
+        # 校验用户正在运行导出的任务数量
+        AsyncTask.check_running_count_by_user(self.request_user)
+
         # 判断是否存在 正在下载的相同检索参数的导出任务
-        if FeatureToggleObject.switch(UNIFY_QUERY_SEARCH_EXPORT, self.bk_biz_id):
-            if AsyncTask.objects.filter(
-                request_param=self.search_dict,
-                created_by=self.request_user,
-                export_status=ExportStatus.DOWNLOAD_LOG,
-            ).exists():
-                raise DuplicateUnifyQueryExportException()
+        if AsyncTask.objects.filter(
+            request_param=self.request_param,
+            created_by=self.request_user,
+            export_status=ExportStatus.DOWNLOAD_LOG,
+        ).exists():
+            raise DuplicateUnifyQueryExportException()
 
         # 判断字段是否支持排序
         if self.search_dict.get("sort_list"):
@@ -111,18 +124,22 @@ class UnifyQueryAsyncExportHandlers:
             logger.error("can not create async_export task, reason: no data")
             raise PreCheckAsyncExportException()
 
-        async_task = AsyncTask.objects.create(
+        async_task = AsyncTask.async_export_task_create_with_running_limit(
+            username=self.request_user,
             **{
-                "request_param": self.search_dict,
+                "request_param": self.request_param,
                 "sorted_param": self.unify_query_handler.origin_order_by,
                 "scenario_id": self.unify_query_handler.index_info_list[0]["scenario_id"],
                 "index_set_id": self.index_set_id,
-                "bk_biz_id": self.bk_biz_id,
+                "bk_biz_id": self.request_bk_biz_id,
                 "start_time": self.search_dict["start_time"],
                 "end_time": self.search_dict["end_time"],
-                "export_type": ExportType.ASYNC,
-                "created_by": self.request_user,
-            }
+                "export_total_count": self.get_export_total_count(
+                    request_size=self.search_dict.get("size"),
+                    is_quick_export=is_quick_export,
+                    max_async_count=self.unify_query_handler.index_info_list[0]["index_set_obj"].max_async_count,
+                ),
+            },
         )
 
         url = self._get_url()
@@ -148,7 +165,7 @@ class UnifyQueryAsyncExportHandlers:
 
     def _get_search_url(self):
         request = get_request()
-        search_dict = copy.deepcopy(self.search_dict)
+        search_dict = copy.deepcopy(self.request_param)
         if "host_scopes" in search_dict:
             search_dict["host_scopes"] = json.dumps(search_dict["host_scopes"])
 
@@ -168,7 +185,15 @@ class UnifyQueryAsyncExportHandlers:
         )
         return search_url
 
-    def get_export_history(self, request, view, show_all=False, is_union_search=False):
+    def get_export_history(
+        self,
+        request,
+        view,
+        show_all=False,
+        is_union_search=False,
+        start_time=None,
+        end_time=None,
+    ):
         # 这里当show_all为true的时候则给前端返回当前业务全部导出历史
         source_app_code = get_request_app_code()
         external_username = get_request_external_username()
@@ -185,22 +210,34 @@ class UnifyQueryAsyncExportHandlers:
             query_set = query_set.filter(index_set_type=IndexSetType.SINGLE.value)
             if not show_all:
                 query_set = query_set.filter(index_set_id=self.index_set_id)
-        pg = DataPageNumberPagination()
-        page_export_task_history = pg.paginate_queryset(
-            queryset=query_set.order_by("-created_at", "created_by"), request=request, view=view
+        if start_time is not None:
+            query_set = query_set.filter(created_at__gte=arrow.get(start_time / 1000).datetime)
+        if end_time is not None:
+            query_set = query_set.filter(created_at__lte=arrow.get(end_time / 1000).datetime)
+
+        # 灰度期间兼容两种数据结构：同一历史列表同时展示旧 AsyncTask 与分片导出 ExportJob
+        job_query_set = sharded_export_history_queryset(
+            bk_biz_id=self.bk_biz_id,
+            search_type=ExportSearchType.INDEX_SET,
+            index_set_type=IndexSetType.UNION.value if is_union_search else IndexSetType.SINGLE.value,
+            index_set_ids=self.index_set_ids if (is_union_search and not show_all) else None,
+            index_set_id=self.index_set_id if (not is_union_search and not show_all) else None,
+            start_time=start_time,
+            end_time=end_time,
         )
+        pg, page_history = paginate_export_history(query_set, job_query_set, request, view)
         index_set_retention = self.get_index_set_retention(
-            index_set_ids=[history.index_set_id for history in page_export_task_history]
+            index_set_ids=list(
+                {task.index_set_id for task in page_history if isinstance(task, AsyncTask) and task.index_set_id}
+            )
         )
-        res = pg.get_paginated_response(
-            [
-                self.generate_export_history(
-                    model_to_dict(history), index_set_retention, is_union_search=is_union_search
-                )
-                for history in page_export_task_history
-            ]
-        )
-        return res
+        history_items = [
+            self.generate_export_history(model_to_dict(task), index_set_retention, is_union_search=is_union_search)
+            if isinstance(task, AsyncTask)
+            else sharded_job_history_item(task)
+            for task in page_history
+        ]
+        return pg.get_paginated_response(history_items)
 
     @classmethod
     def generate_export_history(cls, export_task_history, index_set_retention, is_union_search=False):
@@ -223,6 +260,9 @@ class UnifyQueryAsyncExportHandlers:
             "export_created_at": export_task_history["created_at"],
             "export_created_by": export_task_history["created_by"],
             "export_completed_at": export_task_history["completed_at"],
+            "exported_count": export_task_history["exported_count"],
+            "export_total_count": export_task_history["export_total_count"],
+            "download_count": export_task_history["download_count"],
             "download_able": download_able,
             "retry_able": retry_able,
             "index_set_type": export_task_history["index_set_type"],
@@ -250,6 +290,13 @@ class UnifyQueryAsyncExportHandlers:
         if retention and end_time:
             return arrow.now() < arrow.get(end_time, tzinfo=settings.TIME_ZONE).shift(days=retention)
         return True
+
+    @staticmethod
+    def get_export_total_count(request_size, is_quick_export: bool = False, max_async_count: int = 0):
+        default_export_limit = MAX_QUICK_EXPORT_ASYNC_COUNT if is_quick_export else MAX_ASYNC_COUNT
+        export_limit = max(max_async_count or 0, default_export_limit)
+        request_size = request_size or export_limit
+        return min(request_size, export_limit)
 
     @classmethod
     def get_index_set_retention(cls, index_set_ids):
@@ -357,24 +404,27 @@ class UnifyQueryUnionAsyncExportHandlers:
         self.export_file_type = export_file_type
 
     def async_export(self, is_quick_export: bool = False):
+        # 校验用户正在运行导出的任务数量
+        AsyncTask.check_running_count_by_user(self.request_user)
+
         # 判断是否存在 正在下载的相同检索参数的导出任务
-        if FeatureToggleObject.switch(UNIFY_QUERY_SEARCH_EXPORT, self.bk_biz_id):
-            if AsyncTask.objects.filter(
-                request_param=self.search_dict,
-                created_by=self.request_user,
-                export_status=ExportStatus.DOWNLOAD_LOG,
-            ).exists():
-                raise DuplicateUnifyQueryExportException()
+        if AsyncTask.objects.filter(
+            request_param=self.search_dict,
+            created_by=self.request_user,
+            export_status=ExportStatus.DOWNLOAD_LOG,
+        ).exists():
+            raise DuplicateUnifyQueryExportException()
 
         # 判断字段是否支持排序
         if self.search_dict.get("sort_list"):
             search_dict = {
                 "index_set_ids": self.index_set_ids,
+                "bk_biz_id": self.unify_query_handler.bk_biz_id,
                 "start_time": self.search_dict.get("start_time"),
                 "end_time": self.search_dict.get("end_time"),
             }
             search_handler = UnionSearchHandler(search_dict=search_dict)
-            fields_result = search_handler.union_search_fields(data=search_dict)
+            fields_result = search_handler.unifyquery_union_search_fields(data=search_dict)
             fields = fields_result["fields"]
             UnifyQueryHandler.check_sort_list(fields, self.search_dict["sort_list"])
 
@@ -387,7 +437,8 @@ class UnifyQueryUnionAsyncExportHandlers:
             logger.error("can not create async_export task, reason: no data")
             raise PreCheckAsyncExportException()
 
-        async_task = AsyncTask.objects.create(
+        async_task = AsyncTask.async_export_task_create_with_running_limit(
+            username=self.request_user,
             **{
                 "request_param": self.search_dict,
                 "sorted_param": self.unify_query_handler.origin_order_by,
@@ -396,9 +447,11 @@ class UnifyQueryUnionAsyncExportHandlers:
                 "bk_biz_id": self.bk_biz_id,
                 "start_time": self.search_dict["start_time"],
                 "end_time": self.search_dict["end_time"],
-                "export_type": ExportType.ASYNC,
-                "created_by": self.request_user,
-            }
+                "export_total_count": self.get_union_export_total_count(
+                    request_size=self.search_dict.get("size"),
+                    is_quick_export=is_quick_export,
+                ),
+            },
         )
 
         url = self._get_url()
@@ -418,14 +471,12 @@ class UnifyQueryUnionAsyncExportHandlers:
         )
         return async_task.id, self.search_dict.get("size", 30)
 
-    @staticmethod
-    def _pre_check_fields(search_handler: SearchHandler):
-        fields = search_handler.fields()
-        for config in fields["config"]:
-            if config["name"] == "async_export":
-                if not config["is_active"]:
-                    raise MissAsyncExportException(config["extra"]["usable_reason"])
-                return {"async_export_fields": config["extra"]["fields"]}
+    def get_union_export_total_count(self, request_size, is_quick_export: bool = False):
+        return UnifyQueryAsyncExportHandlers.get_export_total_count(
+            request_size=request_size,
+            is_quick_export=is_quick_export,
+            max_async_count=self.unify_query_handler.index_info_list[0]["index_set_obj"].max_async_count,
+        )
 
     def _get_url(self):
         url = reverse("tasks-download-file", request=get_request())

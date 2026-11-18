@@ -43,6 +43,13 @@ class ModelSpec:
     fields: set[str] = field(default_factory=set)
     sensitive_fields: set[str] = field(default_factory=set)
     default_fields: set[str] = field(default_factory=set)
+    # 服务端强制叠加的行级范围。调用方可省略或显式传同值，但冲突条件必须拒绝，
+    # 避免静默覆盖后返回与请求语义不一致的证据。
+    fixed_filters: dict[str, Any] = field(default_factory=dict)
+    # 服务端惰性叠加的 queryset 范围，用于不能用固定字段值表达的关联限定。
+    queryset_scope: Callable[[Any], Any] | None = None
+    # list-db-models 中对 queryset_scope 的可审计说明，不暴露可执行对象。
+    server_scope: str = ""
     examples: list[dict[str, Any]] = field(default_factory=list)
     # 行级脱敏钩子：敏感性按行内容（而非固定字段）判定的模型使用，如 GlobalConfig 按 key 名脱敏 value。
     # 签名为 (serialized_item, instance)：必须从 instance 判定敏感性，
@@ -54,6 +61,12 @@ class ModelSpec:
     select_related: list[str] = field(default_factory=list)
     # list-db-models 输出里的模型级提示：用途与选型边界（与 row_mask_note 区分，后者只讲脱敏）。
     note: str = ""
+    # 读取所用的 manager 名。默认 objects；软删模型（AbstractRecordModel）可设 origin_objects，
+    # 以读到 is_deleted=True 的行——「配置真删/真禁」类排障必须能看到软删行，否则 .objects
+    # （RecordModelManager）会过滤掉 is_deleted 的行，缺失正是要看的证据。
+    manager_name: str = "objects"
+    # 含订阅发送信息的模型只允许指定一个订阅 ID，避免空 filter 或宽范围枚举。
+    required_exact_filter: str = ""
 
 
 MASKED_VALUE = "***masked***"
@@ -79,6 +92,59 @@ def _mask_global_config_row(item: dict[str, Any], instance: Any) -> dict[str, An
     if GLOBAL_CONFIG_SENSITIVE_KEY_PATTERN.search(key) or _looks_like_credential(item["value"]):
         item["value"] = MASKED_VALUE
     return item
+
+
+def _scope_by_graph_data_link_name(queryset: Any) -> Any:
+    from django.db.models import Exists, OuterRef
+
+    from metadata.models.data_link.data_link import DataLink
+
+    graph_data_links = DataLink.objects.filter(
+        bk_tenant_id=OuterRef("bk_tenant_id"),
+        data_link_name=OuterRef("data_link_name"),
+        data_link_strategy=DataLink.GRAPH_RELATION_TIME_SERIES,
+    )
+    return queryset.filter(Exists(graph_data_links))
+
+
+def _scope_by_graph_table_id(queryset: Any) -> Any:
+    from django.db.models import Exists, Func, OuterRef
+
+    from metadata.models.data_link.data_link import DataLink
+
+    graph_data_links = DataLink.objects.filter(
+        bk_tenant_id=OuterRef("bk_tenant_id"),
+        data_link_strategy=DataLink.GRAPH_RELATION_TIME_SERIES,
+        table_ids__contains=Func(OuterRef("table_id"), function="JSON_ARRAY"),
+    )
+    return queryset.filter(Exists(graph_data_links))
+
+
+def _scope_graph_data_source_result_table(queryset: Any) -> Any:
+    from django.db.models import Exists, Func, OuterRef
+
+    from metadata.models.data_link.data_link import DataLink
+
+    graph_data_links = DataLink.objects.filter(
+        bk_tenant_id=OuterRef("bk_tenant_id"),
+        bk_data_id=OuterRef("bk_data_id"),
+        data_link_strategy=DataLink.GRAPH_RELATION_TIME_SERIES,
+        table_ids__contains=Func(OuterRef("table_id"), function="JSON_ARRAY"),
+    )
+    return queryset.filter(Exists(graph_data_links))
+
+
+def _scope_graph_space_data_source(queryset: Any) -> Any:
+    from django.db.models import Exists, OuterRef
+
+    from metadata.models.data_link.data_link import DataLink
+
+    graph_data_links = DataLink.objects.filter(
+        bk_tenant_id=OuterRef("bk_tenant_id"),
+        bk_data_id=OuterRef("bk_data_id"),
+        data_link_strategy=DataLink.GRAPH_RELATION_TIME_SERIES,
+    )
+    return queryset.filter(Exists(graph_data_links))
 
 
 # DeploymentConfigVersion.params 是 SymmetricJsonField（落库加密、读时解密），可能含采集目标的账号口令。
@@ -151,6 +217,123 @@ def _mask_deployment_config_row(item: dict[str, Any], instance: Any) -> dict[str
 
 
 ALLOWED_MODEL_SPECS: dict[str, ModelSpec] = {
+    "bkmonitor.models.base.ReportItems": ModelSpec(
+        model_path="bkmonitor.models.base.ReportItems",
+        fields={
+            "id",
+            "bk_tenant_id",
+            "frequency",
+            "last_send_time",
+            "is_enabled",
+            "is_deleted",
+            "is_link_enabled",
+            "create_time",
+            "update_time",
+        },
+        sensitive_fields={"mail_title", "receivers", "managers", "channels", "create_user", "update_user"},
+        manager_name="origin_objects",
+        required_exact_filter="id",
+        note="旧邮件订阅；必须传已授权业务 bk_biz_id 并按正整数 id 精确读取，仅返回同租户记录，含软删行。",
+        examples=[{"bk_biz_id": 2, "filter": {"id": 1}, "limit": 1}],
+    ),
+    "bkmonitor.models.base.ReportContents": ModelSpec(
+        model_path="bkmonitor.models.base.ReportContents",
+        fields={"id", "bk_tenant_id", "report_item", "row_pictures_num", "width", "height"},
+        sensitive_fields={"content_title", "content_details", "graphs"},
+        required_exact_filter="report_item",
+        note="旧邮件订阅内容结构；必须传已授权业务 bk_biz_id 并按正整数 report_item 精确读取，仅返回同租户记录。",
+        examples=[{"bk_biz_id": 2, "filter": {"report_item": 1}, "limit": 20}],
+    ),
+    "bkmonitor.models.base.ReportStatus": ModelSpec(
+        model_path="bkmonitor.models.base.ReportStatus",
+        fields={"id", "bk_tenant_id", "report_item", "create_time", "is_success"},
+        sensitive_fields={"mail_title", "details"},
+        required_exact_filter="report_item",
+        note="旧邮件订阅发送状态；必须传已授权业务 bk_biz_id 并按正整数 report_item 精确读取，仅返回同租户记录。",
+        examples=[{"bk_biz_id": 2, "filter": {"report_item": 1}, "order_by": ["-create_time"], "limit": 20}],
+    ),
+    "bkmonitor.models.report.Report": ModelSpec(
+        model_path="bkmonitor.models.report.Report",
+        fields={
+            "id",
+            "bk_biz_id",
+            "scenario",
+            "frequency",
+            "start_time",
+            "end_time",
+            "send_mode",
+            "subscriber_type",
+            "send_round",
+            "is_manager_created",
+            "is_enabled",
+            "is_deleted",
+            "create_time",
+            "update_time",
+        },
+        sensitive_fields={"name", "content_config", "scenario_config", "create_user", "update_user"},
+        manager_name="origin_objects",
+        required_exact_filter="id",
+        note="新邮件订阅；必须传已授权业务 bk_biz_id 并按正整数 id 精确读取，仅返回该业务记录，含软删行。",
+        examples=[{"bk_biz_id": 2, "filter": {"id": 1}, "limit": 1}],
+    ),
+    "bkmonitor.models.report.ReportChannel": ModelSpec(
+        model_path="bkmonitor.models.report.ReportChannel",
+        fields={"id", "report_id", "channel_name", "is_enabled"},
+        sensitive_fields={"subscribers", "send_text"},
+        required_exact_filter="report_id",
+        note="新邮件订阅渠道状态；必须传已授权业务 bk_biz_id 并按正整数 report_id 精确读取，校验父订阅业务归属。",
+        examples=[{"bk_biz_id": 2, "filter": {"report_id": 1}, "limit": 20}],
+    ),
+    "bkmonitor.models.report.ReportSendRecord": ModelSpec(
+        model_path="bkmonitor.models.report.ReportSendRecord",
+        fields={"id", "report_id", "channel_name", "send_status", "send_time", "send_round"},
+        sensitive_fields={"send_results"},
+        required_exact_filter="report_id",
+        note="新邮件订阅发送记录；必须传已授权业务 bk_biz_id 并按正整数 report_id 精确读取，校验父订阅业务归属。",
+        examples=[{"bk_biz_id": 2, "filter": {"report_id": 1}, "order_by": ["-send_time"], "limit": 20}],
+    ),
+    "monitor.models.UptimeCheckTask": ModelSpec(
+        model_path="monitor.models.UptimeCheckTask",
+        fields={
+            "id",
+            "bk_biz_id",
+            "name",
+            "protocol",
+            "status",
+            "check_interval",
+            "indepentent_dataid",
+            "is_deleted",
+            "create_time",
+            "update_time",
+            "update_user",
+        },
+        # config 为加密 JSON，可含 HTTP 头、认证参数等拨测目标凭据。
+        sensitive_fields={"config", "labels", "location"},
+        manager_name="origin_objects",
+        required_exact_filter="id",
+        note="拨测任务；必须传已授权业务 bk_biz_id 并按正整数 id 精确读取，仅返回该业务记录，含软删行。",
+        examples=[{"bk_biz_id": 2, "filter": {"id": 1}, "limit": 1}],
+    ),
+    "monitor.models.UptimeCheckTaskSubscription": ModelSpec(
+        model_path="monitor.models.UptimeCheckTaskSubscription",
+        fields={
+            "id",
+            "uptimecheck_id",
+            "subscription_id",
+            "bk_biz_id",
+            "is_deleted",
+            "create_time",
+            "update_time",
+            "update_user",
+        },
+        manager_name="origin_objects",
+        required_exact_filter="uptimecheck_id",
+        note=(
+            "拨测任务→节点管理订阅映射；必须传任务所属已授权业务 bk_biz_id 并按正整数 uptimecheck_id 精确读取，"
+            "校验任务业务归属，含软删行。行内 bk_biz_id 是拨测节点所属业务，可与任务业务不同。"
+        ),
+        examples=[{"bk_biz_id": 2, "filter": {"uptimecheck_id": 1}, "limit": 20}],
+    ),
     "metadata.models.bcs.cluster.BCSClusterInfo": ModelSpec(
         model_path="metadata.models.bcs.cluster.BCSClusterInfo",
         fields={
@@ -315,6 +498,390 @@ ALLOWED_MODEL_SPECS: dict[str, ModelSpec] = {
             }
         ],
     ),
+    "metadata.models.result_table.ResultTableOption": ModelSpec(
+        model_path="metadata.models.result_table.ResultTableOption",
+        fields={"bk_tenant_id", "table_id", "name", "value_type", "value", "create_time"},
+        default_fields={"bk_tenant_id", "table_id", "name", "value_type", "value"},
+        fixed_filters={"name": "graph_relation_v4_data_link"},
+        note=(
+            "仅用于读取 Graph Relation V4 的 graph_relation_v4_data_link 选项，确认 write_targets。"
+            "服务端固定 name 条件，不能读取或过滤其他 ResultTableOption.value。"
+        ),
+        examples=[
+            {
+                "filter": {
+                    "bk_tenant_id": "system",
+                    "table_id": "system_2_demo.__default__",
+                    "name": "graph_relation_v4_data_link",
+                },
+                "fields": ["bk_tenant_id", "table_id", "name", "value_type", "value"],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.storage.SurrealDBStorage": ModelSpec(
+        model_path="metadata.models.storage.SurrealDBStorage",
+        fields={"bk_tenant_id", "table_id", "table_type", "vertices", "relations", "storage_cluster_id"},
+        default_fields={"bk_tenant_id", "table_id", "table_type", "storage_cluster_id"},
+        queryset_scope=_scope_by_graph_table_id,
+        server_scope=("仅返回 table_id 存在于同租户 graph_relation_time_series DataLink.table_ids 的记录。"),
+        note=(
+            "Graph Relation V4 的本地 SurrealDB 存储声明，用于核对图表类型、顶点、关系和集群 ID。"
+            "不包含 SurrealDB 地址、账号、密码或 token。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "table_id": "system_2_demo.__default__"},
+                "fields": [
+                    "bk_tenant_id",
+                    "table_id",
+                    "table_type",
+                    "vertices",
+                    "relations",
+                    "storage_cluster_id",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.bkdata.result_table.BkBaseResultTable": ModelSpec(
+        model_path="metadata.models.bkdata.result_table.BkBaseResultTable",
+        fields={
+            "bk_tenant_id",
+            "data_link_name",
+            "bkbase_data_name",
+            "storage_type",
+            "monitor_table_id",
+            "storage_cluster_id",
+            "status",
+            "bkbase_table_id",
+            "bkbase_rt_name",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "data_link_name",
+            "storage_type",
+            "monitor_table_id",
+            "status",
+            "bkbase_table_id",
+            "bkbase_rt_name",
+        },
+        queryset_scope=_scope_by_graph_data_link_name,
+        server_scope=("仅返回 data_link_name 匹配同租户 graph_relation_time_series DataLink 的记录。"),
+        note=(
+            "BKBase 结果表落地状态，用 data_link_name/monitor_table_id 对账 DataLink，"
+            "并确认 storage_type、status 和 BKBase 回填 ID。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "monitor_table_id": "system_2_demo.__default__"},
+                "fields": [
+                    "bk_tenant_id",
+                    "data_link_name",
+                    "storage_type",
+                    "monitor_table_id",
+                    "status",
+                    "bkbase_table_id",
+                    "bkbase_rt_name",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_link.data_link.DataLink": ModelSpec(
+        model_path="metadata.models.data_link.data_link.DataLink",
+        fields={
+            "bk_tenant_id",
+            "data_link_name",
+            "namespace",
+            "data_link_strategy",
+            "bk_data_id",
+            "table_ids",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "data_link_name",
+            "namespace",
+            "data_link_strategy",
+            "bk_data_id",
+            "table_ids",
+        },
+        fixed_filters={"data_link_strategy": "graph_relation_time_series"},
+        note=(
+            "仅查询 graph_relation_time_series 链路主记录，核对租户、dataid、结果表列表和命名空间。"
+            "服务端固定 data_link_strategy，不扩展为其他 DataLink 的通用读取。"
+        ),
+        examples=[
+            {
+                "filter": {
+                    "bk_tenant_id": "system",
+                    "data_link_strategy": "graph_relation_time_series",
+                    "data_link_name__contains": "demo",
+                },
+                "fields": [
+                    "bk_tenant_id",
+                    "data_link_name",
+                    "namespace",
+                    "data_link_strategy",
+                    "bk_data_id",
+                    "table_ids",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_link.data_link_configs.ResultTableConfig": ModelSpec(
+        model_path="metadata.models.data_link.data_link_configs.ResultTableConfig",
+        fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "data_type",
+            "table_id",
+            "bkbase_table_id",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "status",
+            "data_type",
+            "table_id",
+            "bkbase_table_id",
+        },
+        queryset_scope=_scope_by_graph_data_link_name,
+        server_scope=("仅返回 data_link_name 匹配同租户 graph_relation_time_series DataLink 的记录。"),
+        note=(
+            "DataLink ResultTable 组件状态；Graph V4 需同时核对 VM 分支(data_type=metric)"
+            "与 SurrealDB 分支(data_type=graph)，不能用 data_type 固定裁掉任一分支。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "data_link_name": "demo_graph_relation"},
+                "fields": [
+                    "bk_tenant_id",
+                    "namespace",
+                    "name",
+                    "data_link_name",
+                    "status",
+                    "data_type",
+                    "table_id",
+                    "bkbase_table_id",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_link.data_link_configs.VMStorageBindingConfig": ModelSpec(
+        model_path="metadata.models.data_link.data_link_configs.VMStorageBindingConfig",
+        fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "vm_cluster_name",
+            "bkbase_result_table_name",
+            "table_id",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "status",
+            "vm_cluster_name",
+            "bkbase_result_table_name",
+            "table_id",
+        },
+        queryset_scope=_scope_by_graph_data_link_name,
+        server_scope=("仅返回 data_link_name 匹配同租户 graph_relation_time_series DataLink 的记录。"),
+        note=("Graph V4 VM 写入分支的绑定状态和逻辑集群名。仅开放集群标识，不开放存储地址、端口、账号、密码或 token。"),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "data_link_name": "demo_graph_relation"},
+                "fields": [
+                    "bk_tenant_id",
+                    "namespace",
+                    "name",
+                    "data_link_name",
+                    "status",
+                    "vm_cluster_name",
+                    "bkbase_result_table_name",
+                    "table_id",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_link.data_link_configs.SurrealDBBindingConfig": ModelSpec(
+        model_path="metadata.models.data_link.data_link_configs.SurrealDBBindingConfig",
+        fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "surrealdb_cluster_name",
+            "table_id",
+            "bkbase_result_table_name",
+            "table_type",
+            "vertices",
+            "relations",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "status",
+            "surrealdb_cluster_name",
+            "table_id",
+            "bkbase_result_table_name",
+            "table_type",
+        },
+        queryset_scope=_scope_by_graph_data_link_name,
+        server_scope=("仅返回 data_link_name 匹配同租户 graph_relation_time_series DataLink 的记录。"),
+        note=(
+            "Graph V4 SurrealDB 写入分支的绑定状态和图定义，用于与 SurrealDBStorage 对账。"
+            "仅开放逻辑集群名，不开放连接地址、凭据或 token。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "data_link_name": "demo_graph_relation"},
+                "fields": [
+                    "bk_tenant_id",
+                    "namespace",
+                    "name",
+                    "data_link_name",
+                    "status",
+                    "surrealdb_cluster_name",
+                    "table_id",
+                    "bkbase_result_table_name",
+                    "table_type",
+                    "vertices",
+                    "relations",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_link.data_link_configs.DataBusConfig": ModelSpec(
+        model_path="metadata.models.data_link.data_link_configs.DataBusConfig",
+        fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "data_id_name",
+            "bk_data_id",
+            "sink_names",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "status",
+            "data_id_name",
+            "bk_data_id",
+            "sink_names",
+        },
+        queryset_scope=_scope_by_graph_data_link_name,
+        server_scope=("仅返回 data_link_name 匹配同租户 graph_relation_time_series DataLink 的记录。"),
+        note=(
+            "Graph V4 VM/SurrealDB Databus 组件对账，sink_names 用于确认实际写入分支。"
+            "consumer_group 不属于本轮 Graph 控制面最小证据，保持不可读、不可过滤。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "data_link_name": "demo_graph_relation"},
+                "fields": [
+                    "bk_tenant_id",
+                    "namespace",
+                    "name",
+                    "data_link_name",
+                    "status",
+                    "data_id_name",
+                    "bk_data_id",
+                    "sink_names",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.data_source.DataSourceResultTable": ModelSpec(
+        model_path="metadata.models.data_source.DataSourceResultTable",
+        fields={"bk_tenant_id", "bk_data_id", "table_id", "create_time"},
+        default_fields={"bk_tenant_id", "bk_data_id", "table_id", "create_time"},
+        queryset_scope=_scope_graph_data_source_result_table,
+        server_scope=(
+            "仅返回 (bk_tenant_id, bk_data_id, table_id) 同时命中同一 graph_relation_time_series DataLink 的记录。"
+        ),
+        note="数据源与结果表映射，用于从 Graph V4 table_id 对账实际 bk_data_id；不开放创建人。",
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "table_id": "system_2_demo.__default__"},
+                "fields": ["bk_tenant_id", "bk_data_id", "table_id", "create_time"],
+                "limit": 20,
+            }
+        ],
+    ),
+    "metadata.models.space.space.SpaceDataSource": ModelSpec(
+        model_path="metadata.models.space.space.SpaceDataSource",
+        fields={
+            "bk_tenant_id",
+            "space_type_id",
+            "space_id",
+            "bk_data_id",
+            "from_authorization",
+            "create_time",
+            "update_time",
+        },
+        default_fields={
+            "bk_tenant_id",
+            "space_type_id",
+            "space_id",
+            "bk_data_id",
+            "from_authorization",
+        },
+        queryset_scope=_scope_graph_space_data_source,
+        server_scope=("仅返回 (bk_tenant_id, bk_data_id) 命中 graph_relation_time_series DataLink 的记录。"),
+        note="空间与数据源映射，用于确认 Graph V4 数据源对哪些空间可见；不开放创建人或更新人。",
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "bk_data_id": 50010},
+                "fields": [
+                    "bk_tenant_id",
+                    "space_type_id",
+                    "space_id",
+                    "bk_data_id",
+                    "from_authorization",
+                ],
+                "limit": 20,
+            }
+        ],
+    ),
     "bkmonitor.models.config.GlobalConfig": ModelSpec(
         model_path="bkmonitor.models.config.GlobalConfig",
         fields={
@@ -418,6 +985,202 @@ ALLOWED_MODEL_SPECS: dict[str, ModelSpec] = {
             }
         ],
     ),
+    "bkmonitor.models.fta.action.ActionConfig": ModelSpec(
+        model_path="bkmonitor.models.fta.action.ActionConfig",
+        fields={
+            "id",
+            "name",
+            "bk_biz_id",
+            "plugin_id",
+            "is_builtin",
+            "is_enabled",
+            "is_deleted",
+            "create_time",
+            "update_time",
+            "update_user",
+        },
+        default_fields={
+            "id",
+            "name",
+            "bk_biz_id",
+            "plugin_id",
+            "is_enabled",
+            "is_deleted",
+            "create_time",
+            "update_time",
+        },
+        # execute_config（执行参数，可内嵌 webhook URL / header token 等凭据，键名由插件作者自定义、
+        # 无类型源可穷举）一律不透出：既不列入 fields，也登记 sensitive_fields 兜底显式 fields 请求。
+        sensitive_fields={"execute_config"},
+        manager_name="origin_objects",
+        note=(
+            "处理/通知套餐(ActionConfig)。用 origin_objects 读，含 is_deleted=True 的软删行，"
+            "用于区分「克隆/新建套餐缓存未传播的瞬时误判」与「套餐真删/真禁」——软删行的 is_deleted/"
+            "is_enabled 为权威态。execute_config（执行参数，可内嵌凭据）不透出，需其内容走 SaaS。"
+        ),
+        examples=[
+            {
+                "filter": {"id": 1},
+                "fields": ["id", "name", "is_enabled", "is_deleted", "create_time", "update_time", "update_user"],
+            },
+            {"filter": {"bk_biz_id": "2"}, "limit": 20},
+        ],
+    ),
+    "bkmonitor.models.fta.action.StrategyActionConfigRelation": ModelSpec(
+        model_path="bkmonitor.models.fta.action.StrategyActionConfigRelation",
+        fields={
+            "id",
+            "strategy_id",
+            "config_id",
+            "relate_type",
+            "signal",
+            "user_type",
+            "is_enabled",
+            "is_deleted",
+            "create_time",
+            "update_time",
+            "update_user",
+        },
+        default_fields={
+            "id",
+            "strategy_id",
+            "config_id",
+            "relate_type",
+            "signal",
+            "is_enabled",
+            "is_deleted",
+        },
+        manager_name="origin_objects",
+        note=(
+            "策略↔套餐绑定关系(StrategyActionConfigRelation)。用 origin_objects 读，含软删行，"
+            "配合 ActionConfig 判定绑定漂移/解绑/孤儿：relate_type=NOTICE 通知套餐、ACTION 处理动作。"
+            "user_groups/options（可能较大且非取证核心）未纳入白名单。"
+        ),
+        examples=[
+            {
+                "filter": {"strategy_id": 1},
+                "fields": ["id", "config_id", "relate_type", "signal", "is_enabled", "is_deleted"],
+            },
+            {"filter": {"config_id": 1}, "limit": 20},
+        ],
+    ),
+    "metadata.models.vm.record.AccessVMRecord": ModelSpec(
+        model_path="metadata.models.vm.record.AccessVMRecord",
+        # VM 接入登记：某结果表落在哪个 VM 集群（vm_cluster_id）、对应 bkbase vm_rt。
+        # 「多租户 VM 未对齐 / 元数据陈旧」致查空的判别第一跳：取 result_table_id 的 vm_cluster_id，
+        # 再用 ClusterInfo(cluster_type=victoria_metrics, cluster_id=该值, bk_tenant_id=该租户) 对账。
+        fields={
+            "id",
+            "result_table_id",
+            "bk_tenant_id",
+            "vm_cluster_id",
+            "vm_result_table_id",
+            "bk_base_data_id",
+            "bk_base_data_name",
+            "storage_cluster_id",
+            "bcs_cluster_id",
+            "data_type",
+        },
+        default_fields={
+            "result_table_id",
+            "bk_tenant_id",
+            "vm_cluster_id",
+            "vm_result_table_id",
+            "bk_base_data_id",
+        },
+        note=(
+            "VM 接入登记(AccessVMRecord)。查空判别第一跳：取某 result_table_id 的 vm_cluster_id，"
+            "再到 ClusterInfo(cluster_type=victoria_metrics, cluster_id=该值, bk_tenant_id=该租户)对账——"
+            "对不上即 ds_rt.py storage_name 解析为空、unify-query 查空。多租户务必带 bk_tenant_id 过滤。"
+        ),
+        examples=[
+            {
+                "filter": {"result_table_id": "system_20001_sys.cpu_summary", "bk_tenant_id": "system"},
+                "fields": ["result_table_id", "vm_cluster_id", "vm_result_table_id", "bk_base_data_id"],
+            }
+        ],
+    ),
+    "metadata.models.entity_relation.ResourceDefinition": ModelSpec(
+        model_path="metadata.models.entity_relation.ResourceDefinition",
+        # 关联关系资源定义的发布源：周期任务把 to_redis_json() 发布到 Redis，供 UQ、BMW 的 SchemaProvider 消费。
+        # 字段与 to_redis_json() 一致，用于核对实际定义和内置静态定义。
+        fields={"namespace", "name", "fields", "labels", "generation"},
+        note="关联关系资源定义的发布源。namespace 为空表示全局（发布到 Redis 时为 __all__）。",
+        examples=[{"filter": {"name": "pod"}, "fields": ["namespace", "name", "fields"]}],
+    ),
+    "metadata.models.entity_relation.RelationDefinition": ModelSpec(
+        model_path="metadata.models.entity_relation.RelationDefinition",
+        # 关联关系定义的发布源，用途同 ResourceDefinition。
+        fields={
+            "namespace",
+            "name",
+            "from_resource",
+            "to_resource",
+            "category",
+            "is_directional",
+            "is_belongs_to",
+            "labels",
+            "generation",
+        },
+        note="关联关系定义的发布源。namespace 为空表示全局（发布到 Redis 时为 __all__）。",
+        examples=[{"filter": {"name": "node_with_pod"}, "fields": ["namespace", "name", "from_resource", "to_resource"]}],
+    ),
+    "metadata.models.storage.ClusterInfo": ModelSpec(
+        model_path="metadata.models.storage.ClusterInfo",
+        # 存储集群登记。查空判别第二跳：按 (bk_tenant_id, cluster_type=victoria_metrics, cluster_id)
+        # 核 AccessVMRecord.vm_cluster_id 能否命中——命不中即 storage_name 空、查空。
+        # ⚠️ cluster_type 的 VM 值是 "victoria_metrics"（ClusterInfo.TYPE_VM），不是 "vm"。
+        # username/password（SymmetricTextField 加密凭据）不纳入白名单、不可读、不可过滤。
+        fields={
+            "cluster_id",
+            "cluster_name",
+            "cluster_type",
+            "bk_tenant_id",
+            "domain_name",
+            "port",
+            "schema",
+            "is_default_cluster",
+            "registered_to_bkbase",
+            "version",
+            "description",
+            "creator",
+            "create_time",
+            "last_modify_time",
+        },
+        default_fields={
+            "cluster_id",
+            "cluster_name",
+            "cluster_type",
+            "bk_tenant_id",
+            "is_default_cluster",
+            "registered_to_bkbase",
+        },
+        # 凭据/私钥字段兜底：即便未来误加进 fields 或被显式请求也不透出、不可过滤。
+        # username/password（SASL 凭据）+ ssl_certificate/ssl_certificate_key（TLS 证书与私钥）/
+        # ssl_certificate_authorities（CA）——均属敏感，绝不进白名单读取面。
+        sensitive_fields={
+            "username",
+            "password",
+            "ssl_certificate",
+            "ssl_certificate_key",
+            "ssl_certificate_authorities",
+        },
+        note=(
+            "存储集群登记(ClusterInfo)。查空判别第二跳：按 (bk_tenant_id, cluster_type='victoria_metrics', "
+            "cluster_id) 核 AccessVMRecord.vm_cluster_id 能否命中——命不中即 ds_rt.py storage_name 空、"
+            "unify-query 查空。cluster_type 的 VM 值是 'victoria_metrics'（勿写 'vm'）。username/password 不可读。"
+        ),
+        examples=[
+            {
+                "filter": {"bk_tenant_id": "system", "cluster_type": "victoria_metrics"},
+                "fields": ["cluster_id", "cluster_name", "registered_to_bkbase"],
+            },
+            {
+                "filter": {"bk_tenant_id": "system", "cluster_type": "victoria_metrics", "cluster_id": 10113},
+                "fields": ["cluster_id", "cluster_name", "domain_name", "registered_to_bkbase"],
+            },
+        ],
+    ),
 }
 
 
@@ -429,7 +1192,11 @@ def read_db_model(params: dict[str, Any]) -> dict[str, Any]:
     normalized_filter = _normalize_filter(params.get("filter") or {}, spec)
     selected_fields = _normalize_selected_fields(params.get("fields"), params.get("exclude_fields"), spec)
 
-    queryset = model_cls.objects.all()
+    queryset = getattr(model_cls, spec.manager_name).all()
+    if model_name in BUSINESS_SCOPED_MODELS:
+        queryset = _scope_business_queryset(queryset, model_name, params, normalized_filter)
+    if spec.queryset_scope is not None:
+        queryset = spec.queryset_scope(queryset)
     if spec.select_related:
         queryset = queryset.select_related(*spec.select_related)
     queryset = queryset.filter(**normalized_filter)
@@ -452,6 +1219,49 @@ def read_db_model(params: dict[str, Any]) -> dict[str, Any]:
         "fields": sorted(selected_fields),
         "items": items,
     }
+
+
+REPORT_LEGACY_MODELS = frozenset(
+    {"bkmonitor.models.base.ReportItems", "bkmonitor.models.base.ReportContents", "bkmonitor.models.base.ReportStatus"}
+)
+UPTIME_CHECK_SUBSCRIPTION_MODEL = "monitor.models.UptimeCheckTaskSubscription"
+BUSINESS_SCOPED_MODELS = REPORT_LEGACY_MODELS | {
+    "bkmonitor.models.report.Report",
+    "bkmonitor.models.report.ReportChannel",
+    "bkmonitor.models.report.ReportSendRecord",
+    "monitor.models.UptimeCheckTask",
+    UPTIME_CHECK_SUBSCRIPTION_MODEL,
+}
+
+
+def _scope_business_queryset(queryset: Any, model_name: str, params: dict[str, Any], filters: dict[str, Any]) -> Any:
+    from bkmonitor.models.report import Report
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog.cmdb import ParamsGuardRejected, _authorize_business
+
+    bk_biz_id = params.get("bk_biz_id")
+    if type(bk_biz_id) is not int or bk_biz_id <= 0:
+        _raise_discovery_error("邮件订阅与拨测模型读取必须传正整数 bk_biz_id")
+    try:
+        tenant = _authorize_business(bk_biz_id)
+    except ParamsGuardRejected as error:
+        raise CustomException(message=str(error)) from error
+
+    if model_name in REPORT_LEGACY_MODELS:
+        # 旧三表没有业务字段，只能在已授权业务所属租户内读取。
+        return queryset.filter(bk_tenant_id=tenant)
+    if model_name in {"bkmonitor.models.report.Report", "monitor.models.UptimeCheckTask"}:
+        return queryset.filter(bk_biz_id=bk_biz_id)
+    if model_name == UPTIME_CHECK_SUBSCRIPTION_MODEL:
+        from monitor.models import UptimeCheckTask
+
+        # 订阅按拨测节点所属业务拆分，行内 bk_biz_id 不等于任务业务，只能经任务行校验归属。
+        if not UptimeCheckTask.origin_objects.filter(id=filters["uptimecheck_id"], bk_biz_id=bk_biz_id).exists():
+            _raise_discovery_error("拨测任务不存在或不属于已授权业务")
+        return queryset
+    # 子表没有业务字段，先验证父订阅归属，软删父订阅也能回溯历史发送状态。
+    if not Report.origin_objects.filter(id=filters["report_id"], bk_biz_id=bk_biz_id).exists():
+        _raise_discovery_error("订阅不存在或不属于已授权业务")
+    return queryset
 
 
 def list_db_models(params: dict[str, Any]) -> dict[str, Any]:
@@ -485,8 +1295,17 @@ def _serialize_model_spec(model_name: str, spec: ModelSpec) -> dict[str, Any]:
     }
     if spec.note:
         serialized["note"] = spec.note
+    if spec.fixed_filters:
+        serialized["fixed_filters"] = spec.fixed_filters
+    if spec.server_scope:
+        serialized["server_scope"] = spec.server_scope
     if spec.row_masker is not None:
         serialized["row_masking"] = spec.row_mask_note or f"敏感行的 value 字段会被脱敏为 {MASKED_VALUE}"
+    # 仅非默认 manager 才回显，避免改动既有模型自描述（默认 objects 的模型输出保持不变）。
+    if spec.manager_name != "objects":
+        serialized["manager"] = spec.manager_name
+    if spec.required_exact_filter:
+        serialized["required_exact_filter"] = spec.required_exact_filter
     return serialized
 
 
@@ -531,7 +1350,22 @@ def _normalize_filter(raw_filter: dict[str, Any], spec: ModelSpec) -> dict[str, 
         if lookup not in ALLOWED_LOOKUPS:
             _raise_discovery_error(f"不支持的 lookup: {lookup}")
         normalized_key = field_name if lookup == "exact" else f"{field_name}__{lookup}"
+        if normalized_key in normalized_filter:
+            _raise_discovery_error(f"filter 包含重复条件: {normalized_key}")
         normalized_filter[normalized_key] = value
+
+    for fixed_field, fixed_value in spec.fixed_filters.items():
+        for key, value in normalized_filter.items():
+            field_name, lookup = _split_lookup(key)
+            if field_name != fixed_field:
+                continue
+            if lookup != "exact" or value != fixed_value:
+                _raise_discovery_error(f"filter 与模型固定条件冲突: {fixed_field}")
+        normalized_filter[fixed_field] = fixed_value
+    if spec.required_exact_filter:
+        value = normalized_filter.get(spec.required_exact_filter)
+        if type(value) is not int or value <= 0:
+            _raise_discovery_error(f"filter 必须包含正整数 {spec.required_exact_filter} 的精确条件")
     return normalized_filter
 
 
@@ -621,6 +1455,7 @@ KernelRPCRegistry.register_function(
     handler=read_db_model,
     params_schema={
         "model": "白名单模型路径",
+        "bk_biz_id": "邮件订阅与拨测模型必填：当前调用身份已获授权的业务 ID",
         "filter": "安全 ORM lookup 对象",
         "fields": "可选字段数组，必须在模型字段白名单内",
         "exclude_fields": "可选排除字段数组",
@@ -659,6 +1494,7 @@ BkmCliOpRegistry.register(
     audit_tags=["db", "readonly"],
     params_schema={
         "model": "string",
+        "bk_biz_id": "integer；邮件订阅与拨测模型必填，目标授权业务",
         "filter": "object",
         "fields": "string[]",
         "exclude_fields": "string[]",

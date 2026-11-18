@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = "==3.11.*"
 
 [[package]]
@@ -118,18 +118,19 @@ wheels = [
 
 [[package]]
 name = "apigw-manager"
-version = "4.0.4"
+version = "4.2.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bkapi-bk-apigateway" },
     { name = "bkapi-client-core" },
+    { name = "docutils" },
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "setuptools" },
     { name = "urllib3" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/79/6d/4eeef9797d4c63e72739190149121addfc74e2d86ded0117dcf1316a4936/apigw_manager-4.0.4-py3-none-any.whl", hash = "sha256:55b423e321e58c0dbca11f3d2f8b03f5c609c2b976860b9e6172eebd70816417", size = 72381, upload-time = "2025-05-16T06:21:01.972Z" },
+    { url = "https://files.pythonhosted.org/packages/50/78/a8c2b091150482e5a2e0ad47dc916ab3d104ca05a102132fa34f920f2351/apigw_manager-4.2.4-py3-none-any.whl", hash = "sha256:f9529624d78eaaad5e79a5dc4d234f219796539ab5024c0ca7f872710b5fdaeb", size = 77552, upload-time = "2026-05-20T06:57:01.393Z" },
 ]
 
 [[package]]
@@ -256,17 +257,21 @@ sdist = { url = "https://files.pythonhosted.org/packages/a8/05/91523d2a5f842ebee
 
 [[package]]
 name = "bk-crypto-python-sdk"
-version = "2.0.1"
+version = "4.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "cryptography" },
     { name = "dacite" },
-    { name = "pycryptodomex" },
-    { name = "tongsuopy-crayon" },
-    { name = "wrapt" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/27/96/38195b6886e4e4a5b40320b70dff5dd6902f17d81ff1cc29e0d14cff7b97/bk_crypto_python_sdk-2.0.1.tar.gz", hash = "sha256:bd33cb86cd287d96eb1f843831b1697b9840feddc95a3cfb5b92669d5246c209", size = 20415, upload-time = "2024-12-16T14:05:54.125Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/52/6c/30a553bf6297456192675b20b67b6bed1625386b0955b1b3833682b0e7fd/bk_crypto_python_sdk-4.1.1.tar.gz", hash = "sha256:89908ab53e2e71eca7316cf5b64b80cce762b38888c51956fb0850fd1abc7dae", size = 141563, upload-time = "2026-09-01T12:19:22.781Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/62/b8ae8fb04e8f2a7f84c01ea9504e5366f11168cfb8b4f0683ae951737a30/bk_crypto_python_sdk-2.0.1-py3-none-any.whl", hash = "sha256:6df90b38e75d756fac2016d60e3e820c0026013b0219289f3032bceba300f49b", size = 44927, upload-time = "2024-12-16T14:05:52.129Z" },
+    { url = "https://files.pythonhosted.org/packages/38/b7/5df1b46e8e8cfb2faaa4b75093e48a4be02718f670d3b2b0c2bbe65a6410/bk_crypto_python_sdk-4.1.1-py3-none-any.whl", hash = "sha256:795f8ca88a70d82073a9862f165ec57db42ab0b5138f0a423f50d510b91a0bd5", size = 51462, upload-time = "2026-09-01T12:19:21.712Z" },
+]
+
+[package.optional-dependencies]
+gm = [
+    { name = "tongsuopy-crayon" },
 ]
 
 [[package]]
@@ -285,12 +290,24 @@ wheels = [
 ]
 
 [[package]]
+name = "bk-kms-sdk"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "bk-crypto-python-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/82/09/005d9c6a32574b78bcc1f7fa08b230ce73ed69eb75292fbfc02b6e03fe76/bk_kms_sdk-1.0.0.tar.gz", hash = "sha256:34962182f15f7e1c6b4edbde25ab43610d0d0344373b2977e9084808484a0fd4", size = 8516, upload-time = "2026-10-09T03:46:24.449Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/37/b8/9cc7810f14b2f7c81191f372598f4ee83ea76d300c8db04811df47ff6204/bk_kms_sdk-1.0.0-py3-none-any.whl", hash = "sha256:ba7357de1ec442e676a2e203ecd465fb7c79f0c5d0614a380d4629e85484107d", size = 11300, upload-time = "2026-10-09T03:46:23.248Z" },
+]
+
+[[package]]
 name = "bk-monitor-base"
 version = "0.0.1"
 source = { editable = "../bk-monitor-base" }
 dependencies = [
     { name = "arrow" },
-    { name = "bk-crypto-python-sdk" },
+    { name = "bk-crypto-python-sdk", extra = ["gm"] },
     { name = "bkstorages" },
     { name = "blue-krill" },
     { name = "celery" },
@@ -333,9 +350,9 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "arrow", specifier = "==0.6" },
-    { name = "bk-crypto-python-sdk", specifier = "==2.0.1" },
+    { name = "bk-crypto-python-sdk", extras = ["gm"], specifier = "==4.1.1" },
     { name = "bkstorages", specifier = ">=2.0.1,<2.1.0" },
-    { name = "blue-krill", specifier = "==2.1.0" },
+    { name = "blue-krill", specifier = "==3.1.1" },
     { name = "celery", specifier = "==5.4.0" },
     { name = "confluent-kafka", specifier = "==2.4.0" },
     { name = "django", specifier = "<5" },
@@ -406,12 +423,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/e4/5b/242444a0fb700335f
 
 [[package]]
 name = "bkapi-bk-apigateway"
-version = "1.0.11"
+version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bkapi-client-core" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/b2/9ad0ae851955ceee8d3bd99298cc0ac9462594f39d066efd5a388c6ef4c7/bkapi-bk-apigateway-1.0.11.tar.gz", hash = "sha256:fcdbc4eca8bfd3310995cec532ae127ee0533ea858c82916d9782e4df3df4c49", size = 5946, upload-time = "2023-02-24T10:50:25.984Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/26/f831c86e48612f482916c7b87dd370ab642b8d6d951035ee91ac9b95f5ec/bkapi_bk_apigateway-1.2.0.tar.gz", hash = "sha256:951af55c247c7b0f8fedcc59291db4b676c0c142a2eb2e13f38f35292f464e0b", size = 12162, upload-time = "2026-05-29T03:23:29.733Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/56/a5710f2161778eceae3eeed91b3bdfb21e5b586ca58e7a4dd305b0c41522/bkapi_bk_apigateway-1.2.0-py3-none-any.whl", hash = "sha256:32f9e8eba781ef78e755476a3d4b7f8b0421751d3a07ae67496b0bd54457877e", size = 16166, upload-time = "2026-05-29T03:23:28.448Z" },
+]
 
 [[package]]
 name = "bkapi-client-core"
@@ -438,8 +458,9 @@ dependencies = [
     { name = "babel" },
     { name = "betterproto" },
     { name = "bk-audit" },
-    { name = "bk-crypto-python-sdk" },
+    { name = "bk-crypto-python-sdk", extra = ["gm"] },
     { name = "bk-iam" },
+    { name = "bk-kms-sdk" },
     { name = "bk-monitor-base" },
     { name = "bk-notice-sdk" },
     { name = "bkstorages" },
@@ -478,6 +499,7 @@ dependencies = [
     { name = "ipython" },
     { name = "jinja2" },
     { name = "jmespath" },
+    { name = "jsonschema" },
     { name = "kafka-python" },
     { name = "kubernetes" },
     { name = "langfuse" },
@@ -504,6 +526,7 @@ dependencies = [
     { name = "protobuf" },
     { name = "psutil" },
     { name = "pycryptodome" },
+    { name = "pydantic-core" },
     { name = "pyinstrument" },
     { name = "pymysql" },
     { name = "pypinyin" },
@@ -519,6 +542,7 @@ dependencies = [
     { name = "six" },
     { name = "sqlparse" },
     { name = "supervisor" },
+    { name = "tiktoken" },
     { name = "typing-extensions" },
     { name = "ujson" },
     { name = "whitenoise" },
@@ -538,7 +562,6 @@ aidev = [
     { name = "pyro4" },
     { name = "retry" },
     { name = "stackprinter" },
-    { name = "tiktoken" },
 ]
 dev = [
     { name = "basedpyright" },
@@ -566,13 +589,14 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aidev-agent", specifier = "==1.0.3" },
-    { name = "apigw-manager", specifier = "==4.0.4" },
+    { name = "apigw-manager", specifier = "==4.2.4" },
     { name = "arrow", specifier = "<1" },
     { name = "babel", specifier = "==2.14.0" },
     { name = "betterproto", specifier = "==2.0.0b7" },
     { name = "bk-audit", specifier = "==1.0.7" },
-    { name = "bk-crypto-python-sdk", specifier = "==2.0.1" },
+    { name = "bk-crypto-python-sdk", extras = ["gm"], specifier = "==4.1.1" },
     { name = "bk-iam", specifier = "==2.0.3" },
+    { name = "bk-kms-sdk", specifier = "==1.0.0" },
     { name = "bk-monitor-base", editable = "../bk-monitor-base" },
     { name = "bk-notice-sdk", specifier = "==1.4.2" },
     { name = "bkstorages", specifier = "==2.0.3" },
@@ -611,6 +635,7 @@ requires-dist = [
     { name = "ipython", specifier = "==9.4.0" },
     { name = "jinja2", specifier = "==3.1.6" },
     { name = "jmespath", specifier = "==1.0.1" },
+    { name = "jsonschema", specifier = "==4.25.1" },
     { name = "kafka-python", specifier = "==1.4.6" },
     { name = "kubernetes", specifier = "==18.20.0" },
     { name = "langfuse", specifier = "==2.60.5" },
@@ -637,6 +662,7 @@ requires-dist = [
     { name = "protobuf", specifier = "==3.19.5" },
     { name = "psutil", specifier = "==6.1.1" },
     { name = "pycryptodome", specifier = "==3.23.0" },
+    { name = "pydantic-core", specifier = ">=2.33.2,<3" },
     { name = "pyinstrument", specifier = "==4.6.2" },
     { name = "pymysql", specifier = "==1.1.1" },
     { name = "pypinyin", specifier = "==0.53.0" },
@@ -650,8 +676,9 @@ requires-dist = [
     { name = "requests-toolbelt", specifier = "==1.0.0" },
     { name = "schema", specifier = "==0.7.7" },
     { name = "six", specifier = "==1.17.0" },
-    { name = "sqlparse", specifier = "==0.5.3" },
+    { name = "sqlparse", specifier = "==0.6.1" },
     { name = "supervisor", specifier = "==4.2.5" },
+    { name = "tiktoken", specifier = "==0.9.0" },
     { name = "typing-extensions", specifier = "==4.14.1" },
     { name = "ujson", specifier = "==5.7.0" },
     { name = "whitenoise", specifier = "==6.5.0" },
@@ -671,7 +698,6 @@ aidev = [
     { name = "pyro4", specifier = "==4.82" },
     { name = "retry", specifier = "==0.9.2" },
     { name = "stackprinter", specifier = "==0.2.12" },
-    { name = "tiktoken", specifier = "==0.9.0" },
 ]
 dev = [
     { name = "basedpyright", specifier = "==1.38.2" },
@@ -724,7 +750,7 @@ wheels = [
 
 [[package]]
 name = "blue-krill"
-version = "2.1.0"
+version = "3.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bk-crypto-python-sdk" },
@@ -736,14 +762,12 @@ dependencies = [
     { name = "pyjwt" },
     { name = "python-editor" },
     { name = "requests" },
-    { name = "six" },
     { name = "toml" },
-    { name = "urllib3" },
     { name = "watchdog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/15/2696474aa56070faa12d9572a113f0ed0fcf06c4c6ec8625f3cebfd14324/blue_krill-2.1.0.tar.gz", hash = "sha256:b2cd00ae57b8e5e9ddb706a07a545f2e8e1278cef66476b1af5adbe542d2ee55", size = 64714, upload-time = "2025-02-24T06:39:54.422Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/19/54/0b026611c5bf4f6a01f069294a68108c51e8619167cb1b2cd6c1d5a2450e/blue_krill-3.1.1.tar.gz", hash = "sha256:01ad73b29ccabecf58ef26fb886240714cee9f3f046cbd6fffa61a3b734a879c", size = 63951, upload-time = "2026-06-30T11:32:10.353Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/ed/1351b5f9a6cde1b816416d1aa912aeac0467b4d1e5062b5cd735da5879b1/blue_krill-2.1.0-py3-none-any.whl", hash = "sha256:f59a0632ebe8259eced5021b6b1b9a1c52ba649483b8a712b5d48a90363e5e30", size = 103040, upload-time = "2025-02-24T06:39:51.91Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/3b/a155a9b7c4fd625c15df7efd8fa84aec27c7cc4e3bcc5539c5009d280dca/blue_krill-3.1.1-py3-none-any.whl", hash = "sha256:7b797ba24e4079ae6b142b37a4b4bbdf2b0047048ccfac20fbaac8fce2019e15", size = 97162, upload-time = "2026-06-30T11:32:08.218Z" },
 ]
 
 [[package]]
@@ -1401,6 +1425,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/37/7d/c871f55054e403fdfd6b8f65fd6d1c4e147ed100d3e9f9ba1fe695403939/dnspython-2.6.1.tar.gz", hash = "sha256:e8f0f9c23a7b7cb99ded64e6c3a6f3e701d78f50c55e002b839dea7225cff7cc", size = 332727, upload-time = "2024-02-18T18:48:48.952Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/87/a1/8c5287991ddb8d3e4662f71356d9656d91ab3a36618c3dd11b280df0d255/dnspython-2.6.1-py3-none-any.whl", hash = "sha256:5ef3b9680161f6fa89daf8ad451b5f1a33b18ae8a1c6778cdf4b43f08c0a6e50", size = 307696, upload-time = "2024-02-18T18:48:46.786Z" },
+]
+
+[[package]]
+name = "docutils"
+version = "0.20.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/53/a5da4f2c5739cf66290fac1431ee52aff6851c7c8ffd8264f13affd7bcdd/docutils-0.20.1.tar.gz", hash = "sha256:f08a4e276c3a1583a86dce3e34aba3fe04d02bba2dd51ed16106244e8a923e3b", size = 2058365, upload-time = "2023-05-16T23:39:19.748Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/87/f238c0670b94533ac0353a4e2a1a771a0cc73277b88bff23d3ae35a256c1/docutils-0.20.1-py3-none-any.whl", hash = "sha256:96f387a2c5562db4476f09f13bbab2192e764cac08ebbf3a34a95d9b1e4a59d6", size = 572666, upload-time = "2023-05-16T23:39:15.976Z" },
 ]
 
 [[package]]
@@ -3000,24 +3033,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pycryptodomex"
-version = "3.22.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ba/d5/861a7daada160fcf6b0393fb741eeb0d0910b039ad7f0cd56c39afdd4a20/pycryptodomex-3.22.0.tar.gz", hash = "sha256:a1da61bacc22f93a91cbe690e3eb2022a03ab4123690ab16c46abb693a9df63d", size = 4917584, upload-time = "2025-03-15T23:11:11.991Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/c2/8c97e649ccd3886eaf4918bd87791d3b52e80ba5b9c4678e2b631f2f8340/pycryptodomex-3.22.0-cp37-abi3-macosx_10_9_universal2.whl", hash = "sha256:aef4590263b9f2f6283469e998574d0bd45c14fb262241c27055b82727426157", size = 2494197, upload-time = "2025-03-15T23:10:19.824Z" },
-    { url = "https://files.pythonhosted.org/packages/f1/62/e947c35efebf95ba9bfe3fd76d766caa8d66d3f5d440fca05328c18b3352/pycryptodomex-3.22.0-cp37-abi3-macosx_10_9_x86_64.whl", hash = "sha256:5ac608a6dce9418d4f300fab7ba2f7d499a96b462f2b9b5c90d8d994cd36dcad", size = 1638999, upload-time = "2025-03-15T23:10:22.574Z" },
-    { url = "https://files.pythonhosted.org/packages/51/af/f877f8ec1c4185e3ede3bf2beb286e5150099d2b3cba528c98d832372f38/pycryptodomex-3.22.0-cp37-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7a24f681365ec9757ccd69b85868bbd7216ba451d0f86f6ea0eed75eeb6975db", size = 2181008, upload-time = "2025-03-15T23:10:24.615Z" },
-    { url = "https://files.pythonhosted.org/packages/6f/72/e7e748c682c889f30a0a7c3072a27a002b50a6cf5912ad1ce1269e327f40/pycryptodomex-3.22.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:259664c4803a1fa260d5afb322972813c5fe30ea8b43e54b03b7e3a27b30856b", size = 2267300, upload-time = "2025-03-15T23:10:27.396Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/ff/c45a97427aefbea07e8e6f2e08b10b4f2b287b99997bd22a4cef913e53a6/pycryptodomex-3.22.0-cp37-abi3-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:7127d9de3c7ce20339e06bcd4f16f1a1a77f1471bcf04e3b704306dde101b719", size = 2306939, upload-time = "2025-03-15T23:10:29.433Z" },
-    { url = "https://files.pythonhosted.org/packages/80/c7/cfbdd748a45b7fe8769a5494f130b092e9392e780ad204b5bc39c1a3a521/pycryptodomex-3.22.0-cp37-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:ee75067b35c93cc18b38af47b7c0664998d8815174cfc66dd00ea1e244eb27e6", size = 2180286, upload-time = "2025-03-15T23:10:31.729Z" },
-    { url = "https://files.pythonhosted.org/packages/91/db/26f5d2af7cf809acfe1d1d7182a81fc0d0c13c26dd995b22c5b41be28bf9/pycryptodomex-3.22.0-cp37-abi3-musllinux_1_2_i686.whl", hash = "sha256:1a8b0c5ba061ace4bcd03496d42702c3927003db805b8ec619ea6506080b381d", size = 2340887, upload-time = "2025-03-15T23:10:34.66Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/4c/78307b989d4855f806fff16424f837400e22df3695725f6aa45553e3a13c/pycryptodomex-3.22.0-cp37-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:bfe4fe3233ef3e58028a3ad8f28473653b78c6d56e088ea04fe7550c63d4d16b", size = 2265831, upload-time = "2025-03-15T23:10:36.913Z" },
-    { url = "https://files.pythonhosted.org/packages/fb/ad/cc69805083af164419a4413bc0ebc791e17103327da6979b14d5d3c7e7e5/pycryptodomex-3.22.0-cp37-abi3-win32.whl", hash = "sha256:2cac9ed5c343bb3d0075db6e797e6112514764d08d667c74cb89b931aac9dddd", size = 1766824, upload-time = "2025-03-15T23:10:39.667Z" },
-    { url = "https://files.pythonhosted.org/packages/15/c8/79ab16e5b95a8988caee792236a776beceabcaa2518979d4e21b6ee20f57/pycryptodomex-3.22.0-cp37-abi3-win_amd64.whl", hash = "sha256:ff46212fda7ee86ec2f4a64016c994e8ad80f11ef748131753adb67e9b722ebd", size = 1797989, upload-time = "2025-03-15T23:10:41.76Z" },
-]
-
-[[package]]
 name = "pydantic"
 version = "2.11.10"
 source = { registry = "https://pypi.org/simple" }
@@ -3131,11 +3146,11 @@ wheels = [
 
 [[package]]
 name = "pyjwt"
-version = "2.10.1"
+version = "2.15.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e7/46/bd74733ff231675599650d3e47f361794b22ef3e3770998dda30d3b63726/pyjwt-2.10.1.tar.gz", hash = "sha256:3cc5772eb20009233caf06e9d8a0577824723b44e6648ee0a2aedb6cf9381953", size = 87785, upload-time = "2024-11-28T03:43:29.933Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/43/ea/5194e52748b0da83d71e082d75496eaec6e58f419f5e184786ded517e6a9/pyjwt-2.15.1.tar.gz", hash = "sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8", size = 121252, upload-time = "2026-09-28T18:40:42.598Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/ad/689f02752eeec26aed679477e80e632ef1b682313be70793d798c1d5fc8f/PyJWT-2.10.1-py3-none-any.whl", hash = "sha256:dcdd193e30abefd5debf142f9adfcdd2b58004e644f25406ffaebd50bd98dacb", size = 22997, upload-time = "2024-11-28T03:43:27.893Z" },
+    { url = "https://files.pythonhosted.org/packages/50/ca/44de4e75f8aadc457f0634be3b542815078ded46dca30efb960edeecad6e/pyjwt-2.15.1-py3-none-any.whl", hash = "sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193", size = 33860, upload-time = "2026-09-28T18:40:41.429Z" },
 ]
 
 [[package]]
@@ -3707,11 +3722,11 @@ wheels = [
 
 [[package]]
 name = "sqlparse"
-version = "0.5.3"
+version = "0.6.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e5/40/edede8dd6977b0d3da179a342c198ed100dd2aba4be081861ee5911e4da4/sqlparse-0.5.3.tar.gz", hash = "sha256:09f67787f56a0b16ecdbde1bfc7f5d9c3371ca683cfeaa8e6ff60b4807ec9272", size = 84999, upload-time = "2024-12-10T12:05:30.728Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7e/e0/361c764ea58cc1a75f7b4b424a74b08449db8bfa5e9199c7275999fdd1b9/sqlparse-0.6.1.tar.gz", hash = "sha256:ca722573f848ff2d30e40ea30f53a104b7dea7635ea9285891263eb2c58fb6e7", size = 182236, upload-time = "2026-11-01T18:06:45.951Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/5c/bfd6bd0bf979426d405cc6e71eceb8701b148b16c21d2dc3c261efc61c7b/sqlparse-0.5.3-py3-none-any.whl", hash = "sha256:cf2196ed3418f3ba5de6af7e82c694a9fbdbfecccdfc72e281548517081f16ca", size = 44415, upload-time = "2024-12-10T12:05:27.824Z" },
+    { url = "https://files.pythonhosted.org/packages/df/ff/2fee788e82e75be8f210c65c5d103bf44c880e3769c884652a4cd911b8ba/sqlparse-0.6.1-py3-none-any.whl", hash = "sha256:3be5a72d04c873d690d7c6dedd33d6fae2ef82759881ceec02fc2efd0cba564f", size = 51200, upload-time = "2026-11-01T18:06:47.434Z" },
 ]
 
 [[package]]

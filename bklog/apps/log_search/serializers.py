@@ -20,6 +20,7 @@ the project delivered to anyone in the future.
 """
 
 import datetime
+import json
 import re
 import time
 
@@ -58,6 +59,36 @@ from apps.utils.lucene import EnhanceLuceneAdapter
 from bkm_space.serializers import SpaceUIDField
 
 HISTORY_MAX_DAYS = 7
+FAVORITE_SCOPE_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+class FavoriteScopeField(serializers.JSONField):
+    """收藏作用域，只接受便于安全映射为 JSONField 查询条件的扁平字符串键值对。"""
+
+    default_error_messages = {
+        "not_object": _("scope 必须是 JSON 对象"),
+        "invalid_key": _("scope 参数名必须以小写字母开头，只能包含小写字母、数字和下划线，且不能包含双下划线"),
+        "invalid_value": _("scope 参数值必须是字符串"),
+    }
+
+    def to_internal_value(self, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (TypeError, ValueError):
+                self.fail("invalid")
+
+        scope = super().to_internal_value(data)
+        if not isinstance(scope, dict):
+            self.fail("not_object")
+
+        for key, value in scope.items():
+            if not isinstance(key, str) or "__" in key or not FAVORITE_SCOPE_KEY_PATTERN.fullmatch(key):
+                self.fail("invalid_key")
+            if not isinstance(value, str):
+                self.fail("invalid_value")
+
+        return scope
 
 
 class PageSerializer(serializers.Serializer):
@@ -261,10 +292,15 @@ class IndexSetDeleteTagSerializer(serializers.Serializer):
 
 
 class CreateIndexSetTagSerializer(serializers.Serializer):
+    space_uid = SpaceUIDField(label=_("空间唯一标识"), required=True)
     name = serializers.CharField(label=_("标签名称"), max_length=255, required=True)
     color = serializers.ChoiceField(
         label=_("标签颜色"), choices=TagColor.get_choices(), default=TagColor.GREEN.value, required=False
     )
+
+
+class IndexSetTagListSerializer(serializers.Serializer):
+    space_uid = serializers.CharField(label=_("空间唯一标识"), required=False, allow_blank=True, default="")
 
 
 class KeywordSerializer(serializers.Serializer):
@@ -339,11 +375,13 @@ class SearchAttrSerializer(serializers.Serializer):
 class OriginalSearchAttrSerializer(serializers.Serializer):
     begin = serializers.IntegerField(required=False, default=0)
     size = serializers.IntegerField(required=False, default=3, max_value=10)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
 
 
 class SearchFieldsSerializer(serializers.Serializer):
     start_time = serializers.IntegerField(label=_("开始时间"), required=False)
     end_time = serializers.IntegerField(label=_("结束时间"), required=False)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
     scope = serializers.ChoiceField(
         label=_("类型"), choices=SearchScopeEnum.get_choices(), default=SearchScopeEnum.DEFAULT.value
     )
@@ -355,7 +393,6 @@ class UnionConfigSerializer(serializers.Serializer):
     index_set_id = serializers.IntegerField(label=_("索引集ID"), required=True)
     begin = serializers.IntegerField(required=False, default=0)
     is_desensitize = serializers.BooleanField(label=_("是否脱敏"), required=False, default=True)
-    custom_indices = serializers.CharField(required=False, allow_null=True, allow_blank=True, default="")
 
 
 class UnionSearchAttrSerializer(SearchAttrSerializer):
@@ -373,6 +410,7 @@ class UnionSearchAttrSerializer(SearchAttrSerializer):
 
 
 class UnionSearchExportSerializer(serializers.Serializer):
+    supports_sort_confirmation = serializers.BooleanField(required=False, default=False)
     union_configs = serializers.ListField(
         label=_("联合检索参数"), required=True, allow_empty=False, child=UnionConfigSerializer()
     )
@@ -535,6 +573,7 @@ class SearchUserIndexSetOptionHistoryDeleteSerializer(serializers.Serializer):
 
 
 class SearchExportSerializer(serializers.Serializer):
+    supports_sort_confirmation = serializers.BooleanField(required=False, default=False)
     bk_biz_id = serializers.IntegerField(label=_("业务id"), required=True)
     keyword = serializers.CharField(label=_("搜索关键字"), required=False, allow_null=True, allow_blank=True)
     time_range = serializers.CharField(label=_("时间范围"), required=False)
@@ -551,8 +590,6 @@ class SearchExportSerializer(serializers.Serializer):
     file_type = serializers.ChoiceField(
         label=_("下载文件类型"), required=False, choices=ExportFileType.get_choices(), default=ExportFileType.LOG.value
     )
-    # 自定义索引列表 Eg. -> "2_bklog.0001,2_bklog.0002"
-    custom_indices = serializers.CharField(required=False, allow_null=True, allow_blank=True, default="")
     sort_list = serializers.ListField(required=False, allow_null=True, allow_empty=True, child=serializers.ListField())
 
 
@@ -572,6 +609,13 @@ class GetExportHistorySerializer(serializers.Serializer):
     pagesize = serializers.IntegerField(label=_("页面大小"))
     show_all = serializers.BooleanField(label=_("是否展示业务全量导出历史"))
     bk_biz_id = serializers.IntegerField(label=_("业务id"))
+    start_time = serializers.IntegerField(label=_("开始时间（毫秒时间戳）"), required=False, allow_null=True)
+    end_time = serializers.IntegerField(label=_("结束时间（毫秒时间戳）"), required=False, allow_null=True)
+
+
+class AsyncExportDownloadUrlSerializer(serializers.Serializer):
+    task_id = serializers.IntegerField(label=_("异步导出任务ID"))
+    bk_biz_id = serializers.IntegerField(label=_("业务id"))
 
 
 class UnionSearchGetExportHistorySerializer(serializers.Serializer):
@@ -580,6 +624,8 @@ class UnionSearchGetExportHistorySerializer(serializers.Serializer):
     show_all = serializers.BooleanField(label=_("是否展示业务全量导出历史"))
     index_set_ids = serializers.CharField(label=_("联合检索索引集ID列表"))
     bk_biz_id = serializers.IntegerField(label=_("业务id"))
+    start_time = serializers.IntegerField(label=_("开始时间（毫秒时间戳）"), required=False, allow_null=True)
+    end_time = serializers.IntegerField(label=_("结束时间（毫秒时间戳）"), required=False, allow_null=True)
 
     def validate(self, attrs):
         # 索引集ID格式校验
@@ -688,6 +734,7 @@ class CreateFavoriteSerializer(serializers.Serializer):
     favorite_type = serializers.ChoiceField(
         label=_("收藏类型"), required=False, choices=FavoriteType.get_choices(), default=FavoriteType.SEARCH.value
     )
+    scope = FavoriteScopeField(label=_("收藏作用域"), required=False, default=dict)
     chart_params = serializers.JSONField(label=_("图表相关参数"), default=dict, required=False)
     # 收藏来源类型：index_set / scene。老前端不传 → 默认 index_set，行为零变更；
     # 场景化收藏必须显式传 "scene"，并配合 scene_id + table_id_conditions。
@@ -755,6 +802,7 @@ class UpdateFavoriteSerializer(serializers.Serializer):
     index_set_type = serializers.ChoiceField(
         label=_("索引集类型"), required=False, choices=IndexSetType.get_choices(), default=IndexSetType.SINGLE.value
     )
+    scope = FavoriteScopeField(label=_("收藏作用域"), required=False)
     # 场景化收藏更新使用，可选；未传时按现有 source_type 处理
     source_type = serializers.ChoiceField(
         label=_("收藏来源类型"),
@@ -817,6 +865,7 @@ class FavoriteListSerializer(serializers.Serializer):
         choices=FavoriteSourceType.get_choices(),
         default=None,
     )
+    scope = FavoriteScopeField(label=_("收藏作用域"), required=False, default=dict)
 
 
 class CreateFavoriteGroupSerializer(serializers.Serializer):
@@ -832,6 +881,7 @@ class CreateFavoriteGroupSerializer(serializers.Serializer):
         choices=FavoriteSourceType.get_choices(),
         default=FavoriteSourceType.INDEX_SET.value,
     )
+    scope = FavoriteScopeField(label=_("收藏组作用域"), required=False, default=dict)
 
 
 class UpdateFavoriteGroupSerializer(serializers.Serializer):
@@ -840,6 +890,7 @@ class UpdateFavoriteGroupSerializer(serializers.Serializer):
     """
 
     name = serializers.CharField(label=_("收藏组名"), max_length=256)
+    scope = FavoriteScopeField(label=_("收藏组作用域"), required=False)
 
 
 class UpdateFavoriteGroupOrderSerializer(serializers.Serializer):
@@ -933,6 +984,7 @@ class FavoriteGroupListSerializer(serializers.Serializer):
         choices=FavoriteSourceType.get_choices(),
         default=FavoriteSourceType.INDEX_SET.value,
     )
+    scope = FavoriteScopeField(label=_("收藏组作用域"), required=False, default=dict)
 
 
 class BcsWebConsoleSerializer(serializers.Serializer):
@@ -1117,6 +1169,7 @@ class ChartSerializer(serializers.Serializer):
         label=_("查询模式"), required=False, choices=QueryMode.get_choices(), default=QueryMode.SQL.value
     )
     alias_settings = AliasSettingSerializer(many=True, required=False, default=list)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -1140,6 +1193,7 @@ class UISearchSerializer(serializers.Serializer):
         child=SearchConditionSerializer(label=_("搜索条件"), required=False),
     )
     alias_settings = AliasSettingSerializer(many=True, required=False, default=list)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -1232,6 +1286,7 @@ class LogGrepQuerySerializer(serializers.Serializer):
     size = serializers.IntegerField(label=_("检索结果大小"), required=False, default=10)
     sort_list = serializers.ListField(required=False, allow_null=True, allow_empty=True, child=serializers.ListField())
     alias_settings = AliasSettingSerializer(many=True, required=False, default=list)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -1282,6 +1337,7 @@ class SearchLogForCodeSerializer(serializers.Serializer):
     end_time = serializers.CharField(label=_("结束时间"), required=True)
     timezone = serializers.CharField(label=_("时区"), required=False, default="UTC")
     limit = serializers.IntegerField(label=_("限制条数"), required=False, default=DEFAULT_QUERY_LIMIT)
+    bk_biz_id = serializers.IntegerField(label=_("业务ID"), required=False, default=None)
 
 
 class SpaceListSerializer(serializers.Serializer):

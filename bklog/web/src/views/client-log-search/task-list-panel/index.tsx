@@ -24,8 +24,9 @@
  * IN THE SOFTWARE.
  */
 
-import { defineComponent, ref, watch } from 'vue';
+import { defineComponent, ref, watch, type PropType } from 'vue';
 
+import TaskSelectionInfo from './selection-info';
 import type { LogItem, ProcessStatus } from '../types';
 import { t } from '@/hooks/use-locale';
 
@@ -67,8 +68,33 @@ export default defineComponent({
       type: String,
       default: '',
     },
+    /** 当前批量选中的任务 */
+    selectedItems: {
+      type: Array as () => LogItem[],
+      default: () => [],
+    },
+    /** 搜索使用的时区，传给已选任务浮层 */
+    timezone: {
+      type: String,
+      default: '',
+    },
+    /** 使用页面层的稳定标识判断卡片是否已勾选 */
+    isTaskSelected: {
+      type: Function as PropType<(item: LogItem) => boolean>,
+      default: () => false,
+    },
   },
-  emits: ['log-item-select', 'toggle', 'load-more', 'source-change'],
+  emits: [
+    'log-item-select',
+    'toggle',
+    'load-more',
+    'source-change',
+    'selection-change',
+    'select-all-collected',
+    'clear-selection',
+    'remove-selected',
+    'download-selected',
+  ],
   setup(props, { emit, expose }) {
     /** 是否收起 */
     const isCollapsed = ref(false);
@@ -88,9 +114,12 @@ export default defineComponent({
     expose({ resetScroll });
 
     /** 监听外部 collapsed 变化，同步内部状态 */
-    watch(() => props.collapsed, (val) => {
-      isCollapsed.value = val;
-    });
+    watch(
+      () => props.collapsed,
+      val => {
+        isCollapsed.value = val;
+      },
+    );
 
     /**
      * 切换收起/展开
@@ -105,7 +134,7 @@ export default defineComponent({
      * 防止滚动后 tooltip 不消失并随滚动偏移
      */
     const hideOverflowTips = () => {
-      scrollContainerRef.value?.querySelectorAll('.task-title, .task-id').forEach((el: any) => {
+      scrollContainerRef.value?.querySelectorAll('.task-title, .task-id, .task-checkbox-wrapper').forEach((el: any) => {
         if (el._tippy) {
           el._tippy.hide();
         }
@@ -164,6 +193,13 @@ export default defineComponent({
       emit('source-change', source);
     };
 
+    /** 非已采集任务的勾选提示 */
+    const getSelectionDisabledTooltip = (status: ProcessStatus | null) => {
+      if (status === 'running') return t('采集中，无法选择');
+      if (status === 'failed') return t('采集失败，无法选择');
+      return t('未采集，无法选择');
+    };
+
     return () => {
       const tabIndex = props.activeSource === '' ? 0 : props.activeSource === 'report' ? 1 : 2;
 
@@ -173,22 +209,45 @@ export default defineComponent({
           style={{ width: `${isCollapsed.value ? 0 : EXPANDED_WIDTH}px` }}
         >
           {/* 标题栏：收起箭头 + 标题 */}
-          <div class='panel-header' onClick={handleToggle}>
+          <div
+            class='panel-header'
+            onClick={handleToggle}
+          >
             <i class='bklog-icon bklog-collapse'></i>
             <span class='panel-title'>{t('任务列表')}</span>
           </div>
 
+          {props.selectedItems.length > 0 && (
+            <TaskSelectionInfo
+              selectedItems={props.selectedItems}
+              timezone={props.timezone}
+              on-select-all={() => emit('select-all-collected')}
+              on-clear={() => emit('clear-selection')}
+              on-remove={(item: LogItem) => emit('remove-selected', item)}
+              on-download={() => emit('download-selected')}
+            />
+          )}
+
           {/* 选项卡：全部 / 用户上报 / 主动采集 */}
           <div class='task-source-tabs'>
-            <div class='tab-slider' style={{ transform: `translateX(${tabIndex * 100}%)` }}></div>
             <div
-              class={['tab-item', { active: props.activeSource === '', 'hide-divider': tabIndex === 0 || tabIndex === 1 }]}
+              class='tab-slider'
+              style={{ transform: `translateX(${tabIndex * 100}%)` }}
+            ></div>
+            <div
+              class={[
+                'tab-item',
+                { active: props.activeSource === '', 'hide-divider': tabIndex === 0 || tabIndex === 1 },
+              ]}
               onClick={() => handleTabChange('')}
             >
               {t('全部')}
             </div>
             <div
-              class={['tab-item', { active: props.activeSource === 'report', 'hide-divider': tabIndex === 1 || tabIndex === 2 }]}
+              class={[
+                'tab-item',
+                { active: props.activeSource === 'report', 'hide-divider': tabIndex === 1 || tabIndex === 2 },
+              ]}
               onClick={() => handleTabChange('report')}
             >
               {t('用户上报')}
@@ -202,46 +261,74 @@ export default defineComponent({
           </div>
 
           {/* 日志条目列表 */}
-          <div class='task-list' ref={scrollContainerRef} onScroll={handleScroll}>
-          {props.taskList.map((item, index) => (
-            <div
-              key={`${item.file_name}_${index}`}
-              class={['task-item', { active: props.selectedLogItem === item }]}
-              onClick={() => handleLogItemSelect(item)}
-            >
-              {/* 第一行：时间 + 状态标签 */}
-              <div class='task-header'>
-                <span class='task-time'>{item.report_time ?? item.processed_at}</span>
-                <span class={`task-status ${mapToCollectionStatus(item.process_status)}`}>
-                  {item.process_status === 'running'
-                    ? <bk-spin size='mini'></bk-spin> : <i class='status-dot'></i>}
-                  {t(mapToCollectionStatusText(item.process_status))}
+          <div
+            class='task-list'
+            ref={scrollContainerRef}
+            onScroll={handleScroll}
+          >
+            {props.taskList.map(item => (
+              <div
+                key={item.selectionKey}
+                class={['task-item', { active: props.selectedLogItem === item }]}
+                onClick={() => handleLogItemSelect(item)}
+              >
+                <span
+                  class='task-checkbox-wrapper'
+                  v-bk-tooltips={{
+                    content: getSelectionDisabledTooltip(item.process_status),
+                    disabled: item.process_status === 'success',
+                  }}
+                  onClick={(event: MouseEvent) => event.stopPropagation()}
+                >
+                  <bk-checkbox
+                    aria-label={t('选择任务')}
+                    disabled={item.process_status !== 'success'}
+                    value={props.isTaskSelected(item)}
+                    onChange={(checked: boolean) => emit('selection-change', item, checked)}
+                  />
                 </span>
-              </div>
+                <div class='task-item-content'>
+                  {/* 第一行：时间 + 状态标签 */}
+                  <div class='task-header'>
+                    <span class='task-time'>{item.report_time ?? item.processed_at}</span>
+                    <span class={`task-status ${mapToCollectionStatus(item.process_status)}`}>
+                      {item.process_status === 'running' ? <bk-spin size='mini'></bk-spin> : <i class='status-dot'></i>}
+                      {t(mapToCollectionStatusText(item.process_status))}
+                    </span>
+                  </div>
 
-              {/* 第二行：文件名 + openid */}
-              <div class='task-title-row'>
-                <span class='task-title' v-bk-overflow-tips>{item.file_name}</span>
-                {item.openid && (
-                  <span class='task-id' v-bk-overflow-tips>{item.openid}</span>
-                )}
+                  {/* 第二行：文件名 + openid */}
+                  <div class='task-title-row'>
+                    <span
+                      class='task-title'
+                      v-bk-overflow-tips
+                    >
+                      {item.file_name}
+                    </span>
+                    {item.openid && (
+                      <span
+                        class='task-id'
+                        v-bk-overflow-tips
+                      >
+                        {item.openid}
+                      </span>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
-          {props.taskList.length === 0 && !props.isLoading && (
-            <bk-exception
-              style='margin-top: 80px'
-              scene='part'
-              type='empty'
-            >
-              <span>{t('暂无数据')}</span>
-            </bk-exception>
-          )}
-          {props.isLoading && props.hasMore && (
-            <div class='task-list-loading'>loading...</div>
-          )}
+            ))}
+            {props.taskList.length === 0 && !props.isLoading && (
+              <bk-exception
+                style='margin-top: 80px'
+                scene='part'
+                type='empty'
+              >
+                <span>{t('暂无数据')}</span>
+              </bk-exception>
+            )}
+            {props.isLoading && props.hasMore && <div class='task-list-loading'>loading...</div>}
+          </div>
         </div>
-      </div>
       );
     };
   },

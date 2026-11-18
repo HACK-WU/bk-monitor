@@ -27,7 +27,6 @@ from django.utils.translation import gettext_lazy as _
 
 from apps.exceptions import ValidationError
 from apps.log_databus.constants import (
-    DORIS_CLUSTER_TYPE,
     ETL_DELIMITER_DELETE,
     ETL_DELIMITER_END,
     ETL_DELIMITER_IGNORE,
@@ -163,7 +162,9 @@ class BkLogDelimiterEtlStorage(EtlStorage):
             logger.error(f"[etl][delimiter]separator_field_list => {separator_field_list}")
 
         option["separator_field_list"] = separator_field_list
-        result_table_fields = self.get_result_table_fields(fields, etl_params, built_in_config, es_version=es_version)
+        result_table_fields = self.get_result_table_fields(
+            fields, etl_params, built_in_config, es_version=es_version, storage_cluster_type=storage_cluster_type
+        )
 
         result_table_config = {
             "option": option,
@@ -232,24 +233,32 @@ class BkLogDelimiterEtlStorage(EtlStorage):
             ]
         )
 
-        # 4. 从iter_item提取data字段作为原文
-        rules.extend(
-            [
+        # 4. 从iter_item提取data：切分始终需要 iter_string；log 仅在保留原文时写出
+        # 与 JSON 清洗对齐：保留清洗失败日志已收敛为保留原文的子开关，只需判断 retain_original_text
+        if etl_params.get("retain_original_text"):
+            rules.append(
                 {
                     "input_id": "iter_item",
                     "output_id": "log",
-                    "operator": {"type": "assign", "key_index": "data", "alias": "log", "output_type": "string"},
-                },
-                {
-                    "input_id": "iter_item",
-                    "output_id": "iter_string",
                     "operator": {
-                        "type": "get",
-                        "key_index": [{"type": "key", "value": "data"}],
-                        "missing_strategy": None,
+                        "type": "assign",
+                        "key_index": "data",
+                        "alias": "log",
+                        "output_type": "string",
+                        "default_value": None,
                     },
+                }
+            )
+        rules.append(
+            {
+                "input_id": "iter_item",
+                "output_id": "iter_string",
+                "operator": {
+                    "type": "get",
+                    "key_index": [{"type": "key", "value": "data"}],
+                    "missing_strategy": None,
                 },
-            ]
+            }
         )
 
         # 4.1. 提取 flat_field=True 的内置字段（从iter_item提取）
@@ -280,6 +289,7 @@ class BkLogDelimiterEtlStorage(EtlStorage):
                         "key_index": str(field["field_index"] - 1),
                         "alias": field["field_name"],
                         "output_type": self._get_output_type(field["field_type"]),
+                        "default_value": None,
                     },
                 }
             )
@@ -294,29 +304,11 @@ class BkLogDelimiterEtlStorage(EtlStorage):
         rules.extend(self._build_path_regex_rules_v4(etl_params, built_in_config))
 
         data_link_config = {"clean_rules": rules}
-
-        if storage_cluster_type == STORAGE_CLUSTER_TYPE:
-            data_link_config["es_storage_config"] = {
-                "unique_field_list": built_in_config["option"]["es_unique_field_list"],
-                "timezone": 8,
-            }
-        elif storage_cluster_type == DORIS_CLUSTER_TYPE:
-            json_fields = set()
-            for check_rule in rules:
-                if check_rule["operator"].get("output_type") == self._get_output_type("object"):
-                    json_fields.add(check_rule["output_id"])
-
-            need_analysis_fields = set()
-            for check_field in field_list:
-                if check_field["option"]["es_type"] == "text":
-                    need_analysis_fields.add(check_field["field_name"])
-
-            data_link_config["doris_storage_config"] = {
-                "storage_keys": built_in_config["option"]["es_unique_field_list"],
-                "json_fields": list(json_fields),
-                "field_config_group": {"search_zh": list(need_analysis_fields)},
-                # "flush_timeout": None
-            }
+        data_link_config.update(
+            self._build_storage_config_v4(
+                rules, field_list, built_in_config, storage_cluster_type, fields=fields, etl_params=etl_params
+            )
+        )
 
         return data_link_config
 

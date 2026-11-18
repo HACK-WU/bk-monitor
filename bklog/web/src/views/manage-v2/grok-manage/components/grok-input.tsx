@@ -31,6 +31,7 @@ import { EditorState } from '@codemirror/state';
 import { placeholder as cmPlaceholder, keymap, highlightSpecialChars } from '@codemirror/view';
 
 import { EditorView } from 'codemirror';
+import type { Props as TippyProps } from 'tippy.js';
 
 import BkLogPopover from '@/components/bklog-popover';
 
@@ -207,7 +208,9 @@ export default defineComponent({
             key: 'Mod-Enter',
             run: () => {
               if (props.grokMode && popoverVisible.value && grokListRef.value) {
-                grokListRef.value.handleKeydown(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, metaKey: true }));
+                grokListRef.value.handleKeydown(
+                  new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, metaKey: true }),
+                );
                 return true;
               }
               return false;
@@ -241,19 +244,19 @@ export default defineComponent({
         ...(isTextarea
           ? []
           : [
-            keymap.of([
-              {
-                key: 'Enter',
-                run: (view) => {
-                  emit('enter', view.state.doc.toString());
-                  return true;
+              keymap.of([
+                {
+                  key: 'Enter',
+                  run: view => {
+                    emit('enter', view.state.doc.toString());
+                    return true;
+                  },
                 },
-              },
+              ]),
             ]),
-          ]),
 
         // 更新监听器
-        EditorView.updateListener.of((update) => {
+        EditorView.updateListener.of(update => {
           if (update.docChanged) {
             const newValue = update.state.doc.toString();
             emit('input', newValue);
@@ -265,8 +268,9 @@ export default defineComponent({
 
           // 监听选区变化，更新弹窗状态
           if (update.selectionSet || update.docChanged) {
-            const isKeyboardSelection = ignoreNextKeyboardSelection
-              || update.transactions.some(transaction => transaction.isUserEvent('select.keyboard'));
+            const isKeyboardSelection =
+              ignoreNextKeyboardSelection ||
+              update.transactions.some(transaction => transaction.isUserEvent('select.keyboard'));
             // 传入 docChanged 参数，用于区分是光标移动还是内容变化
             handleSelectionChange(update.state, update.docChanged, isKeyboardSelection);
             ignoreNextKeyboardSelection = false;
@@ -459,7 +463,7 @@ export default defineComponent({
     // 监听 value 变化
     watch(
       () => props.value,
-      (newValue) => {
+      newValue => {
         if (editorView && editorView.state.doc.toString() !== newValue) {
           const transaction = editorView.state.update({
             changes: {
@@ -549,31 +553,33 @@ export default defineComponent({
                 offset: [0, 4],
                 maxWidth: 'none',
                 zIndex: 9999,
-                ...(props.popoverPosition === 'cursor'
-                  ? {
-                    popperOptions: {
-                      modifiers: [
-                        {
-                          name: 'offset',
-                          options: {
-                            offset: ({ reference }: { reference: { x: number; y: number; height: number } }) => {
-                              // 光标定位模式：计算光标位置相对于编辑器容器的偏移
-                              if (!editorView) return [0, 0];
-                              const cursorPos = editorView.state.selection.main.head;
-                              const cursorCoords = editorView.coordsAtPos(cursorPos);
-                              if (!cursorCoords) return [0, 0];
-                              // 计算光标位置与参考元素的偏移量
-                              const offsetX = cursorCoords.left - reference.x;
-                              const offsetY = cursorCoords.bottom - reference.y - reference.height + 4;
-                              return [offsetX, offsetY];
-                            },
-                          },
-                        },
-                      ],
-                    },
+                getReferenceClientRect: () => {
+                  if (props.popoverPosition === 'cursor' && editorView) {
+                    const coords = editorView.coordsAtPos(editorView.state.selection.main.head);
+                    if (coords) {
+                      return new DOMRect(coords.left, coords.top, 0, coords.bottom - coords.top);
+                    }
                   }
-                  : {}),
-              } as any
+                  return editorRef.value.getBoundingClientRect();
+                },
+                popperOptions: {
+                  modifiers: [
+                    { name: 'flip', options: { padding: 8, fallbackPlacements: ['top-start'] } },
+                    {
+                      name: 'grokMaxHeight',
+                      enabled: true,
+                      phase: 'beforeRead',
+                      fn: ({ state }) => {
+                        const { top, bottom } = state.elements.reference.getBoundingClientRect();
+                        // 预留 8px 视口边距、4px 锚点间距和 2px 弹层外框。
+                        const maxHeight = Math.max(top, window.innerHeight - bottom) - 14;
+                        state.elements.popper.style.setProperty('--grok-popover-max-height', `${Math.max(0, maxHeight)}px`);
+                        state.rects.popper.height = state.elements.popper.offsetHeight;
+                      },
+                    },
+                  ],
+                },
+              } as TippyProps
             }
             {...{
               scopedSlots: { content: renderPopoverContent },

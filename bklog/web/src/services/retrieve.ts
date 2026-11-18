@@ -188,6 +188,10 @@ const unionExportAsync = {
   url: '/search/index_set/union_async_export/',
   method: 'post',
 };
+const getExportDownloadLink = {
+  url: '/search/export_jobs/:job_id/download_link/',
+  method: 'get',
+};
 const getRealTimeLog = {
   url: '/search/index_set/:index_set_id/tail_f/',
   method: 'post',
@@ -225,7 +229,7 @@ const getSearchHistory = {
   method: 'get',
 };
 const getExportHistoryList = {
-  url: '/search/index_set/:index_set_id/export_history/?bk_biz_id=:bk_biz_id&page=:page&pagesize=:pagesize&show_all=:show_all',
+  url: '/search/index_set/:index_set_id/export_history/?bk_biz_id=:bk_biz_id&page=:page&pagesize=:pagesize&show_all=:show_all&start_time=:start_time&end_time=:end_time',
   method: 'get',
 };
 const getFieldsListConfig = {
@@ -515,6 +519,12 @@ const getSceneExport = {
   method: 'post',
 };
 
+/** 场景化检索 - 字段值联想 */
+const listSceneFieldCandidates = {
+  url: '/search/scene/list_field_candidates/',
+  method: 'post',
+};
+
 /** 场景化检索 - 全文下载 */
 const getSceneAsyncExport = {
   url: '/search/scene/export/async/',
@@ -581,6 +591,7 @@ export {
   downloadLog,
   unionDownloadLog,
   exportAsync,
+  getExportDownloadLink,
   quickDownload,
   getRealTimeLog,
   getContentLog,
@@ -645,4 +656,5 @@ export {
   sceneUpdateConfig,
   sceneDeleteConfig,
   sceneApplyFieldsConfig,
+  listSceneFieldCandidates,
 };

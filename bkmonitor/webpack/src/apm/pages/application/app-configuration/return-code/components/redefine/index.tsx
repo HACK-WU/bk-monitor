@@ -31,16 +31,18 @@ import { cloneDeep } from 'lodash';
 import { getFieldOptionValues } from 'monitor-api/modules/apm_metric';
 import { listCodeRedefinedRule, serviceList, setCodeRedefinedRule } from 'monitor-api/modules/apm_service';
 import { downloadFile, random } from 'monitor-common/utils';
+import ValueTagSelector from 'monitor-pc/components/retrieval-filter/value-tag-selector';
 import TagBlock from 'monitor-pc/components/tag-block';
 
-import type { TimeRangeType } from 'monitor-pc/components/time-range/time-range';
-import type { CallOptions, CodeRedefineItem } from 'monitor-ui/chart-plugins/plugins/apm-service-caller-callee/type';
-import ValueTagSelector from 'monitor-pc/components/retrieval-filter/value-tag-selector';
+import CodeRuleTextarea from './code-rule-textarea';
+
 import type {
   IGetValueFnParams,
   IOptionsInfo,
   TGetValueFn,
 } from 'monitor-pc/components/retrieval-filter/value-selector-typing';
+import type { TimeRangeType } from 'monitor-pc/components/time-range/time-range';
+import type { CallOptions, CodeRedefineItem } from 'monitor-ui/chart-plugins/plugins/apm-service-caller-callee/type';
 
 import './index.scss';
 
@@ -56,9 +58,9 @@ interface ColumnItem {
 interface Props {
   /** 应用名（接口请求主键） */
   appName: string;
-  /**是否批量编辑模式 */
-  isBatchEdit: boolean;
   callOptions?: Partial<CallOptions>;
+  /** 是否批量编辑模式 */
+  isBatchEdit: boolean;
   variablesData?: Record<string, any>;
 }
 
@@ -123,7 +125,7 @@ export default class RedefineTabContent extends tsc<Props> {
   savingMap: Record<string, boolean> = {};
   ableSaveMap: Record<string, boolean> = {};
   filterValues: string[] = [];
-  currentEditRowId: string = '';
+  currentEditRowId = '';
 
   @Watch('currentEditRowId', { immediate: true })
   watchCurrentEditRowIdChange(id: string) {
@@ -361,14 +363,10 @@ export default class RedefineTabContent extends tsc<Props> {
         // “全局生效(0)”与具体服务互斥，交互规则同 remark 组件
         newValue = cloneDeep(value);
         if (newValue.includes('0') && value.length > 1) {
-          if (value[0] !== '0') {
-            newValue = ['0'];
-            this.$set(this.showData[index], 'is_global', true);
-          } else {
-            newValue = (newValue as string[]).filter(item => item !== '0');
-            this.$set(this.showData[index], 'is_global', false);
-          }
+          newValue = value[0] !== '0' ? ['0'] : (newValue as string[]).filter(item => item !== '0');
         }
+        // 归一化后依据最终选项同步作用范围语义，避免「清空全局再选服务」时 is_global 残留为 true
+        this.$set(this.showData[index], 'is_global', (newValue as string[]).includes('0'));
       }
       // 普通字段直接写入当前行
       this.$set(this.showData[index], prop, newValue);
@@ -685,7 +683,7 @@ export default class RedefineTabContent extends tsc<Props> {
                   );
                 }
                 return (
-                  <div class='interface-column'>
+                  <div class='interface-column kind-column'>
                     {(row.isImport || row.isNew) && <div class='new-sign-bar' />}
                     {/* 编辑态：类型可选且可自定义创建 */}
                     <bk-select
@@ -757,16 +755,16 @@ export default class RedefineTabContent extends tsc<Props> {
                         content: this.$t('「被调」类型无需填写「被调服务」'),
                         disabled: !isCalleeServerDisabled,
                       }}
-                      multiple={false}
                       fieldInfo={{
                         field: '',
                         alias: '',
                         methods: [],
                         isEnableOptions: true,
                       }}
+                      getValueFn={this.getValueCallback(row.kind, item.prop)}
+                      multiple={false}
                       value={value}
                       tippy-mode
-                      getValueFn={this.getValueCallback(row.kind, item.prop)}
                       onChange={data => this.handleValueTagSelectorChange(data, item.prop, row.id)}
                     />
                     {this.repeatRulesIdSet.has(row.id) && item.prop === 'callee_method' && (
@@ -860,10 +858,9 @@ export default class RedefineTabContent extends tsc<Props> {
                         class='code-status-rule-item'
                       >
                         <bk-form-item property={item.value}>
-                          <bk-input
+                          <CodeRuleTextarea
                             value={row.code_type_rules[item.value]}
-                            // on-change 与组件事件命名保持一致
-                            on-change={v => this.handleValueChange(v, item.value, row.id)}
+                            onChange={v => this.handleValueChange(v, item.value, row.id)}
                           />
                         </bk-form-item>
                         <i18n path={'重定义为 {0}'}>
@@ -911,8 +908,8 @@ export default class RedefineTabContent extends tsc<Props> {
                       placeholder={this.$tc('请选择或输入')}
                       showEmpty={!item.loading && !item.options.length}
                       value={row[item.prop]}
-                      multiple
                       display-tag
+                      multiple
                       searchable
                       onChange={v => this.handleValueChange(v, item.prop, row.id)}
                     >
@@ -951,19 +948,18 @@ export default class RedefineTabContent extends tsc<Props> {
           ) : (
             <bk-table
               ref='tableRef'
-              max-height={this.tableMaxHeight}
               data={this.showData}
               empty-text={this.filterValues.length ? this.$tc('搜索结果为空') : this.$t('暂无数据')}
+              max-height={this.tableMaxHeight}
               row-class-name='return-code-redefine-row'
-              border
               row-key='id'
+              border
               row-auto-height
               on-filter-change={this.handleFilterChange}
             >
               {this.columns.map(item => this.renderColumn(item))}
               <bk-table-column
                 width={120}
-                fixed='right'
                 scopedSlots={{
                   default: ({ row }) => {
                     if (this.currentEditRowId === row.id && !this.isBatchEdit) {
@@ -1001,8 +997,8 @@ export default class RedefineTabContent extends tsc<Props> {
                           >
                             <bk-button
                               class='btn'
-                              theme='primary'
                               disabled={this.currentEditRowId !== '' && this.currentEditRowId !== row.id}
+                              theme='primary'
                               text
                               onClick={() => this.handleEditRow(row.id)}
                             >
@@ -1018,8 +1014,8 @@ export default class RedefineTabContent extends tsc<Props> {
                         >
                           <bk-button
                             class='btn'
-                            theme='danger'
                             disabled={this.currentEditRowId !== '' && this.currentEditRowId !== row.id}
+                            theme='danger'
                             text
                             onClick={() => this.handleDeleteRow(row.id)}
                           >
@@ -1030,6 +1026,7 @@ export default class RedefineTabContent extends tsc<Props> {
                     );
                   },
                 }}
+                fixed='right'
                 label={this.$tc('操作')}
               />
             </bk-table>

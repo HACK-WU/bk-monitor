@@ -137,6 +137,8 @@ export enum DetectionRuleTypeEnum {
   AdvancedYearRound = 'AdvancedYearRound',
   /** 单指标异常检测 */
   IntelligentDetect = 'IntelligentDetect',
+  /** 新维度值检测 */
+  NewSeries = 'NewSeries',
   /** 部分节点数 */
   PartialNodes = 'PartialNodes',
   /** 环比策略(大类) */
@@ -235,13 +237,7 @@ export interface ISceneConfig {
   scene_name?: string;
 }
 /* source模式下 sourceData */
-export interface ISourceData {
-  errorMsg?: string;
-  promqlError?: boolean;
-  sourceCode: string;
-  sourceCodeCache?: string;
-  step: number | string;
-}
+export type ISourceData = import('../../strategy-config-common/promql-query/model').PromqlSourceData;
 
 /** 条件类型 */
 export interface IWhereItem {

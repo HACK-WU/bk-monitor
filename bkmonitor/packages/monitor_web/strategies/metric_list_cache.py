@@ -184,6 +184,19 @@ DEFAULT_DIMENSIONS_MAP = {
     "device_target": DefaultDimensions.device,
 }
 
+
+def get_default_dimension_ids(data_target: str, dimensions: list[dict[str, Any]]) -> list[str]:
+    default_dimensions = [dimension["id"] for dimension in DEFAULT_DIMENSIONS_MAP[data_target]]
+    dimension_ids = {dimension["id"] for dimension in dimensions}
+    if (
+        data_target == DataTarget.HOST_TARGET
+        and "bk_cloud_id" in dimension_ids
+        and "bk_target_cloud_id" not in dimension_ids
+    ):
+        return ["bk_target_ip", "bk_cloud_id"]
+    return default_dimensions
+
+
 UPTIMECHECK_MAP = {
     "HTTP": [AvailableMetric, TaskDurationMetric, ResponseCodeMetric, ResponseMetric],
     "UDP": [AvailableMetric, TaskDurationMetric],
@@ -262,6 +275,17 @@ class BaseMetricCacheManager:
             .annotate(use_frequency=Count("metric_id"))
         }
 
+    @staticmethod
+    def truncate_metric_fields(metric: dict[str, Any]) -> None:
+        """按缓存表字段长度截断可能超长的结果表及派生字段。"""
+        for field_name in ("result_table_id", "result_table_name", "readable_name"):
+            value = metric.get(field_name, "")
+            if not value:
+                continue
+            max_length = MetricListCache._meta.get_field(field_name).max_length
+            if len(value) > max_length:
+                metric[field_name] = value[:max_length]
+
     def _run(self):
         """
         对比数据库已有数据， 实现指标缓存的增量更新
@@ -293,9 +317,7 @@ class BaseMetricCacheManager:
         processed_metric_ids: set[str] = set()
         for table in self.get_tables():
             for metric in self.get_metrics_by_table(table):
-                # 处理result_table_id长度
-                if len(metric.get("result_table_id", "")) > 256:
-                    metric["result_table_id"] = metric["result_table_id"][:256]
+                self.truncate_metric_fields(metric)
 
                 if metric.get("result_table_id", "") in ["bkunifylogbeat_task.base", "bkunifylogbeat_common.base"]:
                     continue
@@ -336,6 +358,7 @@ class BaseMetricCacheManager:
                 if metric_instance is None:
                     _metric = MetricListCache(bk_tenant_id=self.bk_tenant_id, **metric)
                     metric["readable_name"] = _metric.get_human_readable_name()
+                    self.truncate_metric_fields(metric)
                     _metric.readable_name = metric["readable_name"]
                     _metric.metric_md5 = count_md5(metric)
 
@@ -345,6 +368,7 @@ class BaseMetricCacheManager:
 
                 # readable_name 可能会因用户修改data_label而变更，因此跟随周期任务自动更新
                 metric["readable_name"] = metric_instance.get_human_readable_name()
+                self.truncate_metric_fields(metric)
 
                 metric["metric_md5"] = count_md5(metric)
                 # 处理更新逻辑
@@ -494,6 +518,8 @@ class CustomMetricCacheManager(BaseMetricCacheManager):
         # 通过 time_series_group_name 的生成规则过滤掉插件类型的数据
         custom_ts_result = [i for i in custom_ts_result if i["time_series_group_name"] not in db_name_list]
 
+        self.merge_metric_dimensions(custom_ts_result)
+
         # 补充 APM 虚拟指标
         custom_ts_result = self.get_apm_extra_tables(custom_ts_result) + custom_ts_result
 
@@ -502,6 +528,27 @@ class CustomMetricCacheManager(BaseMetricCacheManager):
             self.process_logbeat_table(result)
             self.process_apm_table(result)
             yield result
+
+    @staticmethod
+    def merge_metric_dimensions(tables: list[dict[str, Any]]) -> None:
+        """同一数据源的同名指标跨 scope 合并维度，供缓存去重时保留的首条记录使用。"""
+        metrics: dict[tuple[int, int, str, str], tuple[dict, dict[str, dict]]] = {}
+        for table in tables:
+            for metric in table["metric_info_list"]:
+                if not metric:
+                    continue
+                key = (table["bk_biz_id"], table["time_series_group_id"], table["table_id"], metric["field_name"])
+                _, tags = metrics.setdefault(key, (metric, {}))
+                for tag in metric.get("tag_list", []):
+                    field_name: str = tag["field_name"]
+                    current: dict | None = tags.get(field_name)
+                    if current is None:
+                        tags[field_name] = dict(tag)
+                    elif not current.get("description") and tag.get("description"):
+                        current["description"] = tag["description"]
+
+        for metric, tags in metrics.values():
+            metric["tag_list"] = list(tags.values())
 
     @classmethod
     def process_apm_table(cls, table: dict):
@@ -1465,12 +1512,13 @@ class BaseAlarmMetricCacheManager(BaseMetricCacheManager):
             "collect_config_ids": [],
         }
 
-        # 多租户下 gse 系统事件（AgentLost/DiskReadonly/CoreFile/OOM/PingUnreachable）及 gse 进程托管
-        # 事件已改由 V4 custom 分业务链路内置（CustomEventCacheManager + os/v2，结果表
-        # base_{tenant}_{biz}_event）；此处在多租户仅保留下方 extend_metrics 的 proc_port/os_restart
-        # 两个伪事件——它们的底层时序表 system.proc_port / system.env 在多租户同样产出，仍按
-        # bk_monitor 源 event 内置为目录项，供 os/v3（多租户专用）/ os/v1（单租户）命中、
-        # 经 os_loader 的 EVENT_QUERY_CONFIG_MAP 重定向到底层时序表后创建。
+        # 多租户下 gse 系统事件（AgentLost/DiskReadonly/CoreFile/OOM）及 gse 进程托管事件已改由 V4 custom
+        # 分业务链路内置（CustomEventCacheManager + os/v2，结果表 base_{tenant}_{biz}_event）；此处在多租户
+        # 仅保留下方 extend_metrics 的 proc_port/os_restart（以及按 ENABLE_PING_ALARM 追加的 ping-gse）这几个
+        # bk_monitor 源伪事件——它们的底层时序表 system.proc_port / system.env / pingserver.base 在多租户同样
+        # 产出，仍按 bk_monitor 源 event 内置为目录项，供 os/v3（主机重启/进程端口，多租户专用）、os/v4
+        # （PING，多租户专用）、os/v1（单租户）命中，经 os_loader 的 EVENT_QUERY_CONFIG_MAP 重定向到底层
+        # 时序表后创建。
         if not settings.ENABLE_MULTI_TENANT_MODE:
             metric_list = BaseAlarm.objects.filter(is_enable=True)
             if Platform.te:
@@ -1511,6 +1559,15 @@ class BaseAlarmMetricCacheManager(BaseMetricCacheManager):
             },
             {"metric_field": "os_restart", "metric_field_name": _("主机重启"), "dimensions": DefaultDimensions.host},
         ]
+
+        # 多租户 PING 不可达：单租户由上方 BaseAlarm(is_enable=True) 内置 ping-gse 目录项（且 te 平台排除）；
+        # 多租户改由全局开关 ENABLE_PING_ALARM 运行时单点治理（而非部署平台 Platform.te），与 os_loader
+        # 创建 PING 策略时的门控口径一致。内置 bk_monitor 源 ping-gse 伪事件目录项，供 os/v4（多租户专用）
+        # 命中、经 EVENT_QUERY_CONFIG_MAP 重定向到底层时序 pingserver.base/loss_percent + PingUnreachable 算法建出。
+        if settings.ENABLE_MULTI_TENANT_MODE and getattr(settings, "ENABLE_PING_ALARM", True):
+            extend_metrics.append(
+                {"metric_field": "ping-gse", "metric_field_name": _("PING不可达"), "dimensions": DefaultDimensions.host}
+            )
 
         for metric in extend_metrics:
             metric_dict = copy.deepcopy(base_dict)
@@ -1986,6 +2043,14 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                 for group in group_list:
                     yield from self.get_plugin_ts_metric(group)
 
+        # 预计算输出不属于采集插件，也没有 TimeSeriesGroup，复用 Metadata 的结果表入口。
+        params = {"bk_tenant_id": self.bk_tenant_id, "with_option": False}
+        if self.bk_biz_id is not None:
+            params["bk_biz_id"] = self.bk_biz_id
+        for table in api.metadata.list_monitor_result_table(**params):
+            if table.get("table_type") == "recording_rule":
+                yield from self.get_pre_calculate_metric(table)
+
     def get_metrics_by_table(self, table):
         """
         处理不同类型的表数据， 根据influx_db_name的不同， 进行不同的处理
@@ -2017,7 +2082,7 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
                 yield from self.get_bkci_metric(table)
             elif table.get("table_type") == "plugin":
                 yield from self.get_plugin_metric(table)
-            elif influx_db_name.startswith("bkprecal_"):
+            elif table.get("table_type") == "recording_rule" or influx_db_name.startswith("bkprecal_"):
                 # 预聚合表
                 yield from self.get_pre_calculate_metric(table)
         except BaseException:  # noqa
@@ -2026,7 +2091,12 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
     def get_pre_calculate_metric(self, table):
         base_metric = self.get_base_dict(table)
         base_metric.update(
-            {"related_name": "bk_pre_cal", "related_id": "bk_pre_cal", "category_display": _("预计算指标")}
+            {
+                "bk_biz_id": table["bk_biz_id"],
+                "related_name": "bk_pre_cal",
+                "related_id": "bk_pre_cal",
+                "category_display": _("预计算指标"),
+            }
         )
         return self.get_field_metric_msg(table, base_metric)
 
@@ -2046,7 +2116,7 @@ class BkmonitorMetricCacheManager(BaseMetricCacheManager):
 
         data_target = DataTargetMapping().get_data_target(table["label"], table["source_label"], table["type_label"])
 
-        default_dimensions = list([x["id"] for x in DEFAULT_DIMENSIONS_MAP[data_target]])
+        default_dimensions = get_default_dimension_ids(data_target, dimensions)
 
         return {
             "bk_biz_id": 0,

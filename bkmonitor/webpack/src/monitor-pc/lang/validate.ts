@@ -224,6 +224,7 @@ export default {
   '当前有多项{0}存在格式错误，可对指标名称进行统一格式转换':
     'There are format errors in multiple {0}, you can convert the index name to a unified format',
   指标和检测算法的单位类型不一致: 'Inconsistent unit types for metrics and detection algorithms',
+  阈值不能为空且必须大于等于0: 'Threshold cannot be empty and must be greater than or equal to 0',
 
   监控目标全部失效: 'All Monitoring Targets are Invalid',
   关联的策略已删除: 'Associated rule has been deleted',
@@ -265,6 +266,7 @@ export default {
   轮值规则必须添加人员: 'The rotation rule requires adding personnel',
   最少添加一条轮值规则: 'Add at least one rotation rule',
   请选择值班规则: 'Please select the duty rule',
+  请选择默认方案: 'Please select the default plan',
   请输入企业微信群ID: 'Please enter the group ID of enterprise wechat',
   'validate-暂无数据': 'No data available',
   轮值规则必须添加单班时间: 'The rotation rule must add a single shift time',
@@ -309,5 +311,13 @@ export default {
   克隆配置不能和源模板一致: 'Cloned configuration cannot be consistent with the source template',
   静态阈值算法只能添加一次: 'Static threshold algorithm can only be added once',
   同环比算法最多添加三个级别: 'Algorithm for adding three levels at most',
+  新维度值检测最多支持三个告警级别: 'New dimension value detection supports at most three alarm levels',
   必须选择一个检测规则: 'You must select a detection rule',
+
+  // RUM
+  只能填写正整数: 'Only positive integers can be filled in',
+  应用别名必填: 'Application alias is required',
+  时间不能为空且必须大于0: 'Time cannot be empty and must be greater than 0',
+
+  分组名称不能为空: 'Group name cannot be empty',
 };

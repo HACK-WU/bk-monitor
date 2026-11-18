@@ -1,8 +1,11 @@
+import json
+from dataclasses import asdict
+from types import SimpleNamespace
 from unittest.mock import Mock, call, patch
 
 from django.test import SimpleTestCase
 
-from apps.log_clustering.handlers.dataflow.constants import ActionEnum
+from apps.log_clustering.handlers.dataflow.constants import ActionEnum, FlowMode
 from apps.log_clustering.handlers.dataflow.dataflow_handler import DataFlowHandler
 from apps.log_clustering.tasks.flow import restart_flow
 
@@ -10,15 +13,22 @@ from apps.log_clustering.tasks.flow import restart_flow
 class TestOnlineTenantFlow(SimpleTestCase):
     def setUp(self):
         super().setUp()
+        global_config = {"project_id": 1, "bk_biz_id": 2, "bk_username": "system_admin"}
         switch_patcher = patch("apps.log_clustering.handlers.aiops.base.FeatureToggleObject.switch", return_value=True)
         toggle_patcher = patch(
             "apps.log_clustering.handlers.aiops.base.FeatureToggleObject.toggle",
-            return_value=Mock(feature_config={"project_id": 1, "bk_biz_id": 2, "bk_username": "system_admin"}),
+            return_value=Mock(feature_config=global_config),
+        )
+        resolve_patcher = patch(
+            "apps.log_clustering.handlers.aiops.base.get_online_clustering_config",
+            side_effect=lambda bk_biz_id: dict(global_config),
         )
         self.addCleanup(switch_patcher.stop)
         self.addCleanup(toggle_patcher.stop)
+        self.addCleanup(resolve_patcher.stop)
         switch_patcher.start()
         toggle_patcher.start()
+        resolve_patcher.start()
 
     @patch("apps.log_clustering.handlers.dataflow.dataflow_handler.ActionHandler.get_action_handler")
     def test_operator_flow_passes_business_id_for_tenant_getter(self, mock_get_action):
@@ -33,6 +43,39 @@ class TestOnlineTenantFlow(SimpleTestCase):
         self.assertEqual(request_params["operator"], "system_admin")
         self.assertTrue(request_params["no_request"])
         self.assertNotIn("bk_tenant_id", action.call_args.kwargs)
+
+    @patch("apps.log_clustering.handlers.aiops.base.get_online_clustering_config")
+    @patch("apps.log_clustering.handlers.dataflow.dataflow_handler.ActionHandler.get_action_handler")
+    def test_operator_flow_uses_tenant_cluster_group(self, mock_get_action, mock_resolve):
+        mock_resolve.return_value = {
+            "project_id": 1001,
+            "bk_biz_id": 2001,
+            "bk_username": "tenant_admin",
+            "aiops_default_cluster_group": "tenant_flink",
+        }
+        action = mock_get_action.return_value
+
+        DataFlowHandler().operator_flow(flow_id=11, action=ActionEnum.START, bk_biz_id=2)
+
+        mock_resolve.assert_called_once_with(2)
+        request_params = action.call_args.args[0]
+        self.assertEqual(request_params["cluster_group"], "tenant_flink")
+        self.assertEqual(request_params["bk_biz_id"], 2)
+        self.assertEqual(request_params["bk_username"], "tenant_admin")
+
+    @patch("apps.log_clustering.handlers.aiops.base.get_online_clustering_config")
+    @patch("apps.log_clustering.handlers.dataflow.dataflow_handler.ActionHandler.get_action_handler")
+    def test_operator_flow_without_business_id_keeps_global_cluster_group(self, mock_get_action, mock_resolve):
+        handler = DataFlowHandler()
+        handler.conf = {"bk_biz_id": 2, "bk_username": "system_admin", "aiops_default_cluster_group": "global_flink"}
+        action = mock_get_action.return_value
+
+        handler.operator_flow(flow_id=11, action=ActionEnum.RESTART)
+
+        mock_resolve.assert_not_called()
+        request_params = action.call_args.args[0]
+        self.assertEqual(request_params["cluster_group"], "global_flink")
+        self.assertEqual(request_params["bk_biz_id"], 2)
 
     @patch("retrying.time.sleep", return_value=None)
     @patch("apps.log_clustering.handlers.dataflow.dataflow_handler.ActionHandler.get_action_handler")
@@ -88,13 +131,17 @@ class TestOnlineTenantFlow(SimpleTestCase):
             "tspider_cluster": "tenant_ts",
             "pattern_storage_cluster": "tenant_pattern",
         }
-        mock_get_config.return_value = Mock(
+        clustering_config = Mock(
             bk_biz_id=2,
             index_set_id=30,
             predict_flow={"clustering_predict": {"result_table_id": "2_bklog_30_clustering_output"}},
             group_fields=[],
+            new_cls_strategy_output="",
+            new_cls_pattern_rt="",
+            log_count_aggregation_flow={},
             save=Mock(),
         )
+        mock_get_config.return_value = clustering_config
         mock_create_flow.return_value = {"flow_id": 91}
 
         result = DataFlowHandler().create_log_count_aggregation_flow(30)
@@ -108,7 +155,43 @@ class TestOnlineTenantFlow(SimpleTestCase):
         self.assertTrue(request_params["no_request"])
         self.assertEqual(render_obj["pattern"]["storage"], "tenant_pattern")
         self.assertEqual(render_obj["tspider_storage"]["cluster"], "tenant_ts")
+        self.assertFalse(render_obj["include_agg"])
+        self.assertEqual(clustering_config.new_cls_pattern_rt, "")
         self.assertEqual(result["flow_id"], 91)
+
+    def test_log_count_aggregation_flow_keeps_agg_for_legacy_config(self):
+        clustering_config = Mock(
+            new_cls_strategy_output="",
+            new_cls_pattern_rt="2_bklog_30_agg",
+            log_count_aggregation_flow={},
+            bk_biz_id=2,
+        )
+
+        self.assertTrue(DataFlowHandler._should_include_log_count_agg(clustering_config))
+
+    def test_log_count_aggregation_template_can_skip_agg_nodes(self):
+        handler = DataFlowHandler()
+        handler.conf = {}
+        clustering_config = SimpleNamespace(group_fields=[])
+
+        flow_config = asdict(
+            handler._init_log_count_aggregation_flow(
+                result_table_id="2_bklog_30_clustering_output",
+                bk_biz_id=2,
+                index_set_id=30,
+                clustering_config=clustering_config,
+                include_agg=False,
+            )
+        )
+        rendered = handler._render_template(
+            flow_mode=FlowMode.LOG_COUNT_AGGREGATION_FLOW.value,
+            render_obj={"log_count_aggregation": flow_config},
+        )
+
+        node_ids = {node["id"] for node in json.loads(rendered)}
+        self.assertEqual(node_ids, {447364, 587866, 587868, 589424})
+        self.assertNotIn(447374, node_ids)
+        self.assertNotIn(447376, node_ids)
 
     def test_create_predict_flow_raises_when_clustered_route_sync_fails(self):
         clustering_config = Mock(

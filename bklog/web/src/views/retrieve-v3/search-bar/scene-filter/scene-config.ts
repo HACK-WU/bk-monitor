@@ -24,4 +24,19 @@
  * IN THE SOFTWARE.
  */
 
-export * from '@/store/scene-filter-config';
+export {
+  OPERATOR_DISPLAY_MAP,
+  FREE_INPUT_STRING_OPERATOR_DISPLAY_MAP,
+  FREE_INPUT_STRING_OPERATOR_REQUEST_MAP,
+  REVERSE_OPERATOR_MAP,
+  transformSceneConfigItem,
+  transformSceneConfigs,
+  getSceneConfig,
+  getSceneFieldKeys,
+  getAllSceneFieldKeys,
+  getOperatorDisplay,
+  getOperatorRequestParam,
+  getDefaultOp,
+  getAllSceneFieldOpKeys,
+  TABLE_ID_CONDITION_SCENES,
+} from '@/store/scene-filter-config';

@@ -5,8 +5,14 @@ import { getFlatObjValues } from '@/common/util';
 import useFieldNameHook from '@/hooks/use-field-name';
 import useLocale from '@/hooks/use-locale';
 import useStore from '@/hooks/use-store';
+import { retrieveRowCacheService } from '@/storage';
+import { createRetrieveRowRenderMeta } from '@/storage/utils/retrieve-render-meta';
 
 import { getDefaultDisplayFields } from '../../components/data-filter/fields-config/default-display-fields';
+
+import { flattenLogParams, stripMark } from './realtime-cursor';
+
+export { flattenLogParams, stripMark };
 
 export type DisplayMode = 'log' | 'code';
 
@@ -15,8 +21,6 @@ export interface RelatedLogCommonOptions {
   targetRow: Ref<Record<string, any>>;
   targetFields?: Ref<string[]>;
 }
-
-export const stripMark = (value: string) => value.replace(/<mark>/g, '').replace(/<\/mark>/g, '');
 
 export const normalizeDisplayValue = (value: any) => {
   if (value === null || value === undefined) return ' ';
@@ -28,30 +32,6 @@ export const normalizeDisplayValue = (value: any) => {
     }
   }
   return value;
-};
-
-export const flattenLogParams = (row: Record<string, any>) => {
-  const params: Record<string, string> = {};
-
-  const walk = (obj: any, prefix = '') => {
-    if (obj === null || obj === undefined) {
-      if (prefix) params[prefix] = '';
-      return;
-    }
-
-    Object.keys(obj).forEach((key) => {
-      const prefixKey = prefix ? `${prefix}.${key}` : key;
-      const value = obj[key];
-      if (value && typeof value === 'object' && !value._isBigNumber) {
-        walk(value, prefixKey);
-        return;
-      }
-      params[prefixKey] = stripMark(value?._isBigNumber ? value.toString() : String(value ?? ''));
-    });
-  };
-
-  walk(row);
-  return params;
 };
 
 export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
@@ -76,6 +56,8 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
 
   let rawList: any[] = [];
   let reverseRawList: any[] = [];
+  let relatedQueryKey = '';
+  let relatedSeq = 0;
   let displayFieldNames: string[] = [];
   let filterCheckTimer: ReturnType<typeof setTimeout> | undefined;
   let filterResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -83,31 +65,61 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
 
   const targetFields = computed(() => options.targetFields?.value || []);
 
-  const getShowFieldNames = () => displayFieldNames.length
-    ? displayFieldNames
-    : getDefaultDisplayFields(store, store.state.retrieve.catchFieldCustomConfig?.contextDisplayFields);
+  const getShowFieldNames = () =>
+    displayFieldNames.length
+      ? displayFieldNames
+      : getDefaultDisplayFields(store, store.state.retrieve.catchFieldCustomConfig?.contextDisplayFields);
 
   const getDisplayFieldValue = (row: Record<string, any>, flatRow: Record<string, any>, field: string) => {
     const realField = changeFieldName(field);
     return normalizeDisplayValue(flatRow[realField] ?? row[realField] ?? row[field] ?? flatRow[field]);
   };
 
-  const formatList = (list: any[], fields = getShowFieldNames()) => list.map((row) => {
-    const displayObj = {};
-    const { newObject } = getFlatObjValues(row);
-    fields.forEach((field) => {
-      Object.assign(displayObj, {
-        [field]: getDisplayFieldValue(row, newObject, field),
+  const writeRowsToCache = async (rows: any[], renderRows?: any[]) => {
+    if (!rows.length) return [];
+    if (!relatedQueryKey) {
+      relatedQueryKey = retrieveRowCacheService.createQueryKey({
+        standalone: 'related-log-stream',
+        indexSetId: options.indexSetId.value,
+        seed: options.targetRow.value?.dtEventTimeStamp,
       });
+      relatedSeq = 0;
+    }
+    const fieldNames = getShowFieldNames();
+    const renderMetas = rows.map((row, index) => createRetrieveRowRenderMeta(row, renderRows?.[index]));
+    const keys = await retrieveRowCacheService.appendRows(relatedQueryKey, rows, relatedSeq, {
+      fieldNames,
+      renderRows,
+      renderMetas,
     });
-    return displayObj;
-  });
+    relatedSeq += rows.length;
+    return keys;
+  };
+
+  const formatList = (list: any[], fields = getShowFieldNames()) =>
+    list.map(row => {
+      const displayObj = {};
+      const { newObject } = getFlatObjValues(row);
+      fields.forEach(field => {
+        Object.assign(displayObj, {
+          [field]: getDisplayFieldValue(row, newObject, field),
+        });
+      });
+      return displayObj;
+    });
 
   const resetLogs = () => {
+    if (relatedQueryKey) {
+      retrieveRowCacheService.clearQuery(relatedQueryKey).catch(error => {
+        console.warn('[related-log] clear query rows failed', error);
+      });
+    }
     logList.value = [];
     reverseLogList.value = [];
     rawList = [];
     reverseRawList = [];
+    relatedQueryKey = '';
+    relatedSeq = 0;
     isFilterEmpty.value = false;
   };
 
@@ -116,16 +128,27 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
     reverseRawList = reverseRows;
     logList.value = formatList(rawList);
     reverseLogList.value = formatList(reverseRawList);
+    writeRowsToCache(reverseRows.concat(normalRows), reverseLogList.value.concat(logList.value)).catch(error => {
+      console.warn('[related-log] cache rows failed', error);
+    });
   };
 
   const appendRawRows = (rows: any[]) => {
+    const renderRows = formatList(rows);
     rawList.push(...rows);
-    logList.value.push(...formatList(rows));
+    logList.value.push(...renderRows);
+    writeRowsToCache(rows, renderRows).catch(error => {
+      console.warn('[related-log] cache append rows failed', error);
+    });
   };
 
   const prependReverseRows = (rows: any[]) => {
+    const renderRows = formatList(rows);
     reverseRawList.unshift(...rows);
-    reverseLogList.value.unshift(...formatList(rows));
+    reverseLogList.value.unshift(...renderRows);
+    writeRowsToCache(rows, renderRows).catch(error => {
+      console.warn('[related-log] cache prepend rows failed', error);
+    });
   };
 
   const handleFieldsConfigUpdate = (fields: string[]) => {
@@ -155,9 +178,10 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
       const current = scrollerRef.value?.querySelector('.log-init') as HTMLElement;
       if (!current || !scrollerRef.value) return;
       const wrapperHeight = scrollerRef.value.offsetHeight;
-      const targetTop = wrapperHeight <= current.scrollHeight
-        ? current.offsetTop
-        : current.offsetTop - Math.ceil((wrapperHeight - current.scrollHeight) / 2);
+      const targetTop =
+        wrapperHeight <= current.scrollHeight
+          ? current.offsetTop
+          : current.offsetTop - Math.ceil((wrapperHeight - current.scrollHeight) / 2);
       scrollerRef.value.scrollTo({ top: targetTop, behavior: 'smooth' });
     });
   };
@@ -193,13 +217,17 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
   const request = async (url: string, data: Record<string, any>, requestId?: string) => {
     loading.value = true;
     try {
-      return await $http.request(url, {
-        params: { index_set_id: options.indexSetId.value },
-        data,
-      }, {
-        catchIsShowMessage: false,
-        requestId,
-      });
+      return await $http.request(
+        url,
+        {
+          params: { index_set_id: options.indexSetId.value },
+          data,
+        },
+        {
+          catchIsShowMessage: false,
+          requestId,
+        },
+      );
     } finally {
       loading.value = false;
     }
@@ -209,6 +237,8 @@ export const useCommonRelatedLog = (options: RelatedLogCommonOptions) => {
     clearTimeout(filterCheckTimer);
     clearTimeout(filterResetTimer);
     clearTimeout(highlightTimer);
+    // 卸载时清掉日志缓存，避免残留 query 占用
+    resetLogs();
   };
 
   onBeforeUnmount(disposeCommon);

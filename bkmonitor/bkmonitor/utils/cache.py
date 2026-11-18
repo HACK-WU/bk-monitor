@@ -295,6 +295,7 @@ class CacheType:
     BCS = CacheTypeItem(key="bcs", timeout=60 * 5, user_related=False)
     METADATA = CacheTypeItem(key="metadata", timeout=60 * 10, user_related=False)
     APM = CacheTypeItem(key="apm", timeout=60 * 10, user_related=False)
+    RUM = CacheTypeItem(key="rum", timeout=60 * 10, user_related=False)
     APM_EBPF = CacheTypeItem(key="apm_ebpf", timeout=60 * 10, user_related=False)
     APM_ENDPOINTS = CacheTypeItem(key="apm_endpoints", timeout=60 * 10, user_related=False)
     CC_BACKEND = CacheTypeItem(key="cc_backend", timeout=60 * 10, user_related=False)
@@ -306,6 +307,8 @@ class CacheType:
     CC_CACHE_ALWAYS = CacheTypeItem(key="cc_cache_always", timeout=60 * 60, user_related=False)
     HOME = CacheTypeItem(key="home", timeout=settings.CACHE_HOME_TIMEOUT, label="自愈统计数据相关", user_related=False)
     DEVOPS = CacheTypeItem(key="devops", timeout=60 * 5, label="蓝盾接口相关", user_related=False)
+    # AIDEV 资源按当前用户登录态过滤，缓存必须按用户隔离
+    AIDEV = CacheTypeItem(key="aidev", timeout=60 * 5, label="AIDEV 接口相关", user_related=True)
     GRAFANA = CacheTypeItem(key="grafana", timeout=60 * 5, label="仪表盘相关", user_related=False)
     SCENE_VIEW = CacheTypeItem(key="scene_view", timeout=60 * 1, label="观测场景相关", user_related=False)
     DB_CACHE = CacheTypeItem(key="db_cache", timeout=60 * 3, label="db缓存", user_related=False)

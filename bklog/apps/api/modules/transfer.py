@@ -51,11 +51,17 @@ def get_cluster_info_after(response_result):
 
 def create_cluster_info_before(params):
     """
-    create_cluster_info_before
-    @param params:
-    @return:
+    create_cluster_info_before / modify_cluster_info 共用 before_request。
+
+    add_esb_info_before_request 在未传 auth_info 时会把 ESB 身份（bk_token 等）
+    json.dumps 进 params["auth_info"]；该字段在 metadata ModifyClusterInfoResource
+    语义是「集群账号密码」。未显式传集群 auth_info 时需去掉注入值，
+    让 metadata（auth_info default=None）保留原凭据，避免可见范围更新清空 Doris 账号。
     """
+    caller_provided_auth_info = "auth_info" in params
     params = add_esb_info_before_request(params)
+    if not caller_provided_auth_info:
+        params.pop("auth_info", None)
     params["custom_option"] = json.dumps(params["custom_option"])
     return params
 
@@ -224,6 +230,15 @@ class _TransferApi:
             after_request=get_result_table_storage_after,
             bk_tenant_id=result_table_to_tenant_getter("result_table_list"),
         )
+        self.get_result_table_storage_status = DataAPI(
+            method="GET",
+            url=self._build_url("get_result_table_storage_status/", "metadata_get_result_table_storage_status/"),
+            module=self.MODULE,
+            description=_("批量查询结果表存储状态"),
+            before_request=add_esb_info_before_request,
+            bk_tenant_id=result_table_to_tenant_getter("table_ids"),
+            default_timeout=90,
+        )
         self.get_cluster_info = DataAPI(
             method="GET",
             url=self._build_url("get_cluster_info/", "metadata_get_cluster_info/"),
@@ -231,6 +246,15 @@ class _TransferApi:
             description=_("查询存储集群列表"),
             before_request=add_esb_info_before_request,
             after_request=get_cluster_info_after,
+        )
+        self.get_cluster_status = DataAPI(
+            method="GET",
+            url=self._build_url("get_cluster_status/", "metadata_get_cluster_status/"),
+            module=self.MODULE,
+            description=_("批量查询存储集群状态"),
+            before_request=add_esb_info_before_request,
+            bk_tenant_id=biz_to_tenant_getter(),
+            default_timeout=90,
         )
         self.create_cluster_info = DataAPI(
             method="POST",

@@ -140,4 +140,35 @@
       line-height: 20px;
     }
   }
+
+  .search-field-filter-new {
+    width: 190px !important;
+  }
+
+  .collection-favorite-popover {
+    .popover-title-content {
+      .dialog-title {
+        margin-top: 0;
+      }
+    }
+
+    .tippy-arrow {
+      left: 347px !important;
+    }
+  }
+
+  .bk-table-expand-icon {
+    color: #8f9fbd !important;
+  }
+
+  .llm-token-stats-rank,
+  .llm-duration-stats-rank {
+    .bkmv3-radio-button-label {
+      line-height: 24px !important;
+    }
+  }
+
+  .llm-model-timeline-filters {
+    background: #f0f1f5 !important;
+  }
 }

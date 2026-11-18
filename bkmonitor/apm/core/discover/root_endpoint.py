@@ -29,6 +29,7 @@ class RootEndpointDiscover(CachedDiscoverMixin, DiscoverBase):
     """
 
     DISCOVERY_ALL_SPANS = False
+    DISCOVERY_REQUIRES_TRACE_CONTEXT: bool = True
     MAX_COUNT = 100000
     CACHE_KEY_SPLIT = ":"
     model = RootEndpoint
@@ -120,6 +121,7 @@ class RootEndpointDiscover(CachedDiscoverMixin, DiscoverBase):
         # 使用抽象方法处理缓存刷新
         self.handle_cache_refresh_after_create(
             existing_instances=list(remain_data.values()),
+            remain_data=remain_data,
             created_db_instances=created_instances,
             updated_instances=need_update_instances,
         )

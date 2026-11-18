@@ -37,6 +37,7 @@ import DragTag from '../common-comp/drag-tag';
 import InfoTips from '../common-comp/info-tips';
 import $http from '@/api';
 import { showMessage } from '../../utils';
+import { isCollectionEditRoute } from './route-utils';
 import type { ISubmitOptions } from '../../type';
 
 import './step2-custom-report.scss';
@@ -89,6 +90,7 @@ export default defineComponent({
       target_fields: [],
       sort_fields: [],
       index_set_id: '',
+      data_link_id: '',
     });
     /** 目标字段选择列表 */
     const targetFieldSelectList = ref<{ id: string; name: string }[]>([]);
@@ -114,14 +116,21 @@ export default defineComponent({
       return options;
     });
     const globalsData = computed(() => store.getters['globals/globalsData']);
+
+    /**
+     * 链路配置列表
+     */
+    const linkConfigurationList = ref([]);
+    const linkListLoading = ref(false);
+
     /**
      * 当前采集id
      */
     const collectorId = computed(() => route.params.collectorId);
     const defaultRetention = computed(() => {
-      const { storage_duration_time } = globalsData.value;
+      const { storage_duration_time: storageDurationTime } = globalsData.value;
 
-      return storage_duration_time?.filter(item => item.default === true)[0].id;
+      return storageDurationTime?.filter(item => item.default === true)[0].id;
     });
 
     // 防止重复调用的标志
@@ -129,10 +138,10 @@ export default defineComponent({
 
     onMounted(() => {
       // this.containerLoading = true;
+      getLinkData();
       initFormData();
     });
     const initFormData = async () => {
-      console.log(' isInitializing.value', isInitializing.value);
       // 防止重复调用：如果正在初始化，直接返回
       if (isInitializing.value) {
         return;
@@ -146,22 +155,28 @@ export default defineComponent({
           },
         });
         loading.value = false;
-        const { collector_config_name, index_set_id, target_fields, sort_fields } = res?.data;
+        const responseData = res?.data ?? {};
+        const {
+          collector_config_name: collectorConfigName,
+          index_set_id: indexSetId,
+          target_fields: targetFields,
+          sort_fields: sortFields,
+        } = responseData;
         configData.value = {
           ...configData.value,
-          ...res?.data,
-          index_set_name: collector_config_name,
-          target_fields: target_fields || [],
-          sort_fields: sort_fields || [],
-          index_set_id: index_set_id || '',
+          ...responseData,
+          index_set_name: collectorConfigName,
+          target_fields: targetFields || [],
+          sort_fields: sortFields || [],
+          index_set_id: indexSetId || '',
         };
-        store.commit('collect/setCurCollect', res.data);
+        store.commit('collect/setCurCollect', responseData);
         // 保存初始表单数据快照
         saveInitialFormData();
         emit('detail', configData.value);
         // 编辑模式下初始化字段选择列表
-        if (index_set_id) {
-          initTargetFieldSelectList(index_set_id);
+        if (indexSetId) {
+          initTargetFieldSelectList(indexSetId);
         }
       } else {
         const { retention } = configData.value;
@@ -196,6 +211,60 @@ export default defineComponent({
       }
     };
 
+    /**
+     * 是否为编辑
+     */
+    const isUpdate = computed(() => isCollectionEditRoute(route.name) && props.isEdit);
+
+    /**
+     * 获取链路配置列表
+     */
+    const getLinkData = async () => {
+      try {
+        linkListLoading.value = true;
+        const res = await $http.request('linkConfiguration/getLinkList', {
+          query: {
+            bk_biz_id: bkBizId.value,
+          },
+        });
+        linkConfigurationList.value = res.data.filter(item => item.is_active);
+        if (linkConfigurationList.value.length && !isUpdate.value) {
+          configData.value.data_link_id = linkConfigurationList.value[0].data_link_id;
+        }
+      } catch (e) {
+        console.log(e);
+      } finally {
+        linkListLoading.value = false;
+      }
+    };
+
+    /**
+     * 链路配置卡片
+     */
+    const renderLinkConfig = () => (
+      <div class='link-config label-form-box'>
+        <span class='label-title'>{t('上报链路')}</span>
+        <bk-select
+          class='form-box'
+          clearable={false}
+          disabled={isUpdate.value}
+          loading={linkListLoading.value}
+          value={configData.value.data_link_id}
+          on-selected={val => {
+            configData.value.data_link_id = val;
+          }}
+        >
+          {linkConfigurationList.value.map(item => (
+            <bk-option
+              id={item.data_link_id}
+              key={item.data_link_id}
+              name={item.link_group_name}
+            />
+          ))}
+        </bk-select>
+      </div>
+    );
+
     /** 基本信息 */
     const renderBaseInfo = () => (
       <BaseInfo
@@ -204,7 +273,8 @@ export default defineComponent({
         typeKey='custom'
         isEdit={props.isEdit}
         on-change={data => {
-          configData.value = { ...configData.value, ...data };
+          // 采集名输入框绑定的是 index_set_name，需要同步回真实后端字段 collector_config_name
+          configData.value = { ...configData.value, ...data, collector_config_name: data.index_set_name };
         }}
       />
     );
@@ -276,23 +346,21 @@ export default defineComponent({
      * @param options.action 操作类型: 'next'(默认) | 'back' | 'saveOnly'
      * @param options.callback 保存完成后的回调函数
      */
-    const handleSubmitSave = async ({
-      action = 'saveOnly',
-      callback,
-    }: ISubmitOptions = {}) => {
+    const handleSubmitSave = async ({ action = 'saveOnly', callback }: ISubmitOptions = {}) => {
       // 表单校验
       try {
         await baseInfoRef.value?.validate();
       } catch {
+        callback?.(false);
         return;
       }
 
       submitLoading.value = true;
 
       const {
-        collector_config_name,
+        collector_config_name: collectorConfigName,
         collector_config_name_en,
-        index_set_name,
+        index_set_name: indexSetName,
         bk_data_id,
         custom_type,
         retention,
@@ -303,7 +371,8 @@ export default defineComponent({
         storage_cluster_id,
         es_shards,
         parent_index_set_ids,
-        storage_cluster_type,
+        storage_cluster_type: storageClusterType,
+        data_link_id,
       } = configData.value as { [key: string]: unknown };
 
       const submitData = {
@@ -318,14 +387,15 @@ export default defineComponent({
         es_shards: Number(es_shards),
         parent_index_set_ids,
         collector_config_name_en,
-        collector_config_name: collector_config_name || index_set_name,
+        collector_config_name: collectorConfigName || indexSetName,
         bk_biz_id: Number(bkBizId.value),
         target_fields: configData.value.target_fields || [],
         sort_fields: configData.value.sort_fields || [],
+        data_link_id,
       };
 
       // 根据 storage_cluster_type 判断是否需要移除字段
-      if (storage_cluster_type === 'doris') {
+      if (storageClusterType === 'doris') {
         delete submitData.es_shards;
         delete submitData.storage_replies;
         delete submitData.allocation_min_days;
@@ -338,16 +408,23 @@ export default defineComponent({
           },
           data: submitData,
         })
-        .then((res) => {
+        .then(res => {
           if (res.result) {
             showMessage(t('保存成功'));
+            // 同步最新配置到父级，避免步骤条切换后存储步骤使用旧快照提交
+            emit('detail', configData.value);
             callback?.(true);
             if (action === 'saveOnly') {
               // 只保存，不跳转
               return;
             }
             emit('cancel');
+          } else {
+            callback?.(false);
           }
+        })
+        .catch(() => {
+          callback?.(false);
         })
         .finally(() => {
           submitLoading.value = false;
@@ -368,6 +445,14 @@ export default defineComponent({
           title: t('字段设置'),
           key: 'fieldSetting',
           renderFn: renderFieldSetting,
+        });
+      }
+      // 只有在有可上报的链路且 data_link_id 不为 0 或 null 时才显示链路配置卡片
+      if (linkConfigurationList.value.length > 0 && configData.value.data_link_id) {
+        cards.push({
+          title: t('链路配置'),
+          key: 'linkConfig',
+          renderFn: renderLinkConfig,
         });
       }
       return cards;
@@ -403,7 +488,6 @@ export default defineComponent({
               baseInfoRef.value
                 .validate()
                 .then(() => {
-                  console.log('configData.value', configData.value);
                   emit('next', configData.value);
                 })
                 .catch(() => {

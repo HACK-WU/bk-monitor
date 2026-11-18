@@ -78,6 +78,16 @@ DATA_SOURCE = {
             "backends": "bkmonitor.data_source.backends.elastic_search",
         },
     },
+    DataSourceLabel.BK_RUM: {
+        DataTypeLabel.TIME_SERIES: {
+            "query": api.metadata.get_es_data,
+            "backends": "bkmonitor.data_source.backends.elastic_search",
+        },
+        DataTypeLabel.LOG: {
+            "query": api.metadata.get_es_data,
+            "backends": "bkmonitor.data_source.backends.elastic_search",
+        },
+    },
 }
 
 
@@ -155,6 +165,7 @@ class Query:
         # search after: https://www.elastic.co/guide/en/elasticsearch/reference/
         # current/search-aggregations-bucket-composite-aggregation.html#_pagination
         self.search_after_key = None
+        self.composite_missing_bucket = False
         self.use_full_index_names = False
         # 目前 ES 场景下默认都会补 date_histogram，在原始日志/指标计算等场景下非必须
         # 提供开关用于控制该行为，默认逻辑和之前一致（True）
@@ -195,6 +206,7 @@ class Query:
         obj.nested_paths = self.nested_paths.copy()
         if self.search_after_key is not None:
             obj.search_after_key = self.search_after_key.copy()
+        obj.composite_missing_bucket = self.composite_missing_bucket
         obj.group_hits_size = self.group_hits_size
         obj.use_full_index_names = self.use_full_index_names
         obj.enable_date_histogram = self.enable_date_histogram

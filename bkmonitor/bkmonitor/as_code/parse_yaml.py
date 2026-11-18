@@ -18,7 +18,7 @@ from typing import Any
 from rest_framework.exceptions import ValidationError
 
 from bkmonitor.action.serializers import DutyRuleDetailSlz
-from bkmonitor.as_code.constants import MaxVersion
+from bkmonitor.as_code.constants import MaxVersion, MinVersion
 from bkmonitor.as_code.ply.error import ParseError
 from bkmonitor.as_code.ply.expression import expression_lexer, expression_parser
 from bkmonitor.as_code.schema import (
@@ -171,7 +171,9 @@ class StrategyConfigParser(BaseConfigParser):
 
         return time_ranges
 
-    def get_query_configs_n_name(self, config: dict[str, Any], detect: dict) -> tuple[list, str, str]:
+    def get_query_configs_n_name(
+        self, config: dict[str, Any], detect: dict, fallback_scenario: str | None = None
+    ) -> tuple[list, str, str]:
         # 查询配置
         query_configs = []
 
@@ -183,7 +185,14 @@ class StrategyConfigParser(BaseConfigParser):
         if not config["query"]["query_configs"]:
             raise Exception("query_configs is empty")
 
-        scenario = "other_rt"
+        raw_scenario = config.get("scenario")
+        if raw_scenario is not None:
+            explicit_scenario = raw_scenario.strip().lower()
+            if not explicit_scenario:
+                raise ValidationError("scenario 不能为空")
+        else:
+            explicit_scenario = None
+        resolved_scenario = None
         for origin_config in config["query"]["query_configs"]:
             # grafana类型策略处理
             if config["query"]["data_source"] == DataSourceLabel.DASHBOARD:
@@ -220,6 +229,8 @@ class StrategyConfigParser(BaseConfigParser):
                 "unit": origin_config["unit"],
                 **metric_dict,
             }
+            if config["query"]["data_source"] == DataSourceLabel.PROMETHEUS and origin_config.get("expression_mode"):
+                query_config["expression_mode"] = origin_config["expression_mode"]
 
             query_configs.append(query_config)
 
@@ -249,7 +260,7 @@ class StrategyConfigParser(BaseConfigParser):
                 metric = None
             # 根据指标信息获取场景及时间字段
             if metric:
-                scenario = metric.result_table_label
+                resolved_scenario = metric.result_table_label
                 if metric.extend_fields.get("time_field"):
                     query_config["time_field"] = metric.extend_fields["time_field"]
 
@@ -266,6 +277,7 @@ class StrategyConfigParser(BaseConfigParser):
             name = query_configs[0]["promql"]
         else:
             name = " ".join(expression_tokens)
+        scenario = explicit_scenario or resolved_scenario or fallback_scenario or "other_rt"
         return query_configs, name, scenario
 
     @staticmethod
@@ -281,7 +293,7 @@ class StrategyConfigParser(BaseConfigParser):
             "alert_levels": [LEVEL_NAME_TO_ID[level] for level in issue_config["levels"]],
         }
 
-    def parse(self, config: dict) -> dict:
+    def parse(self, config: dict, fallback_scenario: str | None = None) -> dict:
         # 生效时间段解析 yaml -> config
         time_ranges = self.get_time_ranges(config)
 
@@ -323,7 +335,9 @@ class StrategyConfigParser(BaseConfigParser):
         }
 
         # 查询配置解析
-        query_configs, name, scenario = self.get_query_configs_n_name(config, detect)
+        query_configs, name, scenario = self.get_query_configs_n_name(
+            config, detect, fallback_scenario=fallback_scenario
+        )
 
         # 监控目标
         if "target" in config["query"]:
@@ -393,6 +407,8 @@ class StrategyConfigParser(BaseConfigParser):
             "functions": [parse_function(function) for function in config["query"].get("functions", [])],
             "target": target,
         }
+        if "query_output_config" in config["query"]:
+            item["query_output_config"] = config["query"]["query_output_config"]
 
         # 通知配置
         signal = set(config["notice"]["signal"])
@@ -729,7 +745,9 @@ class StrategyConfigParser(BaseConfigParser):
 
     def unparse(self, config: dict) -> dict:
         # config --> yaml
-        code_config = {"name": config["name"], "version": MaxVersion.STRATEGY}
+        code_config = {"name": config["name"], "version": MinVersion.STRATEGY}
+        if config.get("scenario"):
+            code_config["scenario"] = config["scenario"]
 
         if config["priority"] is not None:
             code_config["priority"] = config["priority"]
@@ -788,11 +806,20 @@ class StrategyConfigParser(BaseConfigParser):
                 if query_config.get(field):
                     code_query_config[code_field] = query_config[field]
 
-            if (data_source, data_type) in (
-                (DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.TIME_SERIES),
-                (DataSourceLabel.CUSTOM, DataTypeLabel.TIME_SERIES),
-            ) or data_source == DataSourceLabel.BK_FTA:
+            if (
+                (data_source, data_type)
+                in (
+                    (DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.TIME_SERIES),
+                    (DataSourceLabel.CUSTOM, DataTypeLabel.TIME_SERIES),
+                )
+                or data_source == DataSourceLabel.BK_FTA
+                or (data_source == DataSourceLabel.PROMETHEUS and query_config.get("expression_mode") == "promql")
+            ):
                 code_query_config["alias"] = query_config["alias"]
+
+            if data_source == DataSourceLabel.PROMETHEUS and query_config.get("expression_mode"):
+                code_query_config["expression_mode"] = query_config["expression_mode"]
+                code_config["version"] = MaxVersion.STRATEGY
 
             if query_config.get("functions"):
                 function_expressions = [
@@ -814,7 +841,7 @@ class StrategyConfigParser(BaseConfigParser):
         elif (data_source, data_type) in (
             (DataSourceLabel.BK_MONITOR_COLLECTOR, DataTypeLabel.TIME_SERIES),
             (DataSourceLabel.CUSTOM, DataTypeLabel.TIME_SERIES),
-        ):
+        ) or (data_source == DataSourceLabel.PROMETHEUS and query_configs[0].get("expression_mode") == "promql"):
             query["expression"] = item["expression"]
 
         # 表达式
@@ -828,6 +855,9 @@ class StrategyConfigParser(BaseConfigParser):
                 query["functions"] = function_expressions
 
         self.update_target(item, query)
+        if isinstance(item.get("query_output_config"), dict):
+            query["query_output_config"] = item["query_output_config"]
+            code_config["version"] = MaxVersion.STRATEGY
         code_config["query"] = query
 
         # 检测配置
@@ -1271,11 +1301,11 @@ class AssignGroupRuleParser(BaseConfigParser):
                 if action["action_type"] == "notice":
                     if not action.get("is_enabled"):
                         rule["notice_enabled"] = False
-                    rule["upgrade_config"] = action["upgrade_config"]
+                    rule["upgrade_config"] = action.get("upgrade_config") or {}
                     rule["upgrade_config"]["enabled"] = rule["upgrade_config"].pop("is_enabled", False)
                     rule["upgrade_config"]["interval"] = rule["upgrade_config"].pop("upgrade_interval", 1440)
                     rule["upgrade_config"]["user_groups"] = self.get_notice_group_names(
-                        rule["upgrade_config"]["user_groups"]
+                        rule["upgrade_config"].get("user_groups", [])
                     )
                 else:
                     action["enabled"] = action.pop("is_enabled", False)

@@ -21,23 +21,18 @@ the project delivered to anyone in the future.
 
 import copy
 import re
+from itertools import chain
 
 import arrow
 from django.conf import settings
-from django.db.models import Q
 from django.db.transaction import atomic
 from django.utils.functional import cached_property
 
 from apps.api import MonitorApi, UnifyQueryApi
 from apps.feature_toggle.handlers.toggle import FeatureToggleObject
-from apps.feature_toggle.plugins.constants import (
-    BKDATA_CLUSTERING_TOGGLE,
-    UNIFY_QUERY_SEARCH,
-    UNIFY_QUERY_SEARCH_CLUSTERING,
-)
+from apps.feature_toggle.plugins.constants import BKDATA_CLUSTERING_TOGGLE
 from apps.log_clustering.constants import (
     AGGS_FIELD_PREFIX,
-    CLUSTERING_REMARK_GROUP_FALLBACK_BIZ_ID_BLACK_LIST,
     DEFAULT_ACTION_NOTICE,
     DEFAULT_ALERT_NOTICE,
     DEFAULT_LABEL,
@@ -48,21 +43,27 @@ from apps.log_clustering.constants import (
     NEW_CLASS_FIELD_PREFIX,
     NEW_CLASS_QUERY_FIELDS,
     NEW_CLASS_QUERY_TIME_RANGE,
+    NEW_CLASS_ALERT_SEARCH_PAGE_SIZE,
     NEW_CLASS_SENSITIVITY_FIELD,
+    NO_DATA_ALERT_DEDUPE_KEY,
     PERCENTAGE_RATE,
     OwnerConfigEnum,
     PatternEnum,
     RemarkConfigEnum,
-    StorageTypeEnum,
+    SIGNATURE_FIELD,
+    StrategiesType,
 )
 from apps.log_clustering.models import (
     AiopsSignatureAndPattern,
     ClusteringConfig,
     ClusteringRemark,
+    SignatureStrategySettings,
 )
-from apps.log_clustering.utils.pattern import parse_pattern_placeholders
+from apps.log_clustering.utils.pattern import (
+    is_remark_group_inherit_allowed,
+    parse_pattern_placeholders,
+)
 from apps.log_search.handlers.index_set import BaseIndexSetHandler
-from apps.log_search.handlers.search.aggs_handlers import AggsHandlers
 from apps.log_unifyquery.handler.pattern import UnifyQueryPatternHandler
 from apps.models import model_to_dict
 from apps.utils.bkdata import BkData
@@ -76,6 +77,10 @@ from apps.utils.local import (
 from apps.utils.log import logger
 from apps.utils.thread import MultiExecuteFunc
 from apps.utils.time_handler import generate_time_range, generate_time_range_shift
+
+
+NEW_CLASS_SIGNATURE_CHUNK_SIZE = 900
+NEW_CLASS_SIGNATURE_QUERY_MAX_WORKERS = 3
 
 
 class PatternHandler:
@@ -146,13 +151,14 @@ class PatternHandler:
         signature_map_origin_log = array_hash(pattern_map, "signature", "origin_log")
         sum_count = sum([pattern.get("doc_count", MIN_COUNT) for pattern in pattern_aggs if pattern["key"]])
 
-        # 符合当前分组hash的所有clustering_remark  signature和origin_pattern可能不相同
+        # 业务下所有备注，signature 和 origin_pattern 可能不相同，按两者分别建索引后逐行挑候选。
+        # 空记录也要保留：它可能是用户删光备注后的精确记录，丢掉会让该行重新继承祖先内容
         clustering_remarks = ClusteringRemark.objects.filter(
             bk_biz_id=self._clustering_config.bk_biz_id, source_app_code=get_external_app_code()
         ).values(
+            "id",
             "signature",
             "origin_pattern",
-            "group_hash",
             "remark",
             "owners",
             "groups",
@@ -160,19 +166,16 @@ class PatternHandler:
             "strategy_enabled",
         )
 
-        signature_map_remark = {}
-        signature_map_remark_without_group = {}
-        origin_pattern_map_remark = {}
-        origin_pattern_map_remark_without_group = {}
+        signature_map_remarks = {}
+        origin_pattern_map_remarks = {}
 
         for remark in clustering_remarks:
-            signature_map_remark[(remark["signature"], remark["group_hash"])] = remark
-            if self._allow_remark_group_fallback and not remark["groups"]:
-                signature_map_remark_without_group[remark["signature"]] = remark
+            signature_map_remarks.setdefault(remark["signature"], []).append(remark)
             if remark["origin_pattern"]:
-                origin_pattern_map_remark[(remark["origin_pattern"], remark["group_hash"])] = remark
-                if self._allow_remark_group_fallback and not remark["groups"]:
-                    origin_pattern_map_remark_without_group[remark["origin_pattern"]] = remark
+                origin_pattern_map_remarks.setdefault(remark["origin_pattern"], []).append(remark)
+
+        group_fields = self._clustering_config.group_fields or []
+        allow_remark_group_inherit = self._allow_remark_group_inherit
 
         result = []
         for pattern in pattern_aggs:
@@ -190,42 +193,24 @@ class PatternHandler:
 
             group_dict = dict(zip(self._group_by, group))
 
-            group_hash = ClusteringRemark.convert_groups_to_groups_hash(group_dict)
-
-            # 黑名单业务严格匹配 group_hash；其余业务兼容空维度备注降级展示。
-            remark_obj = None
-            exact_signature_remark_obj = signature_map_remark.get((signature, group_hash))
-            exact_origin_pattern_remark_obj = (
-                origin_pattern_map_remark.get((signature_origin_pattern, group_hash))
-                if signature_origin_pattern
-                else None
+            # 备注分组维度是当前分组组合子集时即可继承展示，空维度备注是其中的特例；黑名单业务只认精确分组。
+            content = ClusteringRemark.resolve_inherited_content(
+                chain(
+                    signature_map_remarks.get(signature, []),
+                    origin_pattern_map_remarks.get(signature_origin_pattern, []),
+                ),
+                signature=signature,
+                origin_pattern=signature_origin_pattern,
+                group_dict=group_dict,
+                group_fields=group_fields,
+                allow_inherit=allow_remark_group_inherit,
             )
-            fallback_signature_remark_obj = signature_map_remark_without_group.get(signature)
-            fallback_origin_pattern_remark_obj = (
-                origin_pattern_map_remark_without_group.get(signature_origin_pattern)
-                if signature_origin_pattern
-                else None
-            )
-            for candidate in [
-                exact_signature_remark_obj,
-                exact_origin_pattern_remark_obj,
-                fallback_signature_remark_obj,
-                fallback_origin_pattern_remark_obj,
-            ]:
-                if candidate and (candidate["remark"] or candidate["owners"]):
-                    remark_obj = candidate
-                    break
 
-            if remark_obj:
-                remark = remark_obj["remark"]
-                owners = remark_obj["owners"]
-                strategy_id = remark_obj["strategy_id"]
-                strategy_enabled = remark_obj["strategy_enabled"]
-            else:
-                remark = []
-                owners = []
-                strategy_id = 0
-                strategy_enabled = False
+            remark = content.remark_source["remark"] if content.remark_source else []
+            owners = content.owner_source["owners"] if content.owner_source else []
+            # 策略与告警组绑定在具体分组组合上，继承来的行不带出它们，否则会出现停不掉的假开关
+            strategy_id = content.exact["strategy_id"] if content.exact else 0
+            strategy_enabled = content.exact["strategy_enabled"] if content.exact else False
 
             result.append(
                 {
@@ -294,16 +279,10 @@ class PatternHandler:
         return visible_key in new_class_visible_keys
 
     @cached_property
-    def _allow_remark_group_fallback(self) -> bool:
+    def _allow_remark_group_inherit(self) -> bool:
         feature_toggle = FeatureToggleObject.toggle(BKDATA_CLUSTERING_TOGGLE)
         feature_config = feature_toggle.feature_config if feature_toggle else {}
-        if not isinstance(feature_config, dict):
-            return True
-
-        biz_id_black_list = feature_config.get(CLUSTERING_REMARK_GROUP_FALLBACK_BIZ_ID_BLACK_LIST, [])
-        if not isinstance(biz_id_black_list, list | tuple | set):
-            return True
-        return str(self._clustering_config.bk_biz_id) not in {str(bk_biz_id) for bk_biz_id in biz_id_black_list}
+        return is_remark_group_inherit_allowed(feature_config, self._clustering_config.bk_biz_id)
 
     def _get_remark_and_owner(self, result):
         if self._remark_config == RemarkConfigEnum.REMARKED.value:
@@ -332,36 +311,118 @@ class PatternHandler:
             for new_class_tuple in new_class_query_result
             if new_class_tuple and len(new_class_tuple) > 0
         ]
+        new_class_signature_list = list(set(new_class_signature_list))
 
         if not new_class_signature_list:
             return {"pattern_aggs": [], "year_on_year_result": {}, "new_class": set()}
 
-        # 添加新类日志数据指纹 ID 列表作为条件查询的参数
+        chunked_queries = [
+            self._build_new_class_query(signature_chunk)
+            for signature_chunk in self._chunk_values(new_class_signature_list, NEW_CLASS_SIGNATURE_CHUNK_SIZE)
+        ]
+
+        multi_execute_func = MultiExecuteFunc()
+        multi_execute_func.append(
+            "pattern_aggs",
+            lambda p: self._get_new_class_pattern_aggs_result(p["queries"]),
+            {"queries": copy.deepcopy(chunked_queries)},
+        )
+        multi_execute_func.append(
+            "year_on_year_result",
+            lambda p: self._get_new_class_year_on_year_result(p["queries"]),
+            {"queries": copy.deepcopy(chunked_queries)},
+        )
+
+        multi_result = self._run_multi_execute(multi_execute_func)
+
+        multi_result["new_class"] = new_class_query_result
+
+        return multi_result
+
+    def _build_new_class_query(self, signatures):
         new_class_signature_query_condition = {
             "field": self.pattern_aggs_field,
             "operator": "is one of",
-            "value": list(set(new_class_signature_list)),
+            "value": signatures,
             "condition": "and",
         }
 
         copy_query = copy.deepcopy(self._query)
         copy_query.setdefault("addition", []).append(new_class_signature_query_condition)
+        return copy_query
 
-        multi_execute_func = MultiExecuteFunc()
-        multi_execute_func.append(
-            "pattern_aggs",
-            lambda p: self._get_pattern_aggs_result(p["index_set_id"], p["query"]),
-            {"index_set_id": self._index_set_id, "query": copy_query},
+    def _get_new_class_pattern_aggs_result(self, queries):
+        if len(queries) == 1:
+            return self._get_pattern_aggs_result(self._index_set_id, queries[0])
+
+        task_keys = []
+        multi_execute_func = MultiExecuteFunc(max_workers=min(len(queries), NEW_CLASS_SIGNATURE_QUERY_MAX_WORKERS))
+
+        for index, query in enumerate(queries):
+            task_key = f"pattern_aggs_{index}"
+            task_keys.append(task_key)
+            multi_execute_func.append(
+                task_key,
+                lambda p: self._get_pattern_aggs_result(p["index_set_id"], p["query"]),
+                {"index_set_id": self._index_set_id, "query": query},
+            )
+
+        multi_result = self._run_multi_execute(multi_execute_func)
+        return self._merge_pattern_aggs_results(
+            [multi_result.get(task_key, []) for task_key in task_keys], self._query.get("size", 10000)
         )
-        multi_execute_func.append(
-            "year_on_year_result", lambda p: self._get_year_on_year_aggs_result(p["query"]), {"query": copy_query}
-        )
 
-        multi_result = multi_execute_func.run()
+    def _get_new_class_year_on_year_result(self, queries):
+        if self._year_on_year_hour == MIN_COUNT:
+            return {}
 
-        multi_result["new_class"] = new_class_query_result
+        if len(queries) == 1:
+            return self._get_year_on_year_aggs_result(queries[0])
 
-        return multi_result
+        task_keys = []
+        multi_execute_func = MultiExecuteFunc(max_workers=min(len(queries), NEW_CLASS_SIGNATURE_QUERY_MAX_WORKERS))
+
+        for index, query in enumerate(queries):
+            task_key = f"year_on_year_result_{index}"
+            task_keys.append(task_key)
+            multi_execute_func.append(
+                task_key,
+                lambda p: self._get_year_on_year_aggs_result(p["query"]),
+                {"query": query},
+            )
+
+        multi_result = self._run_multi_execute(multi_execute_func)
+        return self._merge_year_on_year_results([multi_result.get(task_key, {}) for task_key in task_keys])
+
+    @staticmethod
+    def _chunk_values(values, chunk_size):
+        for index in range(0, len(values), chunk_size):
+            yield values[index : index + chunk_size]
+
+    @staticmethod
+    def _merge_pattern_aggs_results(pattern_aggs_results, size):
+        merged_pattern_aggs = {}
+
+        for pattern_aggs in pattern_aggs_results:
+            for pattern in pattern_aggs or []:
+                merge_key = (pattern.get("key", ""), pattern.get("group", ""))
+                if merge_key not in merged_pattern_aggs:
+                    merged_pattern_aggs[merge_key] = {**pattern, "doc_count": 0}
+                merged_pattern_aggs[merge_key]["doc_count"] += pattern.get("doc_count", MIN_COUNT)
+
+        result = list(merged_pattern_aggs.values())
+        result.sort(key=lambda pattern: pattern.get("doc_count", MIN_COUNT), reverse=True)
+        return result[:size]
+
+    @staticmethod
+    def _merge_year_on_year_results(year_on_year_results):
+        merged_year_on_year = {}
+
+        for year_on_year_result in year_on_year_results:
+            for key, count in (year_on_year_result or {}).items():
+                merged_year_on_year[key] = merged_year_on_year.get(key, MIN_COUNT) + count
+
+        return merged_year_on_year
 
     def _multi_query(self):
         multi_execute_func = MultiExecuteFunc()
@@ -372,33 +433,16 @@ class PatternHandler:
         )
         multi_execute_func.append("year_on_year_result", lambda: self._get_year_on_year_aggs_result())
         multi_execute_func.append("new_class", lambda: self._get_new_class())
+        return self._run_multi_execute(multi_execute_func)
+
+    def _run_multi_execute(self, multi_execute_func):
         return multi_execute_func.run()
 
     def _get_pattern_aggs_result(self, index_set_id, query):
         pattern_aggs_field = self.pattern_aggs_field
-        use_unify_query = self._clustering_config.storage_type == StorageTypeEnum.DORIS.value or (
-            FeatureToggleObject.switch(UNIFY_QUERY_SEARCH, query.get("bk_biz_id"))
-            and FeatureToggleObject.switch(UNIFY_QUERY_SEARCH_CLUSTERING, query.get("bk_biz_id"))
-        )
-        if use_unify_query:
-            query["index_set_ids"] = [index_set_id]
-            query["agg_field"] = pattern_aggs_field
-            return UnifyQueryPatternHandler(query).query_pattern()
-        else:
-            query["fields"] = [{"field_name": pattern_aggs_field, "sub_fields": self._build_aggs_group}]
-            aggs_result = AggsHandlers.terms(index_set_id, query)
-            return self._parse_pattern_aggs_result(pattern_aggs_field, aggs_result)
-
-    @property
-    def _build_aggs_group(self):
-        aggs_group = {}
-        aggs_group_reuslt = aggs_group
-        for group_key in self._group_by:
-            aggs_group["field_name"] = group_key
-            # aggs_group["missing"] = ""
-            aggs_group["sub_fields"] = {}
-            aggs_group = aggs_group["sub_fields"]
-        return aggs_group_reuslt
+        query["index_set_ids"] = [index_set_id]
+        query["agg_field"] = pattern_aggs_field
+        return UnifyQueryPatternHandler(query).query_pattern()
 
     def _get_year_on_year_aggs_result(self, query=None) -> dict:
         if self._year_on_year_hour == MIN_COUNT:
@@ -441,35 +485,11 @@ class PatternHandler:
     def new_class_field(self) -> str:
         return f"{NEW_CLASS_FIELD_PREFIX}_{self._pattern_level}"
 
-    def _parse_pattern_aggs_result(self, pattern_field: str, aggs_result: dict) -> list[dict]:
-        aggs = aggs_result.get("aggs")
-        pattern_field_aggs = aggs.get(pattern_field)
-        if not pattern_field_aggs:
-            return []
-        return self._get_group_by_value(pattern_field_aggs.get("buckets", []))
-
-    def _get_group_by_value(self, bucket):
-        for group_key in self._group_by:
-            result_buckets = []
-            for iter_bucket in bucket:
-                doc_key = iter_bucket.get("key")
-                group_buckets = iter_bucket.get(group_key, {}).get("buckets", [])
-                for group_bucket in group_buckets:
-                    # 这里是为了兼容字符串空值，数值为0的情况
-                    result_buckets.append(
-                        {
-                            **group_bucket,
-                            "key": doc_key,
-                            "doc_count": group_bucket.get("doc_count", 0),
-                            "group": (
-                                f"{iter_bucket.get('group', '')}|{group_bucket['key']}"
-                                if iter_bucket.get("group") is not None  # noqa
-                                else group_bucket["key"]
-                            ),
-                        }
-                    )
-            bucket = result_buckets
-        return bucket
+    @cached_property
+    def _monitor_bk_biz_id(self) -> int:
+        if self._clustering_config.related_space_pre_bk_biz_id:
+            return self._clustering_config.related_space_pre_bk_biz_id
+        return self._clustering_config.bk_biz_id
 
     def _get_new_class(self):
         start_time, end_time = generate_time_range(
@@ -477,40 +497,130 @@ class PatternHandler:
         )
         if self._clustering_config.use_mini_link:
             # TODO: 使用监控新类告警结果判定
-            new_classes = []
-        elif self._clustering_config.new_cls_strategy_output:
-            # 新类异常检测逻辑适配
-            try:
-                select_fields = NEW_CLASS_QUERY_FIELDS + self._clustering_config.group_fields
-                new_classes = (
-                    BkData(self._clustering_config.new_cls_strategy_output)
-                    .select(*select_fields)
-                    .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.pattern_aggs_field)
-                    .where(IS_NEW_PATTERN_PREFIX, "=", 1)
-                    .time_range(int(start_time.timestamp()), int(end_time.timestamp()))
-                    .query()
-                )
-            except Exception:  # pylint: disable=broad-except
-                # 分组字段不存在导致查询失败时，退化到不按分组聚合
-                select_fields = NEW_CLASS_QUERY_FIELDS
-                new_classes = (
-                    BkData(self._clustering_config.new_cls_strategy_output)
-                    .select(*select_fields)
-                    .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.pattern_aggs_field)
-                    .where(IS_NEW_PATTERN_PREFIX, "=", 1)
-                    .time_range(int(start_time.timestamp()), int(end_time.timestamp()))
-                    .query()
-                )
-        else:
+            return set()
+        if self._clustering_config.new_cls_strategy_output:
+            return self._get_new_class_from_bkdata_strategy_output(start_time, end_time)
+        if self._clustering_config.new_cls_pattern_rt:
+            return self._get_new_class_from_bkdata_pattern_rt(start_time, end_time)
+        return self._get_new_class_from_alerts(start_time, end_time)
+
+    def _get_new_class_from_bkdata_strategy_output(self, start_time, end_time):
+        # 存量 IntelligentDetect 策略输出 RT
+        try:
+            select_fields = NEW_CLASS_QUERY_FIELDS + self._clustering_config.group_fields
+            new_classes = (
+                BkData(self._clustering_config.new_cls_strategy_output)
+                .select(*select_fields)
+                .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.pattern_aggs_field)
+                .where(IS_NEW_PATTERN_PREFIX, "=", 1)
+                .time_range(int(start_time.timestamp()), int(end_time.timestamp()))
+                .query()
+            )
+        except Exception:  # pylint: disable=broad-except
+            # 分组字段不存在导致查询失败时，退化到不按分组聚合
             select_fields = NEW_CLASS_QUERY_FIELDS
             new_classes = (
-                BkData(self._clustering_config.new_cls_pattern_rt)
+                BkData(self._clustering_config.new_cls_strategy_output)
                 .select(*select_fields)
-                .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.new_class_field)
+                .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.pattern_aggs_field)
+                .where(IS_NEW_PATTERN_PREFIX, "=", 1)
                 .time_range(int(start_time.timestamp()), int(end_time.timestamp()))
                 .query()
             )
         return {tuple(str(new_class[field]) for field in select_fields) for new_class in new_classes}
+
+    def _get_new_class_from_bkdata_pattern_rt(self, start_time, end_time):
+        select_fields = NEW_CLASS_QUERY_FIELDS
+        new_classes = (
+            BkData(self._clustering_config.new_cls_pattern_rt)
+            .select(*select_fields)
+            .where(NEW_CLASS_SENSITIVITY_FIELD, "=", self.new_class_field)
+            .time_range(int(start_time.timestamp()), int(end_time.timestamp()))
+            .query()
+        )
+        return {tuple(str(new_class[field]) for field in select_fields) for new_class in new_classes}
+
+    def _get_new_class_strategy_id(self):
+        strategy_settings = SignatureStrategySettings.objects.filter(
+            index_set_id=self._index_set_id,
+            strategy_type=StrategiesType.NEW_CLS_strategy,
+            signature="",
+            is_deleted=False,
+        ).first()
+        if not strategy_settings or not strategy_settings.strategy_id:
+            return None
+        return strategy_settings.strategy_id
+
+    def _is_no_data_alert(self, alert):
+        return NO_DATA_ALERT_DEDUPE_KEY in (alert.get("dedupe_keys") or [])
+
+    @staticmethod
+    def _normalize_alert_dimension_key(key):
+        if isinstance(key, str) and key.startswith("tags."):
+            return key[len("tags.") :]
+        return key
+
+    def _extract_signature_from_alert_dimensions(self, dimensions):
+        signature_keys = {SIGNATURE_FIELD, self.pattern_aggs_field}
+        for dimension in dimensions or []:
+            key = self._normalize_alert_dimension_key(dimension.get("key"))
+            if key not in signature_keys:
+                continue
+            value = dimension.get("value")
+            if value not in (None, ""):
+                return str(value)
+        return None
+
+    def _extract_new_class_tuple_from_alert(self, alert, select_fields):
+        dimensions = alert.get("dimensions") or []
+        signature = self._extract_signature_from_alert_dimensions(dimensions)
+        if not signature:
+            return None
+
+        dimension_map = {
+            self._normalize_alert_dimension_key(dimension.get("key")): dimension.get("value")
+            for dimension in dimensions
+            if dimension.get("key") is not None
+        }
+        return tuple(
+            str(signature if field == SIGNATURE_FIELD else dimension_map.get(field, "")) for field in select_fields
+        )
+
+    def _get_new_class_from_alerts(self, start_time, end_time):
+        strategy_id = self._get_new_class_strategy_id()
+        if not strategy_id:
+            return set()
+
+        select_fields = NEW_CLASS_QUERY_FIELDS + list(self._clustering_config.group_fields or [])
+        new_classes = set()
+        page = 1
+
+        while True:
+            request_params = {
+                "bk_biz_ids": [self._monitor_bk_biz_id],
+                "conditions": [{"key": "strategy_id", "value": [strategy_id]}],
+                "start_time": int(start_time.timestamp()),
+                "end_time": int(end_time.timestamp()),
+                "page": page,
+                "page_size": NEW_CLASS_ALERT_SEARCH_PAGE_SIZE,
+                "show_overview": False,
+                "show_aggs": False,
+            }
+            alert_result = MonitorApi.search_alert(request_params) or {}
+            alerts = alert_result.get("alerts") or []
+            for alert in alerts:
+                if self._is_no_data_alert(alert):
+                    continue
+                new_class_tuple = self._extract_new_class_tuple_from_alert(alert, select_fields)
+                if new_class_tuple:
+                    new_classes.add(new_class_tuple)
+
+            total = alert_result.get("total", 0)
+            if page * NEW_CLASS_ALERT_SEARCH_PAGE_SIZE >= total or not alerts:
+                break
+            page += 1
+
+        return new_classes
 
     def _get_pattern_data(self, patterns):
         if not patterns:
@@ -596,23 +706,22 @@ class PatternHandler:
             if record["signature"]
         ]
 
+    def _materialize_remark(self, params: dict):
+        """写入前物化继承内容，避免新建的精确记录在展示端把继承来的备注挤掉。"""
+        return ClusteringRemark.materialize_inherited_remark(
+            bk_biz_id=self._clustering_config.bk_biz_id,
+            signature=params["signature"],
+            origin_pattern=params.get("origin_pattern") or "",
+            groups=params["groups"],
+            group_fields=self._clustering_config.group_fields or [],
+            allow_inherit=self._allow_remark_group_inherit,
+        )
+
     def set_clustering_owner(self, params: dict):
         """
         日志聚类-数据指纹 页面展示信息修改
         """
-        condition = Q(signature=params["signature"])
-        if params.get("origin_pattern"):
-            condition |= Q(origin_pattern=params["origin_pattern"])
-
-        remark_obj = (
-            ClusteringRemark.objects.filter(condition)
-            .filter(
-                bk_biz_id=self._clustering_config.bk_biz_id,
-                group_hash=ClusteringRemark.convert_groups_to_groups_hash(params["groups"]),
-            )
-            .filter(source_app_code=get_external_app_code())
-            .first()
-        )
+        remark_obj = self._materialize_remark(params)
 
         owners = list(set(params.get("owners", [])))
 
@@ -663,8 +772,12 @@ class PatternHandler:
         """
         self._clustering_config.group_fields = group_fields
         self._clustering_config.save()
-        # TODO: 暂不打开，等完成告警配置页面再打开
-        # update_log_count_aggregation_flow.delay(self._clustering_config.index_set_id)
+        if self._clustering_config.new_cls_strategy_enable:
+            from apps.log_clustering.handlers.clustering_monitor import ClusteringMonitorHandler
+
+            monitor_handler = ClusteringMonitorHandler(self._clustering_config.index_set_id)
+            if not monitor_handler.is_legacy_new_class_strategy():
+                monitor_handler.resave_new_cls_clustering_strategy()
         return model_to_dict(self._clustering_config)
 
     @atomic
@@ -672,19 +785,7 @@ class PatternHandler:
         """
         日志聚类-数据指纹 页面展示信息修改
         """
-        condition = Q(signature=params["signature"])
-        if params.get("origin_pattern"):
-            condition |= Q(origin_pattern=params["origin_pattern"])
-
-        remark_obj = (
-            ClusteringRemark.objects.filter(condition)
-            .filter(
-                bk_biz_id=self._clustering_config.bk_biz_id,
-                group_hash=ClusteringRemark.convert_groups_to_groups_hash(params["groups"]),
-            )
-            .filter(source_app_code=get_external_app_code())
-            .first()
-        )
+        remark_obj = self._materialize_remark(params)
         now = int(arrow.now().timestamp() * 1000)
         # 如果不存在则新建  同时同步其它signature或origin_pattern相同的ClusteringRemark
         if method == "create":

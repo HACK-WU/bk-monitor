@@ -25,9 +25,11 @@ from kernel_api.rpc.functions.admin.common import (
     get_page_list_bk_tenant_id,
     get_scoped_map_value,
     normalize_include,
+    normalize_int_list_filter,
     normalize_optional_bool,
     normalize_ordering,
     normalize_pagination,
+    normalize_string_list_filter,
     paginate_queryset,
     serialize_model,
     serialize_value,
@@ -68,6 +70,7 @@ CLUSTER_INFO_FIELDS = [
     "gse_stream_to_id",
     "label",
     "default_settings",
+    "custom_option",
     "creator",
     "create_time",
     "last_modify_user",
@@ -609,15 +612,20 @@ def _get_storage_model_for_cluster_type(cluster_type: str) -> type[Any] | None:
 def _build_cluster_info_queryset(params: dict[str, Any], bk_tenant_id: str | None):
     queryset = filter_by_bk_tenant_id(models.ClusterInfo.objects.all(), bk_tenant_id)
 
-    cluster_id = _parse_optional_int_param(params, "cluster_id")
-    if cluster_id is not None:
-        queryset = queryset.filter(cluster_id=cluster_id)
-    if params.get("cluster_type") not in (None, ""):
-        queryset = queryset.filter(cluster_type=str(params["cluster_type"]).strip())
+    cluster_ids = normalize_int_list_filter(params, "cluster_id", "cluster_ids", positive=True)
+    if cluster_ids:
+        if "cluster_ids" not in params and len(cluster_ids) == 1:
+            queryset = queryset.filter(cluster_id=cluster_ids[0])
+        else:
+            queryset = queryset.filter(cluster_id__in=cluster_ids)
+    cluster_types = normalize_string_list_filter(params, "cluster_type", "cluster_types")
+    if cluster_types:
+        queryset = queryset.filter(cluster_type__in=cluster_types)
     if params.get("cluster_name"):
         queryset = queryset.filter(cluster_name__contains=str(params["cluster_name"]).strip())
-    if params.get("registered_system") not in (None, ""):
-        queryset = queryset.filter(registered_system=str(params["registered_system"]).strip())
+    registered_systems = normalize_string_list_filter(params, "registered_system", "registered_systems")
+    if registered_systems:
+        queryset = queryset.filter(registered_system__in=registered_systems)
     is_default_cluster = normalize_optional_bool(params.get("is_default_cluster"), "is_default_cluster")
     if is_default_cluster is not None:
         queryset = queryset.filter(is_default_cluster=is_default_cluster)
@@ -685,16 +693,26 @@ def _enrich_clusters_with_storage_count(clusters: list[models.ClusterInfo], bk_t
     params_schema={
         "bk_tenant_id": PAGE_LIST_TENANT_SCHEMA,
         "cluster_id": "可选，ClusterInfo.cluster_id 精确匹配",
+        "cluster_ids": "可选，ClusterInfo.cluster_id 正整数数组，最多 100 项；与 cluster_id 合并去重",
         "cluster_type": "可选，集群类型精确匹配",
+        "cluster_types": "可选，集群类型数组，最多 100 项；与 cluster_type 合并去重",
         "cluster_name": "可选，集群名称包含匹配",
         "is_default_cluster": "可选，是否默认集群",
         "registered_system": "可选，注册来源系统精确匹配",
+        "registered_systems": "可选，注册来源系统数组，最多 100 项；与 registered_system 合并去重",
         "include": "可选，展开范围；默认 associated_counts，传空列表可跳过关联统计",
         "page": "可选，默认 1",
         "page_size": "可选，默认 20，最大 100",
         "ordering": f"可选，白名单字段: {', '.join(sorted(ORDERING_FIELDS))}，默认 cluster_id",
     },
-    example_params={"bk_tenant_id": "system", "page": 1, "page_size": 20, "ordering": "cluster_id"},
+    example_params={
+        "bk_tenant_id": "system",
+        "cluster_ids": [1, 2],
+        "cluster_types": ["kafka", "elasticsearch"],
+        "page": 1,
+        "page_size": 20,
+        "ordering": "cluster_id",
+    },
 )
 def list_cluster_infos(params: dict[str, Any]) -> dict[str, Any]:
     bk_tenant_id = get_page_list_bk_tenant_id(params)
@@ -1195,3 +1213,36 @@ def analyze_es_storage_usage(params: dict[str, Any]) -> dict[str, Any]:
         warnings=warnings,
     )
     return _mark_inspect_response(response)
+
+
+@KernelRPCRegistry.register(
+    "admin.cluster_info.doris_storage_analysis",
+    summary="Admin 分析 Doris 集群物理表占用与当前、历史归属",
+    description="inspect 级别，只读当前账号可见内部库表，一次返回分析快照，容量包含副本，行数为估算。",
+    params_schema={"bk_tenant_id": "可选，租户 ID", "cluster_id": "必填，Doris ClusterInfo.cluster_id"},
+    example_params={"bk_tenant_id": "system", "cluster_id": 3},
+)
+def analyze_doris_storage_usage(params: dict[str, Any]) -> dict[str, Any]:
+    from kernel_api.rpc.functions.admin.doris_analysis import build_doris_storage_analysis
+
+    bk_tenant_id = get_bk_tenant_id(params)
+    try:
+        cluster_id = int(params.get("cluster_id"))
+    except (TypeError, ValueError) as error:
+        raise CustomException(message="cluster_id 必须是整数") from error
+    try:
+        cluster = models.ClusterInfo.objects.get(
+            bk_tenant_id=bk_tenant_id, cluster_id=cluster_id, cluster_type=models.ClusterInfo.TYPE_DORIS
+        )
+    except models.ClusterInfo.DoesNotExist as error:
+        raise CustomException(message=f"未找到 Doris ClusterInfo: cluster_id={cluster_id}") from error
+    data, warnings = build_doris_storage_analysis(cluster, bk_tenant_id)
+    return _mark_inspect_response(
+        build_response(
+            operation="cluster_info.doris_storage_analysis",
+            func_name="admin.cluster_info.doris_storage_analysis",
+            bk_tenant_id=bk_tenant_id,
+            data=data,
+            warnings=warnings,
+        )
+    )

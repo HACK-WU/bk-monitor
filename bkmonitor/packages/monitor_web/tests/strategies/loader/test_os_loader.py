@@ -10,7 +10,6 @@ specific language governing permissions and limitations under the License.
 
 import pytest
 
-from core.errors.strategy import CreateStrategyError
 from bkmonitor.models import StrategyModel
 from bkmonitor.models import DefaultStrategyBizAccessModel
 from monitor_web.strategies.loader import (
@@ -115,10 +114,11 @@ class TestOsDefaultAlarmStrategyLoader:
             )
             assert total == 1
 
-        with pytest.raises(CreateStrategyError):
-            module = strategies_list[0]["module"]
-            strategies = getattr(module, loader.STRATEGY_ATTR_NAME)
-            loader.load_strategies(strategies)
+        module = strategies_list[0]["module"]
+        strategies = getattr(module, loader.STRATEGY_ATTR_NAME)
+        processed_strategies = loader.load_strategies(strategies)
+        assert len(processed_strategies) == 1
+        assert StrategyModel.objects.all().count() == 1
 
     def test_run(self, add_metric_list_cache):
         bk_biz_id = 2
@@ -179,8 +179,7 @@ class TestOsDefaultAlarmStrategyLoader:
         """多租户 custom event 系统事件主链路。
 
         覆盖最关键的新逻辑：
-        - 多租户下按 bk_biz_id 过滤查询 custom event 指标；
-        - 按 custom_event_name 建索引并匹配策略（而非 metric_field/__INDEX__）；
+        - 不依赖 MetricListCache，直接按租户和业务生成系统事件结果表；
         - 生成的 metric_id 带 .OOM 而非退化成整表 __INDEX__；
         - 最终 query_config 落到 agg_method=COUNT + 主机维度 agg_dimension。
         """
@@ -193,59 +192,151 @@ class TestOsDefaultAlarmStrategyLoader:
 
         bk_biz_id = 2
 
-        # 构造一个 V4 分业务系统事件指标（custom 源、event 类型）
-        metric = mock.Mock()
-        metric.data_source_label = "custom"
-        metric.data_type_label = "event"
-        metric.result_table_id = "base_tenant_2_event"
-        metric.metric_field = "OOM"
-        metric.metric_field_name = "OOM异常告警"
-        metric.extend_fields = {"custom_event_name": "OOM"}
-        metric.default_condition = []
-        metric.default_dimensions = []
-        metric.collect_interval = 1
-        metric.unit = ""
-
         # loader 在单租户下实例化，避免触发多租户租户映射查询；load 时再切多租户走 custom event 分支
         loader = OsDefaultAlarmStrategyLoader(bk_biz_id)
+        loader.bk_tenant_id = "tenant"
 
         captured = []
 
         with override_settings(ENABLE_MULTI_TENANT_MODE=True):
             importlib.reload(os_v2)
-            oom_strategy = next(s for s in os_v2.DEFAULT_OS_STRATEGIES if s["metric_field"] == "OOM")
             with (
                 mock.patch(
                     "monitor_web.strategies.loader.os_loader.MetricListCache.objects.filter",
-                    # 多租户 3 次查询：related_id=system 时序 / bk_monitor 源事件 / custom event
-                    side_effect=[[], [], [metric]],
+                    # 仅查询 bk_monitor 时序和事件目录，不查询 custom event MetricListCache
+                    side_effect=[[], []],
                 ) as filter_mock,
                 mock.patch(
                     "monitor_web.strategies.loader.os_loader.resource.strategies.save_strategy_v2",
                     side_effect=lambda **kwargs: captured.append(kwargs),
                 ),
                 mock.patch.object(OsDefaultAlarmStrategyLoader, "get_notice_group", return_value=[1]),
+                mock.patch(
+                    "monitor_web.strategies.loader.os_loader.get_or_create_gse_manager_group", return_value=None
+                ),
             ):
-                result = loader.load_strategies([oom_strategy])
+                result = loader.load_strategies(os_v2.DEFAULT_OS_STRATEGIES)
 
         # 还原全局模块，避免 reload 污染其它用例
         importlib.reload(os_v2)
 
-        assert len(result) == 1
-        # 多租户 custom event 查询带 bk_biz_id 过滤（第 3 次 filter 为 custom event 查询）
-        custom_call = filter_mock.call_args_list[2]
-        assert custom_call.kwargs["bk_biz_id"] == bk_biz_id
-        assert custom_call.kwargs["data_source_label"] == "custom"
-        assert custom_call.kwargs["data_type_label"] == "event"
+        assert len(result) == 4
+        assert len(captured) == 4
+        assert filter_mock.call_count == 2
 
-        query_config = captured[0]["items"][0]["query_configs"][0]
-        # metric_id 带 custom_event_name(.OOM)，未退化为整表 __INDEX__
-        assert query_config["metric_id"].endswith(".OOM")
-        assert "__INDEX__" not in query_config["metric_id"]
+        query_configs = {
+            config["items"][0]["query_configs"][0]["custom_event_name"]: config["items"][0]["query_configs"][0]
+            for config in captured
+        }
+        assert set(query_configs) == {"AgentLost", "DiskReadonly", "CoreFile", "OOM"}
+        for event_name, query_config in query_configs.items():
+            assert query_config["result_table_id"] == "base_tenant_2_event"
+            assert query_config["metric_id"].endswith(f".{event_name}")
+            assert "__INDEX__" not in query_config["metric_id"]
+            assert query_config["agg_method"] == "COUNT"
+
+        query_config = query_configs["OOM"]
         # custom event 检测语义：按事件名过滤 + COUNT 聚合 + 主机维度 group by
         assert query_config["custom_event_name"] == "OOM"
-        assert query_config["agg_method"] == "COUNT"
-        assert query_config["agg_dimension"] == ["bk_target_ip", "bk_target_cloud_id"]
+        assert query_config["agg_dimension"] == [
+            "bk_target_ip",
+            "bk_target_cloud_id",
+            "process",
+            "constraint",
+        ]
+
+    def test_run__v2_reentrant_after_access_record_deleted(self):
+        """删除 v2 接入记录后重跑：跳过已有策略、补齐缺失策略，并重新登记 v2。"""
+        import importlib
+        from unittest import mock
+
+        from django.test import override_settings
+
+        from monitor_web.strategies.default_settings.os import v2 as os_v2
+
+        bk_biz_id = 2
+        existing_names = {"Agent心跳丢失", "OOM异常告警"}
+        for name in existing_names:
+            StrategyModel.objects.create(bk_biz_id=bk_biz_id, name=name, scenario="os", type="monitor")
+
+        def save_strategy(**config):
+            StrategyModel.objects.create(
+                bk_biz_id=config["bk_biz_id"],
+                name=config["name"],
+                scenario=config["scenario"],
+                type="monitor",
+            )
+
+        try:
+            with override_settings(ENABLE_MULTI_TENANT_MODE=True):
+                importlib.reload(os_v2)
+                loader = OsDefaultAlarmStrategyLoader(bk_biz_id)
+                loader.bk_tenant_id = "tenant"
+                OsDefaultAlarmStrategyLoader.CACHE = set()
+
+                with (
+                    mock.patch.object(
+                        loader,
+                        "get_default_strategy",
+                        return_value=[{"version": "v2", "module": os_v2}],
+                    ),
+                    mock.patch(
+                        "monitor_web.strategies.loader.os_loader.MetricListCache.objects.filter",
+                        side_effect=[[], []],
+                    ),
+                    mock.patch(
+                        "monitor_web.strategies.loader.os_loader.resource.strategies.save_strategy_v2",
+                        side_effect=save_strategy,
+                    ) as save_mock,
+                    mock.patch.object(loader, "get_notice_group", return_value=[1]),
+                    mock.patch(
+                        "monitor_web.strategies.loader.os_loader.get_or_create_gse_manager_group", return_value=None
+                    ),
+                ):
+                    loader.run()
+
+                assert save_mock.call_count == 2
+                assert set(StrategyModel.objects.filter(bk_biz_id=bk_biz_id).values_list("name", flat=True)) == {
+                    "Agent心跳丢失",
+                    "磁盘只读",
+                    "Corefile产生",
+                    "OOM异常告警",
+                }
+                assert DefaultStrategyBizAccessModel.objects.filter(
+                    bk_biz_id=bk_biz_id, access_type="os", version="v2"
+                ).exists()
+
+                # 模拟手工删除接入记录后，在新进程中再次执行。
+                DefaultStrategyBizAccessModel.objects.filter(
+                    bk_biz_id=bk_biz_id, access_type="os", version="v2"
+                ).delete()
+                OsDefaultAlarmStrategyLoader.CACHE = set()
+                loader = OsDefaultAlarmStrategyLoader(bk_biz_id)
+                loader.bk_tenant_id = "tenant"
+
+                with (
+                    mock.patch.object(
+                        loader,
+                        "get_default_strategy",
+                        return_value=[{"version": "v2", "module": os_v2}],
+                    ),
+                    mock.patch(
+                        "monitor_web.strategies.loader.os_loader.MetricListCache.objects.filter",
+                        side_effect=[[], []],
+                    ),
+                    mock.patch(
+                        "monitor_web.strategies.loader.os_loader.resource.strategies.save_strategy_v2"
+                    ) as save_mock,
+                ):
+                    loader.run()
+
+                save_mock.assert_not_called()
+                assert DefaultStrategyBizAccessModel.objects.filter(
+                    bk_biz_id=bk_biz_id, access_type="os", version="v2"
+                ).exists()
+        finally:
+            OsDefaultAlarmStrategyLoader.CACHE = set()
+            importlib.reload(os_v2)
 
     def test_run__atomic_rollback_on_partial_failure(self, add_metric_list_cache):
         """单版本加载中途 save 失败时，已创建策略与接入记录整体回滚，且不写 CACHE。
@@ -393,9 +484,8 @@ class TestOsDefaultAlarmStrategyLoader:
                 with (
                     mock.patch(
                         "monitor_web.strategies.loader.os_loader.MetricListCache.objects.filter",
-                        # 多租户 3 次查询：related_id=system 时序 / bk_monitor 源事件 / custom event
-                        # 内置 proc_port/os_restart 由第 2 次（bk_monitor event）命中；custom 返回空
-                        side_effect=[[], [os_restart_metric, proc_port_metric], []],
+                        # 内置 proc_port/os_restart 由第 2 次（bk_monitor event）命中
+                        side_effect=[[], [os_restart_metric, proc_port_metric]],
                     ),
                     mock.patch(
                         "monitor_web.strategies.loader.os_loader.resource.strategies.save_strategy_v2",
@@ -428,38 +518,32 @@ class TestOsDefaultAlarmStrategyLoader:
         assert "not_accurate_listen" in pp_qc["agg_dimension"]
         assert by_field["proc_exists"]["items"][0]["algorithms"][0]["type"] == "ProcPort"
 
-    def test_load_strategies__ping_gated_by_enable_ping_alarm(self):
-        """PING 不可达是否内置由全局开关 ENABLE_PING_ALARM(运行时)决定，而非部署平台。
+    def test_load_strategies__ping_metric_logic_gated_by_enable_ping_alarm(self):
+        """PING 不可达走指标逻辑：bk_monitor/event/ping-gse 伪事件，经 EVENT_QUERY_CONFIG_MAP 重定向到
+        底层时序 pingserver.base/loss_percent + PingUnreachable 算法（与单租户 v1 同形），而非 v2 的
+        custom 计数事件。是否内置由全局开关 ENABLE_PING_ALARM(运行时)决定，而非部署平台。
 
-        开关开启 -> 指标就绪即创建；关闭 -> 即便指标就绪也跳过（避免悬空策略；access 层亦按此开关
-        门控 ping 事件处理）。
+        开关开启 -> 目录项就绪即创建(重定向到时序 + PingUnreachable)；关闭 -> 即便目录项就绪也跳过
+        （避免悬空策略；access 层亦按此开关门控 ping 事件处理）。
         """
+        import importlib
         from unittest import mock
 
         from django.test import override_settings
 
+        from monitor_web.strategies.default_settings.os import v4 as os_v4
+
         bk_biz_id = 2
 
-        ping_cfg = {
-            "name": "PING不可达告警",
-            "data_type_label": "event",
-            "data_source_label": "custom",
-            "result_table_label": "os",
-            "metric_field": "PingUnreachable",
-            "agg_dimension": ["bk_target_ip", "bk_target_cloud_id"],
-            "trigger_count": 3,
-            "trigger_check_window": 5,
-            "recovery_check_window": 5,
-            "recovery_status_setter": "close",
-        }
-
+        # BaseAlarmMetricCacheManager 在多租户内置的 bk_monitor 源 ping-gse 伪事件目录项（event 类型，
+        # result_table_id=system.event；get_metric_id 对 bk_monitor event 仅按 metric_field 归一）
         ping_metric = mock.Mock()
-        ping_metric.data_source_label = "custom"
+        ping_metric.data_source_label = "bk_monitor"
         ping_metric.data_type_label = "event"
-        ping_metric.result_table_id = "base_tenant_2_event"
-        ping_metric.metric_field = "PingUnreachable"
-        ping_metric.metric_field_name = "PING不可达告警"
-        ping_metric.extend_fields = {"custom_event_name": "PingUnreachable"}
+        ping_metric.result_table_id = "system.event"
+        ping_metric.metric_field = "ping-gse"
+        ping_metric.metric_field_name = "PING不可达"
+        ping_metric.extend_fields = {}
         ping_metric.default_condition = []
         ping_metric.default_dimensions = []
         ping_metric.collect_interval = 1
@@ -470,11 +554,13 @@ class TestOsDefaultAlarmStrategyLoader:
         def _run(enable_ping):
             captured = []
             with override_settings(ENABLE_MULTI_TENANT_MODE=True, ENABLE_PING_ALARM=enable_ping):
+                importlib.reload(os_v4)
+                ping_cfg = next(s for s in os_v4.DEFAULT_OS_STRATEGIES if s["metric_field"] == "ping-gse")
                 with (
                     mock.patch(
                         "monitor_web.strategies.loader.os_loader.MetricListCache.objects.filter",
-                        # related_id=system 时序 / bk_monitor 源事件 / custom event(ping 在此)
-                        side_effect=[[], [], [ping_metric]],
+                        # related_id=system 时序 / bk_monitor 源事件(ping-gse 在此)
+                        side_effect=[[], [ping_metric]],
                     ),
                     mock.patch(
                         "monitor_web.strategies.loader.os_loader.resource.strategies.save_strategy_v2",
@@ -485,12 +571,24 @@ class TestOsDefaultAlarmStrategyLoader:
                     result = loader.load_strategies([ping_cfg])
             return result, captured
 
-        # 开关开启：指标就绪 -> 建出 ping 策略
-        result_on, captured_on = _run(True)
-        assert len(result_on) == 1
-        assert len(captured_on) == 1
+        try:
+            # 开关开启：目录项就绪 -> 建出 ping 策略，且走指标逻辑(重定向到 pingserver.base/loss_percent)
+            result_on, captured_on = _run(True)
+            assert len(result_on) == 1
+            assert len(captured_on) == 1
+            qc = captured_on[0]["items"][0]["query_configs"][0]
+            assert qc["result_table_id"] == "pingserver.base"
+            assert qc["metric_field"] == "loss_percent"
+            assert qc["metric_id"] == "bk_monitor.ping-gse"
+            assert qc["data_type_label"] == "time_series"
+            assert captured_on[0]["items"][0]["algorithms"][0]["type"] == "PingUnreachable"
+            # 非 custom 事件：不应带 custom_event_name / COUNT 计数语义
+            assert "custom_event_name" not in qc
 
-        # 开关关闭：即便指标就绪也跳过、不创建
-        result_off, captured_off = _run(False)
-        assert result_off == []
-        assert captured_off == []
+            # 开关关闭：即便目录项就绪也跳过、不创建
+            result_off, captured_off = _run(False)
+            assert result_off == []
+            assert captured_off == []
+        finally:
+            # 还原全局模块，避免 reload 污染其它用例
+            importlib.reload(os_v4)

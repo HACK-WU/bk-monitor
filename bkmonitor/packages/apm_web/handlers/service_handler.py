@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License.
 
 import copy
 import logging
-import operator
+import time
 from collections import defaultdict
 from typing import Any
 
@@ -21,28 +21,25 @@ from django.utils.translation import gettext_lazy as _
 from apm_web.handlers import metric_group
 from opentelemetry.semconv.resource import ResourceAttributes
 from opentelemetry.semconv.trace import SpanAttributes
-from constants.apm import MetricTemporality, TelemetryDataType, Vendor
+from constants.apm import LLMProduct, MetricTemporality, OtlpKey, TelemetryDataType, Vendor
 
 from apm_web.constants import (
     APM_APPLICATION_DEFAULT_METRIC,
     APM_APPLICATION_METRIC,
     APM_APPLICATION_METRIC_DEFAULT_EXPIRED_TIME,
     ApdexCategoryMapping,
-    CategoryEnum,
     CustomServiceMatchType,
     DataStatus,
     TopoNodeKind,
 )
 from apm_web.handlers.log_handler import ServiceLogHandler
-from apm_web.metric_handler import RequestCountInstance, ServiceFlowCount
+from apm_web.metric_handler import ServiceFlowCount
 from apm_web.metrics import APPLICATION_LIST
 from apm_web.models import ApdexServiceRelation, Application, ApplicationCustomService
-from bkmonitor.utils import group_by
 from bkmonitor.utils.cache import CacheType, lru_cache_with_ttl, using_cache
 from bkmonitor.utils.thread_backend import ThreadPool
-from bkmonitor.utils.time_tools import get_datetime_range
-from constants.apm import OtlpKey
-from core.drf_resource import api
+from bkmonitor.utils.time_tools import get_datetime_range, time_interval_align
+from core.drf_resource import api, resource
 from core.errors.api import BKAPIError
 
 logger = logging.getLogger(__name__)
@@ -91,14 +88,10 @@ class ServiceHandler:
         return service_map
 
     @classmethod
-    def list_services(cls, application):
-        """
-        获取应用的服务列表 =
-            已发现的服务(service, remote_service)
-            + 未发现的自定义服务
-            + 服务下的组件(component)
-            + 无 Trace 上报的 Profiling 服务
-        """
+    def list_services(
+        cls, application: Application | dict[str, Any], *, include_data_status: bool = False
+    ) -> list[dict[str, Any]]:
+        """获取拓扑服务、组件及尚未发现的手动自定义服务。"""
         if isinstance(application, dict):
             bk_biz_id = application["bk_biz_id"]
             app_name = application["app_name"]
@@ -108,10 +101,14 @@ class ServiceHandler:
             app_name = application.app_name
             is_enabled_profiling = application.is_enabled_profiling
 
-        trace_services = cls.list_nodes(bk_biz_id, app_name)
+        services = [
+            node
+            for node in cls.list_nodes(bk_biz_id, app_name)
+            if is_enabled_profiling or node.get("source") != [TelemetryDataType.PROFILING.value]
+        ]
 
         # step1: 获取已发现的服务
-        found_service_names = [i["topo_key"] for i in trace_services if i["extra_data"]["kind"] == "remote_service"]
+        found_service_names = [i["topo_key"] for i in services if i["extra_data"]["kind"] == "remote_service"]
         # step2: 额外补充手动配置的自定义服务
         custom_services = ApplicationCustomService.objects.filter(
             bk_biz_id=bk_biz_id, app_name=app_name, match_type=CustomServiceMatchType.MANUAL
@@ -121,7 +118,7 @@ class ServiceHandler:
             if topo_key in found_service_names:
                 continue
 
-            trace_services.append(
+            services.append(
                 {
                     "topo_key": topo_key,
                     "extra_data": {
@@ -134,42 +131,61 @@ class ServiceHandler:
                 }
             )
 
-        # step3: 计算服务下组件
+        if include_data_status:
+            app = Application(**application) if isinstance(application, dict) else application
+            data_status_mapping = cls.build_service_data_status(app, services)
+            services = [{**node, "data_status": data_status_mapping[node["topo_key"]]} for node in services]
 
-        # step4: 获取 Profile 服务
-        profile_services = []
-        if is_enabled_profiling:
-            profile_services = api.apm_api.query_profile_services_detail(
-                **{"bk_biz_id": bk_biz_id, "app_name": app_name}
-            )
-
-        # step5: 将 Profile 服务和 Trace 服务重名的结合
-        return cls._combine_profile_trace_service(trace_services, profile_services)
+        return services
 
     @classmethod
-    def _combine_profile_trace_service(cls, trace_services, profile_services):
-        """合并 TraceService 和 ProfileService"""
-        res = copy.deepcopy(trace_services)
-        trace_names_mapping = group_by(res, operator.itemgetter("topo_key"))
-        visited = []
-        for profile_svr in profile_services:
-            if profile_svr["name"] not in trace_names_mapping and profile_svr["name"] not in visited:
-                # 如果没有 Trace 数据 则单独开一个服务
-                res.append(
-                    {
-                        "topo_key": profile_svr["name"],
-                        "extra_data": {
-                            "category": CategoryEnum.PROFILING,
-                            "kind": "profiling",
-                            "predicate_value": None,
-                            "service_language": None,
-                            "instance": {},
-                        },
-                    }
-                )
-                visited.append(profile_svr["name"])
+    def build_service_data_status(
+        cls, app: Application, nodes: list[dict[str, Any]], *, data_type: str | None = None
+    ) -> dict[str, dict[str, str]]:
+        """按模块开关、服务心跳及关联日志生成当前数据状态。"""
+        if not nodes:
+            return {}
 
-        return res
+        earliest_data_at = int(time.time()) - settings.APM_SERVICE_DATA_STATUS_LOOKBACK_SECONDS
+        data_types = (TelemetryDataType(data_type),) if data_type is not None else TelemetryDataType
+        status_mapping: dict[str, dict[str, str]] = {}
+        missing_heartbeat_counts: defaultdict[str, int] = defaultdict(int)
+        for node in nodes:
+            heartbeat = node.get("heartbeat") or {}
+            status = {}
+            for telemetry_type in data_types:
+                if not getattr(app, f"is_enabled_{telemetry_type.value}"):
+                    status[telemetry_type.value] = DataStatus.DISABLED
+                    continue
+
+                last_data_at = (heartbeat.get(telemetry_type.value) or {}).get("last_data_at")
+                if last_data_at is None:
+                    missing_heartbeat_counts[telemetry_type.value] += 1
+                status[telemetry_type.value] = (
+                    DataStatus.NORMAL
+                    if last_data_at is not None and last_data_at >= earliest_data_at
+                    else DataStatus.NO_DATA
+                )
+            status_mapping[node["topo_key"]] = status
+
+        if missing_heartbeat_counts:
+            logger.info(
+                "[BUILD_SERVICE_DATA_STATUS] missing last_data_at: bk_biz_id=%s app_name=%s missing_heartbeat_counts=%s",
+                app.bk_biz_id,
+                app.app_name,
+                dict(missing_heartbeat_counts),
+            )
+
+        log_services = [
+            name
+            for name, status in status_mapping.items()
+            if status.get(TelemetryDataType.LOG.value) == DataStatus.NO_DATA
+        ]
+        if log_services:
+            for name in ServiceLogHandler.list_available_related_services(app, log_services):
+                status_mapping[name][TelemetryDataType.LOG.value] = DataStatus.NORMAL
+
+        return status_mapping
 
     @classmethod
     def generate_remote_service_name(cls, name, category="http"):
@@ -529,150 +545,128 @@ class ServiceHandler:
     @classmethod
     def get_service_metric_range_mapping(
         cls,
-        metric,
-        application,
-        start_time,
-        end_time,
-        ignore_keys=None,
-        extra_params=None,
-    ):
-        """获取服务的指标数据(range查询)（兼容自定义服务、组件类服务名称）"""
-        if not extra_params:
-            extra_params = {}
-
-        # 查询普通服务
-        response = metric(
-            **{
-                "application": application,
-                "start_time": start_time,
-                "end_time": end_time,
-                # index: 0
-                "group_by": ["service_name"],
-                **extra_params,
-            }
-        ).get_range_calculate_values_mapping(ignore_keys)
-        # 查询组件类服务: DB
-        component_db_service_response = metric(
-            **{
-                "application": application,
-                "start_time": start_time,
-                "end_time": end_time,
-                # index: 0, 1, 2
-                "group_by": ["service_name", "db_system"],
-                **extra_params,
-            }
-        ).get_range_calculate_values_mapping(ignore_keys)
-        # 查询组件类服务: MESSAGING
-        component_messaging_service_response = metric(
-            **{
-                "application": application,
-                "start_time": start_time,
-                "end_time": end_time,
-                # index: 0, 1, 2
-                "group_by": ["service_name", "messaging_system"],
-                **extra_params,
-            }
-        ).get_range_calculate_values_mapping(ignore_keys)
-        # 单独查询自定义服务指标 (因为不同service_name可以访问同一个自定义服务)
-        remote_service_response = metric(
-            **{
-                "application": application,
-                "start_time": start_time,
-                "end_time": end_time,
-                # index: 0
-                "group_by": ["peer_service"],
-                **extra_params,
-            }
-        ).get_range_calculate_values_mapping(ignore_keys)
-        return cls._combine_metric_data(
-            response,
-            component_db_service_response,
-            component_messaging_service_response,
-            remote_service_response,
-        )
-
-    @classmethod
-    def get_service_data_status_mapping(cls, app, start_time, end_time, all_services, **kwargs):
-        """获取应用下各个服务的数据状态"""
-        if len(all_services) == 0:
-            return {}
-
-        status = {
-            TelemetryDataType.METRIC.value: DataStatus.NO_DATA if app.is_enabled_metric else DataStatus.DISABLED,
-            TelemetryDataType.LOG.value: DataStatus.NO_DATA if app.is_enabled_log else DataStatus.DISABLED,
-            TelemetryDataType.TRACE.value: DataStatus.NO_DATA if app.is_enabled_trace else DataStatus.DISABLED,
-            TelemetryDataType.PROFILING.value: DataStatus.NO_DATA if app.is_enabled_profiling else DataStatus.DISABLED,
+        calculation_type: str,
+        application: Application,
+        start_time: int,
+        end_time: int,
+        service_names: list[str],
+        interval: int,
+    ) -> dict[str, list[list[int | float | None]]]:
+        """查询本次请求指定服务的指标趋势。"""
+        service_names = list(dict.fromkeys(service_names))
+        service_group = ("service_name",)
+        db_group = ("service_name", "db_system")
+        messaging_group = ("service_name", "messaging_system")
+        remote_group = ("peer_service",)
+        # 同一名称可能命中多个分支，普通服务始终按请求名称匹配。
+        filters_by_group: dict[tuple[str, ...], dict[str, list[str]]] = {
+            service_group: {"service_name__eq": service_names}
         }
-        data_status_type = kwargs.get("data_status_type")
-        if data_status_type:
-            status = {data_status_type: status[data_status_type]}
 
-        res = defaultdict(lambda: copy.deepcopy(status))
-        # Metric 数据状态: 通过 bk_apm_count 指标判断
-        if TelemetryDataType.METRIC.value in status and status[TelemetryDataType.METRIC.value] != DataStatus.DISABLED:
-            metric_response = cls.get_service_metric_range_mapping(
-                RequestCountInstance,
-                app,
-                start_time,
-                end_time,
+        # 服务名和组件类型均非空且可以包含连字符，保留所有内部切分位置。
+        candidate_services = sorted(
+            {
+                name[:index]
+                for name in service_names
+                for index, char in enumerate(name)
+                if char == "-" and 0 < index < len(name) - 1
+            }
+        )
+        if candidate_services:
+            # 空组件维度不参与结果合并，在 UQ 聚合前过滤。
+            filters_by_group[db_group] = {"service_name__eq": candidate_services, "db_system__neq": [""]}
+            filters_by_group[messaging_group] = {
+                "service_name__eq": candidate_services,
+                "messaging_system__neq": [""],
+            }
+
+        # 远程服务只按被调方 peer_service 筛选，汇总所有调用方的指标。
+        remote_prefix = cls.generate_remote_service_name("")
+        remote_names = [
+            cls.get_remote_service_origin_name(name)
+            for name in service_names
+            if name.startswith(remote_prefix) and name != remote_prefix
+        ]
+        if remote_names:
+            filters_by_group[remote_group] = {"peer_service__eq": remote_names}
+
+        # 分支查询启动前获取指标结果表，各分支复用同一个 MetricHelper。
+        metric_helper = metric_group.MetricHelper(application.bk_biz_id, application.app_name)
+        use_queryset = calculation_type == metric_group.CalculationType.AVG_DURATION.value
+
+        def query_group(
+            group_by: tuple[str, ...], filters: dict[str, list[str]]
+        ) -> dict[tuple[str | None, ...], list[list[int | float | None]]]:
+            group = metric_group.SpanMetricGroup(
+                application.bk_biz_id,
+                application.app_name,
+                group_by=list(group_by),
+                filter_dict=filters if use_queryset else None,
+                interval=interval,
+                metric_helper=metric_helper,
             )
-            for service_name in metric_response.keys():
-                res[service_name].update({TelemetryDataType.METRIC.value: DataStatus.NORMAL})
+            points_by_group: dict[tuple[str | None, ...], list[list[int | float | None]]] = {}
+            if use_queryset:
+                # 直接读取 QuerySet 记录以保留耗时精度。公共查询层剔除结束时间对应的点，因此按列表查询步长对齐结束时间，排除末桶。
+                for point in group.handle(
+                    calculation_type, start_time=start_time, end_time=time_interval_align(end_time, interval)
+                ):
+                    key = tuple(point.get(field) for field in group_by)
+                    points_by_group.setdefault(key, []).append([point["_result_"], point["_time_"]])
+                return points_by_group
 
-        # Log 数据状态
-        if TelemetryDataType.LOG.value in status and status[TelemetryDataType.LOG.value] != DataStatus.DISABLED:
-            log_response = ServiceLogHandler.get_log_count_mapping(app.bk_biz_id, app.app_name, start_time, end_time)
-            for service_name, data_status in log_response.items():
-                res[service_name].update({TelemetryDataType.LOG.value: data_status})
+            config = group.query_config(calculation_type, raw=True)
+            # Graph 会删除 where 中的全选标记。用 filter_dict 精确匹配字面值 __BKMONITOR_ALL__。
+            for query_config in config["query_configs"]:
+                query_config["filter_dict"] = filters
+            # Graph 接收原始秒级窗口，并按其原有规则处理精度和补点。
+            series = resource.grafana.graph_unify_query({**config, "start_time": start_time, "end_time": end_time})[
+                "series"
+            ]
+            for item in series:
+                key = tuple(item["dimensions"].get(field) for field in group_by)
+                points = item["datapoints"]
+                if calculation_type == metric_group.CalculationType.EXCEPTION_RATE.value:
+                    # 移除 Graph 的占位空点，由列表按原有时间戳规则统一补点（值为 0 的有效错误率数据点仍需保留）。
+                    points = [point for point in points if point[0] is not None]
+                points_by_group[key] = points
+            return points_by_group
 
-        # Trace 数据状态: 通过 flow 指标判断
-        # (有 flow 指标 证明有 span 并且经过了 collector 处理
-        # 但是是否正常被 transfer 消费未知除非查 ES 但是查 ES 太重了这里直接查 flow 指标)
-        if TelemetryDataType.TRACE.value in status and status[TelemetryDataType.TRACE.value] != DataStatus.DISABLED:
-            trace_response = ServiceFlowCount(
-                **{
-                    "application": app,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "group_by": ["from_apm_service_name", "to_apm_service_name"],
+        results: dict[tuple[str, ...], dict[tuple[str | None, ...], list[list[int | float | None]]]]
+        if len(filters_by_group) == 1:
+            results = {service_group: query_group(service_group, filters_by_group[service_group])}
+        else:
+            with ThreadPool(processes=2) as pool:
+                futures = {
+                    group: pool.apply_async(query_group, args=(group, filters))
+                    for group, filters in filters_by_group.items()
                 }
-            ).get_instance_values_mapping()
-            for keys in trace_response.keys():
-                if keys[0]:
-                    res[keys[0]].update({TelemetryDataType.TRACE.value: DataStatus.NORMAL})
-                if keys[-1]:
-                    res[keys[-1]].update({TelemetryDataType.TRACE.value: DataStatus.NORMAL})
+                # 分支查询异常通过 get() 向外抛出，由指标列统一处理失败。
+                results = {group: future.get() for group, future in futures.items()}
 
-        # Profiling 数据状态
-        if (
-            TelemetryDataType.PROFILING.value in status
-            and status[TelemetryDataType.PROFILING.value] != DataStatus.DISABLED
-        ):
-            services = api.apm_api.query_profile_services_detail(
-                bk_biz_id=app.bk_biz_id,
-                app_name=app.app_name,
-                # profiling 数据状态依赖周期任务，这里在无数据周期的基础上，再往前探查10分钟数据
-                last_check_time__gt=start_time - 10 * 60,
-            )
-            for i in services:
-                res[i["name"]].update({TelemetryDataType.PROFILING.value: DataStatus.NORMAL})
-
-        for i in all_services:
-            if i["topo_key"] not in res:
-                # 使用默认值
-                res[i["topo_key"]].update({})
-
-        return res
+        # 同名结果按普通服务、数据库组件、消息组件和远程服务的顺序覆盖。
+        return cls._combine_metric_data(
+            results[service_group],
+            results.get(db_group, {}),
+            results.get(messaging_group, {}),
+            results.get(remote_group, {}),
+        )
 
     @classmethod
     def get_system(cls, node: dict[str, Any]) -> dict[str, Any]:
         """
         从节点提取系统信息
         :param node: 节点信息
-        :return: 无 system 返回 {}，否则 {name, sdk, temporality}
+        :return: 无 system 且不支持 LLM 返回 {}
         """
         systems: list[dict[str, Any]] = node.get("system") or []
-        if not systems:
+        llm: dict[str, Any] = (node.get("extra_data") or {}).get("llm") or {}
+        product: str = llm.get("product") or ""
+        is_support_llm: bool = bool(product)
+        if is_support_llm and Vendor.has_sdk(node.get("sdk"), Vendor.G):
+            product = LLMProduct.GALILEO.value
+
+        if not systems and not is_support_llm:
             return {}
 
         name: str = ""
@@ -699,6 +693,8 @@ class ServiceHandler:
             "name": name,
             "rpc_system": rpc_system,
             "is_support_call_analysis": name == metric_group.GroupEnum.TRPC.value,
+            "is_support_llm": is_support_llm,
+            "product": product,
             "sdk": sdk_name or "",
             "temporality": temporality,
         }

@@ -52,7 +52,6 @@ from apps.log_databus.constants import (
     BKDATA_TAGS,
     BULK_CLUSTER_INFOS_LIMIT,
     CACHE_KEY_CLUSTER_INFO,
-    COLLECTOR_SCENARIO_TO_SCENE,
     META_DATA_ENCODING,
     ArchiveInstanceType,
     CollectStatus,
@@ -62,8 +61,9 @@ from apps.log_databus.constants import (
     RunStatus,
     RETRIEVE_CHAIN,
     Environment,
-    build_scene_labels,
     STORAGE_CLUSTER_TYPE,
+    build_collector_scene_labels,
+    detect_container_stream,
 )
 from apps.log_databus.exceptions import (
     CollectNotSuccess,
@@ -74,17 +74,18 @@ from apps.log_databus.exceptions import (
     CollectorConfigNameENDuplicateException,
     CollectorConfigNotExistException,
     CollectorResultTableIDDuplicateException,
+    PublicESClusterNotExistException,
     RegexInvalidException,
     RegexMatchException,
     ResultTableNotExistException,
     SubscriptionInfoNotFoundException,
     CollectorIdNotExistException,
-    SubscriptionStatisticException,
 )
 from apps.log_databus.handlers.collector_scenario import CollectorScenario
 from apps.log_databus.handlers.collector_scenario.custom_define import get_custom
 from apps.log_databus.handlers.etl_storage import EtlStorage
 from apps.log_databus.handlers.storage import StorageHandler
+from apps.log_databus.nodeman_v3.mode import resolve_nodeman_v3_collector_ids, should_use_nodeman_v3
 from apps.log_databus.models import (
     ArchiveConfig,
     CleanStash,
@@ -94,7 +95,7 @@ from apps.log_databus.models import (
     DataLinkConfig,
 )
 from apps.log_databus.tasks.bkdata import async_create_bkdata_data_id
-from apps.log_esquery.utils.es_route import EsRoute
+from apps.log_databus.utils.storage_config import get_storage_retention
 from apps.log_measure.events import NOTIFY_EVENT
 from apps.log_search.constants import (
     CollectorScenarioEnum,
@@ -104,13 +105,13 @@ from apps.log_search.constants import (
     LogAccessTypeEnum,
 )
 from apps.log_search.handlers.biz import BizHandler
+from apps.log_search.handlers.index_group import IndexGroupHandler
 from apps.log_search.handlers.index_set import IndexSetHandler
 from apps.log_search.models import (
     TAG_TYPE_SCENE,
     IndexSetTag,
     LogIndexSet,
     LogIndexSetData,
-    Scenario,
     Space,
 )
 from apps.models import model_to_dict
@@ -122,6 +123,7 @@ from apps.utils.local import get_local_param, get_request_username, get_request_
 from apps.utils.log import logger
 from apps.utils.thread import MultiExecuteFunc
 from apps.utils.time_handler import format_user_time_zone
+from bkm_space.utils import bk_biz_id_to_space_uid
 
 COLLECTOR_RE = re.compile(r".*\d{6,8}$")
 
@@ -335,6 +337,14 @@ class CollectorHandler:
         @return:
         """
         result = context
+        if should_use_nodeman_v3(self.data):
+            # V3 没有订阅对象，详情回显的事实源就是 CollectorConfig.params 本身。
+            # 这里显式返回而不是靠「subscription_id 恰好为空」兜住：后者是隐式依赖，
+            # 一旦有人给 V3 模式回填了 subscription_id，就会去调 get_subscription_info 并报错。
+            #
+            # 注意两侧口径并不完全相同：V2 走 collector_scenario.parse_steps 从订阅步骤反解，
+            # 会做一轮归一化；V3 直接用库里的 params。字段差异需要在 BKL-5 联调时按六种场景对齐。
+            return collector_config
         if self.data.subscription_id and "subscription_config" in result:
             if not result["subscription_config"]:
                 raise SubscriptionInfoNotFoundException()
@@ -431,6 +441,15 @@ class CollectorHandler:
     def _pre_start(self):
         raise NotImplementedError
 
+    def _apply_clean_template_before_start(self):
+        """重新提交停用期间可能发生变化的模板正式配置。"""
+        if not self.data.clean_template_id or not self.data.table_id:
+            return
+
+        # 不显式传 clean_template_id，让清洗更新链路按采集项当前关联读取模板最新正式配置。
+        # 结果表修改仍由原有异步任务执行，这里只保证任务在采集项启用前完成提交。
+        self.create_or_update_clean_config(is_update=True, params={})
+
     @transaction.atomic
     def start(self, **kwargs):
         """
@@ -438,6 +457,8 @@ class CollectorHandler:
         :return: task_id
         """
         self._itsm_start_judge()
+
+        self._apply_clean_template_before_start()
 
         self.data.is_active = True
         self.data.save()
@@ -546,9 +567,11 @@ class CollectorHandler:
         sort_fields=None,
         target_fields=None,
         parent_index_set_ids=None,
+        parent_index_set_names=None,
         is_platform_index=None,
         platform_index_visibility=None,
         platform_index_filter=None,
+        owners=None,
     ):
         collector_config_update = {
             "collector_config_name": collector_config_name,
@@ -583,6 +606,13 @@ class CollectorHandler:
 
         # 更新归属索引集
         if self.data.index_set_id:
+            parent_index_set_ids = CollectorHandler.obtain_parent_index_set_ids(
+                parent_index_set_ids,
+                parent_index_set_names,
+                bk_biz_id=self.data.bk_biz_id,
+                is_update=True,
+            )
+
             IndexSetHandler(self.data.index_set_id).update_parent_index_sets(parent_index_set_ids)
 
         custom_config = get_custom(self.data.custom_type)
@@ -637,13 +667,15 @@ class CollectorHandler:
                 "fields": fields,
                 "sort_fields": sort_fields,
                 "target_fields": target_fields,
-                "labels": self._build_scene_labels(),
+                "labels": self.build_scene_labels(),
                 "is_platform_index": is_platform_index,
                 "platform_index_visibility": platform_index_visibility,
                 "platform_index_filter": platform_index_filter,
             }
             etl_handler.update_or_create(**etl_params)
             self._sync_scene_tags_to_index_set(etl_params["labels"])
+
+        self._authorization_owners(self.data, owners)
 
         custom_config.after_hook(self.data)
 
@@ -668,33 +700,38 @@ class CollectorHandler:
         删除采集配置
         :return: task_id
         """
+        # V2/容器链路保持原有语义：停止与后续删除仍在同一个外层事务中。
+        self.stop()
+        return self._destroy_after_stop(**kwargs)
+
+    @transaction.atomic
+    def _destroy_after_stop(self, *, skip_pre_destroy: bool = False, **kwargs):
+        """完成已停止采集项的本地删除；供需要先提交停止期望态的 V3 链路复用。"""
         # 1. 重新命名采集项名称
         collector_config_name = (
             self.data.collector_config_name + "_delete_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         )
 
-        # 2. 停止采集（删除配置文件）
-        self.stop()
+        # 2. 区分物理机和容器。V3 已由 stop() 完成远端清理，跳过等价的 destroy() 重放。
+        if not skip_pre_destroy:
+            self._pre_destroy()
 
-        # 3. 区分物理机和容器
-        self._pre_destroy()
-
-        # 4. 删除索引集
+        # 3. 删除索引集
         if self.data.index_set_id:
             index_set_handler = IndexSetHandler(index_set_id=self.data.index_set_id)
             index_set_handler.delete(self.data.collector_config_name)
 
-        # 5. 删除CollectorConfig记录
+        # 4. 删除CollectorConfig记录
         self.data.collector_config_name = collector_config_name
         self.data.save()
         self.data.delete()
 
-        # 6. 删除META采集项：直接重命名采集项名称
+        # 5. 删除META采集项：直接重命名采集项名称
         collector_scenario = CollectorScenario.get_instance(collector_scenario_id=self.data.collector_scenario_id)
         if self.data.bk_data_id:
             collector_scenario.delete_data_id(self.data.bk_data_id, collector_config_name)
 
-        # 7. 如果存在归档使用了当前采集项, 则删除归档
+        # 6. 如果存在归档使用了当前采集项, 则删除归档
         qs = ArchiveConfig.objects.filter(
             instance_id=self.data.collector_config_id, instance_type=ArchiveInstanceType.COLLECTOR_CONFIG.value
         )
@@ -715,7 +752,7 @@ class CollectorHandler:
         return True
 
     @abc.abstractmethod
-    def get_task_status(self, id_list):
+    def get_task_status(self, id_list, read_only=False):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -723,7 +760,7 @@ class CollectorHandler:
         raise NotImplementedError
 
     @abc.abstractmethod
-    def get_subscription_status(self):
+    def get_subscription_status(self, include_plugin_status=True):
         raise NotImplementedError
 
     @staticmethod
@@ -948,7 +985,7 @@ class CollectorHandler:
             _data["storage_display_name"] = (
                 cluster_info["cluster_config"].get("display_name") or _data["storage_cluster_name"]
             )
-            _data["retention"] = cluster_info["storage_config"].get("retention", 0)
+            _data["retention"] = get_storage_retention(cluster_info["storage_config"], default=0)
             # table_id
             if _data.get("table_id"):
                 table_id_prefix, table_id = _data["table_id"].split(".")
@@ -1120,6 +1157,54 @@ class CollectorHandler:
                 f"collector_config->({collector_config.collector_config_id}) grant creator action failed, reason: {e}"
             )
 
+    @staticmethod
+    def _authorization_owners(collector_config: CollectorConfig, owners: list = None, grant_space_access: bool = True):
+        """
+        将采集项、索引集及所属业务的访问权限授予指定用户，仅新增授权，不回收历史权限
+
+        :param grant_space_access: 是否一并授予业务访问。幂等命中已存在采集项时传 False，
+            该分支只校验业务级新建权限，不校验对目标实例的管理权限，不应再扩大授权范围
+        """
+        if not owners:
+            return
+
+        try:
+            permission = Permission()
+            permission.grant_creator_action_batch(
+                resource=ResourceEnum.COLLECTION.create_simple_instance(
+                    collector_config.collector_config_id, attribute={"name": collector_config.collector_config_name}
+                ),
+                creators=owners,
+            )
+
+            # 按采集项反查索引集，避免内存中的 collector_config.index_set_id 尚未刷新
+            index_set = LogIndexSet.objects.filter(collector_config_id=collector_config.collector_config_id).first()
+            if index_set:
+                permission.grant_creator_action_batch(
+                    resource=ResourceEnum.INDICES.create_simple_instance(
+                        index_set.index_set_id, attribute={"name": index_set.index_set_name}
+                    ),
+                    creators=owners,
+                )
+
+            if not grant_space_access:
+                return
+
+            # 创建者授权只绑定实例本身，owner 拿不到业务访问就进不了这个业务，
+            # 采集项与索引集权限也就用不上，所以必须补一次空间访问授权
+            failed_owners = permission.grant_space_access_batch(collector_config.bk_biz_id, owners)
+            if failed_owners:
+                logger.warning(
+                    f"collector_config->({collector_config.collector_config_id}) grant space access to owners "
+                    f"{failed_owners} failed, bk_biz_id: {collector_config.bk_biz_id}, "
+                    f"bk_tenant_id: {permission.bk_tenant_id}"
+                )
+        except Exception as e:  # pylint: disable=broad-except
+            logger.warning(
+                f"collector_config->({collector_config.collector_config_id}) grant creator action to owners "
+                f"{owners} failed, reason: {e}"
+            )
+
     def _itsm_start_judge(self):
         if self.data.is_custom_scenario:
             return
@@ -1177,7 +1262,62 @@ class CollectorHandler:
         )
         return return_data, subscription_id_list, subscription_collector_map
 
-    def get_subscription_status_by_list(self, collector_id_list: list) -> list:
+    @staticmethod
+    def _get_subscription_status_by_list_v3(collector_list, container_collector_mapping) -> list:
+        """
+        V3 下的采集项状态汇总，替代 V2 的 subscription_statistic。
+
+        输出字段与 V2 的 format_subscription_status 保持一致（前端不改），差别只有两处：
+
+        - `subscription_id` 恒为 None：V3 没有订阅对象，任务标识是字符串 trigger_id/workflow_id，
+          写不进 IntegerField，也不该硬塞给前端当订阅用
+        - 「已生效但旧版」计入 success：它确实在出数，翻红会让用户去重试一个正在正常采集的采集项
+        """
+        from apps.log_databus.nodeman_v3.status import CollectorStatusReader, summary_to_status
+
+        return_data: list = []
+        for collector_obj in collector_list:
+            if collector_obj.is_container_environment:
+                # 容器采集不在 V3 本期范围（BKL-5 的 Out 明确排除 K8s/BCS），沿用原路径
+                collector_handler = import_string("apps.log_databus.handlers.collector.K8sCollectorHandler")
+                return_data = collector_handler.get_container_return_data(
+                    collector_obj, container_collector_mapping, return_data
+                )
+                continue
+
+            try:
+                summary = CollectorStatusReader(collector_obj).summary()
+            except Exception:  # pylint: disable=broad-except
+                # 单个采集项查不到状态不能让整个列表页 500，降级成 UNKNOWN
+                logger.exception(
+                    "get nodeman v3 status failed, collector_config_id: %s", collector_obj.collector_config_id
+                )
+                return_data.append(
+                    {
+                        "collector_id": collector_obj.collector_config_id,
+                        "subscription_id": None,
+                        "status": CollectStatus.UNKNOWN,
+                        "status_name": RunStatus.UNKNOWN,
+                        "total": 0,
+                        "success": 0,
+                        "failed": 0,
+                        "pending": 0,
+                    }
+                )
+                continue
+
+            return_data.append(
+                {
+                    "collector_id": collector_obj.collector_config_id,
+                    "subscription_id": None,
+                    **summary_to_status(summary, collector_obj),
+                }
+            )
+        return return_data
+
+    def get_subscription_status_by_list(
+        self, collector_id_list: list, *, no_request: bool = False, bk_tenant_id: str | None = None
+    ) -> list:
         """
         批量获取采集项订阅状态
         :param  [list] collector_id_list: 采集项ID列表
@@ -1194,6 +1334,18 @@ class CollectorHandler:
         for config in ContainerCollectorConfig.objects.filter(collector_config_id__in=collector_id_list):
             container_collector_mapping[config.collector_config_id].append(config)
 
+        # 灰度期间同一个列表里会混着两类采集项：V3 归属的与存量 V2 的。必须按归属分流后各查各的，
+        # 不能按环境模式一刀切 —— 那会让存量 V2 采集项在状态页集体失能（查不到 V3 binding 全变 UNKNOWN）
+        v3_collector_ids = resolve_nodeman_v3_collector_ids(collector_list)
+        if v3_collector_ids:
+            return_data += self._get_subscription_status_by_list_v3(
+                [obj for obj in collector_list if obj.collector_config_id in v3_collector_ids],
+                container_collector_mapping,
+            )
+            collector_list = [obj for obj in collector_list if obj.collector_config_id not in v3_collector_ids]
+            if not collector_list:
+                return self._clean_terminated(return_data)
+
         for collector_obj in collector_list:
             return_data, subscription_id_list, subscription_collector_map = self._pre_get_subscription_status_by_list(
                 collector_obj,
@@ -1205,10 +1357,15 @@ class CollectorHandler:
         status_result = []
         multi_execute_func = MultiExecuteFunc(max_workers=10)
         for subscription_id in subscription_id_list:
+            request_params = {"subscription_id_list": [subscription_id], "plugin_name": LogPluginInfo.NAME}
+            if no_request:
+                request_params["no_request"] = True
+                if bk_tenant_id:
+                    request_params["bk_tenant_id"] = bk_tenant_id
             multi_execute_func.append(
                 result_key=subscription_id,
                 func=NodeApi.subscription_statistic,
-                params={"subscription_id_list": [subscription_id], "plugin_name": LogPluginInfo.NAME},
+                params=request_params,
             )
 
         multi_result = multi_execute_func.run(return_exception=True)
@@ -1216,11 +1373,7 @@ class CollectorHandler:
             if isinstance(ret, Exception):
                 # 子查询异常
                 logger.exception("subscription id(%s),subscription statistic failed：%s", key, ret)
-                raise SubscriptionStatisticException(
-                    SubscriptionStatisticException.MESSAGE.format(
-                        reason=f"subscription id({key}),subscription statistic failed：{ret}"
-                    )
-                )
+                continue
             status_result.extend(ret)
 
         # 如果没有订阅ID，则直接返回
@@ -1338,8 +1491,7 @@ class CollectorHandler:
         result_table_id = self.data.table_id
         if not result_table_id:
             raise CollectNotSuccess
-        result = EsRoute(scenario_id=Scenario.LOG, indices=result_table_id).cat_indices()
-        return StorageHandler.sort_indices(result)
+        return StorageHandler.get_result_table_indices(result_table_id)
 
     def get_clean_stash(self):
         clean_stash = CleanStash.objects.filter(collector_config_id=self.collector_config_id).first()
@@ -1361,6 +1513,7 @@ class CollectorHandler:
 
     def create_clean_stash(self, params: dict):
         model_fields = {
+            "clean_template_id": params.get("clean_template_id"),
             "clean_type": params["clean_type"],
             "etl_params": params["etl_params"],
             "etl_fields": params["etl_fields"],
@@ -1410,6 +1563,7 @@ class CollectorHandler:
         etl_params=None,
         fields=None,
         storage_cluster_id=None,
+        auto_select_storage_cluster=False,
         storage_cluster_type=STORAGE_CLUSTER_TYPE,
         retention=7,
         allocation_min_days=0,
@@ -1422,10 +1576,12 @@ class CollectorHandler:
         target_fields=None,
         collector_scenario_id=CollectorScenarioEnum.CUSTOM.value,
         parent_index_set_ids=None,
+        parent_index_set_names=None,
         is_platform_index=None,
         platform_index_visibility=None,
         platform_index_filter=None,
         ignore_exists=False,
+        owners=None,
     ):
         data_link_id = self.get_data_link_id(bk_biz_id=bk_biz_id, data_link_id=int(data_link_id or 0))
         collector_config_params = {
@@ -1448,6 +1604,10 @@ class CollectorHandler:
                 existing = CollectorConfig.objects.get(
                     collector_config_name_en=collector_config_name_en, bk_biz_id=bkdata_biz_id
                 )
+                # 幂等创建同样要保证 owners 拿到采集项与索引集权限。
+                # 但这个分支只校验了业务级新建权限，没有校验调用方对 existing 的管理权限，
+                # 在实例级校验收口前不能再往外授业务访问（见 TAPD #1010158081138359778）。
+                self._authorization_owners(existing, owners, grant_space_access=False)
                 return {
                     "collector_config_id": existing.collector_config_id,
                     "index_set_id": existing.index_set_id,
@@ -1460,6 +1620,15 @@ class CollectorHandler:
                     collector_config_name_en=collector_config_name_en
                 )
             )
+
+        # 仅 MCP 等明确请求自动选择的调用使用 Fast Create 的公共集群策略；
+        # 保留既有 custom_create 未传集群时不创建清洗配置的行为。
+        # 幂等命中已有采集项时无需选择集群。
+        if auto_select_storage_cluster and not storage_cluster_id:
+            storage_cluster_id = self.get_random_public_cluster_id(bk_biz_id=bk_biz_id)
+            if not storage_cluster_id:
+                raise PublicESClusterNotExistException()
+
         # 判断是否已存在同bk_data_name, result_table_id
         bk_data_name = self.build_bk_data_name(
             bk_biz_id=bkdata_biz_id, collector_config_name_en=collector_config_name_en
@@ -1498,6 +1667,14 @@ class CollectorHandler:
 
             # 创建索引集，并添加到归属索引集中
             index_set = self.data.create_index_set()
+
+            parent_index_set_ids = CollectorHandler.obtain_parent_index_set_ids(
+                parent_index_set_ids,
+                parent_index_set_names,
+                bk_biz_id=bk_biz_id,
+                is_update=False,
+            )
+
             if parent_index_set_ids:
                 IndexSetHandler(index_set.index_set_id).add_to_parent_index_sets(parent_index_set_ids)
 
@@ -1542,7 +1719,7 @@ class CollectorHandler:
                 "fields": custom_config.fields,
                 "sort_fields": sort_fields,
                 "target_fields": target_fields,
-                "labels": self._build_scene_labels(),
+                "labels": self.build_scene_labels(),
                 "is_platform_index": is_platform_index,
                 "platform_index_visibility": platform_index_visibility,
                 "platform_index_filter": platform_index_filter,
@@ -1552,6 +1729,9 @@ class CollectorHandler:
             self.data.index_set_id = etl_handler.update_or_create(**params)["index_set_id"]
             self.data.save(update_fields=["index_set_id"])
             self._sync_scene_tags_to_index_set(params["labels"])
+
+        # 索引集ID在清洗创建后才最终确定，因此在此处再对 owners 授权
+        self._authorization_owners(self.data, owners)
 
         custom_config.after_hook(self.data)
 
@@ -1629,67 +1809,82 @@ class CollectorHandler:
             for label_key, label_valus in obj_item["metadata"]["labels"].items()
         ]
 
-    def _build_scene_labels(self) -> dict:
+    def build_scene_labels(self) -> dict:
         """Build ResultTable.labels based on collector scenario and environment.
 
-        判定优先级：
-        1. OTLP 日志上报（custom + otlp_log）→ trpc（tRPC 服务通过 OTLP 上报，
-           按场景化检索设计方案归 trpc 场景；独立于容器判定，即使部署在 k8s）
-        2. 容器日志（is_container_collector = is_container_environment OR
-           is_custom_container）→ k8s（同时覆盖 BCS 容器采集和 custom + custom_type=log）
-        3. 兜底按 COLLECTOR_SCENARIO_TO_SCENE 映射（默认 host）
+        场景优先级由无模型依赖的共享函数统一维护，在线路径仅负责补充
+        ContainerCollectorConfig 中的 stream 信息。
         """
-        if (
-            self.data.collector_scenario_id == CollectorScenarioEnum.CUSTOM.value
-            and self.data.custom_type == CustomTypeEnum.OTLP_LOG.value
-        ):
-            return build_scene_labels("trpc")
-        if self.data.is_container_collector:
-            stream = self._detect_container_stream()
-            return build_scene_labels("k8s", cluster_id=self.data.bcs_cluster_id or "", stream=stream)
-        scene = COLLECTOR_SCENARIO_TO_SCENE.get(self.data.collector_scenario_id, "host")
-        return build_scene_labels(scene)
+        scene_params = {
+            "collector_scenario_id": self.data.collector_scenario_id,
+            "custom_type": self.data.custom_type,
+            "environment": self.data.environment,
+            "is_container_collector": self.data.is_container_collector,
+            "bcs_cluster_id": self.data.bcs_cluster_id,
+            "bk_app_code": self.data.bk_app_code,
+            "table_id": self.data.table_id,
+            "collector_config_name_en": self.data.collector_config_name_en,
+        }
+        labels = build_collector_scene_labels(**scene_params)
+        if labels["scene"] != "k8s":
+            return labels
+
+        return build_collector_scene_labels(
+            **scene_params,
+            container_stream=self._detect_container_stream(),
+        )
 
     def _detect_container_stream(self) -> str:
         """Determine stream type (stdout / file) from ContainerCollectorConfig.collector_type."""
-        from apps.log_databus.constants import ContainerCollectorType
-
         container_configs = ContainerCollectorConfig.objects.filter(
             collector_config_id=self.data.collector_config_id
         ).values_list("collector_type", flat=True)
-        collector_types = set(container_configs)
-        if ContainerCollectorType.STDOUT in collector_types:
-            return "stdout"
-        if ContainerCollectorType.CONTAINER in collector_types:
-            return "file"
-        return ""
+        return detect_container_stream(container_configs)
 
-    def _sync_scene_tags_to_index_set(self, labels: dict):
+    @staticmethod
+    def sync_scene_tags_to_index_set(index_set_id: int | None, labels: dict):
         """
         Persist scene labels as IndexSetTag records and attach them to the
         collector's LogIndexSet.tag_ids so that dimension_values can be
         queried purely from DB.
         """
-        if not self.data.index_set_id:
-            return
-
-        tag_ids = []
-        for key, value in labels.items():
-            if value:
-                tag_ids.append(str(IndexSetTag.get_tag_id(name=key, value=value, tag_type=TAG_TYPE_SCENE)))
-
-        if not tag_ids:
+        if not index_set_id:
             return
 
         try:
-            index_set = LogIndexSet.objects.get(index_set_id=self.data.index_set_id)
+            index_set = LogIndexSet.objects.get(index_set_id=index_set_id)
         except LogIndexSet.DoesNotExist:
             return
 
+        tag_ids = [
+            str(IndexSetTag.get_tag_id(name=key, value=value, tag_type=TAG_TYPE_SCENE))
+            for key, value in labels.items()
+            if value
+        ]
         existing = set(str(t) for t in (index_set.tag_ids or []) if t)
-        merged = existing | set(tag_ids)
-        index_set.tag_ids = list(merged)
+        old_scene_tag_ids = set(
+            str(tag_id)
+            for tag_id in IndexSetTag.objects.filter(tag_id__in=existing, tag_type=TAG_TYPE_SCENE).values_list(
+                "tag_id", flat=True
+            )
+        )
+        index_set.tag_ids = list((existing - old_scene_tag_ids) | set(tag_ids))
         index_set.save(update_fields=["tag_ids"])
+
+    def _sync_scene_tags_to_index_set(self, labels: dict):
+        self.sync_scene_tags_to_index_set(self.data.index_set_id, labels)
+
+    @staticmethod
+    def _get_current_allocation_min_days(result_table: dict) -> int:
+        # 部分历史 RT 保留了 warm_phase_days，但当前集群并不支持冷热数据。
+        allocation_min_days = result_table["storage_config"].get("warm_phase_days") or 0
+        if not allocation_min_days:
+            return 0
+
+        storage_cluster_id = result_table["cluster_config"]["cluster_id"]
+        cluster_config = StorageHandler(storage_cluster_id).get_cluster_info_by_id().get("cluster_config", {})
+        hot_warm_enabled = cluster_config.get("custom_option", {}).get("hot_warm_config", {}).get("is_enabled", False)
+        return allocation_min_days if hot_warm_enabled else 0
 
     def create_or_update_clean_config(self, is_update, params):
         if is_update:
@@ -1702,20 +1897,27 @@ class CollectorHandler:
             if not result_table:
                 raise ResultTableNotExistException(ResultTableNotExistException.MESSAGE.format(table_id))
 
+            current_storage_cluster_id = result_table["cluster_config"]["cluster_id"]
+            target_storage_cluster_id = params.get("storage_cluster_id", current_storage_cluster_id)
+            allocation_min_days = params.get("allocation_min_days", 0)
+            if "allocation_min_days" not in params and target_storage_cluster_id == current_storage_cluster_id:
+                allocation_min_days = self._get_current_allocation_min_days(result_table)
+
             default_etl_params = {
+                "table_id": table_id.split(".")[-1],
                 "es_shards": result_table["storage_config"].get("index_settings", {}).get("number_of_shards", 1),
                 "storage_replies": (
                     result_table["storage_config"].get("index_settings", {}).get("number_of_replicas", 0)
                 ),
                 "storage_cluster_id": result_table["cluster_config"]["cluster_id"],
-                "retention": result_table["storage_config"].get("retention", 0),
-                "allocation_min_days": params.get("allocation_min_days", 0),
+                "retention": get_storage_retention(result_table["storage_config"], default=0),
+                "allocation_min_days": allocation_min_days,
                 "etl_config": self.data.etl_config,
             }
             default_etl_params.update(params)
             params = default_etl_params
 
-        params.setdefault("labels", self._build_scene_labels())
+        params.setdefault("labels", self.build_scene_labels())
 
         from apps.log_databus.handlers.etl import EtlHandler
 
@@ -1848,3 +2050,47 @@ class CollectorHandler:
         if is_pattern_rt:
             return f"{result_table_id}__pattern"
         return result_table_id
+
+    @staticmethod
+    def get_or_create_parent_index_set_ids_by_parent_index_set_names(
+        parent_index_set_names, bk_biz_id: int | None = None, space_uid: str | None = None
+    ) -> list | None:
+        if parent_index_set_names is None:
+            return None
+
+        if not parent_index_set_names:
+            return []
+
+        if not space_uid:
+            if bk_biz_id is None:
+                return None
+            space_uid = bk_biz_id_to_space_uid(bk_biz_id)
+
+        return IndexGroupHandler.get_or_create_index_group_ids_by_index_group_names(
+            space_uid=space_uid,
+            index_groups_names=parent_index_set_names,
+        )
+
+    @staticmethod
+    def obtain_parent_index_set_ids(
+        parent_index_set_ids,
+        parent_index_set_names,
+        bk_biz_id: int | None = None,
+        space_uid: str | None = None,
+        is_update: bool = False,
+    ) -> list | None:
+        if not is_update:
+            if not parent_index_set_ids and parent_index_set_names:
+                return CollectorHandler.get_or_create_parent_index_set_ids_by_parent_index_set_names(
+                    parent_index_set_names,
+                    bk_biz_id=bk_biz_id,
+                    space_uid=space_uid,
+                )
+        else:
+            if parent_index_set_ids is None and parent_index_set_names is not None:
+                return CollectorHandler.get_or_create_parent_index_set_ids_by_parent_index_set_names(
+                    parent_index_set_names,
+                    bk_biz_id=bk_biz_id,
+                    space_uid=space_uid,
+                )
+        return parent_index_set_ids

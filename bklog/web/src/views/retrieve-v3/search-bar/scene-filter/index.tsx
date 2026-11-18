@@ -79,6 +79,30 @@ export default defineComponent({
     /** id→name 映射表：用于 tags 显示选中值的名称 */
     const filterLabels = ref<Record<string, Record<string, string>>>({});
 
+    /** dynamic 维度接口返回的 id→name 映射：URL、收藏、历史恢复后未经下拉选择时，tags 仍可显示名称 */
+    const optionLabels = ref<Record<string, Record<string, string>>>({});
+
+    /** 吸顶 tags 使用的映射：接口返回的名称优先，其次为选择时记录的名称 */
+    const tagLabels = computed<Record<string, Record<string, string>>>(() => {
+      const result: Record<string, Record<string, string>> = { ...filterLabels.value };
+      for (const [fieldName, labels] of Object.entries(optionLabels.value)) {
+        result[fieldName] = { ...(result[fieldName] ?? {}), ...labels };
+      }
+      return result;
+    });
+
+    const handleOptionLabelsChange = (labels: Record<string, Record<string, string>>) => {
+      optionLabels.value = labels;
+    };
+
+    // 切换业务时组件会被复用，清空选择时记录的名称
+    watch(
+      () => store.state.spaceUid,
+      () => {
+        filterLabels.value = {};
+      },
+    );
+
     const syncUrlParams = (options?: { clearKeywordAndAddition?: boolean }) => {
       const { scene_active, scene_filter_values } = store.state.indexItem;
       const resolver = new RetrieveUrlResolver({
@@ -159,27 +183,27 @@ export default defineComponent({
       resetRetrieveData(store);
 
       // 获取场景化检索用户自定义配置
-      http.request('retrieve/getSceneUserCustomConfig', {
-        query: {
-          bk_biz_id: store.state.bkBizId,
-          scene_id: type,
-        },
-      }).then((res) => {
-        store.commit('retrieve/updateCatchFieldCustomConfig', res.data);
-      });
+      http
+        .request('retrieve/getSceneUserCustomConfig', {
+          query: {
+            bk_biz_id: store.state.bkBizId,
+            scene_id: type,
+          },
+        })
+        .then(res => {
+          store.commit('retrieve/updateCatchFieldCustomConfig', res.data);
+        });
 
       syncUrlParams({ clearKeywordAndAddition: true });
 
       updateQueryHint();
     };
 
-    const handleFilterChange = (
-      payload: {
-        values: FilterValues;
-        labels?: { fieldName: string; labels: Record<string, string> };
-        operatorChange?: { fieldKey: string; op: string };
-      },
-    ) => {
+    const handleFilterChange = (payload: {
+      values: FilterValues;
+      labels?: { fieldName: string; labels: Record<string, string> };
+      operatorChange?: { fieldKey: string; op: string };
+    }) => {
       filterValues.value = payload.values;
       if (payload.labels) {
         filterLabels.value = { ...filterLabels.value, [payload.labels.fieldName]: payload.labels.labels };
@@ -189,8 +213,8 @@ export default defineComponent({
         const { fieldKey, op } = payload.operatorChange;
         const currentFields = currentDisplayFields.value;
         if (currentFields) {
-          const updated = currentFields.map(
-            ([k, o]) => (k === fieldKey ? [k, op] as [string, string] : [k, o] as [string, string]),
+          const updated = currentFields.map(([k, o]) =>
+            k === fieldKey ? ([k, op] as [string, string]) : ([k, o] as [string, string]),
           );
           handleDisplayFieldsChange(updated);
         }
@@ -277,10 +301,11 @@ export default defineComponent({
 
     const shortcutKey = getOs() === 'macos' ? 'cmd+shift+enter' : 'ctrl+shift+enter';
 
-    const hintText = () => t('检索条件有变更，请点击{icon}按钮{shortcut}', {
-      icon: '🔍',
-      shortcut: `(${shortcutKey})`,
-    });
+    const hintText = () =>
+      t('检索条件有变更，请点击{icon}按钮{shortcut}', {
+        icon: '🔍',
+        shortcut: `(${shortcutKey})`,
+      });
 
     // ---- 场景化检索禁用判断 ----
     /** 当前是否正在检索中 */
@@ -360,14 +385,16 @@ export default defineComponent({
             activeScene={activeScene.value}
             filterValues={filterValues.value}
             displayFields={currentDisplayFields.value}
+            isSticky={props.isSticky}
             on-scene-change={handleSceneChange}
             on-filter-change={handleFilterChange}
             on-clear={handleClear}
             on-display-fields-change={handleDisplayFieldsChange}
+            on-option-labels-change={handleOptionLabelsChange}
           />
         </div>
         <div class='scene-search-sticky'>
-          {props.isSticky && <SceneFilterTags filterLabels={filterLabels.value} />}
+          {props.isSticky && <SceneFilterTags filterLabels={tagLabels.value} />}
           <V3Searchbar />
           <transition name='slide-hint'>
             {showQueryHint.value && !isSceneFilterEmpty.value && (

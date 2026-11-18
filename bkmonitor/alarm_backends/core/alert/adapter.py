@@ -35,6 +35,12 @@ class MonitorEventAdapter:
     SPECIAL_ALERT_TAG_KEY_WHITELIST = [DoubleCheckStrategy.DOUBLE_CHECK_CONTEXT_KEY]
 
     @classmethod
+    def get_output_topic(cls) -> str:
+        if get_cluster().is_default():
+            return settings.MONITOR_EVENT_KAFKA_TOPIC
+        return f"{settings.MONITOR_EVENT_KAFKA_TOPIC}_{get_cluster().name}"
+
+    @classmethod
     def push_to_kafka(cls, events: list[dict]):
         """
         将事件推送到 Kafka，提供给故障自愈进行消费
@@ -46,14 +52,9 @@ class MonitorEventAdapter:
         if not events:
             return
         messages = [json.dumps(event).encode("utf-8") for event in events]
-        # 默认集群使用默认topic，其他集群使用集群名作为topic后缀
-        if get_cluster().is_default():
-            topic = settings.MONITOR_EVENT_KAFKA_TOPIC
-        else:
-            topic = f"{settings.MONITOR_EVENT_KAFKA_TOPIC}_{get_cluster().name}"
         # 使用专用kafka集群: ALERT_KAFKA_HOST  ALERT_KAFKA_PORT
         kafka_queue = KafkaQueue.get_alert_kafka_queue()
-        kafka_queue.set_topic(topic)
+        kafka_queue.set_topic(cls.get_output_topic())
         kafka_queue.put(value=messages)
 
     def __init__(self, record: dict, strategy: dict):
@@ -268,7 +269,14 @@ class MonitorEventAdapter:
 
         if pod:
             # pod 对象, 数据维度有pod 信息，直接查出 workload 和 namespace
-            pod_instance = BCSPod.get_instance_with_cache(name=pod, bcs_cluster_id=bcs_cluster_id, namespace=namespace)
+            try:
+                pod_instance = BCSPod.get_instance_with_cache(
+                    name=pod, bcs_cluster_id=bcs_cluster_id, namespace=namespace
+                )
+            except BCSPod.MultipleObjectsReturned:
+                # 没有 namespace 且不同命名空间有同名 Pod，确定不了是哪一个：仍按 Pod 处理，但不补充维度，
+                # 避免补错 namespace 和 workload，后续告警丰富也不会据此关联到别的 Pod 的主机
+                return K8STargetType.POD, pod, dimensions
             if pod_instance:
                 additional_dimensions = {}
                 # 补充维度信息

@@ -37,11 +37,14 @@ from apps.api import (
     BkDataMetaApi,
     TransferApi,
 )
+from apps.feature_toggle.handlers.toggle import FeatureToggleObject
+from apps.feature_toggle.plugins.constants import NEW_CLASS_ALERT_NEW_SERIES
 from apps.log_clustering.constants import (
     AGGS_FIELD_PREFIX,
     DEFAULT_NEW_CLS_HOURS,
     NOT_NEED_EDIT_NODES,
     PatternEnum,
+    SIGNATURE_FIELD,
     StorageTypeEnum,
 )
 from apps.log_clustering.exceptions import (
@@ -108,12 +111,13 @@ from apps.log_clustering.handlers.dataflow.data_cls import (
     UpdateOnlineTaskCls,
 )
 from apps.log_clustering.models import ClusteringConfig
+from apps.log_databus.handlers.doris_cluster import DorisClusterHandler
 from apps.log_databus.models import CollectorConfig
 from apps.log_search.constants import DEFAULT_TIME_FIELD, TimeFieldUnitEnum, TimeFieldTypeEnum
 from apps.log_search.handlers.index_set import BaseIndexSetHandler
 from apps.log_search.models import LogIndexSet, Scenario
-from apps.log_search.views.aggs_views import AggsViewAdapter
 from apps.log_trace.serializers import DateHistogramSerializer
+from apps.log_unifyquery.handler.base import UnifyQueryHandler
 from apps.utils.drf import custom_params_valid
 from apps.utils.log import logger
 from bkm_space.utils import space_uid_to_bk_biz_id
@@ -144,6 +148,7 @@ class DataFlowHandler(BaseAiopsHandler):
         @param consuming_mode 数据处理模式
         @param action 操作flow
         """
+        self._use_biz_config(bk_biz_id)
         cluster_group = self.conf.get("aiops_default_cluster_group", cluster_group)
         bk_biz_id = bk_biz_id if bk_biz_id is not None else self.conf.get("bk_biz_id")
         start_request = OperatorFlowCls(flow_id=flow_id, consuming_mode=consuming_mode, cluster_group=cluster_group)
@@ -1626,9 +1631,27 @@ class DataFlowHandler(BaseAiopsHandler):
         return logical_physical_map
 
     @classmethod
+    def _build_clustered_signature_alias_setting(
+        cls, clustering_config: ClusteringConfig, logical_physical_map: dict | None = None
+    ) -> dict:
+        """
+        聚类结果表 signature 读别名：query_alias=signature -> 物理字段 __dist_{pattern_level}
+        供 NewSeries agg_dimension / 页面展示使用。在线路已统一为单敏感度 LEVEL_05。
+        """
+        dist_logical = f"{AGGS_FIELD_PREFIX}_{PatternEnum.LEVEL_05.value}"
+        if logical_physical_map is not None:
+            field_name = logical_physical_map.get(dist_logical, dist_logical.lower())
+        else:
+            field_name = dist_logical
+        return {"field_name": field_name, "query_alias": SIGNATURE_FIELD}
+
+    @classmethod
     def _build_clustered_doris_alias_settings(cls, index_set: LogIndexSet, clustering_config: ClusteringConfig) -> list:
         logical_physical_map = cls._build_clustered_doris_logical_physical_map(clustering_config)
-        fixed_alias_settings = [{"field_name": DEFAULT_TIME_FIELD.lower(), "query_alias": DEFAULT_TIME_FIELD}]
+        fixed_alias_settings = [
+            {"field_name": DEFAULT_TIME_FIELD.lower(), "query_alias": DEFAULT_TIME_FIELD},
+            cls._build_clustered_signature_alias_setting(clustering_config, logical_physical_map),
+        ]
 
         inherited_alias_settings = []
         for alias_setting in index_set.query_alias_settings or []:
@@ -1694,15 +1717,57 @@ class DataFlowHandler(BaseAiopsHandler):
 
     @classmethod
     def _build_clustered_doris_route_params(cls, index_set: LogIndexSet, clustering_config: ClusteringConfig) -> dict:
+        # 不带 cluster_id 时 metadata 会把存储建到默认 Doris 集群上，查询会打到错误的集群
+        cluster_id = DorisClusterHandler.get_cluster_id(
+            bkbase_table_id=clustering_config.clustered_rt,
+            # flow 刚创建时 BkBase 侧可能还查不到存储，此时按下发 flow 时使用的集群名兜底
+            fallback_cluster_name=clustering_config.doris_storage or "",
+        )
+        if not cluster_id:
+            raise DorisStorageNotExistException(
+                DorisStorageNotExistException.MESSAGE.format(index_set_id=index_set.index_set_id)
+            )
         return {
             **cls._build_clustered_route_base_params(index_set, clustering_config),
             "storage_type": StorageTypeEnum.DORIS.value,
+            "cluster_id": cluster_id,
             "bkbase_table_id": clustering_config.clustered_rt,
             "table_id": (
                 f"bklog_index_set_{index_set.index_set_id}_{clustering_config.clustered_rt.replace('.', '_')}.__doris__"
             ),
             "query_alias_settings": cls._build_clustered_doris_alias_settings(index_set, clustering_config),
         }
+
+    @classmethod
+    def _get_clustered_es_field_names(
+        cls, index_set: LogIndexSet, clustering_config: ClusteringConfig
+    ) -> set[str] | None:
+        """
+        获取聚类结果表在 ES 上的真实字段名，返回 None 表示这次拿不到
+
+        空结果按"拿不到"处理，不能当成"字段都不存在"：新建聚类时结果表刚定义出来、
+        数据还没写进 ES，mapping 必然为空，按不存在处理会把别名裁光，
+        抛异常还会中断 create_predict_flow，留下 online_task_id 为空的半创建状态。
+        """
+        from apps.log_search.handlers.search.mapping_handlers import MappingHandlers
+
+        try:
+            field_names = MappingHandlers(
+                indices=clustering_config.clustered_rt,
+                index_set_id=index_set.index_set_id,
+                scenario_id=Scenario.BKDATA,
+                storage_cluster_id=index_set.storage_cluster_id,
+                time_field=index_set.time_field,
+                only_search=True,
+            ).get_mapping_field_names()
+        except Exception as error:  # pylint: disable=broad-except
+            logger.warning(
+                "get mapping fields of clustered result table(%s) failed: %s",
+                clustering_config.clustered_rt,
+                error,
+            )
+            return None
+        return field_names or None
 
     @classmethod
     def _build_clustered_es_route_params(cls, index_set: LogIndexSet, clustering_config: ClusteringConfig) -> dict:
@@ -1715,12 +1780,70 @@ class DataFlowHandler(BaseAiopsHandler):
                 clustering_config.clustered_rt,
             ),
         }
-        if index_set.query_alias_settings:
-            route_params["query_alias_settings"] = copy.deepcopy(index_set.query_alias_settings)
+        signature_alias = cls._build_clustered_signature_alias_setting(clustering_config)
+        # 入口索引集的别名是按源表字段配的，聚类结果表的字段集合与源表并不一致。
+        # 别名指向的物理字段在聚类结果表里不存在时，改写后一定查不到数据，因此按真实 mapping 裁剪。
+        clustered_field_names = cls._get_clustered_es_field_names(index_set, clustering_config)
+        inherited_alias_settings = []
+        for alias_setting in index_set.query_alias_settings or []:
+            # 字段集合拿不到时不裁剪：新建聚类和 ES 抖动都会走到这里，
+            # 裁掉配置正确的别名一样会让检索查不到数据，撞名别名留到下次同步再裁。
+            if clustered_field_names is not None and alias_setting.get("field_name") not in clustered_field_names:
+                logger.info(
+                    "skip inherited alias(%s -> %s) for clustered result table(%s): physical field does not exist",
+                    alias_setting.get("query_alias"),
+                    alias_setting.get("field_name"),
+                    clustering_config.clustered_rt,
+                )
+                continue
+            inherited_alias_settings.append(alias_setting)
+
+        merged_alias_settings = []
+        seen_query_alias = set()
+        for alias_setting in (signature_alias, *inherited_alias_settings):
+            query_alias = alias_setting.get("query_alias")
+            if not query_alias or query_alias in seen_query_alias:
+                continue
+            seen_query_alias.add(query_alias)
+            merged_alias_settings.append(copy.deepcopy(alias_setting))
+        if merged_alias_settings:
+            route_params["query_alias_settings"] = merged_alias_settings
         return route_params
 
     @classmethod
-    def sync_clustered_route(cls, index_set_id: int, raise_exception: bool = False) -> bool:
+    def _build_clustered_bulk_route_params(cls, index_set: LogIndexSet, clustering_config: ClusteringConfig) -> dict:
+        if clustering_config.storage_type == StorageTypeEnum.DORIS.value:
+            route_params = cls._build_clustered_doris_route_params(index_set, clustering_config)
+        else:
+            route_params = cls._build_clustered_es_route_params(index_set, clustering_config)
+        route_params = copy.deepcopy(route_params)
+        space_type = route_params.pop("space_type")
+        space_id = route_params.pop("space_id")
+        data_label = route_params.pop("data_label")
+        # 显式声明 is_enable=True：单条 create_or_update_log_router 的 update 分支不会修改 is_enable，
+        # 无法把曾被停用（is_enable=False）的聚类结果表重新启用；改走批量接口并对齐 IndexSetHandler.sync_router。
+        route_params["is_enable"] = True
+        return {
+            "space_type": space_type,
+            "space_id": space_id,
+            "data_label": data_label,
+            "table_info": [route_params],
+        }
+
+    @classmethod
+    def sync_clustered_route(
+        cls,
+        index_set_id: int,
+        raise_exception: bool = False,
+        query_alias_settings: list | None = None,
+    ) -> bool:
+        """
+        同步聚类结果表路由
+
+        query_alias_settings 传入时以它为准，不再回读数据库：
+        带 Doris 标签的索引集不会把别名落到 LogIndexSet.query_alias_settings，
+        回读只能拿到旧值，会让聚类路由和源表路由的别名长期不一致。
+        """
         index_set = LogIndexSet.objects.filter(index_set_id=index_set_id).first()
         clustering_config = ClusteringConfig.get_by_index_set_id(index_set_id=index_set_id, raise_exception=False)
         if not index_set or not clustering_config:
@@ -1736,13 +1859,14 @@ class DataFlowHandler(BaseAiopsHandler):
                 index_set_id,
             )
             return False
+        if query_alias_settings is not None:
+            # index_set 是这里新查出来的对象，只改内存不落库，避免影响调用方持久化时机
+            index_set.query_alias_settings = query_alias_settings
 
-        if clustering_config.storage_type == StorageTypeEnum.DORIS.value:
-            route_params = cls._build_clustered_doris_route_params(index_set, clustering_config)
-        else:
-            route_params = cls._build_clustered_es_route_params(index_set, clustering_config)
         try:
-            TransferApi.create_or_update_log_router(route_params)
+            # 构建路由参数需要查询存储集群，失败时同样不能下发路由，否则会落到默认 Doris 集群
+            bulk_route_params = cls._build_clustered_bulk_route_params(index_set, clustering_config)
+            TransferApi.bulk_create_or_update_log_router(bulk_route_params)
             return True
         except Exception as error:
             logger.exception("sync clustered route for index set(%s) failed: %s", index_set_id, error)
@@ -1862,6 +1986,7 @@ class DataFlowHandler(BaseAiopsHandler):
         bk_biz_id: int,
         index_set_id: int,
         clustering_config: ClusteringConfig,
+        include_agg: bool = True,
     ):
         """
         初始化 create_log_count_aggregation_flow
@@ -1880,6 +2005,7 @@ class DataFlowHandler(BaseAiopsHandler):
             log_count_signatures=log_count_signatures,
             table_name_no_id=table_name_no_id,
             result_table_id=result_table_id,
+            include_agg=include_agg,
             agg=RealTimeCls(
                 fields="",
                 table_name=f"bklog_{index_set_id}_agg",
@@ -1907,6 +2033,20 @@ class DataFlowHandler(BaseAiopsHandler):
 
         return log_count_aggregation_flow
 
+    @staticmethod
+    def _should_include_log_count_agg(clustering_config: ClusteringConfig) -> bool:
+        """存量 IntelligentDetect 或灰度关闭时保留日志数量聚合分支。"""
+        if clustering_config.new_cls_strategy_output or clustering_config.new_cls_pattern_rt:
+            return True
+        flow_config = clustering_config.log_count_aggregation_flow or {}
+        if flow_config.get("include_agg") is False:
+            return False
+        return not FeatureToggleObject.switch(
+            NEW_CLASS_ALERT_NEW_SERIES,
+            biz_id=clustering_config.bk_biz_id,
+            default=True,
+        )
+
     def create_log_count_aggregation_flow(self, index_set_id):
         """
         create_log_count_aggregation_flow
@@ -1916,12 +2056,14 @@ class DataFlowHandler(BaseAiopsHandler):
         clustering_config = ClusteringConfig.get_by_index_set_id(index_set_id=index_set_id)
         self.conf = get_online_clustering_config(clustering_config.bk_biz_id)
         result_table_id = clustering_config.predict_flow["clustering_predict"]["result_table_id"]
+        include_agg = self._should_include_log_count_agg(clustering_config)
         log_count_aggregation_flow_dict = asdict(
             self._init_log_count_aggregation_flow(
                 result_table_id=result_table_id,
                 bk_biz_id=clustering_config.bk_biz_id,  # 当前业务id
                 index_set_id=clustering_config.index_set_id,
                 clustering_config=clustering_config,
+                include_agg=include_agg,
             )
         )
         log_count_aggregation_flow = self._render_template(
@@ -1941,7 +2083,9 @@ class DataFlowHandler(BaseAiopsHandler):
 
         clustering_config.log_count_aggregation_flow = log_count_aggregation_flow_dict
         clustering_config.log_count_aggregation_flow_id = result["flow_id"]
-        clustering_config.new_cls_pattern_rt = log_count_aggregation_flow_dict["agg"]["result_table_id"]
+        clustering_config.new_cls_pattern_rt = (
+            log_count_aggregation_flow_dict["agg"]["result_table_id"] if include_agg else ""
+        )
         clustering_config.signature_pattern_rt = log_count_aggregation_flow_dict["pattern"]["result_table_id"]
         clustering_config.save()
         return result
@@ -2008,7 +2152,13 @@ class DataFlowHandler(BaseAiopsHandler):
                 "time_range": "customized",
             }
             data = custom_params_valid(DateHistogramSerializer, params)
-            result = AggsViewAdapter().date_histogram(index_set_id, data)
+            result = UnifyQueryHandler(
+                {
+                    **data,
+                    "index_set_ids": [index_set_id],
+                    "bk_biz_id": bk_biz_id,
+                }
+            ).date_histogram()
             count_peak_min_list = [0]
             for item in result.get("aggs", {}).get("group_by_histogram", {}).get("buckets", {}):
                 count_peak_min_list.append(item.get("doc_count", 0))

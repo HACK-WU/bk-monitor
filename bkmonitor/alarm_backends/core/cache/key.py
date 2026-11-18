@@ -18,6 +18,7 @@ from alarm_backends.constants import (
     CONST_ONE_WEEK,
 )
 from alarm_backends.core.cluster import get_cluster
+from alarm_backends.core.storage.redis import Cache, has_module_redis_url
 from alarm_backends.core.storage.redis_cluster import RedisProxy
 from bkmonitor.utils.text import underscore_to_camel
 
@@ -70,7 +71,15 @@ class RedisDataKey:
     @property
     def client(self):
         if self._cache is None:
-            self._cache = RedisProxy(self.backend)
+            if "-" in self.backend:
+                # 模块级独立路由（如 service-new_series -> REDIS_CACHE_NEW_SERIES_URL）：
+                # 仅在显式配置 URL 时连接独立单实例；未配置时回退父后端分片代理，不改变默认环境分片机制。
+                if has_module_redis_url(self.backend):
+                    self._cache = Cache(self.backend)
+                else:
+                    self._cache = RedisProxy(self.backend.split("-", 1)[0])
+            else:
+                self._cache = RedisProxy(self.backend)
         return self._cache
 
     def get_key(self, **kwargs):
@@ -247,12 +256,33 @@ ANOMALY_LIST_KEY = register_key_with_config(
     }
 )
 
+CHECK_RESULT_OPPORTUNITY_TRIM_MARKER_KEY = register_key_with_config(
+    {
+        "label": "[detect]CHECK_RESULT机会裁剪周期标记",
+        "key_type": "string",
+        "key_tpl": "detect.check_result.opportunity_trim.{strategy_group_key}.{cycle_id}",
+        "ttl": 5 * CONST_MINUTES,
+        "backend": "service",
+    }
+)
+
 ANOMALY_SIGNAL_KEY = register_key_with_config(
     {
         "label": "[detect]异常信号队列",
         "key_type": "list",
         "key_tpl": "detect.anomaly.signal",
         "ttl": 30 * CONST_MINUTES,
+        "backend": "queue",
+    }
+)
+
+EVENT_INLINE_TRIGGER_LEASE_KEY = register_key_with_config(
+    {
+        "label": "[trigger]Event内联处理租约",
+        "key_type": "sorted_set",
+        "key_tpl": "trigger.event.inline.lease.{strategy_id}.{item_id}",
+        "ttl": 10 * CONST_MINUTES,
+        # 租约释放脚本需要与 ANOMALY_LIST_KEY 原子检查，因此必须使用同一 backend。
         "backend": "queue",
     }
 )
@@ -379,6 +409,28 @@ LAST_CHECKPOINTS_CACHE_KEY = register_key_with_config(
     }
 )
 
+# Redis 自监控按节点生成的策略成本快照。快照和锁都显式带 node_id，且由调用方使用
+# 对应节点的 service(DB10) 原生客户端读写，避免 RedisProxy 按 strategy_id 再次路由。
+REDIS_STRATEGY_COST_SNAPSHOT_KEY = register_key_with_config(
+    {
+        "label": "[selfmonitor]Redis节点策略成本快照(type:List, newest first)",
+        "key_type": "list",
+        "key_tpl": "selfmonitor.redis.strategy_cost.snapshot.node_{node_id}.v1",
+        "ttl": 8 * CONST_ONE_HOUR,
+        "backend": "service",
+    }
+)
+
+REDIS_STRATEGY_COST_SNAPSHOT_LOCK_KEY = register_key_with_config(
+    {
+        "label": "[selfmonitor]Redis节点策略成本快照采集锁",
+        "key_type": "string",
+        "key_tpl": "selfmonitor.redis.strategy_cost.snapshot.lock.node_{node_id}.v1",
+        "ttl": 5 * CONST_MINUTES,
+        "backend": "service",
+    }
+)
+
 NO_DATA_LAST_ANOMALY_CHECKPOINTS_CACHE_KEY = register_key_with_config(
     {
         "label": "[nodata]最后检测异常点(type:Hash)(key: (strategy_id, item_id, dimensions_md5), value: 最后异常点时间戳(int))",
@@ -399,6 +451,131 @@ CHECK_RESULT_CACHE_KEY = register_key_with_config(
         "key_tpl": f"{KEY_PREFIX}.detect.result.{{strategy_id}}.{{item_id}}.{{dimensions_md5}}.{{level}}",
         "ttl": int(settings.CHECK_RESULT_TTL_HOURS) * CONST_ONE_HOUR,
         "backend": "service",
+    }
+)
+
+# 新维度值检测(NewSeries)：记录某策略某 item 在某维度集合签名下，每个维度组合(指纹=record_id 前段)最近一次出现的时间戳。
+# member=维度指纹, score=该维度最近出现的数据时间戳。判定"新维度": now - score > detect_range 或 member 不存在。
+# key 含 dimension_signature(agg_dimension 列表的稳定 md5)：维度集合变更即落新 key，旧 key 不被读、不占新容量，随软 TTL 回收。
+# 注意：真实 TTL 在写入时由 detector 用 client.expire(key, detect_range*2) 续期(必须 >= detect_range)，
+# 此处注册的 ttl 仅作占位(KEY.expire() 会用注册 ttl，故 detector 不调它)。
+NEW_SERIES_SEEN_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-已见维度集合(type:SortedSet)"
+        "(score: 维度最近出现时间戳(int), member: 维度指纹(record_id 前段))",
+        "key_type": "sorted_set",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.seen.{{strategy_id}}.{{item_id}}.{{dimension_signature}}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 非零阈值使用独立已见集合。threshold 由 detector 归一化为仅含字母和数字的稳定 token，
+# threshold=0 永久使用 NEW_SERIES_SEEN_KEY，避免升级时丢失已积累状态。
+NEW_SERIES_THRESHOLD_SEEN_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-阈值隔离已见维度集合(type:SortedSet)"
+        "(score: 维度最近出现时间戳(int), member: 维度指纹(record_id 前段))",
+        "key_type": "sorted_set",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.threshold_seen.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{threshold}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-活跃观察状态：仅 continuous 模式下，已经触发首次告警的维度才会进入。
+# member=维度指纹；score=最近一次有效出现被 detect 观察到的 wall-clock 秒。
+# level、threshold 与 detect_range 都进入 key，避免不同告警级别、阈值或观察窗口相互续期。
+# 真实 TTL 由 detector 设置为 max(detect_range*2, 1天)，AlertManager 原子认领到期 member 后结束告警。
+NEW_SERIES_ACTIVE_KEY = register_key_with_config(
+    {
+        "label": "[detect|alert]新维度值检测-活跃观察状态(type:SortedSet)"
+        "(score: 最近有效出现检测时间(int), member: 维度指纹(record_id 前段))",
+        "key_type": "sorted_set",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.active.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{level}.{threshold}.{detect_range}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-生命周期已认领标记：AlertManager 原子结束 active 后写入，
+# detector 在下一次有效出现时消费，用于区分“从未触发过告警”与“旧生命周期已结束”。
+# member=维度指纹；score=AlertManager 认领到期状态的 wall-clock 秒。
+NEW_SERIES_CLAIMED_KEY = register_key_with_config(
+    {
+        "label": "[detect|alert]新维度值检测-生命周期已认领(type:SortedSet)"
+        "(score: 到期认领时间(int), member: 维度指纹(record_id 前段))",
+        "key_type": "sorted_set",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.claimed.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{level}.{threshold}.{detect_range}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-生命周期外部终止标记：策略停用、删除或模式切换等终态路径原子清理 active 时写入，
+# detector 用它区分“自然到期认领”与“外部终止”，避免在途检测任务把已关闭生命周期重新激活。
+# member=维度指纹；score=终止状态写入的 wall-clock 秒。标记仅在 detect_range 内抑制，之后按 seen 规则判断新生命周期。
+NEW_SERIES_TERMINATED_KEY = register_key_with_config(
+    {
+        "label": "[detect|alert]新维度值检测-生命周期外部终止(type:SortedSet)"
+        "(score: 外部终止时间(int), member: 维度指纹(record_id 前段))",
+        "key_type": "sorted_set",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.terminated.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{level}.{threshold}.{detect_range}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-学习起点：历史兼容 key。旧版本用它记录 wall-clock 学习起点；新版本只用它判断旧策略已完成基线。
+# 与 seen key 同维度签名、同写入续期、一起过期。
+NEW_SERIES_LEARN_START_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-学习起点时间戳(type:String)(value: 冷启动学习起点 wall-clock 秒)",
+        "key_type": "string",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.learn_start.{{strategy_id}}.{{item_id}}.{{dimension_signature}}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-学习进度：记录已完成的有效周期数。threshold=0 和非零阈值统一使用带 threshold token 的新 key；
+# 既有 seen/baseline_done/learn_start key 保持不变，以兼容存量策略。
+NEW_SERIES_BASELINE_PROGRESS_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-学习有效周期数(type:String)(value: 已完成有效周期数)",
+        "key_type": "string",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.baseline_progress.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{threshold}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 新维度值检测-基线完成标记：累计足够的有效周期后写入此 key。空批次和 partial 批次不写。
+# 旧 NEW_SERIES_LEARN_START_KEY 存在时也视为已完成基线，用于兼容存量策略。
+NEW_SERIES_BASELINE_DONE_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-基线完成标记(type:String)(value: 1)",
+        "key_type": "string",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.baseline_done.{{strategy_id}}.{{item_id}}.{{dimension_signature}}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
+    }
+)
+
+# 非零阈值的基线完成标记。threshold=0 继续使用旧 baseline_done/learn_start 两类 key。
+NEW_SERIES_THRESHOLD_BASELINE_DONE_KEY = register_key_with_config(
+    {
+        "label": "[detect]新维度值检测-阈值隔离基线完成标记(type:String)(value: 1)",
+        "key_type": "string",
+        "key_tpl": f"{KEY_PREFIX}.detect.new_series.threshold_baseline_done.{{strategy_id}}.{{item_id}}."
+        "{dimension_signature}.{threshold}",
+        "ttl": TTL_NOT_SET,
+        "backend": "service-new_series",
     }
 )
 
@@ -507,6 +684,26 @@ SERVICE_LOCK_METADATA_MANAGE_ES_STORAGE = register_key_with_config(
         "label": "[metadata]ES索引轮转集群锁",
         "key_type": "string",
         "key_tpl": "metadata.manage_es_storage.lock.{cluster_id}",
+        "ttl": CONST_ONE_HOUR,
+        "backend": "service",
+    }
+)
+
+SERVICE_LOCK_METADATA_CLEAN_DISABLE_ES_STORAGE = register_key_with_config(
+    {
+        "label": "[metadata]停用采集项ES索引清理集群锁",
+        "key_type": "string",
+        "key_tpl": "metadata.clean_disable_es_storage.lock.{cluster_id}",
+        "ttl": CONST_ONE_HOUR,
+        "backend": "service",
+    }
+)
+
+SERVICE_LOCK_METADATA_RECONCILE_FEDERATION_DATA_LINK = register_key_with_config(
+    {
+        "label": "[metadata]BCS联邦数据链路租户锁",
+        "key_type": "string",
+        "key_tpl": "metadata.reconcile_federation_data_link.lock.{bk_tenant_id}",
         "ttl": CONST_ONE_HOUR,
         "backend": "service",
     }

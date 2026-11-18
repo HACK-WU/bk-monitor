@@ -1,0 +1,168 @@
+/*
+ * Tencent is pleased to support the open source community by making
+ * 蓝鲸智云PaaS平台 (BlueKing PaaS) available.
+ *
+ * Copyright (C) 2017-2025 Tencent.  All rights reserved.
+ *
+ * 蓝鲸智云PaaS平台 (BlueKing PaaS) is licensed under the MIT License.
+ *
+ * License for 蓝鲸智云PaaS平台 (BlueKing PaaS):
+ *
+ * ---------------------------------------------------
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+ * documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+ * to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+ * the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+ * THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+ * CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+
+/** LLM 观测页数据类型 */
+
+/** Agent Span 名称 / 版本 / 描述 */
+export type LlmAgentObservation = {
+  description: string;
+  name: string;
+  version: string;
+};
+
+/** 输入 Tab 解析后的观测数据 */
+export type LlmInputObservation = {
+  /** 当前可用工具定义 */
+  availableTools: LlmToolDefinition[];
+  /** 模型/助手消息 */
+  modelMessages: LlmTextItem[];
+  /** 推理过程文本 */
+  reasoningMessages: LlmTextItem[];
+  /** 系统 Prompts */
+  systemPrompts: LlmTextItem[];
+  /** 已发生的工具调用记录 */
+  toolCalls: LlmToolCallRecord[];
+  /** 用户消息 */
+  userMessages: LlmTextItem[];
+};
+
+/** 工具调用预览用的扁平 KV */
+export type LlmKvPair = {
+  key: string;
+  value: string;
+};
+
+/** 输出 Tab 解析后的观测数据 */
+export type LlmOutputObservation = {
+  /** 模型最终输出 */
+  modelOutputs: LlmTextItem[];
+  /** 规划中的工具调用 */
+  plannedToolCalls: LlmPlannedToolCall[];
+  /** 推理过程文本 */
+  reasoningMessages: LlmTextItem[];
+  /** 工具调用结果 */
+  toolResults: LlmToolResult[];
+};
+
+/** 规划中的工具调用（输出侧） */
+export type LlmPlannedToolCall = {
+  arguments: unknown;
+  description: string;
+  id: string;
+  name: string;
+};
+
+/** 统一文本条目（消息 / Prompt / 推理） */
+export type LlmTextItem = {
+  content: string;
+  id: string;
+};
+
+/** 输入侧已发生的工具调用记录 */
+export type LlmToolCallRecord = {
+  arguments: unknown;
+  id: string;
+  name: string;
+  response: unknown;
+};
+
+/** 可用工具定义 */
+export type LlmToolDefinition = {
+  description: string;
+  name: string;
+  parameters: unknown;
+};
+
+/** Tool Span 观测页数据 */
+export type LlmToolObservation = {
+  arguments: unknown;
+  description: string;
+  name: string;
+  result: unknown;
+};
+
+/** 输出侧工具调用结果 */
+export type LlmToolResult = {
+  id: string;
+  name: string;
+  result: unknown;
+};
+
+/** 模型 Span 时间流筛选 */
+export type LlmTimelineFilter = 'all' | 'error' | 'last-input' | 'output';
+
+/** 时间流单条 message，序号按 messages 下标，parts 按字段顺序连成一组 */
+export type LlmTimelineMessage = {
+  id: string;
+  index: number;
+  isError: boolean;
+  parts: LlmTimelinePart[];
+  tab: 'input' | 'output';
+};
+
+/** 模型 Span 时间流观测数据 */
+export type LlmModelTimeline = {
+  availableTools: LlmToolDefinition[];
+  errorCount: number;
+  inputMessages: LlmTimelineMessage[];
+  outputMessages: LlmTimelineMessage[];
+  systemPrompts: LlmTextItem[];
+};
+
+/** 按 Trace 查询到的工具执行记录，用于时间流行的耗时、异常与详情 */
+export type LlmToolCall = {
+  elapsedTime: number | null;
+  /** status.code === 2 视为执行失败 */
+  isError: boolean;
+  spanId: string;
+  startTime: number | null;
+  /** status.message，异常图标 tooltip 使用 */
+  statusMessage: string;
+  toolCallId: string;
+  toolName: string;
+};
+
+/** 时间流一行：同一 message 的 part，仅首行展示 [n] */
+export type LlmTimelinePart = {
+  arguments?: unknown;
+  content: string;
+  /** 工具描述：优先 part.description，否则回落到 tool.definitions */
+  description?: string;
+  id: string;
+  isError: boolean;
+  isPlaceholder?: boolean;
+  messageIndex: number;
+  response?: unknown;
+  role: LlmTimelineRole;
+  searchBlockId: string;
+  showIndex: boolean;
+  spanId?: string;
+  /** 消息 Part 原始 id，对应 list_tool_calls.tool_call_id */
+  toolCallId?: string;
+  toolName?: string;
+};
+
+export type LlmTimelineRole = 'model' | 'system' | 'thinking' | 'tool' | 'user';

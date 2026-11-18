@@ -22,6 +22,7 @@ class FakeQuerySet:
     def __init__(self, rows):
         self.rows = rows
         self.filter_kwargs = None
+        self.filter_calls = []
         self.order_by_args = None
         self.slice_value = None
         self.select_related_args = None
@@ -32,6 +33,7 @@ class FakeQuerySet:
 
     def filter(self, **kwargs):
         self.filter_kwargs = kwargs
+        self.filter_calls.append(kwargs)
         return self
 
     def order_by(self, *args):
@@ -236,6 +238,207 @@ def test_read_db_model_filters_limits_and_returns_allowed_fields(monkeypatch):
     assert queryset.slice_value == slice(None, 1, None)
 
 
+@pytest.mark.parametrize(
+    ("model", "subscription_field", "private_fields"),
+    [
+        ("bkmonitor.models.base.ReportItems", "id", {"mail_title", "receivers", "managers", "channels"}),
+        ("bkmonitor.models.base.ReportContents", "report_item", {"content_title", "content_details", "graphs"}),
+        ("bkmonitor.models.base.ReportStatus", "report_item", {"mail_title", "details"}),
+        ("bkmonitor.models.report.Report", "id", {"name", "content_config", "scenario_config"}),
+        ("bkmonitor.models.report.ReportChannel", "report_id", {"subscribers", "send_text"}),
+        ("bkmonitor.models.report.ReportSendRecord", "report_id", {"send_results"}),
+        ("monitor.models.UptimeCheckTask", "id", {"config", "labels", "location"}),
+    ],
+)
+def test_report_models_require_exact_subscription_and_hide_private_fields(
+    monkeypatch, model, subscription_field, private_fields
+):
+    """发送记录只能按单个订阅读取，显式请求也不能带出私密内容。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog import cmdb
+
+    queryset = FakeQuerySet([SimpleNamespace(id=7, report_id=7, report_item=7)])
+    FakeModel.objects = FakeManager(queryset)
+    FakeModel.origin_objects = FakeManager(queryset)
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+    monkeypatch.setattr(cmdb, "_authorize_business", lambda _bk_biz_id: "tenant-a")
+    if model in {"bkmonitor.models.report.ReportChannel", "bkmonitor.models.report.ReportSendRecord"}:
+        from bkmonitor.models.report import Report
+
+        monkeypatch.setattr(Report.origin_objects, "filter", lambda **_kwargs: SimpleNamespace(exists=lambda: True))
+
+    spec = db.ALLOWED_MODEL_SPECS[model]
+    discovery = next(item for item in db.list_db_models({})["items"] if item["model"] == model)
+    assert discovery["required_exact_filter"] == subscription_field
+    assert discovery["examples"][0]["bk_biz_id"] == 2
+    assert private_fields.isdisjoint(discovery["allowed_fields"])
+    assert private_fields.isdisjoint(discovery["allowed_filter_fields"])
+    assert private_fields.isdisjoint(discovery["allowed_order_by"])
+
+    for unsafe_filter in ({}, {f"{subscription_field}__in": [7]}, {subscription_field: 0}):
+        with pytest.raises(CustomException, match="精确条件"):
+            db.read_db_model({"model": model, "bk_biz_id": 2, "filter": unsafe_filter})
+
+    with pytest.raises(CustomException, match="bk_biz_id"):
+        db.read_db_model({"model": model, "filter": {subscription_field: 7}})
+
+    private_field = sorted(private_fields)[0]
+    with pytest.raises(CustomException, match="不在 read-db-model 允许列表"):
+        db.read_db_model({"model": model, "bk_biz_id": 2, "filter": {subscription_field: 7, private_field: "x"}})
+
+    result = db.read_db_model(
+        {"model": model, "bk_biz_id": 2, "filter": {subscription_field: 7}, "fields": ["id", private_field]}
+    )
+    assert result["items"] == [{"id": 7}]
+    assert queryset.filter_kwargs == {subscription_field: 7}
+    if model.startswith("bkmonitor.models.base."):
+        assert queryset.filter_calls == [{"bk_tenant_id": "tenant-a"}, {subscription_field: 7}]
+    elif model in {"bkmonitor.models.report.Report", "monitor.models.UptimeCheckTask"}:
+        assert queryset.filter_calls == [{"bk_biz_id": 2}, {subscription_field: 7}]
+    assert spec.required_exact_filter == subscription_field
+
+
+def test_report_scope_rejects_unapproved_business_before_read(monkeypatch):
+    """关联表的订阅 ID 不能绕过目标业务授权。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog import cmdb
+
+    queryset = FakeQuerySet([])
+    FakeModel.objects = FakeManager(queryset)
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+
+    def deny(_bk_biz_id):
+        raise cmdb.ParamsGuardRejected("目标业务未授权")
+
+    monkeypatch.setattr(cmdb, "_authorize_business", deny)
+    with pytest.raises(CustomException, match="目标业务未授权"):
+        db.read_db_model(
+            {"model": "bkmonitor.models.report.ReportSendRecord", "bk_biz_id": 2, "filter": {"report_id": 7}}
+        )
+    assert queryset.filter_calls == []
+
+
+def test_report_scope_requires_authenticated_request(monkeypatch):
+    """直调服务桥函数时没有请求身份也不能按已知订阅 ID 读出数据。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog import _authorization
+
+    queryset = FakeQuerySet([])
+    FakeModel.origin_objects = FakeManager(queryset)
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+    monkeypatch.setattr(_authorization, "get_request", lambda peaceful=True: None)
+
+    with pytest.raises(CustomException, match="已认证"):
+        db.read_db_model({"model": "bkmonitor.models.base.ReportItems", "bk_biz_id": 2, "filter": {"id": 7}})
+    assert queryset.filter_calls == []
+
+
+def test_report_child_rejects_subscription_owned_by_other_business(monkeypatch):
+    """子表没有业务字段，必须先核对父订阅归属。"""
+    from bkmonitor.models.report import Report
+    from kernel_api.rpc.functions.bkm_cli import db
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog import cmdb
+
+    queryset = FakeQuerySet([])
+    FakeModel.objects = FakeManager(queryset)
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+    monkeypatch.setattr(cmdb, "_authorize_business", lambda _bk_biz_id: "tenant-a")
+    checked = []
+
+    def other_business(**kwargs):
+        checked.append(kwargs)
+        return SimpleNamespace(exists=lambda: False)
+
+    monkeypatch.setattr(Report.origin_objects, "filter", other_business)
+    with pytest.raises(CustomException, match="不属于已授权业务"):
+        db.read_db_model({"model": "bkmonitor.models.report.ReportChannel", "bk_biz_id": 2, "filter": {"report_id": 7}})
+    assert checked == [{"id": 7, "bk_biz_id": 2}]
+    assert queryset.filter_calls == []
+
+
+@pytest.mark.parametrize("task_exists", [True, False])
+def test_uptime_check_subscription_scoped_by_task_business(monkeypatch, task_exists):
+    """订阅行 bk_biz_id 是节点业务：只校验任务归属，不按行内业务过滤，以免漏掉公共节点订阅。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+    from kernel_api.rpc.functions.bkm_cli.platform_catalog import cmdb
+    from monitor.models import UptimeCheckTask
+
+    model = "monitor.models.UptimeCheckTaskSubscription"
+    rows = [
+        SimpleNamespace(uptimecheck_id=7, subscription_id=101, bk_biz_id=2, is_deleted=True),
+        SimpleNamespace(uptimecheck_id=7, subscription_id=102, bk_biz_id=3, is_deleted=False),
+    ]
+    queryset = FakeQuerySet(rows)
+    FakeModel.origin_objects = FakeManager(queryset)
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+    monkeypatch.setattr(cmdb, "_authorize_business", lambda _bk_biz_id: "tenant-a")
+    checked = []
+
+    def task_lookup(**kwargs):
+        checked.append(kwargs)
+        return SimpleNamespace(exists=lambda: task_exists)
+
+    monkeypatch.setattr(UptimeCheckTask.origin_objects, "filter", task_lookup)
+
+    with pytest.raises(CustomException, match="精确条件"):
+        db.read_db_model({"model": model, "bk_biz_id": 2, "filter": {}})
+    with pytest.raises(CustomException, match="bk_biz_id"):
+        db.read_db_model({"model": model, "filter": {"uptimecheck_id": 7}})
+
+    request = {
+        "model": model,
+        "bk_biz_id": 2,
+        "filter": {"uptimecheck_id": 7},
+        "fields": ["subscription_id", "bk_biz_id", "is_deleted"],
+    }
+    if not task_exists:
+        with pytest.raises(CustomException, match="不属于已授权业务"):
+            db.read_db_model(request)
+        assert queryset.filter_calls == []
+    else:
+        result = db.read_db_model(request)
+        assert [item["subscription_id"] for item in result["items"]] == [101, 102]
+        assert queryset.filter_calls == [{"uptimecheck_id": 7}]
+    assert checked == [{"id": 7, "bk_biz_id": 2}]
+
+
+def test_uptime_check_models_read_soft_deleted_rows():
+    """拨测删除只置 is_deleted，排障要看到已删任务和残留订阅，不能落到过滤软删的 objects。"""
+    from django.utils.module_loading import import_string
+
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    for model_path in ("monitor.models.UptimeCheckTask", "monitor.models.UptimeCheckTaskSubscription"):
+        spec = db.ALLOWED_MODEL_SPECS[model_path]
+        model_cls = import_string(model_path)
+        assert spec.manager_name == "origin_objects"
+        assert getattr(model_cls, spec.manager_name).all().query.where.children == []
+        assert model_cls.objects.all().query.where.children
+        assert "is_deleted" in spec.fields
+
+
+def test_report_model_projection_fields_exist():
+    """固定投影使用真实 ORM 字段，模型迁移时能直接报出漂移。"""
+    from django.utils.module_loading import import_string
+
+    from kernel_api.rpc.functions.bkm_cli.db import ALLOWED_MODEL_SPECS
+
+    for model_path, spec in ALLOWED_MODEL_SPECS.items():
+        if model_path not in {
+            "bkmonitor.models.base.ReportItems",
+            "bkmonitor.models.base.ReportContents",
+            "bkmonitor.models.base.ReportStatus",
+            "bkmonitor.models.report.Report",
+            "bkmonitor.models.report.ReportChannel",
+            "bkmonitor.models.report.ReportSendRecord",
+            "monitor.models.UptimeCheckTask",
+            "monitor.models.UptimeCheckTaskSubscription",
+        }:
+            continue
+        model_fields = {field.name for field in import_string(model_path)._meta.get_fields()}
+        assert spec.fields <= model_fields
+
+
 def test_bcs_cluster_info_allowlist_has_diagnostic_fields():
     from kernel_api.rpc.functions.bkm_cli.db import ALLOWED_MODEL_SPECS
 
@@ -248,13 +451,10 @@ def test_bcs_cluster_info_allowlist_has_diagnostic_fields():
     assert not (stale & spec.fields), f"Stale field names still present: {stale & spec.fields}"
 
 
-def test_allowlist_excludes_deprecated_and_low_value_models():
+def test_allowlist_excludes_raw_action_execution_models():
     from kernel_api.rpc.functions.bkm_cli.db import ALLOWED_MODEL_SPECS
 
     removed = {
-        "bkmonitor.models.base.ReportItems",
-        "bkmonitor.models.base.ReportContents",
-        "bkmonitor.models.base.ReportStatus",
         "bkmonitor.models.fta.action.ActionInstance",
         "bkmonitor.models.fta.action.ActionInstanceLog",
     }
@@ -274,6 +474,496 @@ def test_datasource_and_resulttable_in_allowlist_with_token_excluded():
 
     rt = db.ALLOWED_MODEL_SPECS["metadata.models.result_table.ResultTable"]
     assert {"table_id", "bk_biz_id", "default_storage", "data_label", "is_builtin"} <= rt.fields
+
+
+def test_graph_relation_v4_control_models_registered_with_minimal_fields():
+    from django.utils.module_loading import import_string
+
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    expected_fields = {
+        "metadata.models.result_table.ResultTableOption": {
+            "bk_tenant_id",
+            "table_id",
+            "name",
+            "value_type",
+            "value",
+            "create_time",
+        },
+        "metadata.models.storage.SurrealDBStorage": {
+            "bk_tenant_id",
+            "table_id",
+            "table_type",
+            "vertices",
+            "relations",
+            "storage_cluster_id",
+        },
+        "metadata.models.bkdata.result_table.BkBaseResultTable": {
+            "bk_tenant_id",
+            "data_link_name",
+            "bkbase_data_name",
+            "storage_type",
+            "monitor_table_id",
+            "storage_cluster_id",
+            "status",
+            "bkbase_table_id",
+            "bkbase_rt_name",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_link.data_link.DataLink": {
+            "bk_tenant_id",
+            "data_link_name",
+            "namespace",
+            "data_link_strategy",
+            "bk_data_id",
+            "table_ids",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_link.data_link_configs.ResultTableConfig": {
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "data_type",
+            "table_id",
+            "bkbase_table_id",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_link.data_link_configs.VMStorageBindingConfig": {
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "vm_cluster_name",
+            "bkbase_result_table_name",
+            "table_id",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_link.data_link_configs.SurrealDBBindingConfig": {
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "surrealdb_cluster_name",
+            "table_id",
+            "bkbase_result_table_name",
+            "table_type",
+            "vertices",
+            "relations",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_link.data_link_configs.DataBusConfig": {
+            "bk_tenant_id",
+            "namespace",
+            "name",
+            "data_link_name",
+            "bk_biz_id",
+            "status",
+            "data_id_name",
+            "bk_data_id",
+            "sink_names",
+            "create_time",
+            "last_modify_time",
+        },
+        "metadata.models.data_source.DataSourceResultTable": {
+            "bk_tenant_id",
+            "bk_data_id",
+            "table_id",
+            "create_time",
+        },
+        "metadata.models.space.space.SpaceDataSource": {
+            "bk_tenant_id",
+            "space_type_id",
+            "space_id",
+            "bk_data_id",
+            "from_authorization",
+            "create_time",
+            "update_time",
+        },
+    }
+    forbidden_fields = {
+        "password",
+        "secret",
+        "token",
+        "username",
+        "host",
+        "port",
+        "domain_name",
+        "dsn",
+        "url",
+        "consumer_group",
+    }
+
+    for model_path, fields in expected_fields.items():
+        spec = db.ALLOWED_MODEL_SPECS[model_path]
+        concrete_fields = {field.name for field in import_string(model_path)._meta.concrete_fields}
+
+        assert spec.model_path == model_path
+        assert spec.fields == fields
+        assert spec.fields <= concrete_fields
+        assert "bk_tenant_id" in spec.default_fields
+        assert spec.default_fields <= spec.fields
+        assert forbidden_fields.isdisjoint(spec.fields)
+        assert spec.note
+        assert spec.examples
+        assert all("bk_tenant_id" in example["filter"] for example in spec.examples)
+
+    fixed_filter_models = {
+        "metadata.models.result_table.ResultTableOption",
+        "metadata.models.data_link.data_link.DataLink",
+    }
+    for model_path in expected_fields.keys() - fixed_filter_models:
+        spec = db.ALLOWED_MODEL_SPECS[model_path]
+        assert spec.queryset_scope is not None
+        assert spec.server_scope
+        assert db._serialize_model_spec(model_path, spec)["server_scope"] == spec.server_scope
+
+
+def test_result_table_option_is_fixed_to_graph_relation_v4_option():
+    from kernel_api.rpc.functions.bkm_cli import db
+    from metadata.models.result_table import ResultTableOption
+
+    model_path = "metadata.models.result_table.ResultTableOption"
+    spec = db.ALLOWED_MODEL_SPECS[model_path]
+
+    assert spec.fixed_filters == {"name": ResultTableOption.OPTION_GRAPH_RELATION_V4_DATA_LINK}
+    assert db._serialize_model_spec(model_path, spec)["fixed_filters"] == spec.fixed_filters
+
+
+def test_data_link_is_fixed_to_graph_relation_strategy():
+    from kernel_api.rpc.functions.bkm_cli import db
+    from metadata.models.data_link.data_link import DataLink
+
+    model_path = "metadata.models.data_link.data_link.DataLink"
+    spec = db.ALLOWED_MODEL_SPECS[model_path]
+
+    assert spec.fixed_filters == {"data_link_strategy": DataLink.GRAPH_RELATION_TIME_SERIES}
+    assert db._serialize_model_spec(model_path, spec)["fixed_filters"] == spec.fixed_filters
+
+
+@pytest.mark.parametrize("requested_filter", [{}, {"name": "graph_relation_v4_data_link"}])
+def test_read_db_model_applies_omitted_or_matching_fixed_filters(monkeypatch, requested_filter):
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    class FilteringQuerySet(FakeQuerySet):
+        def filter(self, **kwargs):
+            super().filter(**kwargs)
+            self.rows = [
+                row
+                for row in self.rows
+                if all(getattr(row, field_name) == value for field_name, value in kwargs.items())
+            ]
+            return self
+
+    graph_option_name = "graph_relation_v4_data_link"
+    queryset = FilteringQuerySet(
+        [
+            SimpleNamespace(name=graph_option_name, value='{"write_targets":["vm"]}'),
+            SimpleNamespace(name="unrelated_option", value="must-not-be-readable"),
+        ]
+    )
+    FakeModel.objects = FakeManager(queryset)
+    monkeypatch.setitem(
+        db.ALLOWED_MODEL_SPECS,
+        "demo.FixedModel",
+        db.ModelSpec(
+            model_path="demo.FixedModel",
+            fields={"name", "value"},
+            fixed_filters={"name": graph_option_name},
+        ),
+    )
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+
+    result = BkmCliOpCallResource().perform_request(
+        {
+            "op_id": "read-db-model",
+            "params": {
+                "model": "demo.FixedModel",
+                "filter": requested_filter,
+                "fields": ["name", "value"],
+            },
+        }
+    )
+
+    assert queryset.filter_kwargs == {"name": graph_option_name}
+    assert result["result"]["items"] == [{"name": graph_option_name, "value": '{"write_targets":["vm"]}'}]
+
+
+@pytest.mark.parametrize("conflicting_filter", [{"name": "unrelated_option"}, {"name__in": ["unrelated_option"]}])
+def test_read_db_model_rejects_conflicting_fixed_filters(monkeypatch, conflicting_filter):
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    graph_option_name = "graph_relation_v4_data_link"
+    queryset = FakeQuerySet([SimpleNamespace(name="unrelated_option", value="must-not-be-readable")])
+    FakeModel.objects = FakeManager(queryset)
+    monkeypatch.setitem(
+        db.ALLOWED_MODEL_SPECS,
+        "demo.FixedModel",
+        db.ModelSpec(
+            model_path="demo.FixedModel",
+            fields={"name", "value"},
+            fixed_filters={"name": graph_option_name},
+        ),
+    )
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+
+    with pytest.raises(CustomException) as exc:
+        BkmCliOpCallResource().perform_request(
+            {
+                "op_id": "read-db-model",
+                "params": {
+                    "model": "demo.FixedModel",
+                    "filter": conflicting_filter,
+                    "fields": ["name", "value"],
+                },
+            }
+        )
+
+    assert "filter 与模型固定条件冲突" in str(exc.value)
+    assert exc.value.data == {
+        "next_actions": ["调用 list-db-models 获取当前环境可读模型、字段、filter、排序和 limit 上限。"]
+    }
+    assert queryset.filter_kwargs is None
+
+
+@pytest.mark.parametrize(
+    "filter_items",
+    [
+        [("name", "graph_relation_v4_data_link"), ("name__exact", "unrelated_option")],
+        [("name__exact", "unrelated_option"), ("name", "graph_relation_v4_data_link")],
+    ],
+)
+def test_read_db_model_rejects_duplicate_canonical_filter_key_in_both_orders(monkeypatch, filter_items):
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    queryset = FakeQuerySet([SimpleNamespace(name="unrelated_option", value="must-not-be-readable")])
+    FakeModel.objects = FakeManager(queryset)
+    monkeypatch.setitem(
+        db.ALLOWED_MODEL_SPECS,
+        "demo.FixedModel",
+        db.ModelSpec(
+            model_path="demo.FixedModel",
+            fields={"name", "value"},
+            fixed_filters={"name": "graph_relation_v4_data_link"},
+        ),
+    )
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+
+    with pytest.raises(CustomException) as exc:
+        BkmCliOpCallResource().perform_request(
+            {
+                "op_id": "read-db-model",
+                "params": {
+                    "model": "demo.FixedModel",
+                    "filter": dict(filter_items),
+                    "fields": ["name", "value"],
+                },
+            }
+        )
+
+    assert "filter 包含重复条件" in str(exc.value)
+    assert queryset.filter_kwargs is None
+
+
+def test_model_spec_scope_is_described_without_being_called():
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    def fail_if_called(_queryset):
+        raise AssertionError("queryset scope must not run during discovery")
+
+    spec = db.ModelSpec(
+        model_path="demo.ScopedModel",
+        fields={"id"},
+        queryset_scope=fail_if_called,
+        server_scope="仅返回服务端限定范围内的记录。",
+    )
+
+    assert db._serialize_model_spec("demo.ScopedModel", spec)["server_scope"] == spec.server_scope
+
+
+@pytest.mark.django_db(databases="__all__")
+def test_graph_server_scopes_make_non_graph_rows_unreachable():
+    from kernel_api.rpc.functions.bkm_cli import db
+    from metadata.models.bkdata.result_table import BkBaseResultTable
+    from metadata.models.data_link.data_link import DataLink
+    from metadata.models.data_link.data_link_configs import (
+        DataBusConfig,
+        ResultTableConfig,
+        SurrealDBBindingConfig,
+        VMStorageBindingConfig,
+    )
+    from metadata.models.data_source import DataSourceResultTable
+    from metadata.models.space.space import SpaceDataSource
+    from metadata.models.storage import SurrealDBStorage
+
+    tenant = "bkm_cli_graph_scope"
+    graph_link_name = "bkm_cli_graph_link"
+    normal_link_name = "bkm_cli_normal_link"
+    graph_table_id = "bkm_cli_graph.metric"
+    normal_table_id = "bkm_cli_normal.metric"
+    graph_data_id = 910001
+    normal_data_id = 910002
+
+    DataLink.objects.create(
+        data_link_name=graph_link_name,
+        bk_tenant_id=tenant,
+        namespace="bkmonitor",
+        data_link_strategy=DataLink.GRAPH_RELATION_TIME_SERIES,
+        bk_data_id=graph_data_id,
+        table_ids=[graph_table_id],
+    )
+    DataLink.objects.create(
+        data_link_name=normal_link_name,
+        bk_tenant_id=tenant,
+        namespace="bkmonitor",
+        data_link_strategy=DataLink.BK_STANDARD_V2_TIME_SERIES,
+        bk_data_id=normal_data_id,
+        table_ids=[normal_table_id],
+    )
+
+    for data_link_name, table_id in [
+        (graph_link_name, graph_table_id),
+        (normal_link_name, normal_table_id),
+    ]:
+        BkBaseResultTable.objects.create(
+            data_link_name=data_link_name,
+            bk_tenant_id=tenant,
+            monitor_table_id=table_id,
+        )
+        ResultTableConfig.objects.create(
+            name=f"{data_link_name}_rt",
+            data_link_name=data_link_name,
+            namespace="bkmonitor",
+            bk_biz_id=2,
+            bk_tenant_id=tenant,
+            status="OK",
+            table_id=table_id,
+        )
+        VMStorageBindingConfig.objects.create(
+            name=f"{data_link_name}_vm",
+            data_link_name=data_link_name,
+            namespace="bkmonitor",
+            bk_biz_id=2,
+            bk_tenant_id=tenant,
+            status="OK",
+            table_id=table_id,
+            vm_cluster_name=f"{data_link_name}_vm_cluster",
+        )
+        SurrealDBBindingConfig.objects.create(
+            name=f"{data_link_name}_surrealdb",
+            data_link_name=data_link_name,
+            namespace="bkmonitor",
+            bk_biz_id=2,
+            bk_tenant_id=tenant,
+            status="OK",
+            table_id=table_id,
+            surrealdb_cluster_name=f"{data_link_name}_surrealdb_cluster",
+        )
+        DataBusConfig.objects.create(
+            name=f"{data_link_name}_databus",
+            data_link_name=data_link_name,
+            namespace="bkmonitor",
+            bk_biz_id=2,
+            bk_tenant_id=tenant,
+            status="OK",
+            data_id_name=f"{data_link_name}_dataid",
+        )
+
+    SurrealDBStorage.objects.create(
+        bk_tenant_id=tenant,
+        table_id=graph_table_id,
+        storage_cluster_id=1,
+    )
+    SurrealDBStorage.objects.create(
+        bk_tenant_id=tenant,
+        table_id=normal_table_id,
+        storage_cluster_id=2,
+    )
+
+    for bk_data_id, table_id in [
+        (graph_data_id, graph_table_id),
+        (normal_data_id, normal_table_id),
+        (graph_data_id, normal_table_id),
+        (normal_data_id, graph_table_id),
+    ]:
+        DataSourceResultTable.objects.create(
+            bk_tenant_id=tenant,
+            bk_data_id=bk_data_id,
+            table_id=table_id,
+            creator="system",
+        )
+
+    for bk_data_id in [graph_data_id, normal_data_id]:
+        SpaceDataSource.objects.create(
+            bk_tenant_id=tenant,
+            space_type_id="bkcc",
+            space_id=str(bk_data_id),
+            bk_data_id=bk_data_id,
+            from_authorization=False,
+            creator="system",
+            updater="system",
+        )
+
+    cases = [
+        ("metadata.models.bkdata.result_table.BkBaseResultTable", "data_link_name", graph_link_name, normal_link_name),
+        (
+            "metadata.models.data_link.data_link_configs.ResultTableConfig",
+            "data_link_name",
+            graph_link_name,
+            normal_link_name,
+        ),
+        (
+            "metadata.models.data_link.data_link_configs.VMStorageBindingConfig",
+            "data_link_name",
+            graph_link_name,
+            normal_link_name,
+        ),
+        (
+            "metadata.models.data_link.data_link_configs.SurrealDBBindingConfig",
+            "data_link_name",
+            graph_link_name,
+            normal_link_name,
+        ),
+        (
+            "metadata.models.data_link.data_link_configs.DataBusConfig",
+            "data_link_name",
+            graph_link_name,
+            normal_link_name,
+        ),
+        ("metadata.models.storage.SurrealDBStorage", "table_id", graph_table_id, normal_table_id),
+        ("metadata.models.data_source.DataSourceResultTable", "table_id", graph_table_id, normal_table_id),
+        ("metadata.models.space.space.SpaceDataSource", "bk_data_id", graph_data_id, normal_data_id),
+    ]
+
+    for model_path, identity_field, graph_value, normal_value in cases:
+        result = db.read_db_model(
+            {
+                "model": model_path,
+                "filter": {"bk_tenant_id": tenant},
+                "fields": [identity_field],
+            }
+        )
+        assert result["items"] == [{identity_field: graph_value}]
+
+        forbidden_result = db.read_db_model(
+            {
+                "model": model_path,
+                "filter": {"bk_tenant_id": tenant, identity_field: normal_value},
+                "fields": [identity_field],
+            }
+        )
+        assert forbidden_result["items"] == []
 
 
 def test_list_db_models_surfaces_model_note():
@@ -601,3 +1291,172 @@ def test_serialize_instance_bad_field_degrades_and_keeps_row():
     _json.dumps(out)
     assert out["ok"] == "fine"
     assert out["bad"] == "<unserializable: _NotSerializable>"
+
+
+# ---------- ActionConfig / StrategyActionConfigRelation 白名单 + origin_objects 软删可见 + execute_config 脱敏 ----------
+
+
+def test_action_config_and_relation_registered_in_allowlist():
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    ac = db.ALLOWED_MODEL_SPECS["bkmonitor.models.fta.action.ActionConfig"]
+    rel = db.ALLOWED_MODEL_SPECS["bkmonitor.models.fta.action.StrategyActionConfigRelation"]
+    # 软删模型必须用 origin_objects 读，否则 .objects 过滤掉 is_deleted 行——那正是要看的证据
+    assert ac.manager_name == "origin_objects"
+    assert rel.manager_name == "origin_objects"
+    assert {"is_deleted", "is_enabled", "create_time", "update_time"} <= ac.fields
+    assert {"strategy_id", "config_id", "relate_type", "is_deleted"} <= rel.fields
+    assert ac.note and rel.note
+
+
+def test_action_config_execute_config_never_exposed():
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    spec = db.ALLOWED_MODEL_SPECS["bkmonitor.models.fta.action.ActionConfig"]
+    # execute_config（可内嵌 webhook/凭据）既不列入 fields，也登记 sensitive_fields 兜底显式请求
+    assert "execute_config" not in spec.fields
+    assert "execute_config" in spec.sensitive_fields
+    assert "execute_config" not in db._safe_fields(spec)
+    # list-db-models 自描述既不广告 execute_config，又回显 origin_objects manager
+    serialized = db._serialize_model_spec("bkmonitor.models.fta.action.ActionConfig", spec)
+    assert "execute_config" not in serialized["allowed_fields"]
+    assert serialized["manager"] == "origin_objects"
+
+
+def test_list_db_models_omits_manager_for_default_objects_models():
+    """MAJOR 回归：默认 objects 的模型不回显 manager，保持既有自描述不变；origin_objects 模型才回显。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    ds = db.ALLOWED_MODEL_SPECS["metadata.models.data_source.DataSource"]
+    assert "manager" not in db._serialize_model_spec("metadata.models.data_source.DataSource", ds)
+
+    rel = db.ALLOWED_MODEL_SPECS["bkmonitor.models.fta.action.StrategyActionConfigRelation"]
+    serialized = db._serialize_model_spec("bkmonitor.models.fta.action.StrategyActionConfigRelation", rel)
+    assert serialized["manager"] == "origin_objects"
+
+
+def test_read_db_model_uses_origin_objects_to_surface_soft_deleted_rows(monkeypatch):
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    # objects（默认 manager，模拟 RecordModelManager）只回未删行；origin_objects 回含软删行的全集
+    objects_qs = FakeQuerySet([SimpleNamespace(id=1, name="live", is_deleted=False)])
+    origin_qs = FakeQuerySet(
+        [
+            SimpleNamespace(id=1, name="live", is_deleted=False),
+            SimpleNamespace(id=2, name="soft-deleted", is_deleted=True),
+        ]
+    )
+
+    class _SoftDeleteModel:
+        objects = FakeManager(objects_qs)
+        origin_objects = FakeManager(origin_qs)
+
+    monkeypatch.setitem(
+        db.ALLOWED_MODEL_SPECS,
+        "demo.SoftDelete",
+        db.ModelSpec(model_path="demo.SoftDelete", fields={"id", "name", "is_deleted"}, manager_name="origin_objects"),
+    )
+    monkeypatch.setattr(db, "import_string", lambda _model_path: _SoftDeleteModel)
+
+    result = BkmCliOpCallResource().perform_request(
+        {"op_id": "read-db-model", "params": {"model": "demo.SoftDelete", "filter": {}}}
+    )
+
+    ids = {item["id"] for item in result["result"]["items"]}
+    # 读到了软删行(id=2)——证明走 origin_objects 而非 objects(后者会过滤掉)
+    assert ids == {1, 2}
+    assert origin_qs.filter_kwargs == {}
+    # 默认 objects manager 未被触碰
+    assert objects_qs.filter_kwargs is None
+
+
+def test_read_db_model_defaults_to_objects_manager(monkeypatch):
+    """变异自检对偶：manager_name 缺省时走 objects，不得误用 origin_objects。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    objects_qs = FakeQuerySet([SimpleNamespace(id=1, name="x")])
+
+    class _Model:
+        objects = FakeManager(objects_qs)
+        # origin_objects 存在且数据不同：若被错误使用，断言会暴露
+        origin_objects = FakeManager(FakeQuerySet([SimpleNamespace(id=9, name="wrong")]))
+
+    monkeypatch.setitem(db.ALLOWED_MODEL_SPECS, "demo.M", db.ModelSpec(model_path="demo.M", fields={"id", "name"}))
+    monkeypatch.setattr(db, "import_string", lambda _model_path: _Model)
+
+    result = BkmCliOpCallResource().perform_request(
+        {"op_id": "read-db-model", "params": {"model": "demo.M", "filter": {"id": 1}}}
+    )
+    assert [i["id"] for i in result["result"]["items"]] == [1]
+    assert objects_qs.filter_kwargs == {"id": 1}
+
+
+def test_read_db_model_action_config_drops_execute_config_even_when_explicitly_requested(monkeypatch):
+    """兜底回归：显式 fields 含 execute_config 也拿不到（sensitive_fields 在 _normalize_selected_fields 拦截）。"""
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    origin_qs = FakeQuerySet(
+        [
+            SimpleNamespace(
+                id=1001,
+                name="demo-notice",
+                is_enabled=True,
+                is_deleted=False,
+                execute_config={"template_detail": {"webhook": "http://example/?token=should-not-leak"}},
+            )
+        ]
+    )
+
+    class _ActionConfig:
+        objects = FakeManager(FakeQuerySet([]))
+        origin_objects = FakeManager(origin_qs)
+
+    monkeypatch.setattr(db, "import_string", lambda _model_path: _ActionConfig)
+
+    result = BkmCliOpCallResource().perform_request(
+        {
+            "op_id": "read-db-model",
+            "params": {
+                "model": "bkmonitor.models.fta.action.ActionConfig",
+                "filter": {"id": 1001},
+                "fields": ["id", "name", "is_enabled", "is_deleted", "execute_config"],
+            },
+        }
+    )
+    item = result["result"]["items"][0]
+    assert "execute_config" not in item
+    assert item == {"id": 1001, "name": "demo-notice", "is_enabled": True, "is_deleted": False}
+
+
+@pytest.mark.parametrize(
+    "model_path, instance_kwargs",
+    [
+        (
+            "metadata.models.entity_relation.ResourceDefinition",
+            {"namespace": "", "name": "pod", "fields": [{"name": "pod", "required": True}], "labels": {"a": "b"}},
+        ),
+        (
+            "metadata.models.entity_relation.RelationDefinition",
+            {"namespace": "", "name": "node_with_pod", "from_resource": "node", "to_resource": "pod"},
+        ),
+    ],
+)
+def test_relation_definitions_expose_exactly_what_is_published(monkeypatch, model_path, instance_kwargs):
+    from django.utils.module_loading import import_string
+
+    from kernel_api.rpc.functions.bkm_cli import db
+
+    model = import_string(model_path)
+    instance = model(**instance_kwargs)
+    # to_redis_json() 是发布到 Redis 的内容，可读字段以它为准，不多不少。
+    published = instance.to_redis_json()
+    spec = db.ALLOWED_MODEL_SPECS[model_path]
+    assert db._safe_fields(spec) == set(published)
+
+    FakeModel.objects = FakeManager(FakeQuerySet([instance]))
+    monkeypatch.setattr(db, "import_string", lambda _model_path: FakeModel)
+    result = BkmCliOpCallResource().perform_request(
+        {"op_id": "read-db-model", "params": {"model": model_path, "fields": sorted(published), "limit": 1}}
+    )
+    item = result["result"]["items"][0]
+    assert item == {**published, "namespace": ""}

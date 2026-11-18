@@ -37,28 +37,30 @@ import type { PropType } from 'vue';
 import { type SortInfo, type TdPrimaryTableProps, PrimaryTable } from '@blueking/tdesign-ui';
 import { Button, Checkbox } from 'bkui-vue';
 import EmptyStatus, { type EmptyStatusOperationType } from 'trace/components/empty-status/empty-status';
-import TableSkeleton from 'trace/components/skeleton/table-skeleton';
 import { formatTime } from 'trace/utils/utils';
 import { useI18n } from 'vue-i18n';
 
+import bcsSvgUrl from '../../../../../../../monitor-common/svg/svg/bcs.svg';
+import defaultSvgUrl from '../../../../../../../monitor-common/svg/svg/default.svg';
+import hostSvgUrl from '../../../../../../../monitor-common/svg/svg/host.svg';
+import landunSvgUrl from '../../../../../../../monitor-common/svg/svg/landun.svg';
 import EventTableExpandContent from './event-table-expand-content';
 import { DimensionsTypeEnum, eventChartMap, SourceTypeEnum } from './typing';
-
-// #if IS_APM_MONITOR
-import hostSvgUrl from '../../../../../../../monitor-common/svg/svg/host.svg?url';
-import bcsSvgUrl from '../../../../../../../monitor-common/svg/svg/bcs.svg?url';
-import landunSvgUrl from '../../../../../../../monitor-common/svg/svg/landun.svg?url';
-import defaultSvgUrl from '../../../../../../../monitor-common/svg/svg/default.svg?url';
+import { DetailLoadStatus, DetailTableSkeleton } from '@/pages/alarm-center/common-detail/detail-loading';
 
 const escapeForSingleQuotedString = (value: string) => value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 
+/**
+ * 事件来源图标的图片地址。
+ * 用不带 query 的默认导入而非 Vite 专属的 `?url`：本文件同时要被主站 webpack 编译，
+ * webpack 侧由 url-loader 返回地址字符串，Vite 侧默认也返回资源地址。
+ */
 const SourceIconSvgMap = {
   [SourceTypeEnum.BCS]: escapeForSingleQuotedString(bcsSvgUrl),
   [SourceTypeEnum.BKCI]: escapeForSingleQuotedString(landunSvgUrl),
   [SourceTypeEnum.HOST]: escapeForSingleQuotedString(hostSvgUrl),
   [SourceTypeEnum.DEFAULT]: escapeForSingleQuotedString(defaultSvgUrl),
 };
-// #endif
 
 import './event-table.scss';
 
@@ -102,12 +104,25 @@ export default defineComponent({
       >,
       default: () => null,
     },
+    showHeaderOperate: {
+      type: Boolean,
+      default: true,
+    },
+    scrollContainer: {
+      type: Function as PropType<() => HTMLElement | null>,
+      default: undefined,
+    },
   },
   emits: ['goEvent'],
   setup(props, { emit }) {
     const { t } = useI18n();
     const loadingRef = useTemplateRef('scrollRef');
-    const loading = shallowRef(false);
+    const loading = shallowRef(true);
+    const error = shallowRef(false);
+    const countLoading = shallowRef(true);
+    const countError = shallowRef(false);
+    let requestId = 0;
+    let disposed = false;
     const scrollLoading = shallowRef(false);
     const columns = shallowRef<TdPrimaryTableProps['columns']>([
       {
@@ -339,45 +354,68 @@ export default defineComponent({
     };
 
     const resetData = () => {
+      ++requestId;
+      loading.value = false;
+      scrollLoading.value = false;
+      error.value = false;
+      expandedRowKeys.value = [];
       tableData.offset = 0;
       tableData.data = [];
       isEnd.value = false;
     };
 
     const handleLoad = async () => {
-      if (isEnd.value || loading.value || scrollLoading.value) {
+      if (error.value || isEnd.value || loading.value || scrollLoading.value) {
         return;
       }
+      const current = ++requestId;
       tableData.offset = tableData.data.length;
       if (tableData.offset) {
         scrollLoading.value = true;
       } else {
         loading.value = true;
       }
-      const res = await props.getTableData({
-        offset: tableData.offset,
-        limit: tableData.limit,
-        sources: sourceType.value,
-        sort: sort.value ? [`${sort.value.descending ? '-' : ''}${sort.value.sortBy}`] : [],
-      });
-      tableData.data = [...tableData.data, ...res.data];
-      isEnd.value = res.data.length < tableData.limit;
-      scrollLoading.value = false;
-      loading.value = false;
+      try {
+        const res = await props.getTableData({
+          offset: tableData.offset,
+          limit: tableData.limit,
+          sources: sourceType.value,
+          sort: sort.value ? [`${sort.value.descending ? '-' : ''}${sort.value.sortBy}`] : [],
+        });
+        if (current !== requestId) return;
+        tableData.data = [...tableData.data, ...res.data];
+        isEnd.value = res.data.length < tableData.limit;
+      } catch {
+        if (current === requestId) error.value = true;
+      } finally {
+        if (current === requestId) {
+          scrollLoading.value = false;
+          loading.value = false;
+        }
+      }
+    };
+    const retry = () => {
+      error.value = false;
+      handleLoad();
     };
     const init = async () => {
+      loading.value = false;
       await handleLoad();
       await nextTick();
-      observer.value = new IntersectionObserver(entries => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            if (tableData.data.length) {
-              handleLoad();
+      if (disposed) return;
+      observer.value = new IntersectionObserver(
+        entries => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              if (tableData.data.length) {
+                handleLoad();
+              }
             }
           }
-        }
-      });
-      observer.value.observe(loadingRef.value as HTMLElement);
+        },
+        { root: props.scrollContainer?.() || null }
+      );
+      if (loadingRef.value) observer.value.observe(loadingRef.value as HTMLElement);
     };
 
     const handleSortChange = (value: SortInfo) => {
@@ -416,13 +454,17 @@ export default defineComponent({
       }
     };
 
-    onMounted(() => {
-      init();
-      props
+    const loadCounts = async () => {
+      // 仅在展示头部操作区时才获取事件来源统计数据
+      if (!props.showHeaderOperate) return;
+      countLoading.value = true;
+      countError.value = false;
+      await props
         .getDataCount({
           sources: sourceTypeOptions.value.map(item => item.value).filter(item => item !== SourceTypeEnum.ALL),
         })
         .then(res => {
+          if (disposed) return;
           const result = [];
           for (const option of sourceTypeOptions.value) {
             if (option.value === SourceTypeEnum.ALL) {
@@ -434,13 +476,31 @@ export default defineComponent({
             result.push(option);
           }
           sourceTypeOptions.value = result;
+        })
+        .catch(() => {
+          if (!disposed) countError.value = true;
+        })
+        .finally(() => {
+          if (!disposed) countLoading.value = false;
         });
+    };
+    onMounted(() => {
+      init();
+      loadCounts();
     });
     onBeforeUnmount(() => {
+      disposed = true;
+      ++requestId;
       observer.value?.disconnect();
     });
 
     return {
+      scrollLoading,
+      error,
+      retry,
+      countLoading,
+      countError,
+      retryCounts: loadCounts,
       columns,
       sourceType,
       sourceTypeOptions,
@@ -465,49 +525,57 @@ export default defineComponent({
     const allItem = this.sourceTypeOptions.find(item => item.value === SourceTypeEnum.ALL);
     return (
       <div class='alarm-center-detail-panel-alarm-relation-event-table'>
-        <div class='header-operate'>
-          <span style='margin-right: 8px;'>{window.i18n.t('事件来源')}:</span>
-          <Checkbox
-            class='mr-24'
-            modelValue={this.isAllSourceType}
-            onChange={this.handleChangeAllSourceType}
-          >
-            <span class='source-item'>
-              {allItem.icon ? <span class={`source-icon icon-monitor ${allItem.icon}`} /> : undefined}
-              <span>{allItem.label}</span>
-              <span>&nbsp;({allItem.count})</span>
-            </span>
-          </Checkbox>
-          <Checkbox.Group
-            class='header-operate-item'
-            modelValue={this.sourceType}
-            onChange={this.handleSourceTypeChange}
-          >
-            {{
-              default: () => {
-                return this.sourceTypeOptions
-                  .filter(item => item.value !== SourceTypeEnum.ALL)
-                  .map(item => (
-                    <Checkbox
-                      key={item.value}
-                      label={item.value}
-                    >
-                      <span class='source-item'>
-                        {item.icon ? (
-                          window.source_app !== 'apm' ? (
-                            <span class={`source-icon icon-monitor ${item.icon}`} />
-                          ) : (
-                            <span
-                              style={{
-                                backgroundImage: SourceIconSvgMap[item.value]
-                                  ? `url('${SourceIconSvgMap[item.value]}')`
-                                  : undefined,
-                              }}
-                              class={`source-icon icon-monitor ${item.icon}`}
-                            />
-                          )
-                        ) : undefined}
-                        {/* { window.source_app !== 'apm' 
+        {this.showHeaderOperate && (
+          <div class='header-operate'>
+            <span style='margin-right: 8px;'>{window.i18n.t('事件来源')}:</span>
+            <Checkbox
+              class='mr-24'
+              modelValue={this.isAllSourceType}
+              onChange={this.handleChangeAllSourceType}
+            >
+              <span class='source-item'>
+                {allItem.icon ? <span class={`source-icon icon-monitor ${allItem.icon}`} /> : undefined}
+                <span>{allItem.label}</span>
+                {this.countLoading ? (
+                  <span
+                    style={{ width: '20px', height: '12px', marginLeft: '4px' }}
+                    class='skeleton-element'
+                  />
+                ) : (
+                  <span>&nbsp;({this.countError ? '--' : allItem.count})</span>
+                )}
+              </span>
+            </Checkbox>
+            <Checkbox.Group
+              class='header-operate-item'
+              modelValue={this.sourceType}
+              onChange={this.handleSourceTypeChange}
+            >
+              {{
+                default: () => {
+                  return this.sourceTypeOptions
+                    .filter(item => item.value !== SourceTypeEnum.ALL)
+                    .map(item => (
+                      <Checkbox
+                        key={item.value}
+                        label={item.value}
+                      >
+                        <span class='source-item'>
+                          {item.icon ? (
+                            window.source_app !== 'apm' ? (
+                              <span class={`source-icon icon-monitor ${item.icon}`} />
+                            ) : (
+                              <span
+                                style={{
+                                  backgroundImage: SourceIconSvgMap[item.value]
+                                    ? `url('${SourceIconSvgMap[item.value]}')`
+                                    : undefined,
+                                }}
+                                class={`source-icon icon-monitor ${item.icon}`}
+                              />
+                            )
+                          ) : undefined}
+                          {/* { window.source_app !== 'apm' 
                           ? item.icon ? <span class={`source-icon icon-monitor ${item.icon}`} /> : undefined 
                           : item.icon ? (
                               <span 
@@ -520,29 +588,45 @@ export default defineComponent({
                               />
                             ) : undefined
                         } */}
-                        <span>{item.label}</span>
-                        <span>&nbsp;({item.count})</span>
-                      </span>
-                    </Checkbox>
-                  ));
-              },
-            }}
-          </Checkbox.Group>
-          <Button
-            style='margin-left: 16px;'
-            theme='primary'
-            text
-            onClick={this.handleGoEvent}
-          >
-            <span>{this.t('更多事件')}</span>
-            <span
-              style='margin-left: 5px; font-size: 12px;'
-              class='icon-monitor icon-fenxiang'
-            />
-          </Button>
-        </div>
+                          <span>{item.label}</span>
+                          {this.countLoading ? (
+                            <span
+                              style={{ width: '20px', height: '12px', marginLeft: '4px' }}
+                              class='skeleton-element'
+                            />
+                          ) : (
+                            <span>&nbsp;({this.countError ? '--' : item.count})</span>
+                          )}
+                        </span>
+                      </Checkbox>
+                    ));
+                },
+              }}
+            </Checkbox.Group>
+            <Button
+              style='margin-left: 16px;'
+              theme='primary'
+              text
+              onClick={this.handleGoEvent}
+            >
+              <span>{this.t('更多事件')}</span>
+              <span
+                style='margin-left: 5px; font-size: 12px;'
+                class='icon-monitor icon-fenxiang'
+              />
+            </Button>
+          </div>
+        )}
+        <DetailLoadStatus
+          error={this.countError}
+          onRetry={this.retryCounts}
+        />
+        <DetailLoadStatus
+          error={this.error}
+          onRetry={this.retry}
+        />
         {this.loading ? (
-          <TableSkeleton type={1} />
+          <DetailTableSkeleton columns={this.columns} />
         ) : (
           <PrimaryTable
             class='relation-event-table'
@@ -565,21 +649,29 @@ export default defineComponent({
             onSortChange={this.handleSortChange as any}
           >
             {{
-              empty: () => (
-                <EmptyStatus
-                  type={this.sourceType.length ? 'search-empty' : 'empty'}
-                  onOperation={this.handleOperation}
-                />
-              ),
+              empty: () =>
+                !this.error && (
+                  <EmptyStatus
+                    type={this.sourceType.length ? 'search-empty' : 'empty'}
+                    onOperation={this.handleOperation}
+                  />
+                ),
             }}
           </PrimaryTable>
         )}
         <div
           ref='scrollRef'
-          style={{ display: this.tableData.data.length ? 'flex' : 'none' }}
-          class='panel-event-table-scroll-loading'
+          style={
+            this.showHeaderOperate
+              ? { display: this.tableData.data.length && !this.error ? 'flex' : 'none' }
+              : undefined
+          }
+          class={this.showHeaderOperate ? 'panel-event-table-scroll-loading' : 'panel-event-table-scroll-sentinel'}
+          aria-hidden={!this.showHeaderOperate}
         >
-          <span>{this.isEnd ? this.$t('到底了') : this.$t('正加载更多内容…')}</span>
+          {this.showHeaderOperate && (
+            <span>{this.isEnd ? this.$t('到底了') : this.scrollLoading ? this.$t('正加载更多内容…') : ''}</span>
+          )}
         </div>
       </div>
     );

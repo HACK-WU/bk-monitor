@@ -17,9 +17,11 @@ import pytest
 from metadata.models.data_link.component_reuse import (
     ALL_DATA_LINK_COMPONENT_KINDS,
     REUSE_ENABLED_STRATEGIES,
+    ComponentReuseError,
     ExistingComponentContext,
     is_reuse_enabled_for,
 )
+from metadata.models.data_link.data_link import DataLink
 from metadata.models.data_link.data_link_configs import (
     ConditionalSinkConfig,
     DataBusConfig,
@@ -41,6 +43,49 @@ def _pool_with(overrides: dict | None = None):
     if overrides:
         pool.update(overrides)
     return pool
+
+
+class TestReuseLeftoverPolicy:
+    def test_bk_log_keeps_storage_bindings_and_result_tables_but_other_components_remain_strict(self):
+        """Doris 换表会保留旧结果表与历史绑定，但 DataBus 等组件仍按 strict 校验。"""
+        datalink = DataLink(data_link_name="bk_log_demo", data_link_strategy=DataLink.BK_LOG)
+        es_binding = SimpleNamespace(name="legacy_es_binding")
+        doris_binding = SimpleNamespace(name="legacy_doris_binding")
+        result_table = SimpleNamespace(name="legacy_result_table")
+        databus = SimpleNamespace(name="unexpected_databus")
+
+        storage_only_ctx = ExistingComponentContext(
+            data_link_name=datalink.data_link_name,
+            components_by_kind=_pool_with(
+                {
+                    ESStorageBindingConfig: [es_binding],
+                    DorisStorageBindingConfig: [doris_binding],
+                    ResultTableConfig: [result_table],
+                }
+            ),
+        )
+        # 换表遗留的旧 ResultTableConfig 与历史绑定都允许保留
+        datalink._check_leftover_or_raise(storage_only_ctx)
+
+        mixed_ctx = ExistingComponentContext(
+            data_link_name=datalink.data_link_name,
+            components_by_kind=_pool_with(
+                {
+                    ResultTableConfig: [result_table],
+                    ESStorageBindingConfig: [es_binding],
+                    DorisStorageBindingConfig: [doris_binding],
+                    DataBusConfig: [databus],
+                }
+            ),
+        )
+        with pytest.raises(ComponentReuseError) as exc_info:
+            datalink._check_leftover_or_raise(mixed_ctx)
+
+        assert datalink._leftover_policy(ESStorageBindingConfig) == "keep"
+        assert datalink._leftover_policy(DorisStorageBindingConfig) == "keep"
+        assert datalink._leftover_policy(ResultTableConfig) == "keep"
+        assert datalink._leftover_policy(DataBusConfig) == "strict"
+        assert exc_info.value.violations == {DataBusConfig: [databus]}
 
 
 class TestExistingComponentContextClaim:

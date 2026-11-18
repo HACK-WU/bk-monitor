@@ -24,9 +24,9 @@
  * IN THE SOFTWARE.
  */
 
-import { type PropType, computed, defineComponent, nextTick, shallowRef, useTemplateRef } from 'vue';
+import { type PropType, computed, defineComponent, nextTick, onScopeDispose, shallowRef, useTemplateRef } from 'vue';
 
-import { Input, Loading } from 'bkui-vue';
+import { Button, Input, Loading, Popover } from 'bkui-vue';
 import { EditLine } from 'bkui-vue/lib/icon';
 import { renameIssue } from 'monitor-api/modules/issue';
 import { useI18n } from 'vue-i18n';
@@ -67,9 +67,12 @@ export default defineComponent({
     previous: () => true,
     next: () => true,
     nameChange: (_val: string) => true,
+    createTapdSliderShowChange: () => true,
   },
   setup(props, { emit }) {
     const { t } = useI18n();
+    let disposed = false;
+    onScopeDispose(() => { disposed = true; });
 
     /** 问题回归状态图标映射配置 */
     const iconMap = computed(() => {
@@ -89,6 +92,8 @@ export default defineComponent({
     const isEdit = shallowRef(false);
     /** 编辑名称的加载状态 */
     const editNameLoading = shallowRef(false);
+    /** 创建单据Popover */
+    const createTapdPopover = useTemplateRef<InstanceType<typeof Popover>>('createTapdPopover');
 
     /**
      * 处理编辑名称
@@ -107,6 +112,7 @@ export default defineComponent({
      * 如果名称有变化则调用API重命名，否则取消编辑
      */
     const handleNameBlur = () => {
+      if (editNameLoading.value) return;
       if (editName.value === props.detail.name || !editName.value.trim()) {
         isEdit.value = false;
         return;
@@ -118,6 +124,7 @@ export default defineComponent({
         new_name: editName.value,
       })
         .then(data => {
+          if (disposed) return;
           isEdit.value = false;
           emit('nameChange', data.name);
         })
@@ -168,6 +175,11 @@ export default defineComponent({
       }
     };
 
+    const handleCreateTapdSliderShowChange = () => {
+      emit('createTapdSliderShowChange');
+      createTapdPopover.value.hide();
+    };
+
     return {
       editName,
       isEdit,
@@ -177,6 +189,7 @@ export default defineComponent({
       handleBtnClick,
       handleEditName,
       handleNameBlur,
+      handleCreateTapdSliderShowChange,
     };
   },
   render() {
@@ -188,9 +201,11 @@ export default defineComponent({
           <div class='issues-detail-head-btn-group'>
             <div class='btn-item skeleton-element' />
             <div class='btn-item skeleton-element' />
+            <div class='btn-item skeleton-element' />
           </div>
         </div>
       );
+    if (!this.detail?.id) return <div class='issues-detail-head-main'>{this.$t('问题详情')}</div>;
     return (
       <div class='issues-detail-head-main'>
         <div
@@ -250,6 +265,35 @@ export default defineComponent({
                 <span class='btn-text'>{item.title}</span>
               </div>
             ))}
+          <div class='btn-group-item create-tapd'>
+            <Popover
+              ref='createTapdPopover'
+              v-slots={{
+                content: () => (
+                  <div class='create-tapd-menu-popover-content'>
+                    <div
+                      class='create-tapd-menu-item'
+                      onClick={this.handleCreateTapdSliderShowChange}
+                    >
+                      {this.$t('TAPD 单据')}
+                    </div>
+                    {/* <div class='create-tapd-menu-item disabled'>Github Issue</div> */}
+                  </div>
+                ),
+              }}
+              arrow={false}
+              theme='light create-tapd-menu-popover'
+              trigger='click'
+            >
+              <Button
+                class='create-tapd-btn'
+                theme='primary'
+              >
+                <span>{this.$t('创建单据')}</span>
+                <i class='icon-monitor icon-arrow-down' />
+              </Button>
+            </Popover>
+          </div>
         </div>
       </div>
     );

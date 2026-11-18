@@ -24,19 +24,43 @@
  * IN THE SOFTWARE.
  */
 
-import { computed, defineComponent, ref, watch } from 'vue';
+import { computed, defineComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 
 import draggable from 'vuedraggable';
 
+import axios from 'axios';
 import http from '@/api';
 import { messageWarn } from '@/common/bkmagic';
 import BklogPopover from '@/components/bklog-popover';
 import useLocale from '@/hooks/use-locale';
 import useStore from '@/hooks/use-store';
-import { SceneType, type FilterFieldConfig, type FilterValues, type SceneConfig, type SceneDimensionValuesResponse } from './types';
-import { getOperatorDisplay, getDefaultOp } from './scene-config';
+import {
+  SceneType,
+  type FilterFieldConfig,
+  type FilterValues,
+  type SceneDimensionOption,
+  type SceneDimensionValuesResponse,
+  type SceneConfig,
+  type FieldCandidateCondition,
+  type ListFieldCandidatesParams,
+} from './types';
+import { getOperatorDisplay, getDefaultOp, TABLE_ID_CONDITION_SCENES } from './scene-config';
+import { buildTableIdConditions } from '@/store/helper';
 
 import './filter-panel.scss';
+
+/** 联想状态 */
+interface SuggestionState {
+  visible: boolean;
+  loading: boolean;
+  items: string[];
+  count: number;
+  page: number;
+  keyword: string;
+  currentFieldKey: string;
+  /** 已选中的项 */
+  selectedItems: Set<string>;
+}
 
 export default defineComponent({
   name: 'FilterPanel',
@@ -54,8 +78,12 @@ export default defineComponent({
       type: Array as () => Array<[string, string]> | null,
       default: null,
     },
+    isSticky: {
+      type: Boolean,
+      default: false,
+    },
   },
-  emits: ['scene-change', 'filter-change', 'clear', 'display-fields-change', 'operator-change'],
+  emits: ['scene-change', 'filter-change', 'clear', 'display-fields-change', 'operator-change', 'option-labels-change'],
   setup(props, { emit }) {
     const { t } = useLocale();
     const store = useStore();
@@ -71,8 +99,46 @@ export default defineComponent({
 
     const apiOptions = ref<Record<string, { loading: boolean; options: Array<{ id: string; name: string }> }>>({});
 
-    const currentScene = computed<SceneConfig | undefined>(() => sceneConfigs.value
-      .find((scene: { type: string; }) => scene.type === props.activeScene),
+    /** dynamic 维度已获取到的 id→name 映射，用于下拉未展开时回显及吸顶标签展示名称 */
+    const dynamicOptionLabels = ref<Record<string, Record<string, string>>>({});
+
+    /** 生成维度选项的展示文本：集群展示为 ID(名称)，其他维度展示名称；名称为空或与 ID 相同时只展示 ID */
+    const formatDimensionOptionName = (fieldKey: string, id: string, name?: string) => {
+      const label = name ? String(name).trim() : '';
+      if (!label || label === id) return id;
+      return fieldKey === 'cluster_id' ? `${id}(${label})` : label;
+    };
+
+    /** 解析维度值接口返回：优先使用带展示文本的 options，未返回时回退为 values */
+    const parseDimensionOptions = (fieldKey: string, data: SceneDimensionValuesResponse): SceneDimensionOption[] => {
+      if (Array.isArray(data.options) && data.options.length > 0) {
+        return data.options.map(opt => {
+          const id = String(opt.id);
+          return { id, name: formatDimensionOptionName(fieldKey, id, opt.name) };
+        });
+      }
+      return (data.values ?? []).map(v => ({ id: String(v), name: String(v) }));
+    };
+
+    /** 合并维度选项的 id→name 映射，并同步给父组件 */
+    const mergeDynamicOptionLabels = (fieldName: string, options: SceneDimensionOption[]) => {
+      if (!options.length) return;
+      const labels = { ...(dynamicOptionLabels.value[fieldName] ?? {}) };
+      for (const opt of options) {
+        labels[opt.id] = opt.name;
+      }
+      dynamicOptionLabels.value = { ...dynamicOptionLabels.value, [fieldName]: labels };
+      emit('option-labels-change', dynamicOptionLabels.value);
+    };
+
+    /** 根据已知映射获取维度值的展示文本，未知时回退为原始值 */
+    const getDynamicOptionName = (fieldName: string, id: string) => dynamicOptionLabels.value[fieldName]?.[id] ?? id;
+
+    /** 标签输入框组件引用 */
+    const tagInputRefs = ref<Record<string, any>>({});
+
+    const currentScene = computed<SceneConfig | undefined>(() =>
+      sceneConfigs.value.find((scene: { type: string }) => scene.type === props.activeScene),
     );
 
     /** 拉取 dynamic 类型维度的可选值 */
@@ -89,7 +155,7 @@ export default defineComponent({
           if (f.key === field.key) continue;
           const fieldValue = props.filterValues[f.key];
           const val = fieldValue?.value;
-          if (val == null || val === '' || (Array.isArray(val) && val.length === 0)) continue;
+          if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) continue;
           filters.push({
             field_name: f.key,
             value: Array.isArray(val) ? val.map(String) : [String(val)],
@@ -107,8 +173,9 @@ export default defineComponent({
         });
 
         const data = (res.data ?? res) as SceneDimensionValuesResponse;
-        const values = data.values ?? [];
-        fieldState.options = values.map(v => ({ id: v, name: v }));
+        const options = parseDimensionOptions(field.key, data);
+        fieldState.options = options;
+        mergeDynamicOptionLabels(field.key, options);
       } catch (err) {
         console.error('fetchDynamicOptions error:', err);
         fieldState.options = [];
@@ -184,15 +251,15 @@ export default defineComponent({
 
     /** 字段设置中操作符变更（仅修改 editDisplayFields，确认后才同步） */
     const handleEditOperatorChange = (fieldKey: string, newOp: string) => {
-      editDisplayFields.value = editDisplayFields.value.map(([k, op]) => (
-        k === fieldKey ? [k, newOp] as [string, string] : [k, op] as [string, string]
-      ),
+      editDisplayFields.value = editDisplayFields.value.map(([k, op]) =>
+        k === fieldKey ? ([k, newOp] as [string, string]) : ([k, op] as [string, string]),
       );
     };
 
     const handleAddAllFields = () => {
-      const toAdd: Array<[string, string]> = editRestFields.value.map(f => [
-        f.key, getDefaultOp(f.ops)] as [string, string]);
+      const toAdd: Array<[string, string]> = editRestFields.value.map(
+        f => [f.key, getDefaultOp(f.ops)] as [string, string],
+      );
       editDisplayFields.value = [...editDisplayFields.value, ...toAdd];
     };
 
@@ -208,12 +275,14 @@ export default defineComponent({
       const allNames = allFieldsOfScene.value.map(f => f.key);
       const editFieldKeys = editDisplayFields.value.map(([k]) => k);
       // 字段 key 顺序与默认一致 且 每个字段的操作符也是默认值时，才算 isDefault
-      const isDefaultOrder = editFieldKeys.length === allNames.length
-        && editFieldKeys.every((name, i) => name === allNames[i]);
-      const isDefault = isDefaultOrder && editDisplayFields.value.every(([k, op]) => {
-        const field = allFieldsOfScene.value.find(f => f.key === k);
-        return op === getDefaultOp(field?.ops);
-      });
+      const isDefaultOrder =
+        editFieldKeys.length === allNames.length && editFieldKeys.every((name, i) => name === allNames[i]);
+      const isDefault =
+        isDefaultOrder &&
+        editDisplayFields.value.every(([k, op]) => {
+          const field = allFieldsOfScene.value.find(f => f.key === k);
+          return op === getDefaultOp(field?.ops);
+        });
 
       // 找出被移除的字段，清除其选中值
       const prevFieldKeys = props.displayFields ? props.displayFields.map(([k]) => k) : allNames;
@@ -298,6 +367,354 @@ export default defineComponent({
       return apiOptions.value[fieldName];
     };
 
+    // 容器场景全量集群列表缓存
+    const fullClusterList = ref<Array<{ id: string; name: string }>>([]);
+
+    // 获取容器场景全量集群列表
+    const fetchFullClusterList = async () => {
+      if (fullClusterList.value.length > 0) return;
+
+      try {
+        const res = await http.request('retrieve/getSceneDimensionValues', {
+          data: {
+            bk_biz_id: store.state.bkBizId,
+            scene: SceneType.Container,
+            dimension_key: 'cluster_id',
+          },
+        });
+
+        const data = (res.data ?? res) as SceneDimensionValuesResponse;
+        const options = parseDimensionOptions('cluster_id', data);
+        fullClusterList.value = options;
+        mergeDynamicOptionLabels('cluster_id', options);
+      } catch (err) {
+        console.error('fetchFullClusterList error:', err);
+      }
+    };
+
+    /** 清空与业务相关的缓存：切换业务时组件会被复用，避免新业务沿用旧业务的集群列表、下拉选项和名称 */
+    const resetSpaceRelatedCache = () => {
+      fullClusterList.value = [];
+      apiOptions.value = {};
+      dynamicOptionLabels.value = {};
+      emit('option-labels-change', {});
+    };
+
+    // 监听业务与场景变化：切换业务时清空缓存；容器场景下预加载全量集群列表
+    // 切换业务时场景可能同时被重置为容器场景，合并为一个监听以避免重复请求
+    watch(
+      [() => store.state.spaceUid, () => props.activeScene],
+      ([newSpaceUid, newScene], oldValues) => {
+        if (oldValues?.length && newSpaceUid !== oldValues[0]) {
+          resetSpaceRelatedCache();
+        }
+        if (newScene === SceneType.Container) {
+          fetchFullClusterList();
+        }
+      },
+      { immediate: true },
+    );
+
+    // ============ 标签输入联想功能 ============
+    /** 联想状态 */
+    const suggestionState = reactive<SuggestionState>({
+      visible: false,
+      loading: false,
+      items: [],
+      count: 0,
+      page: 1,
+      keyword: '',
+      currentFieldKey: '',
+      selectedItems: new Set<string>(),
+    });
+
+    /** 防抖定时器 */
+    let suggestionDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    /** 请求取消执行函数 */
+    let suggestionCancelExecutor: (() => void) | null = null;
+
+    /** 重置联想状态 */
+    const resetSuggestionState = () => {
+      suggestionState.visible = false;
+      suggestionState.items = [];
+      suggestionState.count = 0;
+      suggestionState.page = 1;
+      suggestionState.keyword = '';
+      suggestionState.currentFieldKey = '';
+      suggestionState.selectedItems.clear();
+
+      // 清理防抖定时器
+      if (suggestionDebounceTimer) {
+        clearTimeout(suggestionDebounceTimer);
+        suggestionDebounceTimer = null;
+      }
+      // 取消未完成的请求
+      if (suggestionCancelExecutor) {
+        suggestionCancelExecutor();
+        suggestionCancelExecutor = null;
+      }
+    };
+
+    /** 构建联想请求的 conditions 参数 */
+    const buildSuggestionConditions = (): FieldCandidateCondition[] => {
+      const conditions: FieldCandidateCondition[] = [];
+      const currentFields = currentScene.value?.fields ?? [];
+
+      for (const f of currentFields) {
+        if (f.key === suggestionState.currentFieldKey) continue;
+        // 容器场景下跳过 path 字段
+        if (props.activeScene === SceneType.Container && f.key === 'path') continue;
+        // 只处理 free_input 类型的字段
+        if (f.choicesType !== 'free_input') continue;
+        const fieldValue = props.filterValues[f.key];
+        const val = fieldValue?.value;
+        if (val === null || val === undefined || val === '' || (Array.isArray(val) && val.length === 0)) continue;
+
+        const valueArray = Array.isArray(val) ? val.map(String) : [String(val)];
+        // 只有 op 为 eq 时才传递 condition
+        if (fieldValue.op === 'eq') {
+          conditions.push({
+            key: f.key,
+            method: 'eq',
+            value: valueArray,
+          });
+        }
+      }
+
+      return conditions;
+    };
+
+    /** 渲染联想弹窗内容 */
+    const renderSuggestionDropdown = (fieldKey: string) => {
+      if (suggestionState.items.length === 0) {
+        return (
+          <li
+            class='field-suggestion-empty'
+            onMousedown={(e: MouseEvent) => e.preventDefault()}
+          >
+            {t('暂无数据')}
+          </li>
+        );
+      }
+      return suggestionState.items
+        .map((item, index) => {
+          const isSelected = suggestionState.selectedItems.has(item);
+          return (
+            <li
+              key={`${fieldKey}-${index}-${item}`}
+              title={item}
+              class={['field-suggestion-item', { 'is-selected': isSelected }]}
+              onMousedown={(e: MouseEvent) => {
+                e.preventDefault();
+              }}
+              onClick={() => {
+                handleSelectSuggestion(item);
+              }}
+            >
+              <div class='suggestion-item-content'>{item}</div>
+              {isSelected && <i class='bk-icon icon-check-1 suggestion-item-check' />}
+            </li>
+          );
+        })
+        .concat(
+          suggestionState.items.length < suggestionState.count && suggestionState.loading
+            ? [
+                <li
+                  key={`${fieldKey}-loading`}
+                  class='field-suggestion-loading'
+                  onMousedown={(e: MouseEvent) => e.preventDefault()}
+                >
+                  {t('loading...')}
+                </li>,
+              ]
+            : [],
+        );
+    };
+
+    /** 请求字段联想数据 */
+    const fetchFieldCandidates = async (inputValue: string, loadMore = false) => {
+      // 容器场景下 path 字段不调用联想接口
+      if (props.activeScene === SceneType.Container && suggestionState.currentFieldKey === 'path') {
+        return;
+      }
+      // 清除防抖定时器
+      if (suggestionDebounceTimer) {
+        clearTimeout(suggestionDebounceTimer);
+        suggestionDebounceTimer = null;
+      }
+
+      // 如果不是加载更多且关键词没变且不是首次加载，直接返回
+      if (!loadMore && inputValue === suggestionState.keyword && suggestionState.page > 1) {
+        return;
+      }
+
+      // 取消上一个未完成的请求
+      if (suggestionCancelExecutor) {
+        suggestionCancelExecutor();
+        suggestionCancelExecutor = null;
+      }
+
+      suggestionDebounceTimer = setTimeout(async () => {
+        if (!suggestionState.visible) return;
+
+        if (!loadMore) {
+          suggestionState.page = 1;
+          suggestionState.items = [];
+        }
+        suggestionState.loading = true;
+
+        const params: ListFieldCandidatesParams = {
+          space_uid: store.state.indexItem.spaceUid,
+          bk_biz_id: store.state.bkBizId,
+          scene: props.activeScene,
+          resource_type: suggestionState.currentFieldKey,
+          conditions: buildSuggestionConditions(),
+          query_string: inputValue,
+          page: suggestionState.page,
+          page_size: 100,
+        };
+
+        // 容器场景：必传 bcs_cluster_ids
+        if (props.activeScene === SceneType.Container) {
+          const clusterIdValue = props.filterValues.cluster_id?.value;
+          let clusterIds: string[] = [];
+
+          if (clusterIdValue && (!Array.isArray(clusterIdValue) || clusterIdValue.length > 0)) {
+            // 有选中的集群 ID，使用选中的值
+            clusterIds = Array.isArray(clusterIdValue) ? clusterIdValue.map(String) : [String(clusterIdValue)];
+          } else {
+            // 没有选中集群 ID，使用全量集群列表
+            clusterIds = fullClusterList.value.map(opt => String(opt.id));
+          }
+
+          params.bcs_cluster_ids = clusterIds;
+        }
+
+        // 主机/PaaS/服务场景：必传 table_id_conditions、start_time、end_time
+        // table_id_conditions 复用 buildTableIdConditions：固定场景条件 + static/dynamic 已选值字段
+        if (TABLE_ID_CONDITION_SCENES.includes(props.activeScene as SceneType)) {
+          const retrieveParams = store.getters.retrieveParams;
+          params.table_id_conditions = buildTableIdConditions(store.state, sceneConfigs.value).table_id_conditions;
+          params.start_time = retrieveParams.start_time;
+          params.end_time = retrieveParams.end_time;
+        }
+
+        const cancelToken = new axios.CancelToken(c => {
+          suggestionCancelExecutor = c;
+        });
+
+        try {
+          const res = await http.request(
+            'retrieve/listSceneFieldCandidates',
+            {
+              data: params,
+            },
+            { cancelToken },
+          );
+
+          const data = res.data ?? res;
+          suggestionState.items = [...suggestionState.items, ...(data.items ?? [])];
+          suggestionState.count = data.count ?? 0;
+          suggestionState.keyword = inputValue;
+        } catch (err: any) {
+          if (axios.isCancel(err)) {
+            return;
+          }
+          console.error('fetchFieldCandidates error:', err);
+          suggestionState.items = [];
+          suggestionState.count = 0;
+        } finally {
+          suggestionState.loading = false;
+        }
+      }, 300);
+    };
+
+    /** 处理联想项点击 */
+    const handleSelectSuggestion = (item: string) => {
+      // 切换选中状态
+      if (suggestionState.selectedItems.has(item)) {
+        suggestionState.selectedItems.delete(item);
+      } else {
+        suggestionState.selectedItems.add(item);
+      }
+      // 更新标签输入框的值
+      const currentTags = [...suggestionState.selectedItems];
+      handleTagChange(suggestionState.currentFieldKey, currentTags);
+      // 清空标签输入框的文本值
+      const tagInputRef = tagInputRefs.value[suggestionState.currentFieldKey];
+      if (tagInputRef?.clearInput) {
+        tagInputRef.clearInput();
+      }
+    };
+
+    /** 处理加载更多 */
+    const handleLoadMoreSuggestions = () => {
+      if (suggestionState.loading || suggestionState.items.length >= suggestionState.count) {
+        return;
+      }
+      suggestionState.loading = true;
+      suggestionState.page += 1;
+      fetchFieldCandidates(suggestionState.keyword, true);
+    };
+
+    /** 标签输入框聚焦处理 */
+    const handleTagInputFocus = (fieldKey: string) => {
+      // 如果是同一个字段，不做处理
+      if (suggestionState.currentFieldKey === fieldKey) {
+        return;
+      }
+      // 清除联想状态
+      resetSuggestionState();
+      // 设置当前字段并显示弹窗
+      suggestionState.currentFieldKey = fieldKey;
+      suggestionState.visible = true;
+      // 同步已有标签到 selectedItems
+      const existingTags = localTagValues.value[fieldKey] ?? [];
+      suggestionState.selectedItems = new Set(existingTags);
+      // 触发首次请求（空输入）
+      fetchFieldCandidates('', false);
+    };
+
+    /** 标签输入框内容变化处理 */
+    const handleTagInputChange = (inputValue: string) => {
+      // 重新请求联想数据
+      fetchFieldCandidates(inputValue, false);
+    };
+
+    /** 点击 tag-input-wrapper 容器外部时关闭弹窗 */
+    const handleDocumentMouseDown = (e: MouseEvent) => {
+      // 如果弹窗不可见，不需要处理
+      if (!suggestionState.visible) {
+        return;
+      }
+      // 点击在任何 tag-input-wrapper 容器内部都不关闭弹窗
+      if ((e.target as HTMLElement).closest('.tag-input-wrapper')) {
+        return;
+      }
+
+      resetSuggestionState();
+    };
+
+    /** 绑定/解绑全局 mousedown 事件 */
+    const bindMouseDownEvent = () => {
+      document.addEventListener('mousedown', handleDocumentMouseDown);
+    };
+
+    const unbindMouseDownEvent = () => {
+      document.removeEventListener('mousedown', handleDocumentMouseDown);
+    };
+
+    // 组件卸载时清理
+    onBeforeUnmount(() => {
+      resetSuggestionState();
+      unbindMouseDownEvent();
+    });
+
+    // 组件挂载时绑定事件
+    onMounted(() => {
+      bindMouseDownEvent();
+    });
+
     // 标签输入本地缓存
     const localTagValues = ref<Record<string, string[]>>({});
 
@@ -329,7 +746,7 @@ export default defineComponent({
     // 父组件 filterValues 变化时（切换场景、清空等），同步重置本地缓存
     watch(
       () => props.filterValues,
-      (newVal) => {
+      newVal => {
         const next: Record<string, string[]> = {};
         for (const [k, v] of Object.entries(newVal ?? {})) {
           const rawVal = v?.value ?? v;
@@ -345,12 +762,17 @@ export default defineComponent({
     );
 
     const getLocalTagValues = (fieldName: string) => {
-      return localTagValues.value[fieldName]
-        ?? (Array.isArray(props.filterValues[fieldName]?.value) ? props.filterValues[fieldName].value : []);
+      return (
+        localTagValues.value[fieldName] ??
+        (Array.isArray(props.filterValues[fieldName]?.value) ? props.filterValues[fieldName].value : [])
+      );
     };
 
     const handleTagChange = (fieldName: string, tags: string[]) => {
       localTagValues.value = { ...localTagValues.value, [fieldName]: tags };
+      if (suggestionState.currentFieldKey === fieldName && suggestionState.visible) {
+        suggestionState.selectedItems = new Set(tags);
+      }
       handleFieldChange(fieldName, tags);
     };
 
@@ -361,7 +783,7 @@ export default defineComponent({
 
     const renderSceneTabBar = () => (
       <div class='scene-tab-bar'>
-        {sceneConfigs.value.map(scene => (
+        {sceneConfigs.value.map((scene: SceneConfig) => (
           <div
             class={[
               'scene-tab-item',
@@ -382,7 +804,7 @@ export default defineComponent({
     /** 获取 bk-select 的 value，确保多选字段值为数组 */
     const getSelectValue = (field: FilterFieldConfig) => {
       const raw = props.filterValues[field.key]?.value;
-      if (raw == null || raw === '') return field.multiple ? [] : '';
+      if (raw === null || raw === undefined || raw === '') return field.multiple ? [] : '';
       if (field.multiple) {
         const arr = Array.isArray(raw) ? raw : [raw];
         return arr.map(v => String(v));
@@ -396,26 +818,32 @@ export default defineComponent({
         return field.choices ?? [];
       }
 
-      // dynamic：接口已返回数据时优先使用
+      const currentValue = props.filterValues[field.key]?.value;
+      const currentIds =
+        currentValue === null ||
+        currentValue === undefined ||
+        currentValue === '' ||
+        (Array.isArray(currentValue) && currentValue.length === 0)
+          ? []
+          : (Array.isArray(currentValue) ? currentValue : [currentValue]).map(id => String(id));
+
+      // dynamic：接口已返回数据时优先使用，并合并手输值以便回显；未知值通过已获取的映射回显名称
       const loadedOptions = getApiFieldState(field.key).options;
       if (loadedOptions.length > 0) {
-        return loadedOptions;
+        const known = new Set(loadedOptions.map(opt => String(opt.id)));
+        const extra = currentIds
+          .filter(id => !known.has(id))
+          .map(id => ({ id, name: getDynamicOptionName(field.key, id) }));
+        return extra.length ? [...loadedOptions, ...extra] : loadedOptions;
       }
 
-      // 接口未返回时，从当前值组装临时 options 以支持回显
-      const currentValue = props.filterValues[field.key]?.value;
-      if (currentValue == null || currentValue === '' || (Array.isArray(currentValue) && currentValue.length === 0)) {
-        return [];
-      }
-      const ids = Array.isArray(currentValue) ? currentValue : [currentValue];
-      return ids.map(id => ({ id: String(id), name: String(id) }));
+      return currentIds.map(id => ({ id, name: getDynamicOptionName(field.key, id) }));
     };
 
     /** 操作符选择器渲染 */
     const renderOperatorSelector = (
       currentOp: string,
       ops: string[] | undefined,
-      // eslint-disable-next-line no-unused-vars
       onChange: (newOp: string) => void,
       options?: {
         label?: string;
@@ -472,27 +900,36 @@ export default defineComponent({
         const loading = field.choicesType === 'dynamic' ? (getApiFieldState(field.key).loading ?? false) : false;
 
         return (
-          <div class='filter-field-item' key={field.key}>
+          <div
+            class='filter-field-item'
+            key={field.key}
+          >
             <div class='field-label-row'>
-              <span class='field-label' v-bk-overflow-tips>{field.name}</span>
-              {renderOperatorSelector(
-                currentOp,
-                field.ops,
-                newOp => handleOperatorChange(field.key, newOp),
-                { choicesType: field.choicesType, fieldType: field.fieldType },
-              )}
+              <span
+                class='field-label'
+                v-bk-overflow-tips
+              >
+                {field.name}
+              </span>
+              {renderOperatorSelector(currentOp, field.ops, newOp => handleOperatorChange(field.key, newOp), {
+                choicesType: field.choicesType,
+                fieldType: field.fieldType,
+              })}
             </div>
-            <div class={['field-input', 'is-fixed-layout', { 'is-active': isFieldActive }]}>
+            <div class={['scene-filter-field-input', 'is-fixed-layout', { 'is-active': isFieldActive }]}>
               <div class='field-input-placeholder' />
               <bk-select
                 value={getSelectValue(field)}
                 placeholder={field.placeholder || t('请选择')}
                 multiple={field.multiple}
                 clearable={true}
+                searchable={field.searchable}
+                allow-create={field.allowCreate}
                 loading={loading}
                 display-tag
+                ext-popover-cls={props.isSticky ? 'is-sticky-hidden' : ''}
                 on-change={(val: any) => {
-                  const selectedIds = Array.isArray(val) ? val : (val !== null && val !== '' ? [val] : []);
+                  const selectedIds = Array.isArray(val) ? val : val !== null && val !== '' ? [val] : [];
                   handleFieldChange(field.key, val, buildLabels(selectedIds, options));
                 }}
                 on-toggle={(open: boolean) => {
@@ -507,7 +944,11 @@ export default defineComponent({
                 }}
               >
                 {options.map(opt => (
-                  <bk-option id={opt.id} name={opt.name} key={opt.id} />
+                  <bk-option
+                    id={opt.id}
+                    name={opt.name}
+                    key={opt.id}
+                  />
                 ))}
               </bk-select>
             </div>
@@ -516,32 +957,61 @@ export default defineComponent({
       }
 
       return (
-        <div class='filter-field-item' key={field.key}>
+        <div
+          class='filter-field-item'
+          key={field.key}
+        >
           <div class='field-label-row'>
-            <span class='field-label' v-bk-overflow-tips>{field.name}</span>
-            {renderOperatorSelector(
-              currentOp,
-              field.ops,
-              newOp => handleOperatorChange(field.key, newOp),
-              { choicesType: field.choicesType, fieldType: field.fieldType },
-            )}
+            <span
+              class='field-label'
+              v-bk-overflow-tips
+            >
+              {field.name}
+            </span>
+            {renderOperatorSelector(currentOp, field.ops, newOp => handleOperatorChange(field.key, newOp), {
+              choicesType: field.choicesType,
+              fieldType: field.fieldType,
+            })}
           </div>
-          <div class={['field-input', 'is-fixed-layout', { 'is-active': isFieldActive }]}>
+          <div class={['scene-filter-field-input', 'is-fixed-layout', { 'is-active': isFieldActive }]}>
             <div class='field-input-placeholder' />
-            <bk-tag-input
-              value={getLocalTagValues(field.key)}
-              placeholder={field.placeholder}
-              allow-create={true}
-              has-delete-icon={true}
-              allow-next-focus={true}
-              clearable={true}
-              free-paste={true}
-              collapse-tags={true}
-              on-change={(tags: string[]) => handleTagChange(field.key, tags)}
-              on-removeAll={() => handleTagClear(field.key)}
-              on-focus={() => setActiveField(field.key)}
-              on-blur={() => deactivateField(field.key)}
-            />
+            <div class='tag-input-wrapper'>
+              <bk-tag-input
+                ref={(el: any) => {
+                  tagInputRefs.value[field.key] = el;
+                }}
+                value={getLocalTagValues(field.key)}
+                placeholder={field.placeholder}
+                allow-create={true}
+                has-delete-icon={true}
+                allow-next-focus={true}
+                clearable={true}
+                free-paste={true}
+                collapse-tags={true}
+                on-change={(tags: string[]) => handleTagChange(field.key, tags)}
+                on-removeAll={() => handleTagClear(field.key)}
+                on-focus={() => {
+                  setActiveField(field.key);
+                  handleTagInputFocus(field.key);
+                }}
+                on-inputchange={(inputValue: string) => handleTagInputChange(inputValue)}
+              />
+              {/* 联想弹窗 */}
+              {suggestionState.visible && suggestionState.currentFieldKey === field.key && (
+                <ul
+                  class='field-suggestion-dropdown'
+                  v-bkloading={{ isLoading: suggestionState.loading }}
+                  on-scroll={(e: Event) => {
+                    const target = e.target as HTMLElement;
+                    if (target.scrollTop + target.clientHeight >= target.scrollHeight - 50) {
+                      handleLoadMoreSuggestions();
+                    }
+                  }}
+                >
+                  {renderSuggestionDropdown(field.key)}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       );
@@ -559,18 +1029,32 @@ export default defineComponent({
             <div class='setting-body'>
               <div class='setting-column'>
                 <div class='setting-column-title'>
-                  <span>{t('待选字段')}({editRestFields.value.length})</span>
-                  <span class='text-action' onClick={handleAddAllFields}>{t('全部添加')}</span>
+                  <span>
+                    {t('待选字段')}({editRestFields.value.length})
+                  </span>
+                  <span
+                    class='text-action'
+                    onClick={handleAddAllFields}
+                  >
+                    {t('全部添加')}
+                  </span>
                 </div>
                 <ul class='setting-field-list'>
                   {editRestFields.value.map(field => (
-                    <li class='setting-field-item bklog-v3-popover-tag' key={field.key} onClick={() => handleAddField(field.key)}>
+                    <li
+                      class='setting-field-item bklog-v3-popover-tag'
+                      key={field.key}
+                      onClick={() => handleAddField(field.key)}
+                    >
                       <span class='field-name'>{field.name}</span>
                       <i class='bklog-icon bklog-filled-right-arrow add-icon' />
                     </li>
                   ))}
                   {editRestFields.value.length === 0 && (
-                    <bk-exception type='empty' scene='part' />
+                    <bk-exception
+                      type='empty'
+                      scene='part'
+                    />
                   )}
                 </ul>
               </div>
@@ -579,8 +1063,15 @@ export default defineComponent({
               </div>
               <div class='setting-column'>
                 <div class='setting-column-title'>
-                  <span>{t('已选字段')}({editDisplayFields.value.length})</span>
-                  <span class='text-action' onClick={handleClearAllFields}>{t('清空')}</span>
+                  <span>
+                    {t('已选字段')}({editDisplayFields.value.length})
+                  </span>
+                  <span
+                    class='text-action'
+                    onClick={handleClearAllFields}
+                  >
+                    {t('清空')}
+                  </span>
                 </div>
                 <draggable
                   class='setting-field-list'
@@ -596,16 +1087,26 @@ export default defineComponent({
                   {editDisplayFields.value.map(([name, op]) => {
                     const field = allFieldsOfScene.value.find(f => f.key === name);
                     return (
-                      <li class='setting-field-item is-selected bklog-v3-popover-tag' key={name} onClick={() => handleRemoveField(name)}>
-                        <i class='bklog-icon bklog-ketuodong drag-handle' onClick={e => e.stopPropagation()} />
+                      <li
+                        class='setting-field-item is-selected bklog-v3-popover-tag'
+                        key={name}
+                        onClick={() => handleRemoveField(name)}
+                      >
+                        <i
+                          class='bklog-icon bklog-ketuodong drag-handle'
+                          onClick={e => e.stopPropagation()}
+                        />
                         <span class='field-name'>{getFieldLabel(name)}</span>
-                        <span class='setting-field-operator' onClick={e => e.stopPropagation()}>
-                          {renderOperatorSelector(
-                            op,
-                            field?.ops,
-                            newOp => handleEditOperatorChange(name, newOp),
-                            { label: `${t('默认操作符')}：`, placement: 'bottom-end', choicesType: field?.choicesType, fieldType: field?.fieldType },
-                          )}
+                        <span
+                          class='setting-field-operator'
+                          onClick={e => e.stopPropagation()}
+                        >
+                          {renderOperatorSelector(op, field?.ops, newOp => handleEditOperatorChange(name, newOp), {
+                            label: `${t('默认操作符')}：`,
+                            placement: 'bottom-end',
+                            choicesType: field?.choicesType,
+                            fieldType: field?.fieldType,
+                          })}
                         </span>
                         <i class='bk-icon icon-close-circle-shape remove-icon' />
                       </li>
@@ -615,8 +1116,19 @@ export default defineComponent({
               </div>
             </div>
             <div class='setting-actions'>
-              <bk-button theme='primary' size='small' onClick={handleSettingConfirm}>{t('确定')}</bk-button>
-              <bk-button size='small' onClick={handleSettingCancel}>{t('取消')}</bk-button>
+              <bk-button
+                theme='primary'
+                size='small'
+                onClick={handleSettingConfirm}
+              >
+                {t('确定')}
+              </bk-button>
+              <bk-button
+                size='small'
+                onClick={handleSettingCancel}
+              >
+                {t('取消')}
+              </bk-button>
             </div>
           </div>
         )}
@@ -631,7 +1143,11 @@ export default defineComponent({
     );
 
     return () => (
-      <div class='scene-filter-panel' v-bkloading={{ isLoading: sceneLoading.value }}>
+      <div
+        class='scene-filter-panel'
+        v-bkloading={{ isLoading: sceneLoading.value }}
+        style={{ opacity: props.isSticky ? 0 : 1 }}
+      >
         <div class='scene-filter-top'>
           <div class='top-left'>
             {renderSceneTabBar()}
@@ -643,16 +1159,17 @@ export default defineComponent({
             </span>
           </div>
           <div class='top-right'>
-            <span class='filter-clear-btn' onClick={handleClear}>
+            <span
+              class='filter-clear-btn'
+              onClick={handleClear}
+            >
               {t('清空查询')}
             </span>
             {renderSettingPopover()}
           </div>
         </div>
 
-        <div class='scene-filter-grid'>
-          {visibleFields.value.map(field => renderFilterField(field))}
-        </div>
+        <div class='scene-filter-grid'>{visibleFields.value.map(field => renderFilterField(field))}</div>
       </div>
     );
   },

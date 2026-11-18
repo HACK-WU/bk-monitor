@@ -30,10 +30,12 @@ import {
   defineComponent,
   inject,
   nextTick,
+  onActivated,
   onBeforeUnmount,
+  onDeactivated,
   ref,
-  watch,
   shallowRef,
+  watch,
 } from 'vue';
 
 import {
@@ -67,7 +69,14 @@ export default defineComponent({
     const traceStore = useTraceExploreStore();
     const empty = ref(true);
     const loading = ref(true);
-    const bizId = computed(() => useAppStore().bizId || 0);
+    const injectedBizId = inject<Ref<number | string> | undefined>('bizId', undefined);
+    const bizId = computed(() => {
+      const fromInject = injectedBizId?.value;
+      if (fromInject != null && fromInject !== '' && !Number.isNaN(+fromInject)) {
+        return +fromInject;
+      }
+      return +(useAppStore().bizId || window.bk_biz_id || window.cc_biz_id || 0);
+    });
 
     const serviceName = inject<Ref<string>>('serviceName');
     const appName = inject<Ref<string>>('appName');
@@ -78,6 +87,36 @@ export default defineComponent({
 
     const mainRef = ref<HTMLDivElement>();
     let logAppInstance: any;
+    /**
+     * monitor-apm-log / monitor-trace-log 都会写同一组 window 全局标记与 mainComponent。
+     * 在 APM 日志页嵌套打开 Trace 详情日志 tab 时，若不在卸载时还原，外层会一直按 Trace 模式运行：
+     * - __IS_MONITOR_TRACE__=true 会关闭行悬浮「关联Trace检索」
+     * - 划词「添加到本次检索」也会被提前 return 掉
+     */
+    const hostWindowState = {
+      mainComponent: window.mainComponent,
+      __IS_MONITOR_COMPONENT__: window.__IS_MONITOR_COMPONENT__,
+      __IS_MONITOR_TRACE__: window.__IS_MONITOR_TRACE__,
+      __IS_MONITOR_APM__: window.__IS_MONITOR_APM__,
+    };
+    const restoreHostWindowState = () => {
+      window.mainComponent = hostWindowState.mainComponent;
+      window.__IS_MONITOR_COMPONENT__ = hostWindowState.__IS_MONITOR_COMPONENT__;
+      window.__IS_MONITOR_TRACE__ = hostWindowState.__IS_MONITOR_TRACE__;
+      window.__IS_MONITOR_APM__ = hostWindowState.__IS_MONITOR_APM__;
+    };
+    const destroyLogAppInstance = () => {
+      if (!logAppInstance) {
+        return;
+      }
+      logStore.commit('resetState');
+      // 只销毁本组件创建的实例，避免误毁外层 APM 的 window.mainComponent
+      if (window.mainComponent === logAppInstance) {
+        window.mainComponent = null;
+      }
+      logAppInstance.$destroy();
+      logAppInstance = null;
+    };
     const customTimeProvider = inject<ComputedRef<string[]>>(
       'customTimeProvider',
       computed(() => traceStore.timeRange)
@@ -95,6 +134,7 @@ export default defineComponent({
     });
 
     async function init() {
+      destroyLogAppInstance();
       empty.value = true;
       loading.value = true;
       initWindowState();
@@ -102,11 +142,11 @@ export default defineComponent({
       loading.value = false;
       if (data && empty.value) {
         empty.value = false;
-        const spaceUid =
-          window.space_list.find(item => +item.bk_biz_id === +window.bk_biz_id)?.space_uid || window.bk_biz_id;
+        const targetBizId = bizId.value || window.bk_biz_id;
+        const spaceUid = window.space_list.find(item => +item.bk_biz_id === +targetBizId)?.space_uid || targetBizId;
         window.space_uid = `${spaceUid}`;
         initMonitorState({
-          bkBizId: window.bk_biz_id,
+          bkBizId: targetBizId,
           spaceUid,
         });
         initGlobalComponents();
@@ -157,6 +197,8 @@ export default defineComponent({
         window.mainComponent = logAppInstance;
       } else {
         empty.value = true;
+        // 未成功挂载时也要还原，避免残留 Trace 模式标记影响外层 APM 日志
+        restoreHostWindowState();
       }
     }
 
@@ -229,13 +271,21 @@ export default defineComponent({
 
     init();
 
-    onBeforeUnmount(() => {
-      if (!empty.value) {
-        logStore.commit('resetState');
-        window.mainComponent.$destroy();
-        unPropsWatch?.();
+    // TraceSlider 在 trace-explore 里被 KeepAlive，关闭侧边栏只会 deactivated，不会 unmount
+    onDeactivated(() => {
+      restoreHostWindowState();
+    });
+    onActivated(() => {
+      initWindowState();
+      if (logAppInstance && !logAppInstance._isDestroyed) {
+        window.mainComponent = logAppInstance;
       }
-      logAppInstance = null;
+    });
+
+    onBeforeUnmount(() => {
+      destroyLogAppInstance();
+      restoreHostWindowState();
+      unPropsWatch?.();
     });
 
     return {

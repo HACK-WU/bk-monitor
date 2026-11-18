@@ -61,10 +61,9 @@ from metadata.models.constants import (
     STRICT_NANO_ES_FORMAT,
     DataIdCreatedFromSystem,
 )
-from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_LOG
-from metadata.models.data_link.data_link_configs import DataIdConfig
+from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_LOG, BKBASE_NAMESPACE_BK_MONITOR
 from metadata.models.data_link.utils import (
-    compose_bkdata_data_id_name,
+    find_registered_bkdata_data_id_name,
     get_bkbase_raw_data_name_for_v3_datalink,
     get_data_source_related_info,
 )
@@ -76,6 +75,12 @@ from metadata.service.data_source import (
     stop_or_enable_datasource,
 )
 from metadata.service.storage_details import ResultTableAndDataSource
+from metadata.service.result_table_storage_status import (
+    DEFAULT_BATCH_TOTAL_TIMEOUT,
+    MAX_BATCH_TOTAL_TIMEOUT,
+    MIN_BATCH_TOTAL_TIMEOUT,
+    ResultTableStorageStatusBatchService,
+)
 from metadata.task.bcs import refresh_dataid_resource
 from metadata.utils.bcs import get_bcs_dataids
 from metadata.utils.bkbase import sync_bkbase_result_table_meta
@@ -124,6 +129,12 @@ class CreateDataIDResource(Resource):
         authorized_spaces = serializers.JSONField(required=False, label="授权使用的空间 ID 列表", default=[])
         is_platform_data_id = serializers.BooleanField(required=False, label="是否为平台级 ID", default=False)
         space_type_id = serializers.CharField(required=False, label="数据源所属类型", default=SpaceTypes.ALL.value)
+        created_from = serializers.ChoiceField(
+            required=False,
+            label="数据源创建来源",
+            choices=[DataIdCreatedFromSystem.BKGSE.value, DataIdCreatedFromSystem.BKDATA.value],
+            default=DataIdCreatedFromSystem.BKGSE.value,
+        )
 
     def perform_request(self, validated_request_data):
         space_uid = validated_request_data.pop("space_uid", None)
@@ -325,16 +336,6 @@ class ListResultTableResource(Resource):
             .distinct()
         ]
 
-        # 只查询不属于bcs指标的信息
-        result_table_queryset = models.ResultTable.objects.filter(
-            bk_tenant_id=bk_tenant_id, is_deleted=False, table_id__in=table_ids
-        )
-
-        # 判断是否有结果表类型的过滤
-        datasource_type = request_data["datasource_type"]
-        if datasource_type is not None:
-            result_table_queryset = result_table_queryset.filter(table_id__startswith=f"{datasource_type}.")
-
         # 判断是否有全业务和单业务的过滤需求
         bk_biz_id = []
         if request_data["is_public_include"] is not None and request_data["is_public_include"]:
@@ -343,55 +344,51 @@ class ListResultTableResource(Resource):
         if request_data["bk_biz_id"] is not None:
             bk_biz_id.append(request_data["bk_biz_id"])
 
-        record_rule_metrics = []
-        if len(bk_biz_id) != 0:
+        # 预计算输出不依赖 DataSourceResultTable，与普通结果表一起筛选、计数和分页。
+        record_rule_tables = {
+            table["table_id"]: table
+            for biz_id in (bk_biz_id or [None])
+            for table in get_record_rule_metrics_by_biz_id(
+                bk_biz_id=biz_id, bk_tenant_id=bk_tenant_id, with_option=request_data["with_option"]
+            )
+        }
+        result_table_queryset = models.ResultTable.objects.filter(
+            bk_tenant_id=bk_tenant_id,
+            is_deleted=False,
+            table_id__in=set(table_ids) | record_rule_tables.keys(),
+        )
+        if bk_biz_id:
             result_table_queryset = result_table_queryset.filter(bk_biz_id__in=bk_biz_id)
-            # 拼接预计算指标信息
-            logger.info("ListResultTableResource: try to get precal metrics for bk_biz_ids->[%s]", bk_biz_id)
-            for biz_id in bk_biz_id:
-                logger.info("ListResultTableResource: try to get precal metrics for bk_biz_id->[%s]", biz_id)
-                try:
-                    precal_metrics = get_record_rule_metrics_by_biz_id(bk_biz_id=biz_id)
-                except Exception as e:
-                    logger.error(
-                        "ListResultTableResource: get_record_rule_metrics_by_biz_id failed, "
-                        "bk_biz_id->[%s], error->[%s]",
-                        bk_biz_id,
-                        e,
-                    )
-                    precal_metrics = []
-                record_rule_metrics.extend(precal_metrics)
+
+        datasource_type = request_data["datasource_type"]
+        if datasource_type is not None:
+            result_table_queryset = result_table_queryset.filter(table_id__startswith=f"{datasource_type}.")
 
         # 判断是否需要带上非用户字段的内容
         if request_data["is_config_by_user"]:
             result_table_queryset = result_table_queryset.filter(~Q(table_id__endswith="_cmdb_level"))
 
+        result_table_queryset = result_table_queryset.order_by("table_id")
         if request_data["page_size"] > 0:
             # page_size > 0 才分页
             count = result_table_queryset.count()
             limit = request_data["page_size"]
             offset = (request_data["page"] - 1) * request_data["page_size"]
 
-            result_table_id_list = list(
-                result_table_queryset.values_list("table_id", flat=True)[offset : offset + limit]
-            )
-            result_list = models.ResultTable.batch_to_json(
-                bk_tenant_id=bk_tenant_id,
-                result_table_id_list=result_table_id_list,
-                with_option=request_data["with_option"],
-            )
-            return {"count": count, "info": result_list}
+            result_table_queryset = result_table_queryset[offset : offset + limit]
 
         result_table_id_list = list(result_table_queryset.values_list("table_id", flat=True))
         result_list = models.ResultTable.batch_to_json(
             bk_tenant_id=bk_tenant_id,
-            result_table_id_list=result_table_id_list,
+            result_table_id_list=[table_id for table_id in result_table_id_list if table_id not in record_rule_tables],
             with_option=request_data["with_option"],
         )
 
-        if record_rule_metrics:
-            logger.info("ListResultTableResource: bk_biz_ids->[%s] get precal metrics,try to extend them", bk_biz_id)
-            result_list.extend(record_rule_metrics)
+        table_map = {table["table_id"]: table for table in result_list}
+        table_map.update(record_rule_tables)
+        result_list = [table_map[table_id] for table_id in result_table_id_list]
+        if request_data["page_size"] > 0:
+            return {"count": count, "info": result_list}
         return result_list
 
 
@@ -430,22 +427,16 @@ class ModifyResultTableResource(Resource):
         # 处理查询别名设置
         self._handle_query_alias_settings(table_id, query_alias_settings, operator, bk_tenant_id)
 
-        # 检查ES集群迁移状态
-        is_moving_cluster = self._check_es_cluster_migration(table_id, validated_request_data, bk_tenant_id)
-
         # 修改结果表信息
         result_table = self._modify_result_table(table_id, validated_request_data, bk_tenant_id)
 
-        # 处理ES存储相关的逻辑
+        # 只有 ES 结果表需要通知数据平台。
         if result_table.default_storage == models.ClusterInfo.TYPE_ES:
-            # 处理ES存储索引更新
-            self._handle_es_storage_index_update(table_id, validated_request_data, bk_tenant_id, is_moving_cluster)
-
-            # 通知数据平台信息变更，目前只有es类型需要通知
             self._notify_bkdata_if_needed(table_id, result_table, bk_tenant_id)
 
-            # 推送路由 (关联的虚拟RT）
-            self._push_es_route(result_table, bk_tenant_id)
+        if result_table.default_storage in {models.ClusterInfo.TYPE_ES, models.ClusterInfo.TYPE_DORIS}:
+            # ES/Doris 切换后都需要刷新实体表及关联虚拟表，由统一入口按最终 default_storage 组装路由。
+            self._push_result_table_routes(result_table, bk_tenant_id)
 
         return result_table.to_json()
 
@@ -477,28 +468,6 @@ class ModifyResultTableResource(Resource):
                 e,
             )
 
-    def _check_es_cluster_migration(
-        self, table_id: str, validated_request_data: dict[str, Any], bk_tenant_id: str
-    ) -> bool:
-        """检查ES集群是否发生迁移"""
-        is_moving_cluster = False
-        external_storage = validated_request_data.get("external_storage") or {}
-
-        if external_storage.get(models.ClusterInfo.TYPE_ES):
-            es_storage = models.ESStorage.objects.filter(table_id=table_id, bk_tenant_id=bk_tenant_id).first()
-            if es_storage:
-                param_cluster_id = external_storage[models.ClusterInfo.TYPE_ES].get("storage_cluster_id")
-                if es_storage.storage_cluster_id != param_cluster_id:
-                    logger.info(
-                        "ModifyResultTableResource: table_id->[%s] moved es cluster from old->[%s] to new->[%s]",
-                        table_id,
-                        es_storage.storage_cluster_id,
-                        param_cluster_id,
-                    )
-                    is_moving_cluster = True
-
-        return is_moving_cluster
-
     def _modify_result_table(
         self, table_id: str, validated_request_data: dict[str, Any], bk_tenant_id: str
     ) -> models.ResultTable:
@@ -519,26 +488,10 @@ class ModifyResultTableResource(Resource):
         result_table.refresh_from_db()
         return result_table
 
-    def _handle_es_storage_index_update(
-        self, table_id: str, validated_request_data: dict[str, Any], bk_tenant_id: str, is_moving_cluster: bool
-    ) -> None:
-        """处理ES存储索引更新"""
-        if validated_request_data.get("field_list") is None:
-            return
-
-        es_storage = models.ESStorage.objects.filter(table_id=table_id, bk_tenant_id=bk_tenant_id).first()
-        if es_storage:
-            logger.info(
-                "ModifyResultTableResource: table_id->[%s] has es storage,update index,is_moving_cluster->[%s]",
-                table_id,
-                is_moving_cluster,
-            )
-            es_storage.update_index_and_aliases(ahead_time=0, is_moving_cluster=is_moving_cluster)
-
     def _notify_bkdata_if_needed(self, table_id: str, result_table: models.ResultTable, bk_tenant_id: str) -> None:
         """如果需要，通知bkdata数据变更"""
         bk_data_id = models.DataSourceResultTable.objects.get(table_id=table_id, bk_tenant_id=bk_tenant_id).bk_data_id
-        ds = models.DataSource.objects.get(bk_data_id=bk_data_id)
+        ds = models.DataSource.objects.get(bk_data_id=bk_data_id, bk_tenant_id=bk_tenant_id)
 
         # 如果数据源没有接入BKDATA，则不需要通知bkdata
         if ds.created_from != DataIdCreatedFromSystem.BKDATA.value:
@@ -569,21 +522,31 @@ class ModifyResultTableResource(Resource):
         except Exception as e:  # pylint: disable=broad-except
             logger.warning("notify_log_data_id_changed error, table_id->[%s],error->[%s]", table_id, e)
 
-    def _push_es_route(self, result_table: models.ResultTable, bk_tenant_id: str) -> None:
-        """推送ES路由信息"""
-        # 获取关联的虚拟RT列表
-        virtual_rt_list = list(
-            models.ESStorage.objects.filter(origin_table_id=result_table.table_id).values_list("table_id", flat=True)
-        )
-        table_ids = [result_table.table_id] + virtual_rt_list
+    def _push_result_table_routes(self, result_table: models.ResultTable, bk_tenant_id: str) -> None:
+        """推送实体结果表及同租户下关联的 ES/Doris 虚拟结果表路由。"""
+
+        es_virtual_table_ids = models.ESStorage.objects.filter(
+            bk_tenant_id=bk_tenant_id,
+            origin_table_id=result_table.table_id,
+        ).values_list("table_id", flat=True)
+        doris_virtual_table_ids = models.DorisStorage.objects.filter(
+            bk_tenant_id=bk_tenant_id,
+            origin_table_id=result_table.table_id,
+        ).values_list("table_id", flat=True)
+        virtual_table_ids = sorted(set(chain(es_virtual_table_ids, doris_virtual_table_ids)))
+        table_ids = [result_table.table_id, *virtual_table_ids]
 
         logger.info(
-            "ModifyResultTableResource: all things done, now try to push es route,table_id->[%s]",
+            "ModifyResultTableResource: result table modified, now push routes for table_ids->[%s]",
             json.dumps(table_ids),
         )
 
         client = SpaceTableIDRedis()
-        client.push_es_table_id_detail(table_id_list=table_ids, bk_tenant_id=bk_tenant_id)
+        client.push_table_id_detail(
+            bk_tenant_id=bk_tenant_id,
+            table_id_list=table_ids,
+            is_publish=True,
+        )
 
 
 class AccessBkDataByResultTableResource(Resource):
@@ -643,6 +606,19 @@ class IsDataLabelExistResource(Resource):
         return qs.exists()
 
 
+class SyncAsCodeRecordingRulesResource(Resource):
+    """投递已保存的 AsCode 预计算声明，不在请求内解析或下发。"""
+
+    class RequestSerializer(serializers.Serializer):
+        rule_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+        operator = serializers.CharField()
+
+    def perform_request(self, validated_request_data):
+        from metadata.task.tasks import sync_as_code_recording_rules
+
+        sync_as_code_recording_rules.delay(**validated_request_data)
+
+
 class CreateDownSampleDataFlowResource(Resource):
     """
     创建统计节点（按指定的降采样频率）
@@ -669,6 +645,29 @@ class CreateDownSampleDataFlowResource(Resource):
 
         # TODO：这里是否需要租户ID
         tasks.create_statistics_data_flow.delay(table_id, agg_interval)
+
+
+class ApplyDataSourceResource(Resource):
+    """将已有数据源的 DataSource 资源下发到指定 namespace。"""
+
+    class RequestSerializer(serializers.Serializer):
+        bk_tenant_id = TenantIdField(label="租户ID")
+        bk_data_id = serializers.IntegerField(required=True, min_value=1, label="数据源ID")
+        target_namespace = serializers.CharField(required=True, max_length=64, label="目标命名空间")
+
+        def validate_target_namespace(self, value):
+            if value in (BKBASE_NAMESPACE_BK_MONITOR, BKBASE_NAMESPACE_BK_LOG):
+                raise serializers.ValidationError(_("独立 DataSource 不允许下发到受管命名空间 bkmonitor、bklog"))
+            return value
+
+    def perform_request(self, request_data):
+        try:
+            data_source = models.DataSource.objects.get(
+                bk_tenant_id=request_data["bk_tenant_id"], bk_data_id=request_data["bk_data_id"]
+            )
+        except models.DataSource.DoesNotExist:
+            raise ValueError(_("数据源不存在，请确认后重试"))
+        return data_source.apply_to_namespace(target_namespace=request_data["target_namespace"])
 
 
 class QueryDataSourceResource(Resource):
@@ -962,6 +961,41 @@ class GetResultTableStorageResult(Resource):
         return result
 
 
+class GetResultTableStorageStatus(Resource):
+    """批量查询结果表关联 ES/Doris 存储的配置、历史分段和运行时状态。"""
+
+    class RequestSerializer(serializers.Serializer):
+        bk_tenant_id = TenantIdField(label="租户ID")
+        table_ids = serializers.ListField(
+            required=True,
+            min_length=1,
+            max_length=50,
+            child=serializers.CharField(label="结果表ID"),
+            label="结果表ID列表",
+        )
+        timeout = serializers.IntegerField(required=False, default=15, min_value=1, max_value=30, label="超时时间")
+        total_timeout = serializers.IntegerField(
+            required=False,
+            default=DEFAULT_BATCH_TOTAL_TIMEOUT,
+            min_value=MIN_BATCH_TOTAL_TIMEOUT,
+            max_value=MAX_BATCH_TOTAL_TIMEOUT,
+            label="批量查询总超时时间",
+        )
+
+        def validate_table_ids(self, value):
+            if len(value) != len(set(value)):
+                raise serializers.ValidationError("结果表ID不能重复")
+            return value
+
+    def perform_request(self, validated_request_data):
+        return ResultTableStorageStatusBatchService(
+            bk_tenant_id=validated_request_data["bk_tenant_id"],
+            table_ids=validated_request_data["table_ids"],
+            timeout=validated_request_data["timeout"],
+            total_timeout=validated_request_data["total_timeout"],
+        ).query()
+
+
 class QueryEventGroupResource(Resource):
     class RequestSerializer(PageSerializer):
         bk_tenant_id = TenantIdField(label="租户ID")
@@ -1043,6 +1077,12 @@ class CreateEventGroupResource(Resource):
         operator = serializers.CharField(required=True, label="创建者")
         event_info_list = serializers.ListField(required=False, label="事件列表", default=None)
         data_label = serializers.CharField(label="数据标签", required=False, default="")
+        default_storage = serializers.ChoiceField(
+            choices=[models.ClusterInfo.TYPE_ES, models.ClusterInfo.TYPE_DORIS],
+            required=False,
+            default=models.ClusterInfo.TYPE_ES,
+        )
+        default_storage_config = serializers.DictField(required=False, label="默认存储配置")
 
     def perform_request(self, validated_request_data):
         # 默认都是返回已经删除的内容
@@ -2137,6 +2177,16 @@ class QueryTagValuesResource(Resource):
         table_id = serializers.CharField(required=True, label="结果表ID")
         tag_name = serializers.CharField(required=True, label="dimension/tag名称")
 
+        start_time = serializers.IntegerField(required=False, label="开始时间（Unix秒）")
+        end_time = serializers.IntegerField(required=False, label="结束时间（Unix秒）")
+
+        def validate(self, attrs):
+            if ("start_time" in attrs) != ("end_time" in attrs):
+                raise serializers.ValidationError("start_time 和 end_time 必须同时提供")
+            if "start_time" in attrs and attrs["start_time"] > attrs["end_time"]:
+                raise serializers.ValidationError("start_time 不能大于 end_time")
+            return attrs
+
     def perform_request(self, validated_request_data):
         bk_tenant_id = validated_request_data["bk_tenant_id"]
         table_id = validated_request_data.pop("table_id")
@@ -2146,7 +2196,10 @@ class QueryTagValuesResource(Resource):
         except models.ResultTable.DoesNotExist:
             raise ValueError(f"结果表{table_id}不存在，请确认后重试")
 
-        return {"tag_values": rt.get_tag_values(tag_name=tag_name)}
+        time_range = {
+            key: validated_request_data[key] for key in ("start_time", "end_time") if key in validated_request_data
+        }
+        return {"tag_values": rt.get_tag_values(tag_name=tag_name, **time_range)}
 
 
 class ListTransferClusterResource(Resource):
@@ -2895,9 +2948,9 @@ class KafkaTailResource(Resource):
                 result = self._consume_with_gse_config_by_bk_data_id(bk_data_id, size)
                 result.reverse()
                 return result
-            dsrt = models.DataSourceResultTable.objects.filter(bk_data_id=bk_data_id).first()
+            dsrt = models.DataSourceResultTable.objects.filter(bk_tenant_id=bk_tenant_id, bk_data_id=bk_data_id).first()
             if dsrt:
-                result_table = models.ResultTable.objects.get(table_id=dsrt.table_id)
+                result_table = models.ResultTable.objects.get(bk_tenant_id=bk_tenant_id, table_id=dsrt.table_id)
         else:
             table_id = validated_request_data["table_id"]
             logger.info("KafkaTailResource: got table_id->[%s],try to tail kafka", table_id)
@@ -2920,26 +2973,42 @@ class KafkaTailResource(Resource):
         # 是否是V4数据链路
         elif datasource.datalink_version == DATA_LINK_V4_VERSION_NAME:
             # 若开启特性开关且存在RT且非日志数据，则V4链路使用BkBase侧的Kafka采样接口拉取数据
-            if result_table and datasource.etl_config == EtlConfigs.BK_STANDARD_V2_EVENT.value:
-                data_id_config_name = compose_bkdata_data_id_name(datasource.data_name)
-                try:
-                    data_id_config = DataIdConfig.objects.get(
-                        bk_tenant_id=bk_tenant_id,
-                        namespace=BKBASE_NAMESPACE_BK_LOG,
-                        name=data_id_config_name,
-                    )
-                except DataIdConfig.DoesNotExist:
+            if datasource.etl_config == EtlConfigs.BK_CUSTOM_FORMAT.value:
+                namespace = validated_request_data["namespace"]
+                data_id_name = find_registered_bkdata_data_id_name(datasource, namespace=namespace)
+                if not data_id_name:
                     logger.warning(
-                        "KafkaTailResource: DataIdConfig not found, bk_tenant_id->[%s], namespace->[%s], name->[%s]",
+                        "KafkaTailResource: custom format DataIdConfig not found, "
+                        "bk_tenant_id->[%s], namespace->[%s], bk_data_id->[%s]",
+                        bk_tenant_id,
+                        namespace,
+                        datasource.bk_data_id,
+                    )
+                    return []
+                res = api.bkdata.tail_kafka_data(
+                    bk_tenant_id=bk_tenant_id,
+                    namespace=namespace,
+                    name=data_id_name,
+                    limit=size,
+                )
+                result = [json.loads(data) for data in res]
+            elif result_table and datasource.etl_config == EtlConfigs.BK_STANDARD_V2_EVENT.value:
+                data_id_config_name = find_registered_bkdata_data_id_name(
+                    datasource,
+                    namespace=BKBASE_NAMESPACE_BK_LOG,
+                )
+                if not data_id_config_name:
+                    logger.warning(
+                        "KafkaTailResource: DataIdConfig not found, tenant->[%s], namespace->[%s], bk_data_id->[%s]",
                         bk_tenant_id,
                         BKBASE_NAMESPACE_BK_LOG,
-                        data_id_config_name,
+                        datasource.bk_data_id,
                     )
                     return []
                 res = api.bkdata.tail_kafka_data(
                     bk_tenant_id=bk_tenant_id,
                     namespace=BKBASE_NAMESPACE_BK_LOG,
-                    name=data_id_config.name,
+                    name=data_id_config_name,
                     limit=size,
                 )
                 result = [json.loads(data) for data in res]
@@ -3056,6 +3125,7 @@ class KafkaTailResource(Resource):
         logger.info(
             "KafkaTailResource: using kafka-python to tail,bk_data_id->[%s],topic->[%s]", datasource.bk_data_id, topic
         )
+        timeout_ms = settings.KAFKA_TAIL_API_TIMEOUT_SECONDS
 
         if mq_ins.is_ssl_verify:  # SSL验证是否强验证
             server = mq_ins.extranet_domain_name if mq_ins.extranet_domain_name else mq_ins.domain_name
@@ -3093,8 +3163,8 @@ class KafkaTailResource(Resource):
                 sasl_mechanism=sasl_mechanism,
                 sasl_plain_username=mq_ins.username,
                 sasl_plain_password=mq_ins.password,
-                request_timeout_ms=settings.KAFKA_TAIL_API_TIMEOUT_SECONDS,
-                consumer_timeout_ms=settings.KAFKA_TAIL_API_TIMEOUT_SECONDS,
+                request_timeout_ms=timeout_ms,
+                consumer_timeout_ms=timeout_ms,
                 ssl_cafile=ssl_cafile,
                 ssl_certfile=ssl_certfile,
                 ssl_keyfile=ssl_keyfile,
@@ -3103,8 +3173,8 @@ class KafkaTailResource(Resource):
         else:
             param = {
                 "bootstrap_servers": f"{datasource.mq_cluster.domain_name}:{datasource.mq_cluster.port}",
-                "request_timeout_ms": settings.KAFKA_TAIL_API_TIMEOUT_SECONDS,
-                "consumer_timeout_ms": settings.KAFKA_TAIL_API_TIMEOUT_SECONDS,
+                "request_timeout_ms": timeout_ms,
+                "consumer_timeout_ms": timeout_ms,
             }
             if datasource.mq_cluster.username:
                 param["sasl_plain_username"] = datasource.mq_cluster.username
@@ -3113,42 +3183,50 @@ class KafkaTailResource(Resource):
                 param["sasl_mechanism"] = "PLAIN"
             consumer = KafkaConsumer(topic, **param)
 
-        max_retries = settings.KAFKA_TAIL_API_RETRY_TIMES
-        retry_delay = settings.KAFKA_TAIL_API_RETRY_INTERVAL_SECONDS
-        for attempt in range(max_retries):  # 边缘存查集群存在首次连接拉取时异常问题，添加重试机制
-            consumer.poll(size)
-            topic_partitions = consumer.partitions_for_topic(topic)
-            if topic_partitions:
-                break
-            logger.warning(
-                "KafkaTailResource: Failed to get partitions for topic->[%s],attempt->[%s],retrying.", topic, attempt
-            )
-            time.sleep(retry_delay)
-        else:
-            raise ValueError("failed to get partitions")
-        result = []
-        for partition in topic_partitions:
-            # 获取该分区最大偏移量
-            tp = TopicPartition(topic=datasource.mq_config.topic, partition=partition)
-            low_offset = consumer.beginning_offsets([tp])[tp]
-            high_offset = consumer.end_offsets([tp])[tp]
-            if size <= 0 or high_offset <= low_offset:
-                continue
-            start_offset = max(low_offset, high_offset - size)
-
-            # 设置消息消费偏移量
-            consumer.seek(tp, start_offset)
-            for msg in consumer:
-                try:
-                    result.append(json.loads(msg.value.decode()))
-                except Exception:  # pylint: disable=broad-except
-                    pass
-                if len(result) >= size:
-                    return result
-                if msg.offset >= high_offset - 1:
+        try:
+            max_retries = settings.KAFKA_TAIL_API_RETRY_TIMES
+            retry_delay = settings.KAFKA_TAIL_API_RETRY_INTERVAL_SECONDS
+            for attempt in range(1, max_retries + 1):  # 等待 topic 元数据就绪，并兼容首次连接失败
+                consumer.poll(timeout_ms=timeout_ms)
+                topic_partitions = consumer.partitions_for_topic(topic)
+                if topic_partitions:
                     break
+                logger.warning(
+                    "KafkaTailResource: Failed to get partitions for topic->[%s],attempt->[%s/%s].",
+                    topic,
+                    attempt,
+                    max_retries,
+                )
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+            else:
+                raise ValueError("failed to get partitions")
 
-        return result
+            result = []
+            for partition in topic_partitions:
+                # 获取该分区最大偏移量
+                tp = TopicPartition(topic=topic, partition=partition)
+                low_offset = consumer.beginning_offsets([tp])[tp]
+                high_offset = consumer.end_offsets([tp])[tp]
+                if size <= 0 or high_offset <= low_offset:
+                    continue
+                start_offset = max(low_offset, high_offset - size)
+
+                # 设置消息消费偏移量
+                consumer.seek(tp, start_offset)
+                for msg in consumer:
+                    try:
+                        result.append(json.loads(msg.value.decode()))
+                    except Exception:  # pylint: disable=broad-except
+                        pass
+                    if len(result) >= size:
+                        return result
+                    if msg.offset >= high_offset - 1:
+                        break
+
+            return result
+        finally:
+            consumer.close()
 
     def _consume_with_gse_config(self, datasource, size):
         """
@@ -3260,43 +3338,60 @@ class KafkaTailResource(Resource):
                 raise KafkaException(errors)
             return result
 
+        timeout_ms = settings.KAFKA_TAIL_API_TIMEOUT_SECONDS
         consumer_config = {
             "bootstrap_servers": kafka_servers,
-            "request_timeout_ms": 1000,
-            "consumer_timeout_ms": 1000,
+            "request_timeout_ms": timeout_ms,
+            "consumer_timeout_ms": timeout_ms,
         }
 
         consumer = KafkaConsumer(topic, **consumer_config)
-        consumer.poll(size)
-        topic_partitions = consumer.partitions_for_topic(topic)
-        if not topic_partitions:
-            consumer.close()
-            raise ValueError(_("partition获取失败"))
-        result = []
-        for partition in topic_partitions:
-            # 获取该分区最大偏移量
-            tp = TopicPartition(topic=topic, partition=partition)
-            low_offset = consumer.beginning_offsets([tp])[tp]
-            high_offset = consumer.end_offsets([tp])[tp]
-            if size <= 0 or high_offset <= low_offset:
-                continue
-            start_offset = max(low_offset, high_offset - size)
-
-            # 设置消息消费偏移量
-            consumer.seek(tp, start_offset)
-            for msg in consumer:
-                try:
-                    result.append(json.loads(msg.value.decode()))
-                except Exception:  # pylint: disable=broad-except
-                    pass
-                if len(result) >= size:
-                    consumer.close()
-                    return result
-                if msg.offset >= high_offset - 1:
+        try:
+            max_retries = settings.KAFKA_TAIL_API_RETRY_TIMES
+            retry_delay = settings.KAFKA_TAIL_API_RETRY_INTERVAL_SECONDS
+            for attempt in range(1, max_retries + 1):
+                consumer.poll(timeout_ms=timeout_ms)
+                topic_partitions = consumer.partitions_for_topic(topic)
+                if topic_partitions:
                     break
+                logger.warning(
+                    "KafkaTailResource: Failed to get partitions from GSE config,bk_data_id->[%s],"
+                    "topic->[%s],attempt->[%s/%s].",
+                    bk_data_id,
+                    topic,
+                    attempt,
+                    max_retries,
+                )
+                if attempt < max_retries:
+                    time.sleep(retry_delay)
+            else:
+                raise ValueError(_("partition获取失败"))
 
-        consumer.close()
-        return result
+            result = []
+            for partition in topic_partitions:
+                # 获取该分区最大偏移量
+                tp = TopicPartition(topic=topic, partition=partition)
+                low_offset = consumer.beginning_offsets([tp])[tp]
+                high_offset = consumer.end_offsets([tp])[tp]
+                if size <= 0 or high_offset <= low_offset:
+                    continue
+                start_offset = max(low_offset, high_offset - size)
+
+                # 设置消息消费偏移量
+                consumer.seek(tp, start_offset)
+                for msg in consumer:
+                    try:
+                        result.append(json.loads(msg.value.decode()))
+                    except Exception:  # pylint: disable=broad-except
+                        pass
+                    if len(result) >= size:
+                        return result
+                    if msg.offset >= high_offset - 1:
+                        break
+
+            return result
+        finally:
+            consumer.close()
 
 
 class GetBCSClusterRelatedDataLinkResource(Resource):
@@ -3467,8 +3562,8 @@ class NotifyEsDataLinkAdaptNano(Resource):
 
         try:
             es_storage = models.ESStorage.objects.get(table_id=table_id, bk_tenant_id=bk_tenant_id)
-            es_storage.update_index_v2(force_rotate=force_rotate)
-            es_storage.create_or_update_aliases(force_rotate=force_rotate)
+            if es_storage.update_index_v2(force_rotate=force_rotate) is not False:
+                es_storage.create_or_update_aliases(force_rotate=force_rotate)
         except Exception as e:  # pylint: disable=broad-except
             logger.exception(
                 "NotifyEsDataLinkAdaptNano: table_id->[%s] failed to rotate index,error->[%s]", table_id, e

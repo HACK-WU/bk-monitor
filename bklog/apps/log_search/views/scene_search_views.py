@@ -10,7 +10,7 @@ import math
 from io import BytesIO, TextIOWrapper
 
 import arrow
-from bkm_space.utils import space_uid_to_bk_biz_id
+from bkm_space.utils import bk_biz_id_to_space_uid, space_uid_to_bk_biz_id
 from django.http import StreamingHttpResponse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -25,17 +25,23 @@ from apps.generic import APIViewSet
 from apps.iam.handlers.actions import ActionEnum
 from apps.iam.handlers.drf import BusinessActionPermission
 from apps.log_search.constants import (
+    ASYNC_EXPORT_SCENE_ID,
     ExportFileType,
+    ExportSearchType,
     ExportStatus,
     ExportType,
     FieldDataTypeEnum,
     MAX_RESULT_WINDOW,
     RESULT_WINDOW_COST_TIME,
+    SceneLabelEnum,
     SearchMode,
 )
 from apps.log_search.decorators import search_history_record
 from apps.log_search.exceptions import GetMultiResultFailException
-from apps.log_search.handlers.scene_search import AllConditionsBuilder
+from apps.log_search.export import api as sharded_export_api
+from apps.log_search.export.config import is_sharded_export_enabled
+from apps.log_search.handlers.index_set import IndexSetHandler
+from apps.log_search.handlers.scene_search import AllConditionsBuilder, build_dimension_options, get_field_candidates
 from apps.log_search.handlers.search.scene_fields_config import (
     SceneFieldsConfigHandler,
     UserSceneCustomConfigHandler,
@@ -57,13 +63,14 @@ from apps.log_unifyquery.handler.scene_field import SceneFieldHandler
 from apps.log_unifyquery.handler.scene_search import SceneUnifyQueryHandler
 from apps.log_unifyquery.handler.scene_terms_aggs import SceneTermsAggsHandler
 from apps.utils.drf import list_route
-from apps.utils.local import get_request_app_code, get_request_external_username, get_request_username
+from apps.utils.local import get_request_external_username, get_request_username
 from apps.utils.thread import MultiExecuteFunc
 
 
 # ---------------------------------------------------------------------------
 # Serializers
 # ---------------------------------------------------------------------------
+
 
 class ConditionFieldSerializer(serializers.Serializer):
     field_name = serializers.CharField(required=True, help_text="Label key, e.g. scene / cluster_id")
@@ -83,9 +90,11 @@ class _SceneRouteMixin(serializers.Serializer):
         help_text="AllConditions 二维数组：外层 OR，内层 AND",
     )
     scene_filter_values = serializers.ListField(
-        required=False, default=list, allow_empty=True,
-        help_text='维度筛选条件，格式与 addition 一致，'
-                  'e.g. [{"field": "__ext.io_kubernetes_pod_namespace", "operator": "is", "value": "default"}]',
+        required=False,
+        default=list,
+        allow_empty=True,
+        help_text="维度筛选条件，格式与 addition 一致，"
+        'e.g. [{"field": "__ext.io_kubernetes_pod_namespace", "operator": "is", "value": "default"}]',
     )
 
     def validate(self, attrs):
@@ -110,7 +119,10 @@ class SceneSearchSerializer(_SceneRouteMixin):
     size = serializers.IntegerField(required=False, default=50)
 
     sort_list = serializers.ListField(
-        required=False, allow_null=True, allow_empty=True, default=list,
+        required=False,
+        allow_null=True,
+        allow_empty=True,
+        default=list,
         child=serializers.ListField(child=serializers.CharField()),
     )
     aggs = serializers.DictField(required=False, default=dict)
@@ -132,6 +144,7 @@ class SceneSearchSerializer(_SceneRouteMixin):
         choices=SearchMode.get_choices(),
         default=SearchMode.UI.value,
     )
+    record_history = serializers.BooleanField(required=False, default=True)
 
 
 class SceneFieldsSerializer(_SceneRouteMixin):
@@ -182,9 +195,7 @@ class SceneTotalSerializer(_SceneRouteMixin):
 class SceneDimensionFilterSerializer(serializers.Serializer):
     field_name = serializers.CharField(required=True, help_text="维度 key")
     value = serializers.ListField(child=serializers.CharField(), required=True, help_text="匹配值列表")
-    op = serializers.ChoiceField(
-        choices=["eq", "ne", "req", "nreq"], default="eq", required=False, help_text="操作符"
-    )
+    op = serializers.ChoiceField(choices=["eq", "ne", "req", "nreq"], default="eq", required=False, help_text="操作符")
 
 
 class SceneDimensionValuesSerializer(serializers.Serializer):
@@ -216,9 +227,78 @@ class SceneDimensionValuesSerializer(serializers.Serializer):
         return child.validated_data
 
 
+class SceneFieldCandidatesConditionSerializer(serializers.Serializer):
+    """字段联想级联条件项（已选维度过滤）"""
+
+    key = serializers.CharField(required=True, help_text="维度字段名")
+    method = serializers.ChoiceField(choices=["eq", "include"], default="eq", help_text="eq=精确多选, include=包含匹配")
+    value = serializers.ListField(
+        child=serializers.CharField(), required=True, allow_empty=True, help_text="已选值列表"
+    )
+
+
+class SceneFieldCandidatesSerializer(serializers.Serializer):
+    """
+    IaaS 化字段联想候选值检索。
+
+    - 容器场景（scene=k8s）：转调监控 k8s_resource 候选值缓存接口，需带 bcs_cluster_ids。
+    - 主机场景（scene=host 等）：通过 unify-query ts/reference 聚合实时入库数据，
+      需带 table_id_conditions 路由选表与 start_time / end_time 时间窗。
+    """
+
+    space_uid = serializers.CharField(required=True, help_text="空间 UID, e.g. bkcc__2")
+    bk_biz_id = serializers.IntegerField(required=True, help_text="业务 ID")
+    scene = serializers.CharField(required=True, help_text="场景标识, k8s=容器, host=主机")
+    resource_type = serializers.CharField(required=True, help_text="目标维度字段名（要联想候选值的字段）")
+    conditions = serializers.ListField(
+        child=SceneFieldCandidatesConditionSerializer(), required=False, default=list, help_text="已选级联条件"
+    )
+    query_string = serializers.CharField(
+        required=False, allow_blank=True, default="", help_text="对目标维度候选值做包含匹配"
+    )
+    page = serializers.IntegerField(required=False, default=1)
+    page_size = serializers.IntegerField(required=False, default=500)
+
+    # 容器场景
+    bcs_cluster_ids = serializers.ListField(
+        child=serializers.CharField(), required=False, default=list, help_text="容器场景：BCS 集群 ID 列表"
+    )
+
+    # 主机场景（ts/reference 聚合）
+    table_id_conditions = serializers.ListField(
+        child=serializers.ListField(child=ConditionFieldSerializer()),
+        required=False,
+        default=list,
+        help_text="主机场景：AllConditions 二维数组，外层 OR，内层 AND",
+    )
+    keyword = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    start_time = serializers.CharField(required=False, allow_blank=True, default="")
+    end_time = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if attrs.get("page", 1) < 1:
+            attrs["page"] = 1
+        if attrs.get("page_size", 500) > 1000:
+            attrs["page_size"] = 1000
+        if attrs.get("page_size", 500) < 1:
+            attrs["page_size"] = 1
+
+        if attrs["scene"] == SceneLabelEnum.K8S.value:
+            if not attrs.get("bcs_cluster_ids"):
+                raise serializers.ValidationError("容器场景必须提供 bcs_cluster_ids")
+        else:
+            if not attrs.get("table_id_conditions"):
+                raise serializers.ValidationError("主机场景必须提供 table_id_conditions")
+            if not attrs.get("start_time") or not attrs.get("end_time"):
+                raise serializers.ValidationError("主机场景必须提供 start_time 和 end_time")
+        return attrs
+
+
 # ---------------------------------------------------------------------------
 # Field analysis serializers
 # ---------------------------------------------------------------------------
+
 
 class SceneFieldBaseSerializer(_SceneRouteMixin):
     """场景化字段分析基础序列化器 — 对标 QueryFieldBaseSerializer"""
@@ -266,9 +346,24 @@ class SceneFetchStatisticsGraphSerializer(SceneFieldBaseSerializer):
     distinct_count = serializers.IntegerField(required=False)
 
 
+class SceneAnalyzeFieldSerializer(_SceneRouteMixin):
+    """场景化字段分析，对齐 MCP analyze_field 的场景模式入参。"""
+
+    keyword = serializers.CharField(allow_null=True, allow_blank=True, required=False, default="*")
+    addition = serializers.ListField(allow_empty=True, required=False, default=list)
+    field_name = serializers.CharField(required=True)
+    group_by = serializers.BooleanField(required=False, default=True)
+    order_by = serializers.ChoiceField(choices=["value", "time"], required=False, default="time")
+    limit = serializers.IntegerField(required=False, allow_null=True, min_value=1, max_value=1000)
+    step = serializers.CharField(required=False, default="1h", max_length=16)
+    start_time = serializers.CharField(required=True)
+    end_time = serializers.CharField(required=True)
+
+
 # ---------------------------------------------------------------------------
 # Aggs serializers
 # ---------------------------------------------------------------------------
+
 
 class SceneAggsTermsSerializer(_SceneRouteMixin):
     """场景化 terms 聚合 — 对标 AggsTermsSerializer / UnionSearchAggsTermsSerializer"""
@@ -302,9 +397,11 @@ class SceneAggsDateHistogramSerializer(_SceneRouteMixin):
 # Export serializers
 # ---------------------------------------------------------------------------
 
+
 class SceneExportSerializer(_SceneRouteMixin):
     """场景化异步导出 — 对标 SearchExportSerializer"""
 
+    supports_sort_confirmation = serializers.BooleanField(required=False, default=False)
     keyword = serializers.CharField(required=False, allow_null=True, allow_blank=True, default="*")
     addition = serializers.ListField(allow_empty=True, required=False, default=list)
     start_time = serializers.CharField(required=True)
@@ -317,7 +414,10 @@ class SceneExportSerializer(_SceneRouteMixin):
 
     ip_chooser = serializers.DictField(default=dict, required=False)
     sort_list = serializers.ListField(
-        required=False, allow_null=True, allow_empty=True, default=list,
+        required=False,
+        allow_null=True,
+        allow_empty=True,
+        default=list,
         child=serializers.ListField(child=serializers.CharField()),
     )
     export_fields = serializers.ListField(required=False, default=list)
@@ -336,6 +436,7 @@ class SceneExportHistorySerializer(_SceneRouteMixin):
 
 class SceneSearchHistorySerializer(_SceneRouteMixin):
     """场景化检索历史"""
+
     pass
 
 
@@ -403,11 +504,13 @@ def _extract_routing_dims(conds) -> list:
             field = c.get("field_name") or ""
             if not field or field == "scene":
                 continue
-            group.append({
-                "field_name": field,
-                "value": list(c.get("value") or []),
-                "op": c.get("op", "eq"),
-            })
+            group.append(
+                {
+                    "field_name": field,
+                    "value": list(c.get("value") or []),
+                    "op": c.get("op", "eq"),
+                }
+            )
         if group:
             # sort within the AND-group to make order-insensitive
             group.sort(key=lambda x: (x["field_name"], x["op"]))
@@ -429,6 +532,7 @@ from apps.utils.scene_lucene import (  # noqa: E402, F401
 # Permission
 # ---------------------------------------------------------------------------
 
+
 def _resolve_scene_biz_id(request):
     """解析场景化检索请求的业务 ID。
 
@@ -436,16 +540,10 @@ def _resolve_scene_biz_id(request):
     bk_biz_id（body/query） -> space_uid 反查 bk_biz_id -> 0。
     供灰度开关与业务级权限两个权限类共用，避免重复实现。
     """
-    bk_biz_id = (
-        request.data.get("bk_biz_id", 0)
-        or request.query_params.get("bk_biz_id", 0)
-    )
+    bk_biz_id = request.data.get("bk_biz_id", 0) or request.query_params.get("bk_biz_id", 0)
     if bk_biz_id:
         return bk_biz_id
-    space_uid = (
-        request.data.get("space_uid")
-        or request.query_params.get("space_uid")
-    )
+    space_uid = request.data.get("space_uid") or request.query_params.get("space_uid")
     if space_uid:
         try:
             return space_uid_to_bk_biz_id(space_uid) or 0
@@ -490,6 +588,7 @@ class _SceneViewBusinessPermission(BusinessActionPermission):
 # ViewSet
 # ---------------------------------------------------------------------------
 
+
 class SceneSearchViewSet(APIViewSet):
     serializer_class = serializers.Serializer
 
@@ -523,7 +622,7 @@ class SceneSearchViewSet(APIViewSet):
             - 不传 bk_biz_id 时返回全部场景（向后兼容）；
             - 传 bk_biz_id 时按 IndexSetTag(scene 路由) 主路径判定 + PaaS 兜底，容器/主机始终返回。
         """
-        from apps.log_databus.constants import SCENE_SEARCH_DIMENSIONS
+        from apps.log_databus.constants import PAAS_APP_CODES, SCENE_SEARCH_DIMENSIONS
         from apps.log_databus.models import CollectorConfig
         from apps.log_search.constants import SceneLabelEnum
         from apps.log_search.models import (
@@ -533,8 +632,6 @@ class SceneSearchViewSet(APIViewSet):
         )
         from bkm_space.utils import bk_biz_id_to_space_uid
 
-        PAAS_APP_CODES = {"bk_paas", "bk_paas3"}
-
         data = self.params_valid(SceneListSerializer)
         bk_biz_id = data.get("bk_biz_id")
 
@@ -542,21 +639,23 @@ class SceneSearchViewSet(APIViewSet):
             available = {SceneLabelEnum.K8S.value, SceneLabelEnum.HOST.value}
             space_uid = bk_biz_id_to_space_uid(bk_biz_id)
             active_tag_ids = set()
-            for tag_ids in LogIndexSet.objects.filter(
-                space_uid=space_uid, is_active=True
-            ).values_list("tag_ids", flat=True):
+            for tag_ids in LogIndexSet.objects.filter(space_uid=space_uid, is_active=True).values_list(
+                "tag_ids", flat=True
+            ):
                 if tag_ids:
                     active_tag_ids.update(int(t) for t in tag_ids if t)
             if active_tag_ids:
-                scene_values = IndexSetTag.objects.filter(
-                    tag_id__in=active_tag_ids,
-                    tag_type=TAG_TYPE_SCENE,
-                    name="scene",
-                ).values_list("value", flat=True).distinct()
+                scene_values = (
+                    IndexSetTag.objects.filter(
+                        tag_id__in=active_tag_ids,
+                        tag_type=TAG_TYPE_SCENE,
+                        name="scene",
+                    )
+                    .values_list("value", flat=True)
+                    .distinct()
+                )
                 available.update(v for v in scene_values if v)
-            if CollectorConfig.objects.filter(
-                bk_biz_id=bk_biz_id, bk_app_code__in=PAAS_APP_CODES
-            ).exists():
+            if CollectorConfig.objects.filter(bk_biz_id=bk_biz_id, bk_app_code__in=PAAS_APP_CODES).exists():
                 available.add(SceneLabelEnum.BK_PAAS.value)
         else:
             available = {v for v, _ in SceneLabelEnum.get_choices()}
@@ -565,11 +664,13 @@ class SceneSearchViewSet(APIViewSet):
         for value, label in SceneLabelEnum.get_choices():
             if value not in available:
                 continue
-            scenes.append({
-                "id": value,
-                "name": str(label),
-                "dimensions": SCENE_SEARCH_DIMENSIONS.get(value, []),
-            })
+            scenes.append(
+                {
+                    "id": value,
+                    "name": str(label),
+                    "dimensions": SCENE_SEARCH_DIMENSIONS.get(value, []),
+                }
+            )
         return Response(scenes)
 
     @list_route(methods=["POST"], url_path="search")
@@ -582,26 +683,28 @@ class SceneSearchViewSet(APIViewSet):
         @apiDescription 通过 table_id_conditions 路由选表，完整支持现有 search 接口的所有查询参数。
         """
         data = self.params_valid(SceneSearchSerializer)
+        record_history = data.pop("record_history")
         data["table_id_conditions"] = AllConditionsBuilder.from_raw(data["table_id_conditions"])
         original_addition = list(data.get("addition") or [])
         original_scene_filter_values = list(data.get("scene_filter_values") or [])
         data = _merge_scene_filters_to_addition(data)
         handler = SceneUnifyQueryHandler(data)
         result = Response(handler.search())
-        result.data["history_obj"] = {
-            "index_set_id": 0,
-            "params": {
-                "keyword": data.get("keyword", "*"),
-                "addition": original_addition,
-                "scene_filter_values": original_scene_filter_values,
-                "ip_chooser": data.get("ip_chooser", {}),
-                "table_id_conditions": data["table_id_conditions"],
-                "space_uid": data["space_uid"],
-            },
-            "search_type": "default",
-            "search_mode": data["search_mode"],
-            "from_favorite_id": 0,
-        }
+        if record_history:
+            result.data["history_obj"] = {
+                "index_set_id": 0,
+                "params": {
+                    "keyword": data.get("keyword", "*"),
+                    "addition": original_addition,
+                    "scene_filter_values": original_scene_filter_values,
+                    "ip_chooser": data.get("ip_chooser", {}),
+                    "table_id_conditions": data["table_id_conditions"],
+                    "space_uid": data["space_uid"],
+                },
+                "search_type": "default",
+                "search_mode": data["search_mode"],
+                "from_favorite_id": 0,
+            }
         return result
 
     @list_route(methods=["POST"], url_path="fields")
@@ -666,17 +769,46 @@ class SceneSearchViewSet(APIViewSet):
         @apiName scene_search_dimension_values
         @apiGroup 14_SceneSearch
         @apiDescription 获取场景下指定维度的可选值列表（支持级联筛选），供前端下拉框使用。
+            返回 {dimension_key, values, options}：
+            - values: 原始维度值字符串数组（向后兼容）
+            - options: [{id, name}] 结构，始终返回（空结果为 []）；name 默认等于 id，
+              命中名称解析器的维度（如 k8s 场景的 cluster_id）会补充集群名称
         """
         from apps.log_search.models import IndexSetTag
 
         data = self.params_valid(SceneDimensionValuesSerializer)
+        space_uid = bk_biz_id_to_space_uid(data["bk_biz_id"])
+        space_uids = IndexSetHandler.get_all_related_space_uids(space_uid)
         values = IndexSetTag.get_dimension_values(
             bk_biz_id=data["bk_biz_id"],
             scene=data["scene"],
             dimension_key=data["dimension_key"],
             filters=data.get("filters") or None,
+            space_uids=space_uids,
         )
-        return Response({"dimension_key": data["dimension_key"], "values": sorted(values)})
+
+        sorted_values = sorted(values)
+        return Response(
+            {
+                "dimension_key": data["dimension_key"],
+                "values": sorted_values,
+                "options": build_dimension_options(data["scene"], data["dimension_key"], sorted_values),
+            }
+        )
+
+    @list_route(methods=["POST"], url_path="list_field_candidates")
+    def list_field_candidates(self, request):
+        """
+        @api {post} /search/scene/list_field_candidates/ 场景化检索-字段联想候选值
+        @apiName scene_list_field_candidates
+        @apiGroup 14_SceneSearch
+        @apiDescription IaaS 化字段联想：容器场景转调监控 k8s_resource 候选值缓存，
+        主机场景通过 unify-query ts/reference 聚合实时入库数据，统一返回 {count, items}。
+        """
+        data = self.params_valid(SceneFieldCandidatesSerializer)
+        if data.get("table_id_conditions"):
+            data["table_id_conditions"] = AllConditionsBuilder.from_raw(data["table_id_conditions"])
+        return Response(get_field_candidates(data))
 
     # ------------------------------------------------------------------
     # Scene user custom config (UI 偏好 JSON，与模板系统解耦)
@@ -836,10 +968,12 @@ class SceneSearchViewSet(APIViewSet):
         data["table_id_conditions"] = AllConditionsBuilder.from_raw(data["table_id_conditions"])
         data = _merge_scene_filters_to_addition(data)
         handler = SceneUnifyQueryHandler(data)
-        return Response(handler.aggs_date_histogram(
-            interval=data.get("interval", "auto"),
-            group_field=data.get("group_field"),
-        ))
+        return Response(
+            handler.aggs_date_histogram(
+                interval=data.get("interval", "auto"),
+                group_field=data.get("group_field"),
+            )
+        )
 
     # ------------------------------------------------------------------
     # Field analysis endpoints
@@ -859,8 +993,7 @@ class SceneSearchViewSet(APIViewSet):
         fields_handler = SceneUnifyQueryHandler(params)
         fields_result = fields_handler.fields()
         fields_list = [
-            f for f in fields_result.get("fields", [])
-            if f["field_type"] != "text" and f.get("es_doc_values", False)
+            f for f in fields_result.get("fields", []) if f["field_type"] != "text" and f.get("es_doc_values", False)
         ]
 
         multi_execute_func = MultiExecuteFunc()
@@ -896,16 +1029,18 @@ class SceneSearchViewSet(APIViewSet):
         field_count = handler.get_field_count()
         distinct_count = handler.get_distinct_count()
         topk_list = handler.get_topk_list(params["limit"])
-        return Response({
-            "name": params["agg_field"],
-            "columns": ["_value", "_count"],
-            "types": ["float", "float"],
-            "limit": params["limit"],
-            "total_count": total_count,
-            "field_count": field_count,
-            "distinct_count": distinct_count,
-            "values": topk_list,
-        })
+        return Response(
+            {
+                "name": params["agg_field"],
+                "columns": ["_value", "_count"],
+                "types": ["float", "float"],
+                "limit": params["limit"],
+                "total_count": total_count,
+                "field_count": field_count,
+                "distinct_count": distinct_count,
+                "values": topk_list,
+            }
+        )
 
     @list_route(methods=["POST"], url_path="field/fetch_value_list")
     def fetch_value_list(self, request):
@@ -996,6 +1131,27 @@ class SceneSearchViewSet(APIViewSet):
         else:
             return Response(handler.get_topk_ts_data(params["limit"]))
 
+    @list_route(methods=["POST"], url_path="field/analyze")
+    def analyze_field(self, request):
+        """
+        @api {post} /search/scene/field/analyze/ 场景化检索-字段分析
+        @apiName scene_analyze_field
+        @apiGroup 14_SceneSearch
+        @apiDescription 按场景路由执行字段聚合，供 MCP analyze_field 场景模式使用。
+        """
+        params = self.params_valid(SceneAnalyzeFieldSerializer)
+        params["table_id_conditions"] = AllConditionsBuilder.from_raw(params["table_id_conditions"])
+        params = _merge_scene_filters_to_addition(params)
+        params["agg_field"] = params["field_name"]
+        params["interval"] = params["step"]
+        handler = SceneFieldHandler(params)
+        result = handler.analyze_field(
+            group_by=params["group_by"],
+            order_by=params["order_by"],
+            limit=params.get("limit"),
+        )
+        return Response(result)
+
     # ------------------------------------------------------------------
     # Export endpoints
     # ------------------------------------------------------------------
@@ -1027,7 +1183,7 @@ class SceneSearchViewSet(APIViewSet):
 
         AsyncTask.objects.create(
             request_param=data,
-            scenario_id="scene",
+            scenario_id=ASYNC_EXPORT_SCENE_ID,
             index_set_id=0,
             result=True,
             completed_at=timezone.now(),
@@ -1067,6 +1223,10 @@ class SceneSearchViewSet(APIViewSet):
         data["table_id_conditions"] = AllConditionsBuilder.from_raw(data["table_id_conditions"])
         data = _merge_scene_filters_to_addition(data)
 
+        # 灰度分流：命中分片导出开关且非快速导出时，复用本接口已完成的鉴权，转分片导出链路
+        if not is_quick_export and is_sharded_export_enabled(data.get("bk_biz_id")):
+            return self._sharded_scene_export(data)
+
         handler = SceneAsyncExportHandler(
             bk_biz_id=data["bk_biz_id"],
             search_dict=data,
@@ -1074,10 +1234,21 @@ class SceneSearchViewSet(APIViewSet):
             export_file_type=data["file_type"],
         )
         task_id, size = handler.async_export(is_quick_export=is_quick_export)
-        return Response({
-            "task_id": task_id,
-            "prompt": f"任务提交成功，预估等待时间{math.ceil(size / MAX_RESULT_WINDOW * RESULT_WINDOW_COST_TIME)}分钟",
-        })
+        return Response(
+            {
+                "task_id": task_id,
+                "prompt": f"任务提交成功，预估等待时间{math.ceil(size / MAX_RESULT_WINDOW * RESULT_WINDOW_COST_TIME)}分钟",
+            }
+        )
+
+    def _sharded_scene_export(self, data):
+        """把场景化导出参数归一为标准分片导出参数并创建场景化分片任务。"""
+        params = sharded_export_api.normalize_legacy_export_params(data, search_type=ExportSearchType.SCENE)
+        params.update(space_uid=data["space_uid"], table_id_conditions=data["table_id_conditions"])
+        job = sharded_export_api.create_export_job(params, raw_params=data)
+        if isinstance(job, sharded_export_api.ExportSortConfirmation):
+            return Response({"engine": "sharded", "requires_sort_confirmation": True, "sort_list": job.sort_list})
+        return Response({"task_id": job.pk, "engine": "sharded"})
 
     @list_route(methods=["POST"], url_path="export/history")
     def scene_export_history(self, request):
@@ -1094,7 +1265,9 @@ class SceneSearchViewSet(APIViewSet):
             bk_biz_id=data["bk_biz_id"],
             search_dict={},
         ).get_export_history(
-            request=request, view=self, show_all=data["show_all"],
+            request=request,
+            view=self,
+            show_all=data["show_all"],
             table_id_conditions=data["table_id_conditions"],
         )
 
@@ -1120,13 +1293,15 @@ class SceneSearchViewSet(APIViewSet):
         data["table_id_conditions"] = AllConditionsBuilder.from_raw(data["table_id_conditions"])
 
         username = get_request_external_username() or get_request_username()
-        history_qs = UserIndexSetSearchHistory.objects.filter(
-            is_deleted=False,
-            created_by=username,
-            index_set_id=0,
-            search_type="default",
-        ).order_by("-created_at").values(
-            "id", "params", "search_mode", "created_by", "created_at"
+        history_qs = (
+            UserIndexSetSearchHistory.objects.filter(
+                is_deleted=False,
+                created_by=username,
+                index_set_id=0,
+                search_type="default",
+            )
+            .order_by("-created_at")
+            .values("id", "params", "search_mode", "created_by", "created_at")
         )
 
         target_space_uid = data.get("space_uid")
@@ -1154,9 +1329,7 @@ class SceneSearchViewSet(APIViewSet):
                 json.dumps(params.get("addition", []), sort_keys=True),
                 json.dumps(params.get("scene_filter_values", []), sort_keys=True),
                 json.dumps(params.get("ip_chooser", {}), sort_keys=True),
-                json.dumps(
-                    _extract_routing_dims(params.get("table_id_conditions")), sort_keys=True
-                ),
+                json.dumps(_extract_routing_dims(params.get("table_id_conditions")), sort_keys=True),
             )
             if key in seen:
                 continue

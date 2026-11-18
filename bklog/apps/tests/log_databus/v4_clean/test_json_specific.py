@@ -45,24 +45,23 @@ class TestJsonRetainOriginalText(TestCase):
 
 
 class TestJsonEnableRetainContent(TestCase):
-    """enable_retain_content 分支"""
+    """enable_retain_content 分支（已收敛为 retain_original_text 的子开关）"""
 
     def setUp(self):
         self.storage = BkLogJsonEtlStorage()
 
-    def test_enable_retain_content_generates_log(self):
-        """enable_retain_content=True 时应生成 log assign 规则"""
+    def test_enable_retain_content_without_original_text_no_log(self):
+        """retain_original_text=False 时即使 enable_retain_content=True 也不应生成 log assign 规则"""
         etl_params = {"retain_original_text": False, "enable_retain_content": True}
         fields = [make_field("level")]
         config = get_fresh_config()
         result = self.storage.build_log_v4_data_link(fields, etl_params, config, build_test_field_list(fields, config))
         rules = result["clean_rules"]
-        log_rules = find_rules_by_output(rules, "log")
-        self.assertEqual(len(log_rules), 1)
+        assert_rule_absent(self, rules, "log")
 
     def test_enable_retain_content_json_de_null_strategy(self):
-        """enable_retain_content=True 时 bk_separator_object 的 json_de 应使用 null 策略"""
-        etl_params = {"enable_retain_content": True}
+        """保留原文 + enable_retain_content=True 时 json_de 应使用 null 策略"""
+        etl_params = {"retain_original_text": True, "enable_retain_content": True}
         fields = [make_field("level")]
         config = get_fresh_config()
         result = self.storage.build_log_v4_data_link(fields, etl_params, config, build_test_field_list(fields, config))
@@ -70,6 +69,48 @@ class TestJsonEnableRetainContent(TestCase):
         sep_rules = find_rules_by_output(rules, "bk_separator_object")
         self.assertEqual(len(sep_rules), 1)
         self.assertEqual(sep_rules[0]["operator"]["error_strategy"], "null")
+
+    def test_enable_retain_content_without_original_text_json_de_drop_strategy(self):
+        """retain_original_text=False 时 enable_retain_content 失效，json_de 应回落到 drop 策略"""
+        etl_params = {"retain_original_text": False, "enable_retain_content": True}
+        fields = [make_field("level")]
+        config = get_fresh_config()
+        result = self.storage.build_log_v4_data_link(fields, etl_params, config, build_test_field_list(fields, config))
+        rules = result["clean_rules"]
+        sep_rules = find_rules_by_output(rules, "bk_separator_object")
+        self.assertEqual(len(sep_rules), 1)
+        self.assertEqual(sep_rules[0]["operator"]["error_strategy"], "drop")
+
+    def test_is_retain_content_enabled_truth_table(self):
+        """helper 仅服务 V4：两个开关都为真才成立，缺 key 视为 False"""
+        self.assertTrue(
+            self.storage.is_retain_content_enabled({"retain_original_text": True, "enable_retain_content": True})
+        )
+        self.assertFalse(
+            self.storage.is_retain_content_enabled({"retain_original_text": False, "enable_retain_content": True})
+        )
+        self.assertFalse(
+            self.storage.is_retain_content_enabled({"retain_original_text": True, "enable_retain_content": False})
+        )
+        self.assertFalse(self.storage.is_retain_content_enabled({"retain_original_text": True}))
+
+    def test_v3_option_not_affected_by_retain_original_text(self):
+        """V3（Transfer）option 的 enable_retain_content 不受 retain_original_text 影响。
+
+        V3 的分隔符/正则 transformer 根本不读该 option（恒返回 nil error，不会丢弃失败记录），
+        改动 V3 取值只会让存量采集项行为漂移而拿不到任何收益，故本 PR 只改 V4。
+        缺 key 时须保住 JSON 侧历史缺省 True（该字段 2024-01 才引入）。
+        """
+        # built_in_config / fields 会被就地修改，每个用例都必须用全新副本
+        for etl_params in (
+            {"retain_original_text": False, "enable_retain_content": True},
+            {"retain_original_text": False},
+        ):
+            with self.subTest(etl_params=etl_params):
+                option = self.storage.get_result_table_config(
+                    [make_field("level")], etl_params, get_fresh_config()
+                )["option"]
+                self.assertTrue(option["enable_retain_content"])
 
     def test_no_enable_retain_content_json_de_drop_strategy(self):
         """enable_retain_content 未设置时 json_de 应使用 drop 策略"""
@@ -131,6 +172,38 @@ class TestJsonRetainExtraJson(TestCase):
         exclude_values = [k["value"] for k in delete_rules[0]["operator"]["key_index"]]
         self.assertIn("client_ip", exclude_values)
         self.assertNotIn("src_ip", exclude_values)
+
+    def test_extra_json_delete_null_when_retain_content(self):
+        """保留清洗失败日志时 delete 应使用 null 策略，避免 json_de 输出 null 后整条被丢弃"""
+        etl_params = {"retain_original_text": True, "enable_retain_content": True, "retain_extra_json": True}
+        fields = [make_field("level")]
+        config = get_fresh_config()
+        result = self.storage.build_log_v4_data_link(fields, etl_params, config, build_test_field_list(fields, config))
+        rules = result["clean_rules"]
+        sep_rules = find_rules_by_output(rules, "bk_separator_object")
+        delete_rules = find_rules_by_type(rules, "delete")
+        self.assertEqual(sep_rules[0]["operator"]["error_strategy"], "null")
+        self.assertEqual(delete_rules[0]["operator"]["error_strategy"], "null")
+
+    def test_extra_json_delete_drop_without_retain_content(self):
+        """未保留清洗失败日志时 delete 与 json_de 一致使用 drop 策略"""
+        for etl_params in (
+            {"retain_original_text": False, "retain_extra_json": True},
+            {"retain_original_text": True, "retain_extra_json": True},
+            # enable_retain_content 是 retain_original_text 的子开关，单独开启不生效
+            {"retain_original_text": False, "enable_retain_content": True, "retain_extra_json": True},
+        ):
+            with self.subTest(etl_params=etl_params):
+                fields = [make_field("level")]
+                config = get_fresh_config()
+                result = self.storage.build_log_v4_data_link(
+                    fields, etl_params, config, build_test_field_list(fields, config)
+                )
+                rules = result["clean_rules"]
+                sep_rules = find_rules_by_output(rules, "bk_separator_object")
+                delete_rules = find_rules_by_type(rules, "delete")
+                self.assertEqual(sep_rules[0]["operator"]["error_strategy"], "drop")
+                self.assertEqual(delete_rules[0]["operator"]["error_strategy"], "drop")
 
     def test_extra_json_excludes_skip_deleted_fields(self):
         """is_delete=True 的字段不应出现在 exclude keys 中"""

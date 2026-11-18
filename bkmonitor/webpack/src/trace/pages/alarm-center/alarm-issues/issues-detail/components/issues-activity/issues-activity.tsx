@@ -40,7 +40,11 @@ import {
   ISSUES_STATUS_MAP,
 } from '../../../constant';
 import { followUpIssues } from '../../../services/issues-operations';
+import IssuesLoading from '../issues-loading';
+import { DetailLoadStatus } from '../../../../common-detail/detail-loading';
+
 import BasicCard from '../basic-card/basic-card';
+import RelationTapdItem from '../issues-relation-tapd/relation-tapd-item';
 import { useAppStore } from '@/store/modules/app';
 
 import type { IssueActivityItem, IssueDetail } from '../../../typing';
@@ -50,6 +54,8 @@ import './issues-activity.scss';
 export default defineComponent({
   name: 'IssuesActivity',
   props: {
+    loaded: Boolean,
+    error: Boolean,
     detail: {
       type: Object as PropType<IssueDetail>,
       default: () => ({}),
@@ -64,6 +70,7 @@ export default defineComponent({
     },
   },
   emits: {
+    retry: () => true,
     commentChange: (_activities: IssueActivityItem[]) => true,
   },
   setup(props, { emit }) {
@@ -141,7 +148,7 @@ export default defineComponent({
 
     /** 发送评论 */
     const handleSendComment = () => {
-      if (!commentContent.value) return;
+      if (!commentContent.value || commentLoading.value) return;
       commentLoading.value = true;
       followUpIssues({
         issues: [
@@ -172,6 +179,7 @@ export default defineComponent({
 
     /** 编辑评论 */
     const handleEditComment = () => {
+      if (commentLoading.value) return;
       commentLoading.value = true;
       editIssueFollowUp({
         bk_biz_id: props.detail?.bk_biz_id,
@@ -485,6 +493,35 @@ export default defineComponent({
     };
 
     /**
+     * 渲染 TAPD 关联/创建活动
+     */
+    const renderTapdActivity = (item: IssueActivityItem, showLine = true) => {
+      let tapdItem = null;
+      try {
+        tapdItem = typeof item.content === 'string' ? JSON.parse(item.content) : item.content;
+      } catch (e) {
+        console.error(e);
+      }
+      return renderActivityItem({
+        extCls: 'comment-activity-item',
+        icon: <i class='icon-monitor icon-a-useryonghu' />,
+        title: (
+          <div class='title-row'>
+            <span>{item.activity_type === IssueActiveNodeTypeEnum.TAPD_LINK ? t('关联已有单据') : t('创建单据')}</span>
+            {renderActivityItemTime(item, true)}
+          </div>
+        ),
+        content: (
+          <RelationTapdItem
+            style='margin: 0'
+            value={tapdItem}
+          />
+        ),
+        showLine,
+      });
+    };
+
+    /**
      * 渲染状态流转
      */
     const renderStatusActivity = (item: IssueActivityItem, showLine = true) => {
@@ -651,6 +688,10 @@ export default defineComponent({
           return renderNameChangeActivity(item, showLine);
         case IssueActiveNodeTypeEnum.CREATE:
           return renderFirstActivity(item, showLine);
+        case IssueActiveNodeTypeEnum.TAPD_LINK:
+          return renderTapdActivity(item, showLine);
+        case IssueActiveNodeTypeEnum.CREATE_TAPD:
+          return renderTapdActivity(item, showLine);
         // case IssueActiveNodeTypeEnum.SPLIT_FROM:
         //   return renderSplitActivity(item);
         // case IssueActiveNodeTypeEnum.MERGED_INTO:
@@ -660,24 +701,10 @@ export default defineComponent({
       }
     };
 
-    const renderSkeleton = () => {
-      return (
-        <div class='skeleton-wrapper'>
-          {new Array(5).fill(0).map(() =>
-            renderActivityItem({
-              title: <div class='skeleton-element title-skeleton' />,
-              icon: <div class='skeleton-element icon-skeleton' />,
-            })
-          )}
-        </div>
-      );
-    };
-
     return {
       renderCommentInput,
       renderMarkdownDialog,
       renderActivityContent,
-      renderSkeleton,
     };
   },
   render() {
@@ -687,9 +714,10 @@ export default defineComponent({
         title={this.$t('活动')}
       >
         {this.renderCommentInput()}
+        <DetailLoadStatus loading={this.loading && this.loaded} error={this.error} onRetry={() => this.$emit('retry')} />
         <div class='activity-list'>
-          {this.loading
-            ? this.renderSkeleton()
+          {this.loading && !this.loaded
+            ? <IssuesLoading variant='activity' />
             : this.list.map((item, index) => this.renderActivityContent(item, index !== this.list.length - 1))}
         </div>
         {this.renderMarkdownDialog()}

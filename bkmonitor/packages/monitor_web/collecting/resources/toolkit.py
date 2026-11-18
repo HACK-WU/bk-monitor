@@ -21,12 +21,12 @@ from rest_framework import serializers
 
 from bkmonitor.models import MetricListCache, QueryConfigModel, StrategyModel
 from bkmonitor.utils.cipher import RSACipher
+from bkmonitor.utils.nodeman import host_queries
 from bkmonitor.utils.request import get_request, get_request_tenant_id
 from constants.cmdb import TargetNodeType
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import Resource, api
 from core.drf_resource.exceptions import CustomException
-from core.errors.api import BKAPIError
 from core.errors.collecting import CollectingError
 from monitor_web.collecting.constant import COLLECT_TYPE_CHOICES
 from monitor_web.collecting.deploy import get_collect_installer
@@ -340,21 +340,7 @@ class IsTaskReady(Resource):
             id=config_id, bk_biz_id=validated_request_data["bk_biz_id"]
         )
 
-        # 兼容非节点管理部署的采集
-        if not config.deployment_config.subscription_id:
-            return True
-
-        params = {
-            "subscription_id": config.deployment_config.subscription_id,
-            "task_id_list": config.deployment_config.task_ids,
-        }
-        try:
-            result = api.node_man.check_task_ready(**params)
-            return result
-        except BKAPIError as e:
-            # 兼容旧版节点管理设计，若esb不存在此接口，则说明为旧版逻辑
-            logger.info(f"[is_task_ready] {e}")
-            return True
+        return get_collect_installer(config).is_task_ready()
 
 
 class EncryptPasswordResource(Resource):
@@ -555,9 +541,9 @@ class CheckPluginVersionResource(Resource):
             if validated_request_data["collect_type"] != collect_type:
                 continue
             # 动态进程采集依赖bkmonitorbeat-v2.10.0/v0.33.0
-            all_plugin = api.node_man.plugin_search(
-                {"page": 1, "pagesize": len(bk_host_ids), "conditions": [], "bk_host_id": bk_host_ids}
-            )["list"]
+            all_plugin = host_queries.beat_plugin_status(
+                bk_biz_ids=[validated_request_data["bk_biz_id"]], bk_host_ids=bk_host_ids
+            )
             for plugin in all_plugin:
                 for plugin_name, version in check_plugins.items():
                     beat_plugin = list(filter(lambda x: x["name"] == plugin_name, plugin["plugin_status"]))

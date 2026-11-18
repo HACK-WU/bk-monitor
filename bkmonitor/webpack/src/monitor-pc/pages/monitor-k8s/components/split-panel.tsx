@@ -34,6 +34,7 @@ import { LANGUAGE_COOKIE_KEY } from 'monitor-common/utils';
 import { ALARM_CENTER_LIST_HASH, getAlarmCenterListHash } from 'monitor-common/utils/alarm-center-router';
 import bus from 'monitor-common/utils/event-bus';
 import { docCookies, random } from 'monitor-common/utils/utils';
+import { resolveLegacyHostHash } from 'monitor-pc/common/legacy-host-url';
 import { DEFAULT_METHOD } from 'monitor-ui/chart-plugins/constants';
 import { type IPanelModel, type IViewOptions, BookMarkModel } from 'monitor-ui/chart-plugins/typings';
 
@@ -256,6 +257,7 @@ export default class SplitPanel extends tsc<ISplitPanelProps, ISplitPanelEvent> 
       type,
       id,
       is_split: true,
+      ...(this.sceneId === 'kubernetes' && id === 'pod' ? { supports_pod_memory_promql: true } : {}),
     }).catch(() => ({ id: '', panels: [], name: '' }));
     this.sceneData = new BookMarkModel(data || { id: '', panels: [], name: '' });
     this.localPanels = this.handleGetLocalPanels(this.sceneData.panels);
@@ -310,10 +312,15 @@ export default class SplitPanel extends tsc<ISplitPanelProps, ISplitPanelEvent> 
   handleNewPage() {
     const url = `${location.origin}${location.pathname}${location.search}`;
     const { current_target } = this.variables;
+    if (this.relatePage === 'host') {
+      const hostId = current_target?.bk_host_id;
+      const hash = resolveLegacyHostHash({
+        id: hostId ? String(hostId) : `${current_target?.bk_target_ip || 0}-${current_target?.bk_target_cloud_id || 0}`,
+      });
+      window.open(`${url}${hash}`);
+      return;
+    }
     const urlMap = {
-      host: `${url}#/performance/detail/${current_target?.bk_target_ip || 0}-${
-        current_target?.bk_target_cloud_id || 0
-      }`,
       kubernetes: `${url}#/k8s?dashboardId=${this.relateTab.replace(`_${this.sceneType}`, '')}`,
       alert_event: `${url}${ALARM_CENTER_LIST_HASH}`,
       action_event: `${url}${getAlarmCenterListHash({ searchType: 'action', activeFilterId: 'action' })}`,

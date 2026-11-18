@@ -28,10 +28,12 @@ from django.utils.timezone import make_aware
 from django.utils.timezone import now as tz_now
 from django.utils.translation import gettext as _
 
+from bkmonitor.utils.base62 import decode_identifier, decode_metric_identifier
 from bkmonitor.utils.db.fields import JsonField
 from constants.common import DEFAULT_TENANT_ID
 from core.drf_resource import api
 from metadata import config
+from metadata.builtin_metrics import SYSTEM_BASE_DATA_ID, SYSTEM_BASE_METRIC_UNITS
 from metadata.models.constants import (
     BULK_CREATE_BATCH_SIZE,
     BULK_UPDATE_BATCH_SIZE,
@@ -40,10 +42,11 @@ from metadata.models.constants import (
 )
 from metadata.models.data_source import DataSource
 from metadata.models.result_table import (
-    ResultTable,
+    CustomFormatV4DataLinkOption,
     ResultTableField,
     ResultTableOption,
 )
+from metadata.models.space.constants import EtlConfigs
 from metadata.models.storage import ClusterInfo
 from metadata.utils.db import filter_model_by_in_page
 from metadata.utils.redis_tools import RedisTools
@@ -182,13 +185,6 @@ class TimeSeriesGroup(CustomGroupBase):
     def is_cmdb_relation_builtin(self):
         return bool(self.CMDB_RELATION_BUILT_IN_GROUP_NAME_REGEX.match(self.time_series_group_name))
 
-    @classmethod
-    def make_cmdb_relation_builtin_table_id_and_group_name(cls, bk_biz_id, space_type):
-        return (
-            f"{bk_biz_id}_{space_type}_built_in_time_series.__default__",
-            f"{bk_biz_id}_{space_type}_built_in_time_series",
-        )
-
     # 组合一个默认的table_id
     @staticmethod
     def make_table_id(bk_biz_id, bk_data_id, table_name=None, bk_tenant_id=DEFAULT_TENANT_ID):
@@ -325,16 +321,19 @@ class TimeSeriesGroup(CustomGroupBase):
             # 格式: {field_name: 是否禁用}
             metric_dict[item["field_name"]] = not item.get("is_active", True)
             # 兼容传入 tag_value_list/tag_list 的情况
-            if "tag_value_list" in item:
+            tag_value_list = item.get("tag_value_list") or {}
+            if tag_value_list:
                 is_update_description = False
-                for tag in item["tag_value_list"].keys():
-                    tag_dict[tag] = ""
-            else:
-                for tag in item.get("tag_list", []):
-                    # 取第一个值，后面重复的直接忽略
-                    if not tag.get("field_name") or tag["field_name"] in tag_dict:
-                        continue
-                    tag_dict[tag["field_name"]] = tag.get("description", "")
+                for tag_name in tag_value_list:
+                    tag_dict.setdefault(tag_name, "")
+
+            for tag in item.get("tag_list") or []:
+                tag_name = tag.get("field_name")
+                if not tag_name:
+                    continue
+                # 静态配置中的描述优先于自动发现生成的空描述
+                if tag_name not in tag_dict or not tag_dict[tag_name]:
+                    tag_dict[tag_name] = tag.get("description", "")
 
         return {
             "is_update_description": is_update_description,
@@ -448,8 +447,11 @@ class TimeSeriesGroup(CustomGroupBase):
 
     def bulk_refresh_rt_fields(self, table_id: str, metric_info: list):
         """批量刷新结果表打平的指标和维度"""
-        # 根据field_name聚合metric_info，合并tag_value_list
-        aggregated_metrics = defaultdict(lambda: {"tag_value_list": {}, "tag_list": []})
+        # 根据 field_name 聚合 metric_info，合并不同 scope 下的指标维度
+        # tag_map 仅用于聚合过程中的 O(1) 查找，输出前会剔除
+        aggregated_metrics: dict[str, Any] = defaultdict(
+            lambda: {"tag_value_list": {}, "tag_list": [], "tag_map": {}, "is_active": False}
+        )
 
         for item in metric_info:
             field_name = item.get("field_name")
@@ -457,12 +459,15 @@ class TimeSeriesGroup(CustomGroupBase):
                 continue
 
             # 初始化聚合数据
-            aggregated_metrics[field_name].setdefault("field_name", field_name)
+            aggregated_metric = aggregated_metrics[field_name]
+            aggregated_metric["field_name"] = field_name
+            # ResultTableField 是表级打平字段，任一 scope 活跃时该指标都应保持启用
+            aggregated_metric["is_active"] = aggregated_metric["is_active"] or item.get("is_active", True)
 
             # 合并 tag_value_list
             tag_value_list = item.get("tag_value_list") or {}
             for tag_name, tag_info in tag_value_list.items():
-                existing_tag = aggregated_metrics[field_name]["tag_value_list"].get(tag_name)
+                existing_tag = aggregated_metric["tag_value_list"].get(tag_name)
                 tag_info = tag_info or {}
                 new_values = set(tag_info.get("values") or [])
                 new_update_time = tag_info.get("last_update_time", 0)
@@ -473,13 +478,29 @@ class TimeSeriesGroup(CustomGroupBase):
                     existing_tag["last_update_time"] = max(existing_tag["last_update_time"], new_update_time)
                 else:
                     # 新建 tag 信息
-                    aggregated_metrics[field_name]["tag_value_list"][tag_name] = {
+                    aggregated_metric["tag_value_list"][tag_name] = {
                         "last_update_time": new_update_time,
                         "values": list(new_values),
                     }
 
-        # 将聚合后的数据转换为列表
-        metric_info = list(aggregated_metrics.values())
+            # 合并插件配置传入的 tag_list，保留第一个非空描述；tag_map 跨 scope 复用
+            tag_map = aggregated_metric["tag_map"]
+            for tag in item.get("tag_list") or []:
+                tag_name: str | None = tag.get("field_name")
+                if not tag_name:
+                    continue
+                if tag_name not in tag_map:
+                    aggregated_tag = dict(tag)
+                    aggregated_metric["tag_list"].append(aggregated_tag)
+                    tag_map[tag_name] = aggregated_tag
+                elif not tag_map[tag_name].get("description") and tag.get("description"):
+                    tag_map[tag_name]["description"] = tag["description"]
+
+        # 将聚合后的数据转换为列表，并移除内部辅助字段
+        metric_info = []
+        for aggregated_metric in aggregated_metrics.values():
+            aggregated_metric.pop("tag_map", None)
+            metric_info.append(aggregated_metric)
 
         # 创建或更新
         metric_tag_info = self._refine_metric_tags(metric_info)
@@ -754,6 +775,7 @@ class TimeSeriesGroup(CustomGroupBase):
         data_label: str | None = None,
         metric_group_dimensions: list[dict] | None = None,
         is_need_deploy_collector_config: bool = True,
+        is_sync_db: bool = True,
     ):
         """
         创建一个新的自定义分组记录
@@ -772,13 +794,28 @@ class TimeSeriesGroup(CustomGroupBase):
         :param bk_tenant_id: 租户ID
         :param metric_group_dimensions: 指标分组的维度key配置，如 [{"key": "scope_name", "default_value": "default"}]
         :param is_need_deploy_collector_config: 是否需要下发 collector 配置
+        :param is_sync_db: 是否在创建 ResultTable 后立即下发数据链路
         :return: group object
         """
+        additional_options = dict(additional_options or {})
+
         # 将 metric_group_dimensions 合并到 additional_options，流向 ResultTableOption
         if metric_group_dimensions is not None:
-            if additional_options is None:
-                additional_options = {}
             additional_options["metric_group_dimensions"] = metric_group_dimensions
+
+        data_source = DataSource.objects.get(bk_tenant_id=bk_tenant_id, bk_data_id=bk_data_id)
+        is_custom_format = data_source.etl_config == EtlConfigs.BK_CUSTOM_FORMAT.value
+        if is_custom_format:
+            if additional_options.get(ResultTableOption.OPTION_ENABLE_CUSTOM_FORMAT_V4_DATA_LINK) is not True:
+                raise ValueError(_("自定义格式 TimeSeriesGroup 必须开启自定义格式 V4 数据链路"))
+            custom_format_config = additional_options.get(ResultTableOption.OPTION_CUSTOM_FORMAT_V4_DATA_LINK)
+            if custom_format_config is None:
+                raise ValueError(_("自定义格式 TimeSeriesGroup 缺少 custom_format_v4_data_link 配置"))
+            custom_format_option = CustomFormatV4DataLinkOption.from_option_value(custom_format_config)
+            if custom_format_option.target_storage_type != ClusterInfo.TYPE_VM:
+                raise ValueError(_("自定义格式 TimeSeriesGroup 仅支持 victoria_metrics 目标存储"))
+
+            additional_options.setdefault(ResultTableOption.OPTION_ENABLE_FIELD_BLACK_LIST, True)
 
         custom_group = super().create_custom_group(
             bk_data_id=bk_data_id,
@@ -795,6 +832,7 @@ class TimeSeriesGroup(CustomGroupBase):
             additional_options=additional_options,
             data_label=data_label,
             bk_tenant_id=bk_tenant_id,
+            is_sync_db=is_sync_db,
         )
 
         # 写入 metric_group_dimensions 模型字段
@@ -802,10 +840,9 @@ class TimeSeriesGroup(CustomGroupBase):
             custom_group.metric_group_dimensions = metric_group_dimensions
             custom_group.save(update_fields=["metric_group_dimensions"])
 
-        # 需要刷新一次外部依赖的consul，触发transfer更新
-        from metadata.models import DataSource
-
-        DataSource.objects.get(bk_data_id=bk_data_id).refresh_consul_config()
+        # 自定义格式由 BKBase V4 DataLink 消费，不重新写入旧 Transfer/Consul 配置。
+        if not is_custom_format:
+            data_source.refresh_consul_config()
 
         return custom_group
 
@@ -1165,54 +1202,6 @@ class TimeSeriesGroup(CustomGroupBase):
 
         return metric_info_list
 
-    def set_table_id_disable(self):
-        """
-        将相关的结果表都设置为已经废弃
-        1. 对于公共结果表的，直接设置公共结果表废弃使用
-        2. 对于拆分结果表的，需要遍历相关的所有metric，将每个结果表逐一设置为废弃使用
-        :return: True | False
-        """
-        # 1. 判断是否公共结果表
-        if not self.is_split_measurement:
-            # 公共结果表，直接设置即可
-            ResultTable.objects.filter(table_id=self.table_id, bk_tenant_id=self.bk_tenant_id).update(
-                is_deleted=True, is_enable=False
-            )
-            logger.info(
-                "ts group->[%s] table_id->[%s] of bk_tenant_id->[%s] is set to disabled now.",
-                self.custom_group_name,
-                self.table_id,
-                self.bk_tenant_id,
-            )
-
-            return True
-
-        # 2. 拆分结果表的，先遍历所有的metric
-        # TODO 这里需要调整,因为实际拆分结果表也不会生成新的table_id了，对应的应该在TimeSeriesMetric上增加状态位
-
-        logger.info("ts group->[%s] is split measurement will disable all tables.", self.custom_group_name)
-        for metric_group in TimeSeriesMetric.objects.filter(group_id=self.custom_group_id):
-            # 2.1 每个metric拼接出结果表名
-            table_id = self.make_metric_table_id(metric_group.field_name)
-            # 2.2 设置该结果表启用
-            ResultTable.objects.filter(table_id=self.table_id, bk_tenant_id=self.bk_tenant_id).update(
-                is_deleted=True, is_enable=False
-            )
-
-            logger.info(
-                "ts group->[%s] of bk_tenant_id->[%s]per table_id->[%s] is set to disabled now.",
-                self.custom_group_name,
-                self.bk_tenant_id,
-                table_id,
-            )
-
-        logger.info(
-            "ts group->[%s] of bk_tenant_id->[%s] all table_id is set to disabled now.",
-            self.custom_group_name,
-            self.bk_tenant_id,
-        )
-        return True
-
 
 class TimeSeriesScope(models.Model):
     """
@@ -1441,6 +1430,18 @@ class TimeSeriesScope(models.Model):
         return scope_name_to_metrics, scope_name_to_dimensions
 
     @classmethod
+    def build_new_dimension_config(cls, dimension: str) -> dict:
+        """新发现维度的初始配置
+
+        SDK 会把含中文等非法字符的维度名编码成 base62 标识符上报，查询必须继续使用编码后的名字，
+        这里把解码出的原始名回填成别名，让各展示入口都能拿到可读的维度名。
+        """
+        original_name = decode_identifier(dimension)
+        if original_name == dimension:
+            return {}
+        return {"alias": original_name}
+
+    @classmethod
     def _do_bulk_refresh_ts_scopes(cls, group_id: int, scope_name_to_dimensions: dict):
         # 1. 获取已存在的 scope
         exists_scope_name_to_obj = {scope.scope_name: scope for scope in cls.objects.filter(group_id=group_id)}
@@ -1458,12 +1459,12 @@ class TimeSeriesScope(models.Model):
                 dimension_config = scope.dimension_config or {}
                 new_dims = {dim for dim in dimensions if dim not in dimension_config}
                 if new_dims:
-                    dimension_config.update({dim: {} for dim in new_dims})
+                    dimension_config.update({dim: cls.build_new_dimension_config(dim) for dim in new_dims})
                     scope.dimension_config = dimension_config
                     scopes_to_update.append(scope)
             else:
                 # 不存在的 scope：创建新的 scope
-                dimension_config = {dim: {} for dim in dimensions}
+                dimension_config = {dim: cls.build_new_dimension_config(dim) for dim in dimensions}
                 # 根据是否为默认分组决定 create_from 字段
                 create_from = cls.CREATE_FROM_DEFAULT if create_from_default else cls.CREATE_FROM_DATA
                 new_scope = cls(
@@ -1989,6 +1990,38 @@ class TimeSeriesMetric(models.Model):
         return list(tags)
 
     @classmethod
+    def build_new_metric_config(cls, field_name: str, default_units: dict | None = None) -> dict:
+        """新发现指标的初始配置
+
+        SDK 会把含中文等非法字符的指标名编码成 base62 标识符上报，查询必须继续使用编码后的名字，
+        这里把解码出的原始名回填成别名，让各展示入口都能拿到可读的指标名。
+        """
+        field_config = {}
+        original_name = decode_metric_identifier(field_name)
+        if original_name != field_name:
+            field_config["alias"] = original_name
+        if default_units and field_name in default_units:
+            field_config["unit"] = default_units[field_name]
+        return field_config
+
+    @classmethod
+    def get_builtin_metric_units(cls, group: TimeSeriesGroup) -> dict:
+        if group.bk_data_id != SYSTEM_BASE_DATA_ID:
+            return {}
+        units = SYSTEM_BASE_METRIC_UNITS.copy()
+        # Preserve units configured through the legacy result-table fields.
+        units.update(
+            ResultTableField.objects.filter(
+                bk_tenant_id=group.bk_tenant_id,
+                table_id=group.table_id,
+                field_name__in=units,
+            )
+            .exclude(unit="")
+            .values_list("field_name", "unit")
+        )
+        return units
+
+    @classmethod
     def _bulk_create_metrics(
         cls,
         metrics_dict: dict,
@@ -1996,6 +2029,7 @@ class TimeSeriesMetric(models.Model):
         group_id: int,
         table_id: str,
         is_auto_discovery: bool,
+        default_units: dict | None = None,
     ) -> bool:
         """批量创建指标"""
         records = []
@@ -2017,6 +2051,7 @@ class TimeSeriesMetric(models.Model):
                 "field_scope": field_scope,
                 "scope_id": metric_info.get("scope_id"),
                 "is_active": True,  # 新创建的指标在返回列表中，标记为活跃
+                "field_config": cls.build_new_metric_config(field_name, default_units),
             }
             logger.info("create ts metric data: %s", json.dumps(params))
             records.append(cls(**params))
@@ -2032,6 +2067,7 @@ class TimeSeriesMetric(models.Model):
         need_update_metrics: list | set,
         group_id: int,
         is_auto_discovery: bool,
+        default_units: dict | None = None,
     ) -> bool:
         """批量更新指标，针对记录仅更新最后更新时间和 tag 字段"""
         records = []
@@ -2083,11 +2119,18 @@ class TimeSeriesMetric(models.Model):
                 is_need_update = True
                 obj.tag_list = tag_list
 
-            # 如果指标从 disabled 状态恢复，需要更新 scope_id 和清空 field_config
+            # 如果指标从 disabled 状态恢复，需要更新 scope_id 和重置 field_config
             if obj.scope_id == cls.DISABLE_SCOPE_ID:
                 is_need_update = True
                 obj.scope_id = metric_info.get("scope_id")
-                obj.field_config = {}
+                field_config = cls.build_new_metric_config(obj.field_name, default_units)
+                if default_units and obj.field_name in default_units:
+                    # Builtin metrics retain custom display settings when rediscovered.
+                    field_config.update(obj.field_config or {})
+                    field_config.pop("disabled", None)
+                    if not field_config.get("unit"):
+                        field_config["unit"] = default_units[obj.field_name]
+                obj.field_config = field_config
 
             # 更新 is_active 字段：指标在返回列表中，标记为活跃
             if not obj.is_active:
@@ -2194,17 +2237,18 @@ class TimeSeriesMetric(models.Model):
 
         table_id = group.table_id
         is_auto_discovery = group.is_auto_discovery()
+        default_units = cls.get_builtin_metric_units(group)
         # NOTE: 针对创建或者时间变动时，推送路由数据
         need_push_router = False
         # 如果存在，则批量创建
         if need_create_metrics:
             need_push_router = cls._bulk_create_metrics(
-                _metrics_dict, need_create_metrics, group_id, table_id, is_auto_discovery
+                _metrics_dict, need_create_metrics, group_id, table_id, is_auto_discovery, default_units
             )
         # 批量更新
         if need_update_metrics:
             need_push_router |= cls._bulk_update_metrics(
-                _metrics_dict, need_update_metrics, group_id, is_auto_discovery
+                _metrics_dict, need_update_metrics, group_id, is_auto_discovery, default_units
             )
 
         # 处理不在返回列表中的已存在指标，设置为非活跃

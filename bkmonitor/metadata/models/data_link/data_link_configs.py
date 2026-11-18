@@ -8,12 +8,15 @@ an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express o
 specific language governing permissions and limitations under the License.
 """
 
+import copy
+import datetime
 import json
 import logging
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, cast
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from typing_extensions import deprecated
 
 from bkmonitor.utils.db.fields import SymmetricJsonField
@@ -24,6 +27,15 @@ from metadata.models.data_link.constants import BKBASE_NAMESPACE_BK_LOG, BKBASE_
 from metadata.models.space.constants import LOG_EVENT_ETL_CONFIGS
 
 logger = logging.getLogger("metadata")
+
+
+def _format_data_source_datetime(value: datetime.datetime | str) -> str:
+    if isinstance(value, str):
+        return value
+    if timezone.is_aware(value):
+        value = timezone.localtime(value)
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
 
 if TYPE_CHECKING:
     from metadata.models.data_source import DataSource
@@ -38,7 +50,9 @@ class DataLinkResourceConfigBase(models.Model):
     CONFIG_KIND_CHOICES = (
         (DataLinkKind.DATAID.value, "数据源"),
         (DataLinkKind.RESULTTABLE.value, "结果表"),
+        (DataLinkKind.CHANNELBINDING.value, "结果表通道绑定"),
         (DataLinkKind.VMSTORAGEBINDING.value, "存储配置"),
+        (DataLinkKind.SURREALDBBINDING.value, "SurrealDB绑定"),
         (DataLinkKind.DATABUS.value, "清洗任务"),
         (DataLinkKind.SINK.value, "清洗配置"),
         (DataLinkKind.CONDITIONALSINK.value, "过滤条件"),
@@ -118,6 +132,63 @@ class DataIdConfig(DataLinkResourceConfigBase):
         verbose_name = "数据源配置"
         verbose_name_plural = verbose_name
         unique_together = (("bk_tenant_id", "namespace", "name"),)
+
+    def compose_data_source_config(
+        self,
+        data_source_alias: str | None = None,
+        description: str | None = None,
+        created_by: str | None = None,
+        created_at: datetime.datetime | str | None = None,
+        updated_by: str | None = None,
+        updated_at: datetime.datetime | str | None = None,
+    ) -> dict[str, Any]:
+        """组装引用当前 DataId 的 BKBase DataSource 资源配置。"""
+        default_operator = settings.BK_DATA_PROJECT_MAINTAINER.split(",")[0]
+        default_time = timezone.now()
+        created_at = created_at or self.create_time or default_time
+        updated_at = updated_at or self.last_modify_time or default_time
+        basic_info = {
+            "data_source_name": self.name,
+            "data_source_alias": self.name if data_source_alias is None else data_source_alias,
+            "data_encoding": "UTF-8",
+            "bk_biz_id": self.datalink_biz_ids.data_biz_id,
+            "time_zone": settings.TIME_ZONE,
+            "tags": [],
+            "description": self.name if description is None else description,
+            "access_channel": "bkbase",
+            "access_channel_alias": "计算平台",
+        }
+        data_id = {
+            "kind": DataLinkKind.DATAID.value,
+            "namespace": self.namespace,
+            "name": self.name,
+        }
+        metadata = {
+            "namespace": self.namespace,
+            "name": self.name,
+            "labels": {},
+        }
+        if self.bk_data_id > 0:
+            metadata["labels"]["raw_data_id"] = str(self.bk_data_id)
+        if settings.ENABLE_MULTI_TENANT_MODE:
+            metadata["tenant"] = self.bk_tenant_id
+            data_id["tenant"] = self.bk_tenant_id
+
+        return {
+            "kind": "DataSource",
+            "metadata": metadata,
+            "spec": {
+                "basic_info": basic_info,
+                "report_config": {"type": "custom"},
+                "data_id": data_id,
+                "data_conn": None,
+                "created_by": created_by or default_operator,
+                "created_at": _format_data_source_datetime(created_at),
+                "updated_by": updated_by or default_operator,
+                "updated_at": _format_data_source_datetime(updated_at),
+                "desired_status": "Running",
+            },
+        }
 
     def compose_predefined_config(self, data_source: "DataSource") -> dict[str, Any]:
         """
@@ -279,16 +350,16 @@ class ResultTableConfig(DataLinkResourceConfigBase):
 
         # 优先使用ResultTableConfig记录的bkbase_table_id，因为重建链路的所属业务并不稳定
         if self.bkbase_table_id:
-            bk_biz_id = int(self.bkbase_table_id.split("_")[0])
+            data_biz_id = int(self.bkbase_table_id.split("_")[0])
         else:
-            bk_biz_id = self.datalink_biz_ids.label_biz_id
+            data_biz_id = self.datalink_biz_ids.data_biz_id
 
         maintainer = settings.BK_DATA_PROJECT_MAINTAINER.split(",")
         render_params = {
             "name": self.name,
             "namespace": self.namespace,
-            "bk_biz_id": bk_biz_id,  # 数据实际归属的业务ID
-            "monitor_biz_id": self.datalink_biz_ids.data_biz_id,  # 接入者的业务ID
+            "bk_biz_id": data_biz_id if self.bkbase_table_id else self.datalink_biz_ids.label_biz_id,  # 保持原标签规则
+            "monitor_biz_id": data_biz_id,  # 完整 BKBase RT ID 的业务前缀
             "data_type": self.data_type,
             "maintainers": json.dumps(maintainer),
             "fields": json.dumps(fields, ensure_ascii=False) if fields else "null",
@@ -303,6 +374,46 @@ class ResultTableConfig(DataLinkResourceConfigBase):
             render_params=render_params,
             err_msg_prefix="compose bkdata es table_id config",
         )
+
+
+class ChannelBindingConfig(DataLinkResourceConfigBase):
+    """BKBase ResultTable 与 Inner KafkaChannel 的绑定配置。"""
+
+    kind = DataLinkKind.CHANNELBINDING.value
+    name = models.CharField(verbose_name="通道绑定名称", max_length=64, db_index=True)
+    bkbase_result_table_name = models.CharField(verbose_name="BKBase结果表名称", max_length=255)
+    channel_name = models.CharField(verbose_name="Inner KafkaChannel名称", max_length=255)
+
+    class Meta:
+        verbose_name = "结果表通道绑定配置"
+        verbose_name_plural = verbose_name
+        unique_together = (("bk_tenant_id", "namespace", "name"),)
+
+    def compose_config(self) -> dict[str, Any]:
+        data = {
+            "kind": DataLinkKind.RESULTTABLE.value,
+            "namespace": self.namespace,
+            "name": self.bkbase_result_table_name,
+        }
+        channel = {
+            "kind": DataLinkKind.KAFKACHANNEL.value,
+            "namespace": self.namespace,
+            "name": self.channel_name,
+        }
+        metadata: dict[str, Any] = {
+            "name": self.name,
+            "namespace": self.namespace,
+            "labels": {"bk_biz_id": str(self.datalink_biz_ids.label_biz_id)},
+        }
+        if settings.ENABLE_MULTI_TENANT_MODE:
+            metadata["tenant"] = self.bk_tenant_id
+            data["tenant"] = self.bk_tenant_id
+            channel["tenant"] = self.bk_tenant_id
+        return {
+            "kind": self.kind,
+            "metadata": metadata,
+            "spec": {"data": data, "channel": channel},
+        }
 
 
 class ESStorageBindingConfig(DataLinkResourceConfigBase):
@@ -366,6 +477,7 @@ class ESStorageBindingConfig(DataLinkResourceConfigBase):
                         {% endif %}
                         "name": "{{storage_cluster_name}}"
                     },
+                    "doc_type": "{{doc_type}}",
                     "write_alias": {
                         "TimeBased": {
                             "format": "{{write_alias_format}}",
@@ -385,11 +497,13 @@ class ESStorageBindingConfig(DataLinkResourceConfigBase):
             "namespace": self.namespace,
             "bk_biz_id": self.datalink_biz_ids.label_biz_id,  # 数据实际归属的业务ID
             "storage_cluster_name": storage_cluster_name,
+            "doc_type": self.table_id,
             "unique_field_list": json.dumps(unique_field_list),
             "write_alias_format": write_alias_format,
             "timezone": self.timezone,
             "maintainers": json.dumps(maintainer),
-            "json_field_list": json.dumps(json_field_list) if json_field_list is not None else "null",
+            # BKBase V4 按数组反序列化该字段，缺省时必须发送空数组，不能发送 null。
+            "json_field_list": json.dumps(json_field_list or []),
         }
 
         # 现阶段仅在多租户模式下添加tenant字段
@@ -524,6 +638,65 @@ class VMStorageBindingConfig(DataLinkResourceConfigBase):
         )
 
 
+@deprecated("已废弃，Graph Relation V4 写入目标统一使用 ResultTableOption 配置")
+class GraphRelationBindingConfig(models.Model):
+    """
+    已废弃的图关系写入目标配置。
+
+    仅保留模型和历史字段用于兼容已有数据库记录，不再参与 Graph Relation V4
+    的配置、状态聚合、组件删除或链路重建。当前写入目标由 ResultTableOption
+    的 graph_relation_v4_data_link 选项声明。
+    """
+
+    WRITE_MODE_VM = "vm"
+    WRITE_MODE_SURREALDB = "surrealdb"
+    WRITE_MODE_VM_AND_SURREALDB = "vm_and_surrealdb"
+    WRITE_MODE_CHOICES = (
+        (WRITE_MODE_VM, "VM"),
+        (WRITE_MODE_SURREALDB, "SurrealDB"),
+        (WRITE_MODE_VM_AND_SURREALDB, "VM + SurrealDB"),
+    )
+
+    kind = DataLinkKind.GRAPHRELATIONBINDING.value
+    namespace = models.CharField(
+        verbose_name="命名空间", max_length=64, default=settings.DEFAULT_VM_DATA_LINK_NAMESPACE
+    )
+    create_time = models.DateTimeField("创建时间", auto_now_add=True)
+    last_modify_time = models.DateTimeField("最后更新时间", auto_now=True)
+    status = models.CharField(verbose_name="状态", max_length=64)
+    data_link_name = models.CharField(verbose_name="数据链路名称", max_length=64, blank=True)
+    bk_biz_id = models.BigIntegerField(verbose_name="业务ID")
+    bk_tenant_id: str = models.CharField("租户ID", max_length=256, null=True, default="system")  # pyright: ignore[reportAssignmentType]
+    name = models.CharField(verbose_name="图关系绑定配置名称", max_length=64, db_index=True)
+    write_mode = models.CharField(
+        verbose_name="写入模式",
+        max_length=32,
+        choices=WRITE_MODE_CHOICES,
+        default=WRITE_MODE_VM_AND_SURREALDB,
+    )
+    vm_cluster_name = models.CharField(verbose_name="VM集群名称", max_length=64, default="", blank=True)
+    surrealdb_cluster_name = models.CharField(verbose_name="SurrealDB集群名称", max_length=64, default="", blank=True)
+    table_id = models.CharField(verbose_name="结果表ID", max_length=255, default="", blank=True)
+    bkbase_result_table_name = models.CharField(verbose_name="BKBase结果表名称", max_length=255, default="")
+    graph_result_table_name = models.CharField(verbose_name="图BKBase结果表名称", max_length=255, default="")
+    vm_storage_binding_name = models.CharField(verbose_name="VM存储绑定名称", max_length=255, default="", blank=True)
+    vm_databus_name = models.CharField(verbose_name="VM清洗任务名称", max_length=255, default="", blank=True)
+    surrealdb_binding_name = models.CharField(verbose_name="SurrealDB绑定名称", max_length=255, default="", blank=True)
+    graph_databus_name = models.CharField(verbose_name="图清洗任务名称", max_length=255, default="", blank=True)
+    table_type = models.CharField(verbose_name="图表类型", max_length=32, default="temporary")
+    vertices = models.JSONField(verbose_name="顶点定义", default=list)
+    relations = models.JSONField(verbose_name="关系定义", default=list)
+    surrealdb_auto_restore = models.BooleanField(verbose_name="SurrealDB自动恢复写入", default=False)
+
+    class Meta:
+        verbose_name = "图关系绑定配置"
+        verbose_name_plural = verbose_name
+        unique_together = (("bk_tenant_id", "namespace", "name"),)
+        indexes = [
+            models.Index(fields=["bk_tenant_id", "namespace", "data_link_name"], name="grbc_tenant_ns_dl_idx"),
+        ]
+
+
 class DataBusConfig(DataLinkResourceConfigBase):
     """
     链路清洗任务配置
@@ -535,11 +708,39 @@ class DataBusConfig(DataLinkResourceConfigBase):
     bk_data_id = models.IntegerField(verbose_name="数据源ID", default=0)
     sink_names = models.JSONField(verbose_name="处理配置列表", default=list, help_text="格式为kind:name，便于检索")
     consumer_group = models.CharField(verbose_name="Consumer Group", max_length=255, default="", blank=True)
+    options = models.JSONField(verbose_name="清洗任务额外配置", default=dict, blank=True)
+    data_link_strategy = models.CharField(verbose_name="数据链路策略标记", max_length=64, default="", blank=True)
+    source_kind = models.CharField(verbose_name="源资源类型", max_length=64, default=DataLinkKind.DATAID.value)
+    source_name = models.CharField(verbose_name="源资源名称", max_length=64, default="", blank=True)
+    role = models.CharField(verbose_name="Databus角色", max_length=32, default="main", blank=True)
 
     class Meta:
         verbose_name = "清洗任务配置"
         verbose_name_plural = verbose_name
         unique_together = (("bk_tenant_id", "namespace", "name"),)
+
+    def stop_config(self):
+        """停止 Databus 任务，保留远端资源和本地记录。"""
+        from metadata.models.data_link.data_link import DataLink
+
+        try:
+            config = api.bkdata.get_data_link(
+                bk_tenant_id=self.bk_tenant_id,
+                kind=DataLinkKind.get_choice_value(self.kind),
+                namespace=self.namespace,
+                name=self.name,
+            )
+        except Exception as error:
+            if DataLink._is_remote_component_not_found(error):
+                return
+            raise
+        config = copy.deepcopy(config)
+        config["metadata"].setdefault("annotations", {})["task_stopped"] = "true"
+        # 只下发配置，不回写远端 status 等运行态字段。
+        api.bkdata.apply_data_link(
+            bk_tenant_id=self.bk_tenant_id,
+            config=[{key: config[key] for key in ("kind", "metadata", "spec")}],
+        )
 
     def apply_consumer_group(self, consumer_group: str | None) -> None:
         """应用显式 consumer group；已有值优先，空入参不触发更新。"""
@@ -575,6 +776,7 @@ class DataBusConfig(DataLinkResourceConfigBase):
         transform_name: str | None = constants.DEFAULT_METRIC_TRANSFORMER,
         transform_format: str | None = constants.DEFAULT_METRIC_TRANSFORMER_FORMAT,
         transform_options: dict[str, Any] | None = None,
+        transforms: list[dict[str, Any]] | None = None,
     ) -> dict:
         """
         组装清洗任务配置，需要声明 where -> how -> where
@@ -585,6 +787,7 @@ class DataBusConfig(DataLinkResourceConfigBase):
         @param transform_name: 转换名称
         @param transform_format: 转换格式
         @param transform_options: 转换额外配置
+        @param transforms: 完整转换列表；传入时覆盖单个预定义转换参数
         """
         tpl = """
         {
@@ -595,7 +798,10 @@ class DataBusConfig(DataLinkResourceConfigBase):
                 "tenant": "{{ tenant }}",
                 {% endif %}
                 "namespace": "{{namespace}}",
-                "labels": {"bk_biz_id": "{{bk_biz_id}}"}
+                "annotations": {"task_stopped": "false"},
+                "labels": {
+                    "bk_biz_id": "{{bk_biz_id}}"
+                }
             },
             "spec": {
                 "maintainers": {{maintainers}},
@@ -605,36 +811,37 @@ class DataBusConfig(DataLinkResourceConfigBase):
                 "sinks": {{sinks}},
                 "sources": [
                     {
-                        "kind": "DataId",
-                        "name": "{{data_id_name}}",
+                        "kind": "{{source_kind}}",
+                        "name": "{{source_name}}",
                         {% if tenant %}
                         "tenant": "{{ tenant }}",
                         {% endif %}
                         "namespace": "{{namespace}}"
                     }
                 ],
-                "transforms": [
-                    {{transform}}
-                ]
+                "transforms": {{transforms}}
             }
         }
         """
         maintainer = settings.BK_DATA_PROJECT_MAINTAINER.split(",")
-        transform = {
-            "kind": transform_kind,
-            "name": transform_name,
-            "format": transform_format,
-        }
-        if transform_options:
-            transform.update(transform_options)
+        if transforms is None:
+            transform = {
+                "kind": transform_kind,
+                "name": transform_name,
+                "format": transform_format,
+            }
+            if transform_options:
+                transform.update(transform_options)
+            transforms = [transform]
         render_params = {
             "name": self.name,
             "namespace": self.namespace,
             "bk_biz_id": self.datalink_biz_ids.label_biz_id,
             "sinks": json.dumps(sinks),
             "sink_name": self.name,
-            "data_id_name": self.data_id_name,
-            "transform": json.dumps(transform),
+            "source_kind": self.source_kind or DataLinkKind.DATAID.value,
+            "source_name": self.source_name or self.data_id_name,
+            "transforms": json.dumps(transforms),
             "maintainers": json.dumps(maintainer),
             "consumer_group": json.dumps(self.consumer_group) if self.consumer_group else None,
         }
@@ -649,7 +856,12 @@ class DataBusConfig(DataLinkResourceConfigBase):
             err_msg_prefix="compose vm databus config",
         )
 
-    def compose_log_config(self, sinks: list[dict[str, Any]], rules: list[dict[str, Any]]) -> dict[str, Any]:
+    def compose_log_config(
+        self,
+        sinks: list[dict[str, Any]],
+        rules: list[dict[str, Any]],
+        filter_rules: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """
         常规日志清洗总线配置
         """
@@ -662,7 +874,10 @@ class DataBusConfig(DataLinkResourceConfigBase):
                 "tenant": "{{ tenant }}",
                 {% endif %}
                 "namespace": "{{namespace}}",
-                "labels": {"bk_biz_id": "{{bk_biz_id}}"}
+                "annotations": {"task_stopped": "false"},
+                "labels": {
+                    "bk_biz_id": "{{bk_biz_id}}"
+                }
             },
             "spec": {
                 "maintainers": {{maintainers}},
@@ -672,8 +887,8 @@ class DataBusConfig(DataLinkResourceConfigBase):
                 "sinks": {{sinks}},
                 "sources": [
                     {
-                        "kind": "DataId",
-                        "name": "{{data_id_name}}",
+                        "kind": "{{source_kind}}",
+                        "name": "{{source_name}}",
                         {% if tenant %}
                         "tenant": "{{ tenant }}",
                         {% endif %}
@@ -684,7 +899,7 @@ class DataBusConfig(DataLinkResourceConfigBase):
                     {
                         "kind": "Clean",
                         "rules": {{rules}},
-                        "filter_rules": "True",
+                        "filter_rules": {{filter_rules}},
                         "context_map": {
                             "use_default_value": "__parse_failure"
                         }
@@ -701,7 +916,9 @@ class DataBusConfig(DataLinkResourceConfigBase):
             "maintainers": json.dumps(maintainer),
             "sinks": json.dumps(sinks),
             "rules": json.dumps(rules),
-            "data_id_name": self.data_id_name,
+            "source_kind": self.source_kind or DataLinkKind.DATAID.value,
+            "source_name": self.source_name or self.data_id_name,
+            "filter_rules": json.dumps(filter_rules if filter_rules is not None else "True"),
             "consumer_group": json.dumps(self.consumer_group) if self.consumer_group else None,
         }
 
@@ -730,6 +947,7 @@ class DataBusConfig(DataLinkResourceConfigBase):
                     "tenant": "{{ tenant }}",
                     {% endif %}
                     "namespace": "{{namespace}}",
+                    "annotations": {"task_stopped": "false"},
                     "labels": {"bk_biz_id": "{{bk_biz_id}}"}
                 },
                 "spec": {
@@ -911,6 +1129,7 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
         "json_fields", // JSON字段
         "original_json_fields",
         "field_config_group", // 字段配置，search_en: ["log"]
+        "tokenizers", // 字段自定义分词规则，例如 {"log": "._=:,"}
         "expires", // 保留时间, 7d, 30d
         "is_profiling", // 是否为profiling, true/false
         "unique_partition_table", // 是否为unique partition table, true/false
@@ -925,6 +1144,8 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
     table_id = models.CharField(verbose_name="结果表ID", max_length=255, default="", blank=True)
     bkbase_result_table_name = models.CharField(verbose_name="BKBase结果表名称", max_length=255, default="")
     doris_cluster_name = models.CharField(verbose_name="Doris集群名称", max_length=255, default="")
+
+    physical_tables = models.JSONField("物理表用途映射", default=dict)
 
     class Meta:
         verbose_name: ClassVar[str] = "Doris存储绑定配置"
@@ -941,6 +1162,10 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
         expires: str,
         flush_timeout: int | None,
         rt_name: str | None = None,
+        tokenizers: dict[str, str] | None = None,
+        db: str | None = None,
+        table: str | None = None,
+        table_type: str = "primary_table",
     ) -> dict[str, Any]:
         """
         组装Doris存储绑定配置
@@ -949,6 +1174,10 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
             rt_name: 关联的 ResultTable 名称。默认沿用 ``self.name``，以兼容历史上
                 binding 与 RT 同名的调用方式；当 compose 复用到不同名的 RT 时，由
                 调用方显式传入实际 RT name。
+            tokenizers: 字段自定义分词规则。None 时不下发，显式空对象仍原样下发。
+            db: 物理库名。传入时以调用方为准（换表后由元数据记录决定），否则沿用默认库。
+            table: 物理表名。传入时以调用方为准（换表后由元数据记录决定），否则沿用
+                ``{name}_{bk_biz_id}`` 的历史规则。
         """
         tpl = """
         {
@@ -979,15 +1208,18 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
                     "kind": "Doris"
                 },
                 "storage_config": {
-                    "table_type": "primary_table",
+                    "table_type": "{{table_type}}",
                     "is_profiling": false,
                     "unique_partition_table": true,
-                    "db": "mapleleaf_{{bk_biz_id}}",
-                    "table": "{{name}}_{{bk_biz_id}}",
+                    "db": "{{db}}",
+                    "table": "{{table}}",
                     "storage_keys": {{storage_keys}},
                     "json_fields": {{json_fields}},
                     "original_json_fields": {{original_json_fields}},
                     "field_config_group": {{field_config_group}},
+                    {% if tokenizers is defined %}
+                    "tokenizers": {{tokenizers}},
+                    {% endif %}
                     "expires": "{{expires}}",
                     "flush_timeout": {{flush_timeout}}
                 }
@@ -995,20 +1227,26 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
         }
         """
 
+        data_biz_id = self.datalink_biz_ids.data_biz_id
         render_params = {
             "name": self.name,
             "rt_name": rt_name if rt_name is not None else self.name,
             "namespace": self.namespace,
-            "bk_biz_id": self.datalink_biz_ids.data_biz_id,
+            "bk_biz_id": data_biz_id,
             "monitor_biz_id": self.datalink_biz_ids.label_biz_id,
             "storage_cluster_name": storage_cluster_name,
+            "table_type": table_type,
             "storage_keys": json.dumps(storage_keys),
             "json_fields": json.dumps(json_fields),
             "field_config_group": json.dumps(field_config_group),
             "original_json_fields": json.dumps(original_json_fields),
             "expires": expires,
             "flush_timeout": json.dumps(flush_timeout),
+            "db": db if db is not None else f"mapleleaf_{data_biz_id}",
+            "table": table if table is not None else f"{self.name}_{data_biz_id}",
         }
+        if tokenizers is not None:
+            render_params["tokenizers"] = json.dumps(tokenizers)
 
         # 现阶段仅在多租户模式下添加tenant字段
         if settings.ENABLE_MULTI_TENANT_MODE:
@@ -1021,16 +1259,255 @@ class DorisStorageBindingConfig(DataLinkResourceConfigBase):
         )
 
 
+class SurrealDBBindingConfig(DataLinkResourceConfigBase):
+    """
+    SurrealDB 绑定配置（图数据库关联关系写入）
+
+    对应 bkbase 资源 kind=SurrealDBBinding
+    spec 字段：data(ResultTable 引用)、storage(SurrealDB 引用)、table_type、vertices、relations
+
+    命名约定：与 ES/VM/Doris 同族 Binding 一致，`self.name` 同时作为 bkbase 侧
+    ResultTable 的 name（两者必须相同）。`bkbase_result_table_name` 字段用于索引/查询时
+    的冗余记录，不参与 compose —— 目的是避免两处不同步引起 spec.data.name 错指。
+    """
+
+    kind = DataLinkKind.SURREALDBBINDING.value
+    name = models.CharField(verbose_name="绑定配置名称", max_length=64, db_index=True)
+    surrealdb_cluster_name = models.CharField(verbose_name="SurrealDB 集群名称", max_length=64)
+    table_id = models.CharField(verbose_name="结果表ID", max_length=255, default="", blank=True)
+    bkbase_result_table_name = models.CharField(verbose_name="BKBase结果表名称", max_length=255, default="")
+    table_type = models.CharField(verbose_name="图表类型", max_length=32, default="temporary")
+    vertices = models.JSONField(verbose_name="顶点定义", default=list)
+    relations = models.JSONField(verbose_name="关系定义", default=list)
+
+    class Meta:
+        verbose_name = "SurrealDB绑定配置"
+        verbose_name_plural = verbose_name
+        unique_together = (("bk_tenant_id", "namespace", "name"),)
+        indexes = [
+            models.Index(fields=["bk_tenant_id", "namespace", "data_link_name"], name="sdbc_tenant_ns_dl_idx"),
+        ]
+
+    def compose_config(self) -> dict[str, Any]:
+        """
+        组装 SurrealDBBinding 配置，关联 ResultTable 与 SurrealDB 集群，并声明图结构（顶点/关系）
+        """
+        # 校验 vertices/relations 基本结构，提前暴露配置错误
+        self._validate_graph_definitions()
+
+        tpl = """
+        {
+            "kind": "SurrealDBBinding",
+            "metadata": {
+                "name": "{{name}}",
+                {% if tenant %}
+                "tenant": "{{ tenant }}",
+                {% endif %}
+                "namespace": "{{namespace}}",
+                "labels": {
+                    "bk_biz_id": "{{bk_biz_id}}"
+                }
+            },
+            "spec": {
+                "data": {
+                    "kind": "ResultTable",
+                    "name": "{{rt_name}}",
+                    {% if tenant %}
+                    "tenant": "{{ tenant }}",
+                    {% endif %}
+                    "namespace": "{{namespace}}"
+                },
+                "storage": {
+                    "kind": "SurrealDB",
+                    "name": "{{surrealdb_name}}",
+                    {% if tenant %}
+                    "tenant": "{{ tenant }}",
+                    {% endif %}
+                    "namespace": "{{namespace}}"
+                },
+                "table_type": "{{table_type}}",
+                "vertices": {{vertices}},
+                "relations": {{relations}}
+            }
+        }
+        """
+        render_params = {
+            "name": self.name,
+            "namespace": self.namespace,
+            "bk_biz_id": self.datalink_biz_ids.label_biz_id,
+            "rt_name": self.bkbase_result_table_name or self.name,
+            "surrealdb_name": self.surrealdb_cluster_name,
+            "table_type": self.table_type,
+            "vertices": json.dumps(self.vertices),
+            "relations": json.dumps(self.relations),
+        }
+
+        if settings.ENABLE_MULTI_TENANT_MODE:
+            render_params["tenant"] = self.bk_tenant_id
+
+        return utils.compose_config(
+            tpl=tpl,
+            render_params=render_params,
+            err_msg_prefix="compose surrealdb binding config",
+        )
+
+    def _validate_graph_definitions(self) -> None:
+        """
+        校验 vertices/relations 基本结构
+
+        Raises:
+            ValueError: 当 vertices 或 relations 结构不符合规范时
+        """
+        if not isinstance(self.vertices, list):
+            raise ValueError(f"vertices 必须为列表类型，当前类型: {type(self.vertices).__name__}")
+        if not isinstance(self.relations, list):
+            raise ValueError(f"relations 必须为列表类型，当前类型: {type(self.relations).__name__}")
+        if not self.vertices:
+            raise ValueError("vertices 必须为非空列表")
+        if not self.relations:
+            raise ValueError("relations 必须为非空列表")
+
+        for idx, vertex in enumerate(self.vertices):
+            if not isinstance(vertex, dict):
+                raise ValueError(f"vertices[{idx}] 必须为对象类型，当前类型: {type(vertex).__name__}")
+            missing = [k for k in ("name", "id_fields") if k not in vertex]
+            if missing:
+                raise ValueError(f"vertices[{idx}] 缺少必填字段: {', '.join(missing)}")
+            if not isinstance(vertex["id_fields"], list) or not vertex["id_fields"]:
+                raise ValueError(f"vertices[{idx}].id_fields 必须为非空列表")
+
+        for idx, relation in enumerate(self.relations):
+            if not isinstance(relation, dict):
+                raise ValueError(f"relations[{idx}] 必须为对象类型，当前类型: {type(relation).__name__}")
+            missing = [k for k in ("name", "from", "to") if k not in relation]
+            if missing:
+                raise ValueError(f"relations[{idx}] 缺少必填字段: {', '.join(missing)}")
+
+
 class ClusterConfig(models.Model):
     """
     集群信息配置
     """
+
+    DORIS_SETTING_TYPES = {
+        "write_port": int,
+        "select_user": str,
+        "table_bucket_num": int,
+        "shard_minutes": int,
+        "v3_rename": str,
+        "bk_biz_id": int,
+        "expires": dict,
+        "common_query_cluster": str,
+        "support_node_tag": bool,
+        "hot_save_days": int,
+        "storage_policy": str,
+    }
+
+    @staticmethod
+    def normalize_es_schema(schema):
+        schema = schema.strip().lower() if schema else "http"
+        return schema if schema in ("http", "https") else "http"
+
+    @classmethod
+    def sync_fields(cls, cluster):
+        """无需完整性校验的下发字段投影，用于判断修改是否需要同步。"""
+        if cluster.cluster_type == cluster.TYPE_ES:
+            return (cluster.username, cluster.password, cls.normalize_es_schema(cluster.schema))
+        if cluster.cluster_type == cluster.TYPE_DORIS:
+            options = cluster.default_settings
+            if options is None:
+                options = {}
+            if not isinstance(options, dict):
+                raise ValueError("default_settings 必须是 JSON 对象")
+            return (
+                cluster.username,
+                cluster.password,
+                cluster.version,
+                # JSON 比较保留数值类型差异，避免 8030 == 8030.0、False == 0 绕过校验。
+                json.dumps({key: options[key] for key in cls.DORIS_SETTING_TYPES if key in options}, sort_keys=True),
+            )
+        return None
+
+    @classmethod
+    def validate_doris_config(cls, cluster):
+        """只使用本地权威字段校验，禁止用历史快照补齐必需配置。"""
+        options = cluster.default_settings
+        if not isinstance(options, dict):
+            raise ValueError("default_settings 必须是 JSON 对象")
+        if cluster.version is not None and not isinstance(cluster.version, str):
+            raise ValueError("Doris 配置字段 version 类型错误")
+        for field, value in {
+            "host": cluster.domain_name,
+            "user": cluster.username,
+            "password": cluster.password,
+        }.items():
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"Doris 配置字段 {field} 不能为空")
+        for field, value in {"port": cluster.port, "write_port": options.get("write_port")}.items():
+            if type(value) is not int or not 1 <= value <= 65535:
+                raise ValueError(f"Doris 配置字段 {field} 必须是有效整数端口")
+        for field, expected_type in cls.DORIS_SETTING_TYPES.items():
+            value = options.get(field)
+            if value is None:
+                if field == "expires" and field in options:
+                    raise ValueError("Doris 配置字段 expires 必须是 JSON 对象")
+                continue
+            if type(value) is not expected_type:
+                raise ValueError(f"Doris 配置字段 {field} 类型错误")
+            bounds = {
+                "table_bucket_num": (0, 2**32 - 1),
+                "hot_save_days": (0, 2**32 - 1),
+                "shard_minutes": (-(2**31), 2**31 - 1),
+                "bk_biz_id": (-(2**63), 2**63 - 1),
+            }
+            if field in bounds and not bounds[field][0] <= value <= bounds[field][1]:
+                raise ValueError(f"Doris 配置字段 {field} 超出范围")
+            if field == "expires":
+                expiry = value.get("maxExpire", value.get("max_expire"))
+                if type(expiry) is not int or not 0 <= expiry <= 2**32 - 1:
+                    raise ValueError("Doris 配置字段 expires.maxExpire 必须是无符号整数")
+
+    def compose_doris_config(self, cluster):
+        """校验并组装 Doris 集群配置，保留原始配置中非本地管理的扩展字段。
+
+        Args:
+            cluster: 提供公共连接字段和 default_settings 专属参数的集群信息。
+
+        Returns:
+            dict[str, Any]: 用于下发到 BKBase 的完整 Doris 集群配置。
+
+        Raises:
+            ValueError: 本地必需配置缺失或字段类型、取值不合法。
+        """
+        self.validate_doris_config(cluster)
+        config = copy.deepcopy(self.origin_config or {})
+        config.pop("status", None)
+        config["kind"] = DataLinkKind.DORIS.value
+        metadata = config.setdefault("metadata", {})
+        metadata.update(namespace=self.namespace, name=cluster.cluster_name)
+        metadata.pop("tenant", None)
+        if settings.ENABLE_MULTI_TENANT_MODE:
+            metadata["tenant"] = cluster.bk_tenant_id
+        spec = config.setdefault("spec", {})
+        spec.update(
+            host=cluster.domain_name,
+            port=cluster.port,
+            user=cluster.username,
+            password=cluster.password,
+            version=cluster.version or None,
+        )
+        for field in self.DORIS_SETTING_TYPES:
+            spec.pop(field, None)
+            if field in cluster.default_settings:
+                spec[field] = copy.deepcopy(cluster.default_settings[field])
+        return config
 
     # 由于配置原因，namespace实际上与存储类型是绑定的，与实际的使用方无关
     KIND_TO_NAMESPACES_MAP = {
         DataLinkKind.ELASTICSEARCH.value: [BKBASE_NAMESPACE_BK_LOG],
         DataLinkKind.VMSTORAGE.value: [BKBASE_NAMESPACE_BK_MONITOR],
         DataLinkKind.DORIS.value: [BKBASE_NAMESPACE_BK_LOG],
+        DataLinkKind.SURREALDB.value: [BKBASE_NAMESPACE_BK_MONITOR],
         # Kafka集群需要同时注册到bkmonitor和bklog命名空间
         DataLinkKind.KAFKACHANNEL.value: [BKBASE_NAMESPACE_BK_LOG, BKBASE_NAMESPACE_BK_MONITOR],
     }
@@ -1040,6 +1517,7 @@ class ClusterConfig(models.Model):
         "victoria_metrics": DataLinkKind.VMSTORAGE.value,
         "doris": DataLinkKind.DORIS.value,
         "kafka": DataLinkKind.KAFKACHANNEL.value,
+        "surrealdb": DataLinkKind.SURREALDB.value,
     }
 
     bk_tenant_id = models.CharField(max_length=255, verbose_name="租户ID")
@@ -1094,6 +1572,10 @@ class ClusterConfig(models.Model):
             return self.compose_es_config(cluster)
         elif self.kind == DataLinkKind.KAFKACHANNEL.value:
             return self.compose_kafka_config(cluster)
+        elif self.kind == DataLinkKind.SURREALDB.value:
+            return self.compose_surrealdb_config(cluster)
+        elif self.kind == DataLinkKind.DORIS.value:
+            return self.compose_doris_config(cluster)
         else:
             raise ValueError(f"不支持的集群类型: {self.kind}")
 
@@ -1194,6 +1676,7 @@ class ClusterConfig(models.Model):
             "spec": {
                 "host": "es.db",
                 "port": 9200,
+                "schema": "https",
                 "user": "xxxx",
                 "password": "xxx"
             },
@@ -1212,8 +1695,58 @@ class ClusterConfig(models.Model):
             dict[str, Any]: 集群配置
         """
 
+        schema = self.normalize_es_schema(cluster.schema)
+
         config = {
             "kind": DataLinkKind.ELASTICSEARCH.value,
+            "metadata": {
+                "namespace": self.namespace,
+                "name": cluster.cluster_name,
+            },
+            "spec": {
+                "host": cluster.domain_name,
+                "port": cluster.port,
+                "schema": schema,
+                "user": cluster.username,
+                "password": cluster.password,
+            },
+        }
+
+        if settings.ENABLE_MULTI_TENANT_MODE:
+            config["metadata"]["tenant"] = cluster.bk_tenant_id
+
+        return config
+
+    def compose_surrealdb_config(self, cluster: "ClusterInfo") -> dict[str, Any]:
+        """组装 SurrealDB 集群配置
+
+        配置示例:
+        {
+            "kind": "SurrealDB",
+            "metadata": {
+                "tenant": "default",
+                "namespace": "bkmonitor",
+                "name": "surrealdb_bkmonitor_test",
+                "labels": {},
+                "annotations": {}
+            },
+            "spec": {
+                "host": "surrealdb.example.com",
+                "port": 8080,
+                "user": "root",
+                "password": "root",
+                "version": "2.3.2"
+            }
+        }
+
+        Args:
+            cluster: 集群信息
+
+        Returns:
+            dict[str, Any]: 集群配置
+        """
+        config: dict[str, Any] = {
+            "kind": DataLinkKind.SURREALDB.value,
             "metadata": {
                 "namespace": self.namespace,
                 "name": cluster.cluster_name,
@@ -1225,6 +1758,12 @@ class ClusterConfig(models.Model):
                 "password": cluster.password,
             },
         }
+
+        default_settings = cast(dict[str, Any] | None, cluster.default_settings)
+        if cluster.version:
+            config["spec"]["version"] = cluster.version
+        elif default_settings and default_settings.get("version"):
+            config["spec"]["version"] = default_settings["version"]
 
         if settings.ENABLE_MULTI_TENANT_MODE:
             config["metadata"]["tenant"] = cluster.bk_tenant_id
@@ -1245,6 +1784,12 @@ class ClusterConfig(models.Model):
             sync_namespaces: 指定同步的命名空间列表
         """
 
+        if cluster.cluster_type == cluster.TYPE_DORIS:
+            cls.validate_doris_config(cluster)
+
+        if cluster.cluster_type == cluster.TYPE_KAFKA and cluster.gse_stream_to_id <= 0:
+            raise ValueError(f"Kafka 集群({cluster.cluster_name})的 gse_stream_to_id 必须大于 0")
+
         # 根据集群类型获取kind和namespace
         kind = cls.CLUSTER_TYPE_TO_KIND_MAP[cluster.cluster_type]
         namespaces = cls.KIND_TO_NAMESPACES_MAP[kind]
@@ -1260,7 +1805,11 @@ class ClusterConfig(models.Model):
             )
 
             # 组装配置
-            config = cluster_config.compose_config()
+            config = (
+                cluster_config.compose_doris_config(cluster)
+                if cluster.cluster_type == cluster.TYPE_DORIS
+                else cluster_config.compose_config()
+            )
 
             # 注册到bkbase平台
             try:
@@ -1322,9 +1871,11 @@ class LogResultTableConfig(DataLinkResourceConfigBase):
 COMPONENT_CLASS_MAP: dict[str, type[DataLinkResourceConfigBase]] = {
     DataLinkKind.DATAID.value: DataIdConfig,
     DataLinkKind.RESULTTABLE.value: ResultTableConfig,
+    DataLinkKind.CHANNELBINDING.value: ChannelBindingConfig,
     DataLinkKind.VMSTORAGEBINDING.value: VMStorageBindingConfig,
     DataLinkKind.ESSTORAGEBINDING.value: ESStorageBindingConfig,
     DataLinkKind.DORISBINDING.value: DorisStorageBindingConfig,
+    DataLinkKind.SURREALDBBINDING.value: SurrealDBBindingConfig,
     DataLinkKind.DATABUS.value: DataBusConfig,
     DataLinkKind.CONDITIONALSINK.value: ConditionalSinkConfig,
     DataLinkKind.BASEREPORTSINK.value: BasereportSinkConfig,

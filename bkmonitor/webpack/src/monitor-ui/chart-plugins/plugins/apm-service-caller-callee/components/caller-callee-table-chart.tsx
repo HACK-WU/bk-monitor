@@ -275,7 +275,7 @@ class CallerCalleeTableChart extends CommonSimpleChart {
   }
   @Debounce(100)
   async getPanelData() {
-    this.tableListData = [];
+    // 视口外会提前返回；先清空会导致表格/分页被卸掉且无法拉回
     if (!(await this.beforeGetPanelData())) {
       return;
     }
@@ -367,9 +367,6 @@ class CallerCalleeTableChart extends CommonSimpleChart {
             const { dimensions } = item;
             const key = item.key || this.transformDimensionToKey(dimensions);
             const rawItem = res?.data?.find(set => this.transformDimensionToKey(set.dimensions) === key);
-            if (metric_cal_type === 'timeout_rate') {
-              console.info(item['0s'], rawItem['0s']);
-            }
             tableData.push(resetColItem(item, rawItem, key, dimensions));
           } else {
             tableData.push(resetColItem(item, res?.data[0]));

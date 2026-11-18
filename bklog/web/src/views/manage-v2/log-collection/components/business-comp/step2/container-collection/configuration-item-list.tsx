@@ -78,6 +78,8 @@ interface IConfigurationItemListProps {
   logType: 'row' | 'section';
   /** 采集器类型 */
   collectorType: string;
+  /** 是否为编辑态 */
+  isEdit?: boolean;
 }
 
 /**
@@ -128,6 +130,12 @@ export default defineComponent({
       type: String,
       required: false,
       default: '',
+    },
+    /** 是否为编辑态 */
+    isEdit: {
+      type: Boolean,
+      required: false,
+      default: false,
     },
   },
 
@@ -226,7 +234,7 @@ export default defineComponent({
     // 监听集群 ID 变化时获取命名空间列表
     watch(
       () => props.bcsClusterId,
-      (newVal) => {
+      newVal => {
         if (newVal) {
           getNameSpaceList(newVal);
         }
@@ -297,6 +305,8 @@ export default defineComponent({
           multiline_pattern: '',
           multiline_max_lines: '50',
           multiline_timeout: '2',
+          // 采集范围：true-仅采集下发后的日志，false-采集全量日志
+          tail_files: true,
           // winlog 相关字段在 IContainerCollectionParams 中，但 IContainerConfigItem.params 类型是 IHostCollectionParams
           // 这里使用类型断言来兼容实际使用场景
           winlog_name: [],
@@ -499,6 +509,46 @@ export default defineComponent({
                 </bk-select>
               </div>
             )}
+            {/* 采集范围 */}
+            <div class='item-content-child small-width'>
+              <div class='item-content-title'>{t('采集范围')}</div>
+              <span
+                class='tail-files-radio-wrap'
+                v-bk-tooltips={{
+                  content: t('仅新创建采集项支持选择采集范围'),
+                  placement: 'top',
+                  disabled: !props.isEdit,
+                }}
+              >
+                <bk-radio-group
+                  value={item.params?.tail_files ?? true}
+                  on-change={(val: boolean) => {
+                    const updatedItem = {
+                      ...item,
+                      params: {
+                        ...item.params,
+                        tail_files: val,
+                      },
+                    };
+                    handleDataChange(updatedItem, ind);
+                  }}
+                >
+                  <bk-radio
+                    class='mr-24'
+                    value={true}
+                    disabled={props.isEdit}
+                  >
+                    {t('仅采集下发后的日志')}
+                  </bk-radio>
+                  <bk-radio
+                    value={false}
+                    disabled={props.isEdit}
+                  >
+                    {t('采集全量日志')}
+                  </bk-radio>
+                </bk-radio-group>
+              </span>
+            </div>
             {/* 日志过滤配置 */}
             <div class='item-content-child'>
               <div class='item-content-title'>{t('日志过滤')}</div>

@@ -70,7 +70,6 @@ export default defineComponent({
       indicator: ref<HTMLSpanElement | null>(null),
     };
 
-
     const sceneConfigs = computed(() => store.getters['retrieve/sceneConfigList']);
 
     const tags = computed<TagItem[]>(() => {
@@ -127,12 +126,22 @@ export default defineComponent({
       }
     };
 
+    const createMeasureSpan = (className: string, text: string) => {
+      const span = document.createElement('span');
+      span.className = className;
+      span.textContent = text;
+      return span;
+    };
+
     const measureItemWidth = (tag: TagItem): number => {
       if (!measureSpans.tag.value) return 0;
       const displayValue = tag.value.slice(tag.name.length + tag.opDisplay.length);
-      measureSpans.tag.value.innerHTML = `<span class="tag-key">${tag.name}</span>`
-        + `<span class="tag-separator">${tag.opDisplay}</span>`
-        + `<span class="tag-value">${displayValue}</span>`;
+      measureSpans.tag.value.textContent = '';
+      measureSpans.tag.value.append(
+        createMeasureSpan('tag-key', tag.name),
+        createMeasureSpan('tag-separator', tag.opDisplay),
+        createMeasureSpan('tag-value', displayValue),
+      );
       return measureSpans.tag.value.offsetWidth;
     };
 
@@ -301,7 +310,7 @@ export default defineComponent({
 
     watch(
       () => hiddenCount.value,
-      (val) => {
+      val => {
         if (val > 0) {
           nextTick(initActionPop);
         } else if (tippyInstance) {

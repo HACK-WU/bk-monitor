@@ -11,12 +11,30 @@ specific language governing permissions and limitations under the License.
 from enum import Enum
 
 
+class DataLinkNameScene(Enum):
+    """BKBase 资源命名场景；短码用于资源名，调用方使用有业务含义的枚举成员。"""
+
+    # bkm_ + 场景 + _ + 最长 19 位来源 ID + _ + 12 位随机串，总长不超过 40。
+    DATA_ID = "did"  # 已有 DataId 注册
+    STANDARD_V2_TIME_SERIES = "ts"  # 标准 V2 时序
+    STANDARD_PLUGIN = "std"  # 标准插件
+    EXPORTER_PLUGIN = "exp"  # Exporter 插件
+    GRAPH = "gr"  # 图谱 DataLink
+    GRAPH_VM = "gvm"  # 图谱 VM 输出
+    GRAPH_SURREALDB = "gdb"  # 图谱 SurrealDB 输出
+    RECORD_RULE = "rr"  # 预计算输出
+    FEDERAL_PROXY = "fp"  # 联邦父集群
+    FEDERAL_SUBSET = "fs"  # 联邦子集群
+
+
 class DataLinkKind(Enum):
     """数据链路资源类型"""
 
     DATAID = "DataId"
     RESULTTABLE = "ResultTable"
+    CHANNELBINDING = "ChannelBinding"
     VMSTORAGEBINDING = "VmStorageBinding"
+    GRAPHRELATIONBINDING = "GraphRelationBinding"
     ESSTORAGEBINDING = "ElasticSearchBinding"
     DORISBINDING = "DorisBinding"
     DATABUS = "Databus"
@@ -25,12 +43,16 @@ class DataLinkKind(Enum):
     BASEREPORTSINK = "BasereportSink"
     SINK = "Sink"
     VMSTORAGE = "VmStorage"
+    VMQUERYCLUSTER = "VmQueryCluster"
     ELASTICSEARCH = "ElasticSearch"
     DORIS = "Doris"
+    SURREALDB = "SurrealDB"
+    SURREALDBBINDING = "SurrealDBBinding"
 
     choices_labels = (
         (DATAID, "dataids"),
         (RESULTTABLE, "resulttables"),
+        (CHANNELBINDING, "channelbindings"),
         (VMSTORAGEBINDING, "vmstoragebindings"),
         (ESSTORAGEBINDING, "elasticsearchbindings"),
         (DORISBINDING, "dorisbindings"),
@@ -39,9 +61,12 @@ class DataLinkKind(Enum):
         (BASEREPORTSINK, "basereportsinks"),
         (SINK, "sinks"),
         (VMSTORAGE, "vmstorages"),
+        (VMQUERYCLUSTER, "vmqueryclusters"),
         (ELASTICSEARCH, "elasticsearchs"),
         (DORIS, "dorises"),
         (KAFKACHANNEL, "kafkachannels"),
+        (SURREALDB, "surrealdbs"),
+        (SURREALDBBINDING, "surrealdbbindings"),
     )
 
     @classmethod
@@ -62,15 +87,17 @@ class DataLinkResourceStatus(Enum):
     Terminating: The resource is terminating    计算平台状态
     Failed: The resource has failed 计算平台状态
     Ok: The resource has been scheduled and is ready for use 计算平台状态
+    Terminated: The resource no longer exists in BKBase 监控侧批量刷新状态
     """
 
-    # INITIALIZING -> CREATING -> PENDING -> OK
+    # INITIALIZING -> CREATING -> PENDING -> OK；资源不存在时记录为 TERMINATED
     INITIALIZING = "Initializing"
     CREATING = "Creating"
     PENDING = "Pending"
     FAILED = "Failed"
     OK = "Ok"
     TERMINATING = "Terminating"
+    TERMINATED = "Terminated"
 
     RECONCILING = "Reconciling"
 
@@ -82,6 +109,7 @@ class DataLinkResourceStatus(Enum):
         (OK, 1),
         (RECONCILING, 5),
         (TERMINATING, 6),
+        (TERMINATED, 7),
     )
 
     @classmethod

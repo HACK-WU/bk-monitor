@@ -17,6 +17,13 @@ import requests
 from django.conf import settings
 from rest_framework import serializers
 
+from api.unify_query.relation_routing import (
+    RELATION_MULTI_RESOURCE_PATH,
+    RELATION_MULTI_RESOURCE_RANGE_PATH,
+    RELATION_MULTI_RESOURCE_RANGE_V1BETA3_PATH,
+    RELATION_MULTI_RESOURCE_V1BETA3_PATH,
+    resolve_relation_query_path,
+)
 from bkm_space.api import SpaceApi
 from bkm_space.utils import bk_biz_id_to_space_uid, parse_space_uid
 from bkmonitor.utils.local import local
@@ -74,6 +81,7 @@ class UnifyQueryAPIResource(Resource):
 
     method = ""
     path = ""
+    v1beta3_path = ""
 
     def perform_request(self, params):
         request = get_request(peaceful=True)
@@ -82,6 +90,7 @@ class UnifyQueryAPIResource(Resource):
         else:
             username = ""
 
+        bk_biz_id = None
         space_uid = ""
         if "space_uid" in params:
             space_uid = params["space_uid"]
@@ -89,27 +98,16 @@ class UnifyQueryAPIResource(Resource):
             bk_biz_id = params.pop("bk_biz_ids")[0]
             space_uid = bk_biz_id_to_space_uid(bk_biz_id)
         elif request and request.biz_id:
-            space_uid = bk_biz_id_to_space_uid(request.biz_id)
+            bk_biz_id = request.biz_id
+            space_uid = bk_biz_id_to_space_uid(bk_biz_id)
 
-        url = urljoin(get_unify_query_url(space_uid), self.path.format(**params))
+        space = None
         is_global = False
         if space_uid:
             space = SpaceApi.get_space_detail(space_uid=space_uid)
             is_global = space.is_global if space else is_global
-
-        # 记录查询来源
-        source = "backend"
-        if username:
-            source = f"username:{username}"
-        elif getattr(local, "strategy_id", None):
-            source = f"strategy:{local.strategy_id}"
-
-        requests_params = {"method": self.method, "url": url, "headers": {"Bk-Query-Source": source}}
-        if space_uid is None or is_global:
-            # 跨业务查询
-            requests_params["headers"]["X-Bk-Scope-Skip-Space"] = settings.APP_CODE
-        elif space_uid:
-            requests_params["headers"]["X-Bk-Scope-Space-Uid"] = space_uid
+            if bk_biz_id is None and space:
+                bk_biz_id = space.bk_biz_id
 
         # 设置租户ID
         bk_tenant_id = None
@@ -124,6 +122,27 @@ class UnifyQueryAPIResource(Resource):
         # 如果租户ID不存在，则使用请求的租户ID
         if not bk_tenant_id:
             bk_tenant_id = get_request_tenant_id(peaceful=True)
+
+        request_path = resolve_relation_query_path(
+            self.path,
+            self.v1beta3_path,
+            bk_biz_id,
+        )
+        url = urljoin(get_unify_query_url(space_uid), request_path.format(**params))
+
+        # 记录查询来源
+        source = "backend"
+        if username:
+            source = f"username:{username}"
+        elif getattr(local, "strategy_id", None):
+            source = f"strategy:{local.strategy_id}"
+
+        requests_params = {"method": self.method, "url": url, "headers": {"Bk-Query-Source": source}}
+        if space_uid is None or is_global:
+            # 跨业务查询
+            requests_params["headers"]["X-Bk-Scope-Skip-Space"] = settings.APP_CODE
+        elif space_uid:
+            requests_params["headers"]["X-Bk-Scope-Space-Uid"] = space_uid
 
         if bk_tenant_id:
             requests_params["headers"]["X-Bk-Tenant-Id"] = bk_tenant_id
@@ -145,6 +164,30 @@ class UnifyQueryAPIResource(Resource):
 class QueryDataResource(UnifyQueryAPIResource):
     """
     查询数据
+
+    返回示例：
+    {
+      "series": [
+        {
+          "name": "_result0",
+          "metric_name": "system.cpu_summary.usage",
+          "columns": ["_time", "_value", "bk_target_ip"],
+          "types": ["time", "double", "string"],
+          "group_keys": ["bk_target_ip"],
+          "group_values": ["127.0.1.10"],
+          "values": [
+            [1657848000, 12.5, "127.0.1.11"],
+            [1657848060, 13.1, "127.0.1.12"]
+          ],
+          "stat": {"avg": 12.8, "max": 13.1, "min": 12.5, "count": 2}
+        }
+      ],
+      "status": {"series_limit_reached": false, "is_partial": false},
+      "trace_id": "a1b2c3d4",
+      "is_partial": false,
+      "result_table_id": ["system.cpu_summary"]
+    }
+
     """
 
     method = "POST"
@@ -161,6 +204,9 @@ class QueryDataResource(UnifyQueryAPIResource):
         timezone = serializers.CharField(required=False)
         instant = serializers.BooleanField(required=False)
         not_time_align = serializers.BooleanField(label="是否不对齐时间窗口", required=False, default=False)
+        response_contract = serializers.CharField(required=False)
+        legacy_output_ref = serializers.CharField(required=False)
+        output_list = serializers.ListField(child=serializers.DictField(), required=False)
 
 
 class QueryRawResource(UnifyQueryAPIResource):
@@ -173,7 +219,7 @@ class QueryRawResource(UnifyQueryAPIResource):
 
     class RequestSerializer(serializers.Serializer):
         query_list = serializers.ListField()
-        metric_merge = serializers.CharField()
+        metric_merge = serializers.CharField(required=False)
         start_time = serializers.CharField()
         end_time = serializers.CharField()
         step = serializers.CharField()
@@ -184,6 +230,7 @@ class QueryRawResource(UnifyQueryAPIResource):
         timezone = serializers.CharField(required=False)
         instant = serializers.BooleanField(required=False)
         order_by = serializers.ListField(allow_null=True, required=False, allow_empty=True)
+        is_es_batch = serializers.BooleanField(required=False)
 
     def perform_request(self, params):
         params["from"] = params.pop("_from", 0)
@@ -242,6 +289,7 @@ class QueryDataByPromqlResource(UnifyQueryAPIResource):
     path = "/query/ts/promql"
 
     class RequestSerializer(serializers.Serializer):
+        bk_tenant_id = serializers.CharField(required=False)
         promql = serializers.CharField()
         match = serializers.CharField(default="", allow_blank=True, required=False)
         is_verify_dimensions = serializers.BooleanField(default=False)
@@ -273,6 +321,11 @@ class QueryDataByPromqlResource(UnifyQueryAPIResource):
         # 在日志场景，如果希望保证数据准确性，且保留最新数据点，设置 reference=True 取消对数据的时序对齐，配合 SaaS 侧提供的
         # time_alignment=False 参数。
         reference = serializers.BooleanField(default=False, required=False)
+        # 命名输出契约（UQ /query/ts/promql 支持后透传）：
+        # response_contract / legacy_output_ref / output_list，与 /query/ts 的命名输出契约一致。
+        response_contract = serializers.CharField(required=False)
+        legacy_output_ref = serializers.CharField(required=False)
+        output_list = serializers.ListField(child=serializers.DictField(), required=False)
 
         def validate(self, attrs):
             logger.info(f"PROMQL_QUERY: {json.dumps(attrs)}")
@@ -371,6 +424,7 @@ class GetDimensionDataResource(UnifyQueryAPIResource):
     class RequestSerializer(serializers.Serializer):
         space_uid = serializers.CharField(allow_blank=True, required=False, allow_null=True)
         info_type = serializers.CharField(required=True, label="请求资源类型")
+        data_source = serializers.CharField(required=False, allow_blank=True)
         table_id = serializers.CharField(required=False, allow_blank=True)
         conditions = serializers.DictField(required=False, label="查询参数")
         keys = serializers.ListField(required=False)
@@ -378,6 +432,7 @@ class GetDimensionDataResource(UnifyQueryAPIResource):
         metric_name = serializers.CharField(required=False, allow_null=True)
         start_time = serializers.CharField(required=False)
         end_time = serializers.CharField(required=False)
+        bk_tenant_id = serializers.CharField(label="租户ID", required=False, allow_blank=True, allow_null=True)
 
 
 class GetPromqlLabelValuesResource(UnifyQueryAPIResource):
@@ -459,7 +514,8 @@ class QuerySeriesResource(UnifyQueryAPIResource):
 
 class GetKubernetesRelationResource(UnifyQueryAPIResource):
     method = "POST"
-    path = "/api/v1/relation/multi_resource"
+    path = RELATION_MULTI_RESOURCE_PATH
+    v1beta3_path = RELATION_MULTI_RESOURCE_V1BETA3_PATH
 
     class RequestSerializer(serializers.Serializer):
         bk_biz_ids = serializers.ListField(child=serializers.IntegerField(), required=True)
@@ -488,7 +544,8 @@ class QueryMultiResourceRange(UnifyQueryAPIResource):
     """查询时间范围内的关联资源实体"""
 
     method = "POST"
-    path = "/api/v1/relation/multi_resource_range"
+    path = RELATION_MULTI_RESOURCE_RANGE_PATH
+    v1beta3_path = RELATION_MULTI_RESOURCE_RANGE_V1BETA3_PATH
 
     class RequestSerializer(serializers.Serializer):
         class QueryListSerializer(serializers.Serializer):
@@ -499,6 +556,10 @@ class QueryMultiResourceRange(UnifyQueryAPIResource):
             source_type = serializers.CharField(required=False)
             source_info = serializers.DictField()
             path_resource = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+            target_info_show = serializers.BooleanField(required=False, label="是否展示目标资源扩展信息")
+            look_back_delta = serializers.CharField(
+                required=False, allow_blank=True, label="instant 回看窗口，如 1440m"
+            )
 
         bk_biz_ids = serializers.ListField(child=serializers.CharField(), allow_empty=True, required=False)
         query_list = serializers.ListField(child=QueryListSerializer(), min_length=1)
@@ -508,7 +569,8 @@ class QueryMultiResource(UnifyQueryAPIResource):
     """查询某时间点的关联资源实体（query_list 风格，与 QueryMultiResourceRange 对称）"""
 
     method = "POST"
-    path = "/api/v1/relation/multi_resource"
+    path = RELATION_MULTI_RESOURCE_PATH
+    v1beta3_path = RELATION_MULTI_RESOURCE_V1BETA3_PATH
 
     class RequestSerializer(serializers.Serializer):
         class QueryListSerializer(serializers.Serializer):
@@ -517,6 +579,55 @@ class QueryMultiResource(UnifyQueryAPIResource):
             source_type = serializers.CharField(required=False)
             source_info = serializers.DictField()
             path_resource = serializers.ListField(child=serializers.CharField(), required=False, allow_empty=True)
+            target_info_show = serializers.BooleanField(required=False, label="是否展示目标资源扩展信息")
+            look_back_delta = serializers.CharField(
+                required=False, allow_blank=True, label="instant 回看窗口，如 1440m"
+            )
 
         bk_biz_ids = serializers.ListField(child=serializers.CharField(), allow_empty=True, required=False)
         query_list = serializers.ListField(child=QueryListSerializer(), min_length=1)
+
+
+class QueryMultiResourceV1Beta3(QueryMultiResource):
+    """Explicit v1beta3 probe, independent of the business rollout switch."""
+
+    path = RELATION_MULTI_RESOURCE_V1BETA3_PATH
+    v1beta3_path = ""
+
+
+class QueryMultiResourceRangeV1Beta3(QueryMultiResourceRange):
+    """Explicit v1beta3 range probe, independent of the business rollout switch."""
+
+    path = RELATION_MULTI_RESOURCE_RANGE_V1BETA3_PATH
+    v1beta3_path = ""
+
+
+class GetRelationSchemaResource(UnifyQueryAPIResource):
+    """
+    查询关联关系定义在 namespace 下的生效结果、每条定义的来源与 Redis 覆盖层状态（只读）
+    """
+
+    method = "GET"
+    path = "/relation_schema_print"
+
+    class RequestSerializer(serializers.Serializer):
+        space_uid = serializers.CharField(required=False, allow_blank=True, help_text="用于选择 UQ 集群与请求头")
+        namespace = serializers.CharField(default="__all__", help_text="__all__ 或空间 UID")
+        content = serializers.BooleanField(default=False, help_text="为 true 时附带每条定义的内容")
+
+        def validate(self, attrs):
+            attrs["content"] = "true" if attrs["content"] else "false"
+            attrs["format"] = "json"
+            return attrs
+
+
+class QueryInfoFieldMapResource(UnifyQueryAPIResource):
+    method = "POST"
+    path = "/query/ts/info/field_map"
+
+    class RequestSerializer(serializers.Serializer):
+        data_source = serializers.CharField(default="bkmonitor")
+        table_id = serializers.CharField(allow_blank=True)
+        start_time = serializers.CharField()
+        end_time = serializers.CharField()
+        space_uid = serializers.CharField(allow_blank=True, allow_null=True, required=False)

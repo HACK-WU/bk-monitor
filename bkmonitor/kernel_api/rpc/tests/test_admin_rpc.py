@@ -48,13 +48,14 @@ from kernel_api.rpc.functions.admin.cluster_info import (
 from kernel_api.rpc.functions.admin.common import build_response
 from kernel_api.rpc.functions.admin.datasource import _serialize_datasource
 from kernel_api.rpc.functions.admin import datalink as admin_datalink
+from kernel_api.rpc.functions.admin import es_storage as admin_es_storage
+from kernel_api.rpc.functions.admin import result_table as admin_result_table
 from kernel_api.rpc.functions.admin.datalink import (
     get_component_detail,
     get_datalink_component_config,
     list_components,
 )
 from kernel_api.rpc.functions.admin.es_storage import (
-    _build_runtime_index_item,
     _contains_index_wildcard,
     _is_virtual_es_storage,
     _serialize_es_storage_config,
@@ -65,19 +66,27 @@ from kernel_api.rpc.functions.admin.query_route import (
     _normalize_string_list,
     _resolve_space_identity,
 )
-from kernel_api.rpc.functions.admin.result_table import _serialize_result_table_detail
+from kernel_api.rpc.functions.admin.result_table import _build_result_table_storages, _serialize_result_table_detail
 from kernel_api.rpc.functions.admin.render_image_task import _serialize_render_image_task
 from kernel_api.rpc.functions.admin import space as admin_space
 from kernel_api.rpc.functions.admin import kafka_sample as kafka_sample_module
 from kernel_api.rpc.functions.admin import storage as admin_storage
 from kernel_api.rpc.functions.admin.storage import (
+    _build_doris_relations,
     get_doris_storage_latest_records,
     get_doris_storage_physical_metadata,
     _serialize_bkbase_item,
     _serialize_doris_storage,
 )
+from kernel_api.rpc.functions.admin.storage_cluster_history import (
+    clone_storage_with_runtime_cluster,
+    resolve_runtime_storage_cluster,
+    resolve_storage_history_table_id,
+    serialize_storage_cluster_record,
+)
 from kernel_api.rpc.functions.admin.uptime_check import _build_subscription_detail_payload, _summarize_subscription
 from kernel_api.rpc.registry import KernelRPCRegistry
+from metadata.service.es_storage import _build_runtime_index_item
 from monitor_web.models.collecting import CollectConfigMeta, DeploymentConfigVersion
 from monitor_web.models.plugin import (
     CollectorPluginConfig,
@@ -145,6 +154,10 @@ def test_admin_rpc_functions_registered_by_builtin_loader():
         "admin.bcs_cluster.bk_collector_config_detail",
         "admin.bcs_cluster.bkmonitor_operator_release_list",
         "admin.bcs_cluster.bkmonitor_operator_release_detail",
+        "admin.bcs_federal_cluster.list",
+        "admin.bcs_federal_cluster.detail",
+        "admin.bcs_federal_cluster.sub_cluster_list",
+        "admin.bcs_federal_cluster.sub_cluster_namespace_list",
         "admin.datasource.kafka_sample",
         "admin.es_storage.list",
         "admin.es_storage.detail",
@@ -161,6 +174,8 @@ def test_admin_rpc_functions_registered_by_builtin_loader():
         "admin.vm_storage.detail",
         "admin.kafka_storage.list",
         "admin.kafka_storage.detail",
+        "admin.surrealdb_storage.list",
+        "admin.surrealdb_storage.detail",
         "admin.bkbase_result_table.list",
         "admin.bkbase_result_table.detail",
         "admin.custom_report.list",
@@ -204,6 +219,83 @@ def test_admin_rpc_functions_registered_by_builtin_loader():
         "admin.render_image_task.detail",
         "admin.token.resolve",
     } <= func_names
+
+
+@pytest.mark.django_db(databases="__all__")
+def test_surrealdb_storage_list_and_detail_are_tenant_scoped():
+    table_id = "admin_surrealdb.metric"
+    tenant_id = "admin_surrealdb_tenant"
+    other_tenant_id = "admin_surrealdb_other_tenant"
+    cluster = admin_storage.models.ClusterInfo.objects.create(
+        bk_tenant_id=tenant_id,
+        cluster_id=61001,
+        cluster_name="admin-surrealdb",
+        display_name="Admin SurrealDB",
+        cluster_type=admin_storage.models.ClusterInfo.TYPE_SURREALDB,
+        domain_name="surrealdb.invalid",
+        port=8000,
+        description="test",
+        is_default_cluster=False,
+    )
+    admin_storage.models.ResultTable.objects.create(
+        table_id=table_id,
+        bk_tenant_id=tenant_id,
+        table_name_zh="Admin SurrealDB test",
+        is_custom_table=False,
+        schema_type=admin_storage.models.ResultTable.SCHEMA_TYPE_FIXED,
+        default_storage=admin_storage.models.ClusterInfo.TYPE_SURREALDB,
+        creator="system",
+        last_modify_user="system",
+    )
+    admin_storage.models.SurrealDBStorage.objects.create(
+        table_id=table_id,
+        bk_tenant_id=tenant_id,
+        table_type=admin_storage.models.SurrealDBStorage.TEMPORARY_TABLE_TYPE,
+        vertices=[{"name": "host", "id_fields": ["bk_host_id"]}],
+        relations=[{"name": "host_with_system", "from": "host", "to": "system"}],
+        storage_cluster_id=cluster.cluster_id,
+    )
+    admin_storage.models.SurrealDBStorage.objects.create(
+        table_id=table_id,
+        bk_tenant_id=other_tenant_id,
+        storage_cluster_id=61002,
+    )
+
+    list_result = admin_storage.list_surrealdb_storages(
+        {"bk_tenant_id": tenant_id, "table_id": table_id, "page": 1, "page_size": 20}
+    )
+    detail_result = admin_storage.get_surrealdb_storage_detail({"bk_tenant_id": tenant_id, "table_id": table_id})
+
+    assert list_result["data"]["total"] == 1
+    assert list_result["data"]["items"] == [
+        {
+            "surrealdb_storage": {
+                "table_id": table_id,
+                "bk_tenant_id": tenant_id,
+                "table_type": "temporary",
+                "vertices": [{"name": "host", "id_fields": ["bk_host_id"]}],
+                "relations": [{"name": "host_with_system", "from": "host", "to": "system"}],
+                "storage_cluster_id": 61001,
+            },
+            "result_table": {
+                "table_id": table_id,
+                "bk_tenant_id": tenant_id,
+                "table_name_zh": "Admin SurrealDB test",
+                "bk_biz_id": 0,
+                "data_label": "",
+                "default_storage": "surrealdb",
+                "is_enable": True,
+                "is_deleted": False,
+            },
+            "storage_cluster": {
+                "cluster_id": 61001,
+                "cluster_name": "admin-surrealdb",
+                "display_name": "Admin SurrealDB",
+                "cluster_type": "surrealdb",
+            },
+        }
+    ]
+    assert detail_result["data"] == list_result["data"]["items"][0]
 
     detail = KernelRPCRegistry.get_function_detail("admin.result_table.detail")
     assert detail is not None
@@ -453,6 +545,7 @@ def test_config_delivery_ping_server_serializer_marks_disabled_flags(monkeypatch
         bk_cloud_id=0,
         ip="127.0.0.1",
         bk_host_id=2001,
+        bk_biz_id=19078,
         plugin_name="bkmonitorproxy",
         config={
             "type": "PLUGIN",
@@ -477,6 +570,7 @@ def test_config_delivery_ping_server_serializer_marks_disabled_flags(monkeypatch
 
     item = admin_config_delivery._serialize_ping_server_config(subscription)
 
+    assert item["bk_biz_id"] == 19078
     assert item["direct_area"] is True
     assert item["special_area"] is False
     assert item["global_ping_disabled"] is True
@@ -506,6 +600,26 @@ def test_config_delivery_ping_server_serializer_marks_disabled_flags(monkeypatch
     second_page = admin_config_delivery._paginate_ping_targets(subscription.config, page=2, page_size=1)
     assert second_page["items"][0]["index"] == 2
     assert second_page["items"][0]["target_ip"] == "127.0.0.1"
+
+
+def test_config_delivery_ping_server_queryset_filters_by_model_biz_id(monkeypatch):
+    queryset = _FakeQuerySet([])
+    monkeypatch.setattr(
+        admin_config_delivery.PingServerSubscriptionConfig,
+        "objects",
+        SimpleNamespace(all=lambda: queryset),
+    )
+
+    result, warnings = admin_config_delivery._build_ping_server_queryset(
+        {"bk_biz_id": 19078, "bk_cloud_id": 42}, "system"
+    )
+
+    assert result is queryset
+    assert warnings == []
+    assert {"bk_tenant_id": "system"} in queryset.filters
+    assert {"bk_biz_id": 19078} in queryset.filters
+    assert {"bk_cloud_id": 42} in queryset.filters
+    assert ("bk_biz_id", "bk_cloud_id", "bk_host_id", "subscription_id") in queryset.ordering
 
 
 def test_config_delivery_custom_report_serializer_keeps_default_tenant():
@@ -618,6 +732,7 @@ def test_config_delivery_proxy_related_configs_collects_four_config_types(monkey
         bk_cloud_id=30000901,
         ip="127.0.0.1",
         bk_host_id=70001,
+        bk_biz_id=19078,
         plugin_name="bk-collector",
         config={"scope": {"nodes": [{"bk_host_id": 70001}]}, "steps": [{"config": {"plugin_name": "bk-collector"}}]},
     )
@@ -1144,21 +1259,31 @@ def test_api_auth_token_biz_ids_accepts_negative_biz_id():
 
 
 def test_doris_storage_physical_metadata_rpc_marks_inspect_and_serializes_runtime_values():
+    runtime_cluster = SimpleNamespace(cluster_id=41)
     storage = SimpleNamespace(
-        query_physical_storage_metadata=lambda: {
+        storage_cluster_id=40,
+        query_physical_storage_metadata=lambda *, storage_cluster_id: {
             "physical_metadata": {
                 "tables": [{"CREATE_TIME": datetime(2026, 5, 12, 10, 30, 0), "TABLE_ROWS": Decimal("3")}]
             },
+            "storage_cluster": {"cluster_id": storage_cluster_id},
             "warnings": [],
             "errors": [],
-        }
+        },
     )
 
-    with patch.object(_doris_storage_manager(), "get", return_value=storage):
-        response = get_doris_storage_physical_metadata({"bk_tenant_id": "system", "table_id": "2_bklog.demo"})
+    with (
+        patch.object(_doris_storage_manager(), "get", return_value=storage),
+        patch.object(admin_storage, "resolve_runtime_storage_cluster", return_value=runtime_cluster) as resolve_cluster,
+    ):
+        response = get_doris_storage_physical_metadata(
+            {"bk_tenant_id": "system", "table_id": "2_bklog.demo", "storage_cluster_id": 41}
+        )
 
+    resolve_cluster.assert_called_once_with(storage, "system", 41, admin_storage.models.ClusterInfo.TYPE_DORIS)
     assert response["meta"]["safety_level"] == "inspect"
     assert response["meta"]["requested_safety_level"] == "inspect"
+    assert response["data"]["storage_cluster"]["cluster_id"] == 41
     assert response["data"]["physical_metadata"]["tables"][0]["CREATE_TIME"] == "2026-05-12 10:30:00"
     assert response["data"]["physical_metadata"]["tables"][0]["TABLE_ROWS"] == "3"
 
@@ -1166,18 +1291,31 @@ def test_doris_storage_physical_metadata_rpc_marks_inspect_and_serializes_runtim
 def test_doris_storage_latest_records_rpc_passes_limit_and_order_field():
     calls = []
 
-    def query_latest_physical_storage_records(*, limit, order_field):
-        calls.append({"limit": limit, "order_field": order_field})
+    def query_latest_physical_storage_records(*, limit, order_field, storage_cluster_id):
+        calls.append({"limit": limit, "order_field": order_field, "storage_cluster_id": storage_cluster_id})
         return {"records": [{"value": "latest"}], "warnings": [], "errors": []}
 
-    storage = SimpleNamespace(query_latest_physical_storage_records=query_latest_physical_storage_records)
+    storage = SimpleNamespace(
+        storage_cluster_id=40,
+        query_latest_physical_storage_records=query_latest_physical_storage_records,
+    )
+    runtime_cluster = SimpleNamespace(cluster_id=41)
 
-    with patch.object(_doris_storage_manager(), "get", return_value=storage):
+    with (
+        patch.object(_doris_storage_manager(), "get", return_value=storage),
+        patch.object(admin_storage, "resolve_runtime_storage_cluster", return_value=runtime_cluster),
+    ):
         response = get_doris_storage_latest_records(
-            {"bk_tenant_id": "system", "table_id": "2_bklog.demo", "limit": "200", "order_field": "time"}
+            {
+                "bk_tenant_id": "system",
+                "table_id": "2_bklog.demo",
+                "storage_cluster_id": "41",
+                "limit": "200",
+                "order_field": "time",
+            }
         )
 
-    assert calls == [{"limit": 100, "order_field": "time"}]
+    assert calls == [{"limit": 100, "order_field": "time", "storage_cluster_id": 41}]
     assert response["meta"]["safety_level"] == "inspect"
     assert response["data"]["records"] == [{"value": "latest"}]
 
@@ -1242,6 +1380,67 @@ def test_result_table_detail_serializer_does_not_return_fields():
     assert "fields" not in item
 
 
+def test_result_table_detail_storages_include_tenant_scoped_doris_storage():
+    es_storage = SimpleNamespace(
+        id=1,
+        table_id="2_bklog.demo",
+        origin_table_id=None,
+        bk_tenant_id="system",
+        storage_cluster_id=3,
+        date_format="%Y%m%d",
+        slice_size=500,
+        slice_gap=120,
+        retention=30,
+        warm_phase_days=0,
+        time_zone=8,
+        source_type="log",
+        need_create_index=True,
+        archive_index_days=0,
+    )
+    doris_storage = SimpleNamespace(
+        id=2,
+        table_id="2_bklog.demo",
+        bk_tenant_id="system",
+        bkbase_table_id="591_2_bklog_demo",
+        origin_table_id=None,
+        source_type="log",
+        index_set="2_bklog_demo",
+        table_type="primary_table",
+        expire_days=30,
+        storage_cluster_id=4,
+    )
+    es_queryset = _FakeQuerySet([es_storage])
+    doris_queryset = _FakeQuerySet([doris_storage])
+
+    with (
+        patch.object(admin_result_table.models.ESStorage.objects, "filter", return_value=es_queryset) as es_filter,
+        patch.object(
+            admin_result_table.models.DorisStorage.objects, "filter", return_value=doris_queryset
+        ) as doris_filter,
+    ):
+        storages = _build_result_table_storages("system", "2_bklog.demo")
+
+    es_filter.assert_called_once_with(bk_tenant_id="system", table_id="2_bklog.demo")
+    doris_filter.assert_called_once_with(bk_tenant_id="system", table_id="2_bklog.demo")
+    assert es_queryset.ordering == [("id",)]
+    assert doris_queryset.ordering == [("id",)]
+    assert storages["es"][0]["storage_cluster_id"] == 3
+    assert storages["doris"] == [
+        {
+            "table_id": "2_bklog.demo",
+            "bk_tenant_id": "system",
+            "bkbase_table_id": "591_2_bklog_demo",
+            "origin_table_id": None,
+            "source_type": "log",
+            "index_set": "2_bklog_demo",
+            "table_type": "primary_table",
+            "expire_days": 30,
+            "storage_cluster_id": 4,
+            "table_kind": "physical",
+        }
+    ]
+
+
 def test_datalink_component_list_accepts_cluster_config_kind():
     cluster_config = SimpleNamespace(
         name="default-vm",
@@ -1269,7 +1468,7 @@ def test_datalink_component_list_accepts_cluster_config_kind():
     assert response["data"]["items"][0]["bk_biz_id"] == 0
 
 
-def test_datalink_databus_serializer_includes_consumer_group():
+def test_datalink_databus_serializer_includes_source_fields():
     databus = SimpleNamespace(
         name="l_1575783",
         namespace="bklog",
@@ -1281,6 +1480,9 @@ def test_datalink_databus_serializer_includes_consumer_group():
         bk_tenant_id="default",
         data_id_name="l_1575783",
         bk_data_id=1575783,
+        source_kind="ResultTable",
+        source_name="l_1575783_intermediate",
+        role="shipper",
         sink_names=["ElasticSearchBinding:l_1575783"],
         consumer_group="bkmonitorv3_transfer0bkmonitor_15757830",
     )
@@ -1288,7 +1490,52 @@ def test_datalink_databus_serializer_includes_consumer_group():
     item = admin_datalink._serialize_component(databus, "Databus")
 
     assert item["kind"] == "Databus"
+    assert item["source_kind"] == "ResultTable"
+    assert item["source_name"] == "l_1575783_intermediate"
+    assert item["role"] == "shipper"
     assert item["consumer_group"] == "bkmonitorv3_transfer0bkmonitor_15757830"
+
+
+def test_datalink_channel_binding_serializer_and_detail_group_are_supported():
+    channel_binding = SimpleNamespace(
+        name="custom_format_vm_intermediate",
+        namespace="bkmonitor",
+        create_time=None,
+        last_modify_time=None,
+        status="Ok",
+        data_link_name="custom_format_vm",
+        bk_biz_id=2,
+        bk_tenant_id="system",
+        bkbase_result_table_name="custom_format_vm_intermediate",
+        channel_name="inner-kafka",
+    )
+
+    item = admin_datalink._serialize_component(channel_binding, "ChannelBinding")
+
+    assert item["kind"] == "ChannelBinding"
+    assert item["bkbase_result_table_name"] == "custom_format_vm_intermediate"
+    assert item["channel_name"] == "inner-kafka"
+    assert "ChannelBinding" in admin_datalink.DATALINK_DETAIL_KIND_ORDER
+
+    datalink = SimpleNamespace(
+        data_link_name="custom_format_vm",
+        bk_tenant_id="system",
+        namespace="bkmonitor",
+        data_link_strategy="custom_format_vm",
+        bk_data_id=1575783,
+        table_ids=["2_custom_format_vm.metric"],
+        create_time=None,
+        last_modify_time=None,
+    )
+    channel_binding_model = SimpleNamespace(objects=SimpleNamespace(filter=Mock(return_value=[channel_binding])))
+    with (
+        patch.object(admin_datalink.models.DataLink.objects, "get", return_value=datalink),
+        patch.object(admin_datalink, "DATALINK_DETAIL_KIND_ORDER", ["ChannelBinding"]),
+        patch.object(admin_datalink, "COMPONENT_CLASS_MAP", {"ChannelBinding": channel_binding_model}),
+    ):
+        response = admin_datalink.get_datalink_detail({"bk_tenant_id": "system", "data_link_name": "custom_format_vm"})
+
+    assert response["data"]["components"] == {"ChannelBinding": [item]}
 
 
 def test_datalink_component_detail_accepts_cluster_config_kind_with_component_config():
@@ -1376,7 +1623,8 @@ def test_cluster_info_serializer_masks_sensitive_fields():
         is_register_to_gse=False,
         gse_stream_to_id=-1,
         label="",
-        default_settings={},
+        default_settings={"bk_biz_id": 2},
+        custom_option='{"source": "manual"}',
         creator="admin",
         create_time=None,
         last_modify_user="admin",
@@ -1401,7 +1649,8 @@ def test_cluster_info_serializer_masks_sensitive_fields():
     assert item["has_ssl_certificate_authorities"] is True
     assert item["has_ssl_certificate"] is True
     assert item["has_ssl_certificate_key"] is True
-    assert "custom_option" not in item
+    assert item["default_settings"] == {"bk_biz_id": 2}
+    assert item["custom_option"] == '{"source": "manual"}'
 
 
 def test_cluster_info_serializer_empty_sensitive_fields():
@@ -1429,6 +1678,7 @@ def test_cluster_info_serializer_empty_sensitive_fields():
         gse_stream_to_id=-1,
         label="",
         default_settings={},
+        custom_option="",
         creator="admin",
         create_time=None,
         last_modify_user="admin",
@@ -2163,6 +2413,40 @@ def test_bcs_cluster_bk_collector_config_detail_masks_platform_secret_by_default
     assert "******" in result["data"]["config"]
 
 
+def test_bcs_cluster_bk_collector_config_inspection_supports_explicit_public_namespace(settings):
+    settings.CUSTOM_REPORT_DEFAULT_DEPLOY_CLUSTER = ["BCS-K8S-00001/public-1", "BCS-K8S-00001/public-2"]
+    cluster = SimpleNamespace(cluster_id="BCS-K8S-00001", api_client=object(), operator_ns="operator-ns")
+    core_client = Mock()
+    core_client.list_namespaced_secret.side_effect = _collector_secret_list_side_effect()
+    config_ref = admin_bcs_cluster._encode_bk_collector_config_ref("platform", "bk-collector-platform", "platform.conf")
+    params = {"bk_tenant_id": "system", "cluster_id": "BCS-K8S-00001", "namespace": "public-2"}
+    with (
+        patch.object(admin_bcs_cluster.models.BCSClusterInfo.objects, "get", return_value=cluster),
+        patch.object(admin_bcs_cluster.k8s_client, "CoreV1Api", return_value=core_client),
+    ):
+        listing = admin_bcs_cluster.list_bcs_cluster_bk_collector_configs(params)
+        detail = admin_bcs_cluster.get_bcs_cluster_bk_collector_config_detail({**params, "config_ref": config_ref})
+    assert set(listing["data"]["public_namespaces"]) == {"public-1", "public-2"}
+    assert listing["data"]["namespace"] == detail["data"]["namespace"] == "public-2"
+    assert {call.kwargs["namespace"] for call in core_client.list_namespaced_secret.call_args_list} == {"public-2"}
+    assert "real-key" not in detail["data"]["config"]
+
+
+def test_bcs_cluster_bk_collector_namespace_context_skips_invalid_public_targets(settings):
+    settings.CUSTOM_REPORT_DEFAULT_DEPLOY_CLUSTER = ["cluster-a/", "cluster-a/public"]
+    cluster = SimpleNamespace(cluster_id="cluster-a", operator_ns="operator-ns")
+    context = admin_bcs_cluster._get_bk_collector_namespace_context(cluster, namespace="public")
+    assert context["namespace"] == "public"
+    assert context["public_namespaces"] == ["public"]
+
+
+@pytest.mark.parametrize("namespace", ["", "*", "invalid/namespace"])
+def test_bcs_cluster_bk_collector_namespace_validation(namespace):
+    cluster = SimpleNamespace(cluster_id="cluster-a", operator_ns="operator-ns")
+    with pytest.raises(CustomException):
+        admin_bcs_cluster._get_bk_collector_namespace_context(cluster, namespace=namespace)
+
+
 def test_bcs_cluster_bk_collector_config_detail_can_show_platform_secret_and_keeps_report_token():
     cluster = SimpleNamespace(cluster_id="BCS-K8S-00001", api_client=object(), operator_ns="operator-ns")
     core_client = Mock()
@@ -2545,42 +2829,23 @@ def test_kafka_sample_function_registered():
     assert "bk_data_id" in detail["params_schema"]
 
 
-def test_kafka_sample_v4_uses_data_id_config_by_bk_data_id():
-    datasource = SimpleNamespace(
-        bk_data_id=1001,
-        datalink_version="V4",
-        etl_config="bk_standard_v2_time_series",
-        data_name="demo",
-        mq_cluster=SimpleNamespace(is_auth=False),
-        mq_config=SimpleNamespace(topic="origin_topic"),
-    )
-    data_id_config = SimpleNamespace(namespace="bkmonitor", name="actual_data_id_name")
-    data_id_config_queryset = Mock()
-    data_id_config_queryset.order_by.return_value.first.return_value = data_id_config
-
-    with (
-        patch.object(kafka_sample_module.models.DataSource.objects, "get", return_value=datasource),
-        patch.object(
-            kafka_sample_module.models.DataSourceResultTable.objects,
-            "filter",
-            return_value=Mock(first=Mock(return_value=None)),
-        ),
-        patch.object(kafka_sample_module, "_query_gse_route_topic", return_value=None),
-        patch.object(
-            kafka_sample_module.DataIdConfig.objects, "filter", return_value=data_id_config_queryset
-        ) as data_id_filter,
-        patch.object(kafka_sample_module.api.bkdata, "tail_kafka_data", return_value=['{"value": 1}']) as tail_kafka,
-    ):
+def test_kafka_sample_uses_metadata_kafka_tail():
+    with patch.object(
+        kafka_sample_module.resource.metadata,
+        "kafka_tail",
+        return_value=[{"time": 1785326340, "value": 1}],
+    ) as kafka_tail:
         result = kafka_sample_module.kafka_sample({"bk_tenant_id": "system", "bk_data_id": 1001, "size": 1})
 
-    data_id_filter.assert_called_once_with(bk_tenant_id="system", bk_data_id=1001)
-    tail_kafka.assert_called_once_with(
+    kafka_tail.assert_called_once_with(
         bk_tenant_id="system",
-        namespace="bkmonitor",
-        name="actual_data_id_name",
-        limit=1,
+        bk_data_id=1001,
+        size=1,
+        use_gse_config=True,
     )
-    assert result["data"]["items"] == [{"value": 1}]
+    assert result["meta"]["safety_level"] == "inspect"
+    assert result["data"]["topics"] == []
+    assert result["data"]["items"] == [{"time": 1785326340, "value": 1}]
 
 
 def test_custom_report_refresh_metrics_function_registered():
@@ -2681,20 +2946,100 @@ def test_es_storage_functions_registered():
     runtime_detail = KernelRPCRegistry.get_function_detail("admin.es_storage.runtime_overview")
     assert "inspect" in runtime_detail["description"]
     assert "table_id" in runtime_detail["params_schema"]
+    assert "storage_cluster_id" in runtime_detail["params_schema"]
+    sample_detail = KernelRPCRegistry.get_function_detail("admin.es_storage.sample")
+    assert "storage_cluster_id" in sample_detail["params_schema"]
     rotate_detail = KernelRPCRegistry.get_function_detail("admin.es_storage.rotate_aliases")
     assert "write" in rotate_detail["description"]
     assert "traceback" in rotate_detail["description"]
 
 
-def test_es_storage_runtime_index_item_keeps_stats_values_and_counts_shards():
+def test_es_storage_runtime_overview_uses_selected_runtime_cluster_without_mutating_storage():
+    storage = SimpleNamespace(
+        table_id="system.cpu",
+        origin_table_id=None,
+        storage_cluster_id=3,
+        index_set="system_cpu",
+        need_create_index=True,
+        search_format_v2=lambda: "v2_system_cpu_*",
+        search_format_v1=lambda: "system_cpu_*",
+    )
+    runtime_cluster = SimpleNamespace(
+        cluster_id=11,
+        cluster_name="history-es",
+        display_name="历史 ES",
+        cluster_type="elasticsearch",
+    )
+
+    with (
+        patch.object(admin_es_storage, "_get_es_storage_or_raise", return_value=storage),
+        patch.object(
+            admin_es_storage,
+            "resolve_runtime_storage_cluster",
+            return_value=runtime_cluster,
+        ) as resolve_cluster,
+    ):
+        response = admin_es_storage.get_es_storage_runtime_overview(
+            {
+                "bk_tenant_id": "system",
+                "table_id": "system.cpu",
+                "storage_cluster_id": 11,
+                "include": [],
+            }
+        )
+
+    resolve_cluster.assert_called_once_with(storage, "system", 11, admin_es_storage.models.ClusterInfo.TYPE_ES)
+    assert response["data"]["storage_cluster"]["cluster_id"] == 11
+    assert storage.storage_cluster_id == 3
+
+
+def test_es_storage_sample_uses_selected_runtime_cluster():
+    get_raw_data = Mock(return_value={"took": 1, "hits": {"hits": [{"_source": {"value": 1}}]}})
+    storage = SimpleNamespace(
+        table_id="system.cpu",
+        origin_table_id=None,
+        storage_cluster_id=3,
+        get_raw_data=get_raw_data,
+    )
+    runtime_cluster = SimpleNamespace(
+        cluster_id=11,
+        cluster_name="history-es",
+        display_name="历史 ES",
+        cluster_type="elasticsearch",
+    )
+
+    with (
+        patch.object(admin_es_storage, "_get_es_storage_or_raise", return_value=storage),
+        patch.object(admin_es_storage, "resolve_runtime_storage_cluster", return_value=runtime_cluster),
+        patch.object(admin_es_storage, "_is_index_allowed", return_value=True) as is_index_allowed,
+    ):
+        response = admin_es_storage.get_es_storage_sample(
+            {
+                "bk_tenant_id": "system",
+                "table_id": "system.cpu",
+                "storage_cluster_id": 11,
+                "index": "v2_system_cpu_20260714_0",
+            }
+        )
+
+    runtime_storage = is_index_allowed.call_args.args[0]
+    assert runtime_storage.storage_cluster_id == 11
+    assert runtime_storage._cluster is runtime_cluster
+    get_raw_data.assert_called_once_with(index_name="v2_system_cpu_20260714_0", time_field="dtEventTimeStamp")
+    assert response["data"]["storage_cluster"]["cluster_id"] == 11
+    assert storage.storage_cluster_id == 3
+
+
+def test_es_storage_runtime_index_item_prefers_cat_docs_before_total_stats_and_counts_shards():
     item = _build_runtime_index_item(
         index_name="v2_system_cpu_20260521_0",
         stats={"total": {"docs": {"count": 0}, "store": {"size_in_bytes": 0}}},
         cat_meta={"health": "green", "status": "open", "pri": "2", "rep": "1", "docs.count": "99"},
     )
 
-    assert item["docs_count"] == 0
-    assert item["store_size"] == 0
+    assert item["docs_count"] == 99
+    assert item["store_size_bytes"] == 0
+    assert "stats" not in item
     assert item["primary_shards"] == 2
     assert item["replica_shards"] == 2
     assert item["replica_factor"] == 1
@@ -2728,11 +3073,182 @@ def test_storage_functions_registered():
         assert detail["func_name"] == func_name
 
     assert "table_id" in KernelRPCRegistry.get_function_detail("admin.doris_storage.list")["params_schema"]
+    assert (
+        "storage_cluster_id"
+        in KernelRPCRegistry.get_function_detail("admin.doris_storage.physical_metadata")["params_schema"]
+    )
+    assert (
+        "storage_cluster_id"
+        in KernelRPCRegistry.get_function_detail("admin.doris_storage.latest_records")["params_schema"]
+    )
     assert "id" in KernelRPCRegistry.get_function_detail("admin.vm_storage.detail")["params_schema"]
     assert "vm_cluster_id" in KernelRPCRegistry.get_function_detail("admin.vm_storage.list")["params_schema"]
     assert (
         "data_link_name" in KernelRPCRegistry.get_function_detail("admin.bkbase_result_table.detail")["params_schema"]
     )
+
+
+@pytest.mark.parametrize(
+    ("cluster_type", "storage_type"),
+    [("elasticsearch", "es"), ("doris", "doris"), ("kafka", "unknown")],
+)
+def test_storage_cluster_record_exposes_related_cluster_type(cluster_type, storage_type):
+    record = SimpleNamespace(
+        table_id="3_bklog.demo",
+        cluster_id=7,
+        is_current=False,
+        is_deleted=False,
+        enable_time=None,
+        disable_time=None,
+        delete_time=None,
+        creator="admin",
+        create_time=None,
+    )
+    cluster = SimpleNamespace(
+        cluster_id=7,
+        cluster_name=f"history-{cluster_type}",
+        display_name="历史集群",
+        cluster_type=cluster_type,
+    )
+
+    item = serialize_storage_cluster_record(record, cluster)
+
+    assert item["storage_type"] == storage_type
+    assert item["cluster"]["cluster_type"] == cluster_type
+
+
+def test_storage_history_uses_origin_table_id_for_virtual_es_and_doris_storage():
+    storage = SimpleNamespace(table_id="3_bklog.demo_virtual", origin_table_id="3_bklog.demo")
+
+    assert resolve_storage_history_table_id(storage) == "3_bklog.demo"
+
+
+def test_runtime_storage_cluster_accepts_current_cluster_without_history_record():
+    storage = SimpleNamespace(
+        table_id="3_bklog.demo",
+        origin_table_id=None,
+        storage_cluster_id=40,
+    )
+    cluster = SimpleNamespace(cluster_id=40, cluster_type="doris")
+
+    with (
+        patch.object(admin_storage.models.ClusterInfo.objects, "get", return_value=cluster) as cluster_get,
+        patch.object(admin_storage.models.StorageClusterRecord.objects, "filter") as history_filter,
+    ):
+        result = resolve_runtime_storage_cluster(storage, "system", None, "doris")
+
+    assert result is cluster
+    cluster_get.assert_called_once_with(bk_tenant_id="system", cluster_id=40, cluster_type="doris")
+    history_filter.assert_not_called()
+
+
+def test_runtime_storage_cluster_validates_history_against_virtual_storage_origin_table():
+    storage = SimpleNamespace(
+        table_id="3_bklog.demo_virtual",
+        origin_table_id="3_bklog.demo",
+        storage_cluster_id=40,
+    )
+    cluster = SimpleNamespace(cluster_id=41, cluster_type="doris")
+    history_queryset = Mock()
+    history_queryset.exists.return_value = True
+
+    with (
+        patch.object(admin_storage.models.ClusterInfo.objects, "get", return_value=cluster),
+        patch.object(
+            admin_storage.models.StorageClusterRecord.objects,
+            "filter",
+            return_value=history_queryset,
+        ) as history_filter,
+    ):
+        result = resolve_runtime_storage_cluster(storage, "system", "41", "doris")
+
+    assert result is cluster
+    history_filter.assert_called_once_with(
+        bk_tenant_id="system",
+        table_id="3_bklog.demo",
+        cluster_id=41,
+    )
+
+
+def test_runtime_storage_cluster_rejects_unrelated_cluster():
+    storage = SimpleNamespace(
+        table_id="3_bklog.demo",
+        origin_table_id=None,
+        storage_cluster_id=40,
+    )
+    cluster = SimpleNamespace(cluster_id=41, cluster_type="doris")
+    history_queryset = Mock()
+    history_queryset.exists.return_value = False
+
+    with (
+        patch.object(admin_storage.models.ClusterInfo.objects, "get", return_value=cluster),
+        patch.object(
+            admin_storage.models.StorageClusterRecord.objects,
+            "filter",
+            return_value=history_queryset,
+        ),
+        pytest.raises(CustomException, match="不属于当前实体表的历史存储集群"),
+    ):
+        resolve_runtime_storage_cluster(storage, "system", 41, "doris")
+
+
+@pytest.mark.parametrize("storage_cluster_id", [True, 41.0])
+def test_runtime_storage_cluster_rejects_non_integer_input(storage_cluster_id):
+    storage = SimpleNamespace(
+        table_id="3_bklog.demo",
+        origin_table_id=None,
+        storage_cluster_id=40,
+    )
+
+    with pytest.raises(CustomException, match="storage_cluster_id 必须是整数"):
+        resolve_runtime_storage_cluster(storage, "system", storage_cluster_id, "doris")
+
+
+def test_clone_storage_with_runtime_cluster_does_not_mutate_persisted_model_instance():
+    storage = SimpleNamespace(storage_cluster_id=40, _cluster=SimpleNamespace(cluster_id=40))
+    cluster = SimpleNamespace(cluster_id=41)
+
+    runtime_storage = clone_storage_with_runtime_cluster(storage, cluster)
+
+    assert runtime_storage is not storage
+    assert runtime_storage.storage_cluster_id == 41
+    assert runtime_storage._cluster is cluster
+    assert storage.storage_cluster_id == 40
+
+
+def test_doris_connection_config_supports_read_only_cluster_override():
+    storage = admin_storage.models.DorisStorage(
+        bk_tenant_id="system",
+        table_id="2_bklog.test",
+        storage_cluster_id=40,
+    )
+    history_cluster = admin_storage.models.ClusterInfo(
+        bk_tenant_id="system",
+        cluster_id=41,
+        cluster_name="doris_history",
+        cluster_type=admin_storage.models.ClusterInfo.TYPE_DORIS,
+        domain_name="doris-history.service.consul",
+        port=9031,
+        username="history_user",
+        password="history_password",
+        version="2.0",
+    )
+
+    with patch.object(
+        admin_storage.models.ClusterInfo.objects,
+        "get",
+        return_value=history_cluster,
+    ) as cluster_get:
+        connection_config = storage.get_doris_connection_config(storage_cluster_id=41)
+
+    cluster_get.assert_called_once_with(
+        bk_tenant_id="system",
+        cluster_id=41,
+        cluster_type=admin_storage.models.ClusterInfo.TYPE_DORIS,
+    )
+    assert connection_config["cluster_id"] == 41
+    assert connection_config["host"] == "doris-history.service.consul"
+    assert storage.storage_cluster_id == 40
 
 
 def test_doris_storage_serializer_parses_field_config_mapping():
@@ -2742,6 +3258,7 @@ def test_doris_storage_serializer_parses_field_config_mapping():
             table_id="3_bklog.demo",
             bk_tenant_id="system",
             bkbase_table_id="592_bklog_demo",
+            origin_table_id="3_bklog.origin",
             source_type="log",
             index_set="3_bklog_demo",
             table_type="primary_table",
@@ -2753,7 +3270,71 @@ def test_doris_storage_serializer_parses_field_config_mapping():
     )
 
     assert item["field_config_mapping"]["ip"]["type"] == "keyword"
+    assert item["origin_table_id"] == "3_bklog.origin"
     assert warnings == []
+
+
+def test_doris_virtual_storage_relation_resolves_physical_table_in_same_tenant():
+    physical_storage = SimpleNamespace(
+        table_id="3_bklog.demo",
+        bk_tenant_id="system",
+        bkbase_table_id="592_bklog_demo",
+        origin_table_id=None,
+        source_type="log",
+        index_set="3_bklog_demo",
+        table_type="primary_table",
+        field_config_mapping=None,
+        expire_days=30,
+        storage_cluster_id=4,
+    )
+    virtual_storage = SimpleNamespace(
+        **{**physical_storage.__dict__, "table_id": "3_bklog.demo_virtual", "origin_table_id": "3_bklog.demo"}
+    )
+    queryset = Mock()
+    queryset.first.return_value = physical_storage
+
+    with (
+        patch.object(_doris_storage_manager(), "filter", return_value=queryset) as storage_filter,
+        patch.object(admin_storage, "_load_result_table_map", return_value={}),
+        patch.object(admin_storage, "_load_cluster_map", return_value={}),
+    ):
+        relations = _build_doris_relations(virtual_storage, "system")
+
+    storage_filter.assert_called_once_with(bk_tenant_id="system", table_id="3_bklog.demo")
+    assert relations["physical_table"]["doris_storage"]["table_id"] == "3_bklog.demo"
+    assert relations["virtual_tables"] == []
+
+
+def test_doris_physical_storage_relation_lists_virtual_tables_in_same_tenant():
+    physical_storage = SimpleNamespace(
+        table_id="3_bklog.demo",
+        bk_tenant_id="system",
+        bkbase_table_id="592_bklog_demo",
+        origin_table_id=None,
+        source_type="log",
+        index_set="3_bklog_demo",
+        table_type="primary_table",
+        field_config_mapping=None,
+        expire_days=30,
+        storage_cluster_id=4,
+    )
+    virtual_storage = SimpleNamespace(
+        **{**physical_storage.__dict__, "table_id": "3_bklog.demo_virtual", "origin_table_id": "3_bklog.demo"}
+    )
+    queryset = Mock()
+    queryset.order_by.return_value = [virtual_storage]
+
+    with (
+        patch.object(_doris_storage_manager(), "filter", return_value=queryset) as storage_filter,
+        patch.object(admin_storage, "_load_result_table_map", return_value={}),
+        patch.object(admin_storage, "_load_cluster_map", return_value={}),
+    ):
+        relations = _build_doris_relations(physical_storage, "system")
+
+    storage_filter.assert_called_once_with(bk_tenant_id="system", origin_table_id="3_bklog.demo")
+    queryset.order_by.assert_called_once_with("table_id")
+    assert relations["physical_table"] is None
+    assert [item["doris_storage"]["table_id"] for item in relations["virtual_tables"]] == ["3_bklog.demo_virtual"]
 
 
 def test_bkbase_result_table_serializer_keeps_model_fields():
@@ -3291,3 +3872,129 @@ def test_admin_token_resolve_aes_fallback_metric_and_log_combo_returns_unmatched
     assert result["data"]["kind"] is None
     assert result["data"]["apm_application"] is None
     assert result["data"]["custom_report"] is None
+
+
+def test_apm_profiling_datalink_detail_returns_v4_components(monkeypatch):
+    application = SimpleNamespace(
+        id=11,
+        app_name="checkout",
+        bk_tenant_id="system",
+        bk_biz_id=2,
+    )
+    profile_datasource = SimpleNamespace(
+        bk_biz_id=2,
+        app_name="checkout",
+        bk_data_id=1573194,
+        result_table_id="2_profile_checkout_1573194",
+        created=datetime(2026, 7, 1, 10, 0, 0),
+        updated=datetime(2026, 7, 1, 11, 0, 0),
+        bkdata_datalink_config={
+            "version": 4,
+            "namespace": "bklog",
+            "v4_resource_names": {
+                "data_id_name": "profile_2_checkout",
+                "result_table_name": "profile_checkout_1573194",
+                "doris_binding_name": "profile_checkout_1573194",
+                "databus_name": "profile_checkout_1573194",
+            },
+        },
+        is_bkbase_v4_link=lambda: True,
+    )
+
+    monkeypatch.setattr(admin_apm, "_get_application", lambda *_args, **_kwargs: application)
+    monkeypatch.setattr(admin_apm, "_get_profile_datasource", lambda *_args, **_kwargs: profile_datasource)
+
+    configs = {
+        ("DataId", "profile_2_checkout"): {
+            "kind": "DataId",
+            "metadata": {"name": "profile_2_checkout"},
+            "status": {"phase": "Ok"},
+        },
+        ("Databus", "profile_checkout_1573194"): {
+            "kind": "Databus",
+            "metadata": {"name": "profile_checkout_1573194"},
+            "spec": {
+                "sources": [{"kind": "DataId", "name": "profile_2_checkout", "namespace": "bklog"}],
+                "sinks": [{"kind": "DorisBinding", "name": "profile_checkout_1573194", "namespace": "bklog"}],
+            },
+            "status": {"phase": "Ok"},
+        },
+        ("DorisBinding", "profile_checkout_1573194"): {
+            "kind": "DorisBinding",
+            "metadata": {"name": "profile_checkout_1573194"},
+            "spec": {
+                "data": {"kind": "ResultTable", "name": "profile_checkout_1573194", "namespace": "bklog"},
+                "storage": {"kind": "Doris", "name": "doris-default1", "namespace": "bklog"},
+            },
+            "status": {"phase": "Ok"},
+        },
+        ("ResultTable", "profile_checkout_1573194"): {
+            "kind": "ResultTable",
+            "metadata": {"name": "profile_checkout_1573194"},
+            "status": {"phase": "Ok"},
+        },
+    }
+
+    def fake_get_data_link_component_config(*, bk_tenant_id, kind, component_name, namespace):
+        assert bk_tenant_id == "system"
+        assert namespace == "bklog"
+        return configs[(kind, component_name)]
+
+    monkeypatch.setattr(
+        "metadata.models.data_link.service.get_data_link_component_config",
+        fake_get_data_link_component_config,
+    )
+
+    result = admin_apm.get_apm_profiling_datalink_detail(
+        {"bk_tenant_id": "system", "application_id": 11, "include": ["component_config"]}
+    )
+
+    data = result["data"]
+    assert data["available"] is True
+    assert data["unavailable_reason"] is None
+    assert data["data_link_strategy"] == "apm_profiling_v4"
+    assert data["namespace"] == "bklog"
+    assert data["bk_data_id"] == 1573194
+    assert data["components"]["DataId"][0]["status"] == "Ok"
+    assert data["components"]["Databus"][0]["data_id_name"] == "profile_2_checkout"
+    assert data["components"]["DorisBinding"][0]["doris_cluster_name"] == "doris-default1"
+    assert data["components"]["ResultTable"][0]["component_config"]["status"]["phase"] == "Ok"
+    assert result["warnings"] == []
+
+
+def test_apm_profiling_datalink_detail_marks_v3_unavailable(monkeypatch):
+    application = SimpleNamespace(id=12, app_name="legacy", bk_tenant_id="system", bk_biz_id=2)
+    profile_datasource = SimpleNamespace(
+        bk_biz_id=2,
+        app_name="legacy",
+        bk_data_id=100,
+        result_table_id="2_profile.profile_legacy",
+        created=datetime(2026, 7, 1, 10, 0, 0),
+        updated=datetime(2026, 7, 1, 11, 0, 0),
+        bkdata_datalink_config={},
+        is_bkbase_v4_link=lambda: False,
+    )
+    monkeypatch.setattr(admin_apm, "_get_application", lambda *_args, **_kwargs: application)
+    monkeypatch.setattr(admin_apm, "_get_profile_datasource", lambda *_args, **_kwargs: profile_datasource)
+
+    result = admin_apm.get_apm_profiling_datalink_detail({"bk_tenant_id": "system", "application_id": 12})
+
+    assert result["data"]["available"] is False
+    assert result["data"]["unavailable_reason"] == "profiling_v3_unsupported"
+    assert result["data"]["components"]["Databus"] == []
+    assert result["warnings"][0]["code"] == "PROFILING_V3_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("physical_tables", [{}, {"main": "db.logs_*"}, {"sample": "db.sample", "label": "db.label"}])
+def test_admin_serializers_preserve_doris_physical_table_mapping(physical_tables):
+    record = SimpleNamespace(physical_tables=physical_tables, bkbase_table_id="2_profile")
+    assert admin_datalink._serialize_component(record, "DorisBinding")["physical_tables"] == physical_tables
+    assert _serialize_doris_storage(record)["physical_tables"] == physical_tables
+    history = serialize_storage_cluster_record(record, None)
+    assert history["physical_tables"] == physical_tables
+    assert history["bkbase_table_id"] == "2_profile"
+
+
+def test_admin_databus_serializer_preserves_options():
+    options = {"flush_interval": 5, "nested": {"enabled": False}}
+    assert admin_datalink._serialize_component(SimpleNamespace(options=options), "Databus")["options"] == options

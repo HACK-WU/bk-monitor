@@ -1,14 +1,22 @@
 import { nextTick, onBeforeUnmount, ref, type Ref } from 'vue';
 
 import { messageSuccess } from '@/common/bkmagic';
+import useStore from '@/hooks/use-store';
 
-import { flattenLogParams, useCommonRelatedLog } from './use-common-related-log';
+import { advanceRealtimeCursor, buildRealtimeTailRequest, createRealtimeCursor } from './realtime-cursor';
+import { useCommonRelatedLog } from './use-common-related-log';
+import {
+  getRelatedLogIndexSetId,
+  getRelatedLogResolveOptions,
+  resolveRelatedLogTargetRow,
+} from './resolve-related-log-target-row';
 
 export const useRealtimeRelatedLog = (options: {
   indexSetId: Ref<number>;
   targetRow: Ref<Record<string, any>>;
   targetFields?: Ref<string[]>;
 }) => {
+  const store = useStore();
   const common = useCommonRelatedLog(options);
   const zero = ref(true);
   const isPolling = ref(false);
@@ -21,30 +29,39 @@ export const useRealtimeRelatedLog = (options: {
   let isInit = true;
   let isScrollBottom = true;
   let requestSeq = 0;
+  /** tail_f 在 zero=false 时按 gseIndex/gseindex 做 gt 过滤，必须随最新一条推进 */
+  let cursorParams = createRealtimeCursor(options.targetRow.value);
+
+  const getDtEventTimeStamp = () => cursorParams.dtEventTimeStamp ?? options.targetRow.value?.dtEventTimeStamp;
 
   const requestRealTimeLog = async () => {
     if (common.loading.value) return;
     requestSeq += 1;
     const currentSeq = requestSeq;
-    const params = flattenLogParams(options.targetRow.value);
-    const dtEventTimeStamp = params.dtEventTimeStamp ?? options.targetRow.value?.dtEventTimeStamp;
-    if (!options.indexSetId.value || dtEventTimeStamp === undefined || dtEventTimeStamp === null || dtEventTimeStamp === 'None') {
+    const dtEventTimeStamp = getDtEventTimeStamp();
+    if (
+      !options.indexSetId.value ||
+      dtEventTimeStamp === undefined ||
+      dtEventTimeStamp === null ||
+      dtEventTimeStamp === 'None'
+    ) {
       return;
     }
 
     try {
       error.value = '';
-      const res = await common.request('retrieve/getRealTimeLog', {
-        order: '-',
-        size: 50,
-        zero: zero.value,
-        dtEventTimeStamp,
-        ...params,
-      });
+      const res = await common.request(
+        'retrieve/getRealTimeLog',
+        buildRealtimeTailRequest(cursorParams, zero.value, dtEventTimeStamp),
+      );
       if (currentSeq !== requestSeq) return;
 
       const list = res?.data?.list || [];
-      if (!list.length) return;
+      const nextCursor = advanceRealtimeCursor(list);
+      if (!nextCursor) return;
+
+      cursorParams = nextCursor;
+      common.paramsInfo.value = nextCursor;
 
       if (common.logList.value.length > maxLength) {
         common.logList.value.splice(0, shiftLength);
@@ -54,7 +71,6 @@ export const useRealtimeRelatedLog = (options: {
 
       if (isInit) {
         common.setRawLists(list.slice(-1), list.slice(0, -1));
-            common.paramsInfo.value = flattenLogParams(list[list.length - 1]);
       } else {
         common.appendRawRows(list);
       }
@@ -114,7 +130,8 @@ export const useRealtimeRelatedLog = (options: {
   };
 
   const init = async () => {
-    common.paramsInfo.value = flattenLogParams(options.targetRow.value);
+    cursorParams = createRealtimeCursor(options.targetRow.value);
+    common.paramsInfo.value = cursorParams;
     common.resetLogs();
     zero.value = true;
     isInit = true;
@@ -126,8 +143,20 @@ export const useRealtimeRelatedLog = (options: {
     });
   };
 
-  const chooseRow = async (row: Record<string, any>) => {
-    options.targetRow.value = row;
+  const chooseRow = async (payload: Record<string, any> & { rowKey?: string }) => {
+    const { rowKey, ...fallbackRow } = payload;
+    if (rowKey) {
+      const resolved = await resolveRelatedLogTargetRow({
+        rowKey,
+        fallbackRow: Object.keys(fallbackRow).length ? fallbackRow : undefined,
+        ...getRelatedLogResolveOptions(store),
+      });
+      if (!resolved) return;
+      options.targetRow.value = resolved.row;
+      options.indexSetId.value = getRelatedLogIndexSetId(resolved.fullRow, store);
+    } else {
+      options.targetRow.value = payload;
+    }
     await init();
   };
 

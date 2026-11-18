@@ -334,7 +334,7 @@ export default defineComponent({
      * @param {'down' | 'up'} direction - 滚动方向，up 向上导航需处理吸顶遮挡，down 向下导航无需额外处理
      * @returns {void}
      */
-    function scrollToSpan(spanID: string, direction: 'down' | 'up'): void {
+    function scrollToSpan(spanID: string, _direction: 'down' | 'up'): void {
       const targetElem = getRootNode().getElementById(spanID);
       if (!targetElem) return;
 
@@ -401,6 +401,7 @@ export default defineComponent({
           app_name: appName,
           trace_id: traceId,
           bk_biz_id: bkBizId,
+          reduce_span_details: true,
           [QUERY_TRACE_RELATION_APP]: store.traceViewFilters.includes(QUERY_TRACE_RELATION_APP),
         };
         const data = await traceDetail(params).catch(() => null);
@@ -444,6 +445,13 @@ export default defineComponent({
       }
     };
 
+    const handleChangeSpan = (span: Partial<Span>) => {
+      const spanId = String(span.span_id || span.spanID || '').trim();
+      const found = store.traceTree.spans.find(item => item.span_id === spanId || item.spanID === spanId);
+      spanDetails.value = (found || span) as Span;
+      showSpanDetails.value = true;
+    };
+
     return {
       virtualizedTraceViewElm,
       listViewElm,
@@ -457,6 +465,7 @@ export default defineComponent({
       traceTree,
       spans,
       handlePrevNextClicked,
+      handleChangeSpan,
       handleToggleCollapse,
       activeTab,
       spanDetailDefaultExpand,
@@ -494,6 +503,7 @@ export default defineComponent({
           isShowPrevNextButtons={true}
           show={this.showSpanDetails}
           spanDetails={this.spanDetails as Span}
+          onChangeSpan={this.handleChangeSpan}
           onPrevNextClicked={flag => {
             this.handlePrevNextClicked(flag);
           }}

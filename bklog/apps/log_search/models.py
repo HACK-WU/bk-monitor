@@ -24,27 +24,37 @@ import hashlib
 import os
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from typing import Any
 
+import arrow
 from django.conf import settings
 from django.core.cache import cache
 from django.db import connection, models
-from django.db.models import Q
+from django.db.models import Q, Value
+from django.db.models.fields.json import KeyTransform, KeyTransformExact
+from django.db.models.functions import Cast
 from django.db.transaction import atomic
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
 from jinja2 import FileSystemLoader
 from jinja2.sandbox import SandboxedEnvironment as Environment
+from redis.exceptions import RedisError
 
 from apps.api import TransferApi
-from apps.constants import SpacePropertyEnum
+from apps.constants import USERNAME_MAX_LENGTH, SpacePropertyEnum
 from apps.exceptions import BizNotExistError
 from apps.feature_toggle.handlers.toggle import feature_switch
 from apps.log_clustering.constants import PatternEnum, YearOnYearEnum
-from apps.log_databus.constants import EsSourceType
+from apps.log_databus.constants import DORIS_CLUSTER_TYPE, EsSourceType
 from apps.log_search.constants import (
+    ASYNC_EXPORT_SCENE_ID,
     DEFAULT_INDEX_SET_FIELDS_CONFIG_NAME,
     DEFAULT_TIME_FIELD,
+    ExportJobStatus,
+    ExportSearchType,
+    ExportStatus,
+    ExportType,
     INDEX_SET_NO_DATA_CHECK_INTERVAL,
     INDEX_SET_NO_DATA_CHECK_PREFIX,
     INDEX_SET_NOT_EXISTED,
@@ -74,15 +84,21 @@ from apps.log_search.constants import (
     TimeZoneEnum,
     LogBuiltInFieldTypeEnum,
     IndexSetDataType,
+    PLATFORM_INDEX_OWNER_SPACE_UID_FIELD,
+    PlatformIndexVisibleType,
 )
 from apps.log_search.exceptions import (
+    AsyncExportRequestBusyException,
+    ConcurrentExportLimitException,
     CouldNotFindTemplateException,
     DefaultConfigNotAllowedDelete,
+    GetAllFieldsException,
     IndexSetNameDuplicateException,
     ScenarioNotSupportedException,
     SourceDuplicateException,
 )
-from apps.log_search.utils import fetch_request_username
+from apps.log_search.utils import display_index_set_name, fetch_request_username
+from apps.log_search.export.models import ExportJob  # noqa: F401
 from apps.models import (
     JsonField,
     MultiStrSplitByCommaField,
@@ -93,6 +109,7 @@ from apps.models import (
 from apps.utils.base_crypt import BaseCrypt
 from apps.utils.db import array_group, array_hash
 from apps.utils.local import get_request_app_code, get_request_tenant_id
+from apps.utils.log import logger
 from apps.utils.time_handler import (
     datetime_to_timestamp,
     timestamp_to_datetime,
@@ -102,7 +119,7 @@ from bkm_ipchooser.constants import CommonEnum
 from bkm_space.api import AbstractSpaceApi
 from bkm_space.define import Space as SpaceDefine
 from bkm_space.define import SpaceTypeEnum
-from bkm_space.utils import bk_biz_id_to_space_uid, space_uid_to_bk_biz_id
+from bkm_space.utils import bk_biz_id_to_space_uid, parse_space_uid, space_uid_to_bk_biz_id
 
 
 class GlobalConfig(models.Model):
@@ -536,15 +553,130 @@ class LogIndexSet(SoftDeleteModel):
             for data in index_set_data
         ]
 
+    @staticmethod
+    def build_space_visibility_context(space_uids: list, current_space_uid: str = None) -> dict:
+        """
+        汇总请求侧空间的判定依据，避免每个平台级索引集重复查关联空间。
+        """
+        from bkm_space.api import SpaceApi
+
+        bk_biz_ids, cmdb_biz_ids = set(), set()
+        for space_uid in space_uids:
+            bk_biz_id = space_uid_to_bk_biz_id(space_uid)
+            if bk_biz_id:
+                bk_biz_ids.add(str(bk_biz_id))
+            # 非 BKCC 空间的 bk_biz_id 是负数，配置方填的是关联的 CMDB 业务
+            related_space = SpaceApi.get_related_space(space_uid, SpaceTypeEnum.BKCC.value)
+            if related_space:
+                bk_biz_ids.add(str(related_space.bk_biz_id))
+                cmdb_biz_ids.add(related_space.bk_biz_id)
+        current_space_uid = current_space_uid or (space_uids[0] if space_uids else None)
+        current_space_type = parse_space_uid(current_space_uid)[0] if current_space_uid else None
+        return {
+            "bk_biz_ids": bk_biz_ids,
+            "current_space_type": current_space_type,
+            "cmdb_biz_ids": cmdb_biz_ids,
+        }
+
+    @staticmethod
+    def is_platform_index_visible(visibility: dict, context: dict) -> bool:
+        """
+        判定平台级可见范围是否命中请求侧空间。调用方必须先确认 is_platform_index 为 True。
+        """
+        visibility = visibility or {}
+        visible_type = visibility.get("type")
+
+        if visible_type == PlatformIndexVisibleType.MULTI_BIZ.value:
+            allowed_biz_ids = {str(bk_biz_id) for bk_biz_id in visibility.get("bk_biz_ids") or []}
+            return bool(allowed_biz_ids & context["bk_biz_ids"])
+
+        if visible_type == PlatformIndexVisibleType.BIZ_ATTR.value:
+            bk_biz_labels = visibility.get("bk_biz_labels") or {}
+            if not bk_biz_labels:
+                return False
+            # 存量脏配置也必须按不可见处理，避免 reduce([]) 打成 500 或空条件放大范围
+            if any(not isinstance(label_values, list) or not label_values for label_values in bk_biz_labels.values()):
+                return False
+            # 与 StorageHandler.can_visible 对齐：配了空间类型就只按空间类型判定
+            label_space_types = bk_biz_labels.get(SpacePropertyEnum.SPACE_TYPE.value, [])
+            if label_space_types:
+                # SPACE_TYPE 只能匹配当前空间，不能被关联空间的 type 并集放大
+                return context["current_space_type"] in label_space_types
+            if not context["cmdb_biz_ids"]:
+                return False
+            # 每条 BizProperty 只承载一个 biz_property_id，多个属性 key 不能 AND 进同一次查询，
+            # 否则等价于要求同一行同时是两个属性，恒为假。按 key 分别取业务集合再求交集：
+            # 同 key 的多个取值是「或」，不同 key 之间是「且」
+            candidate_biz_ids = set(context["cmdb_biz_ids"])
+            for label_key, label_values in bk_biz_labels.items():
+                candidate_biz_ids &= set(
+                    BizProperty.objects.filter(
+                        biz_property_id=label_key,
+                        biz_property_value__in=label_values,
+                        bk_biz_id__in=candidate_biz_ids,
+                    ).values_list("bk_biz_id", flat=True)
+                )
+                if not candidate_biz_ids:
+                    return False
+            return bool(candidate_biz_ids)
+
+        return False
+
     @classmethod
-    def get_index_set(cls, index_set_ids=None, scenarios=None, space_uids=None, is_trace_log=False, show_indices=True):
+    def get_visible_platform_index_set_ids(cls, space_uids: list, current_space_uid: str = None) -> list:
+        """
+        取对请求侧空间开放检索入口的平台级索引集。归属空间自身走 space_uid__in，这里只补跨空间的部分。
+        """
+        if not space_uids:
+            return []
+        candidates = list(
+            cls.objects.filter(is_active=True, is_platform_index=True)
+            .exclude(space_uid__in=space_uids)
+            .values("index_set_id", "is_group", "platform_index_visibility")
+        )
+        if not candidates:
+            return []
+        context = cls.build_space_visibility_context(space_uids, current_space_uid=current_space_uid)
+        visible = [
+            candidate
+            for candidate in candidates
+            if cls.is_platform_index_visible(candidate["platform_index_visibility"], context)
+        ]
+        index_set_ids = [candidate["index_set_id"] for candidate in visible]
+
+        # 索引组的 indices 要由子索引集拼出来，子索引集不放行的话跨空间看到的会是一个空组
+        group_ids = [candidate["index_set_id"] for candidate in visible if candidate["is_group"]]
+        if group_ids:
+            child_ids = LogIndexSetData.objects.filter(
+                index_set_id__in=group_ids, type=IndexSetDataType.INDEX_SET.value
+            ).values_list("result_table_id", flat=True)
+            index_set_ids.extend(int(child_id) for child_id in child_ids if str(child_id).isdigit())
+
+        return index_set_ids
+
+    @classmethod
+    def get_index_set(
+        cls,
+        index_set_ids=None,
+        scenarios=None,
+        space_uids=None,
+        is_trace_log=False,
+        show_indices=True,
+        current_space_uid=None,
+    ):
         qs = cls.objects.filter(is_active=True)
         if index_set_ids:
             qs = qs.filter(index_set_id__in=index_set_ids)
         if scenarios and isinstance(scenarios, list):
             qs = qs.filter(scenario_id__in=scenarios)
         if space_uids:
-            qs = qs.filter(space_uid__in=space_uids)
+            space_filter = Q(space_uid__in=space_uids)
+            visible_platform_index_set_ids = cls.get_visible_platform_index_set_ids(
+                space_uids, current_space_uid=current_space_uid
+            )
+            if visible_platform_index_set_ids:
+                space_filter |= Q(index_set_id__in=visible_platform_index_set_ids)
+            qs = qs.filter(space_filter)
         if is_trace_log:
             qs = qs.filter(is_trace_log=is_trace_log)
 
@@ -566,6 +698,9 @@ class LogIndexSet(SoftDeleteModel):
             "support_doris",
             "doris_table_id",
             "is_group",
+            "is_platform_index",
+            "platform_index_visibility",
+            "platform_index_filter",
         )
 
         # 获取接入场景
@@ -618,6 +753,11 @@ class LogIndexSet(SoftDeleteModel):
                 index_set["time_field"] = time_field
 
             index_set["scenario_name"] = scenarios.get(index_set["scenario_id"])
+            if index_set["is_platform_index"] and current_space_uid and index_set["space_uid"] != current_space_uid:
+                # 跨空间入口必须以请求方空间对外，否则前端拿归属业务发起检索会命中 metadata 的归属空间分支，
+                # 拿到的是 filters 为空的全量路由，数据隔离形同虚设
+                index_set[PLATFORM_INDEX_OWNER_SPACE_UID_FIELD] = index_set["space_uid"]
+                index_set["space_uid"] = current_space_uid
             index_set["bk_biz_id"] = space_uid_to_bk_biz_id(index_set["space_uid"])
             # 排除场景化检索路由标签（tag_type=scene），仅后端使用，不暴露给前端
             index_set["tags"] = [
@@ -636,6 +776,50 @@ class LogIndexSet(SoftDeleteModel):
 
         return sorted(result, key=lambda i: i["is_favorite"], reverse=True)
 
+    @staticmethod
+    def resolve_search_scope(index_set, request_bk_biz_id=None, request_space_uid=None):
+        """解析检索请求方的 ``(bk_biz_id, space_uid)``，显式业务优先于请求空间。"""
+        if not getattr(index_set, "is_platform_index", False):
+            return space_uid_to_bk_biz_id(index_set.space_uid), index_set.space_uid
+
+        if request_bk_biz_id not in (None, ""):
+            try:
+                bk_biz_id = int(request_bk_biz_id)
+                return bk_biz_id, bk_biz_id_to_space_uid(bk_biz_id)
+            except (TypeError, ValueError):
+                return None, None
+
+        if request_space_uid:
+            try:
+                return space_uid_to_bk_biz_id(request_space_uid), request_space_uid
+            except (TypeError, ValueError):
+                return None, None
+
+        return None, None
+
+    @classmethod
+    def is_platform_index_visible_to_space(cls, index_set, request_space_uid: str) -> bool:
+        """归属空间天然可见；跨空间必须命中平台索引集的分发范围。"""
+        if not getattr(index_set, "is_platform_index", False):
+            return True
+        if not request_space_uid:
+            return False
+        if index_set.space_uid == request_space_uid:
+            return True
+        context = cls.build_space_visibility_context([request_space_uid], current_space_uid=request_space_uid)
+        return cls.is_platform_index_visible(index_set.platform_index_visibility, context)
+
+    @staticmethod
+    def resolve_search_bk_biz_id(index_set, request_bk_biz_id=None, request_space_uid=None):
+        """
+        解析检索要用的 bk_biz_id。
+
+        平台级索引集必须用请求方业务：归属空间会被 metadata 当成全量（filters=[]）。
+        请求方没带 bk_biz_id 时返回 None，由调用方拒绝，不能回落成 skip space。
+        普通索引集保持原行为，用归属空间。
+        """
+        return LogIndexSet.resolve_search_scope(index_set, request_bk_biz_id, request_space_uid)[0]
+
     def get_fields(self, use_snapshot=True):
         """
         取出或更新字段快照
@@ -644,15 +828,35 @@ class LogIndexSet(SoftDeleteModel):
             self.sync_fields_snapshot()
         return self.fields_snapshot
 
-    def sync_fields_snapshot(self, pre_check_enable=True):
-        from apps.log_search.handlers.search.search_handlers_esquery import (
-            SearchHandler,
-        )
+    def _get_fields_by_unify_query(self) -> dict:
+        """字段快照统一经 unify-query 取字段。"""
+        from apps.log_unifyquery.handler.base import UnifyQueryHandler
 
+        end_time = arrow.now()
+        start_time = end_time.shift(days=-1)
+        result = UnifyQueryHandler(
+            {
+                "index_set_ids": [self.index_set_id],
+                "bk_biz_id": space_uid_to_bk_biz_id(self.space_uid),
+                "start_time": start_time.int_timestamp * 1000,
+                "end_time": end_time.int_timestamp * 1000,
+            }
+        ).fields()
+        # UQ field_map 单路由失败时仍可能 200 且 data=[]。空字段字典为真值，
+        # 若当成功快照落库，get_fields(use_snapshot=True) 不会再回源。
+        if not result or not result.get("fields"):
+            raise GetAllFieldsException(
+                GetAllFieldsException.MESSAGE.format(
+                    index_set_id=self.index_set_id,
+                    e="unify-query returned empty fields",
+                )
+            )
+        return result
+
+    def sync_fields_snapshot(self):
         fields = {}
         try:
-            search_handler_esquery = SearchHandler(self.index_set_id, {}, pre_check_enable=pre_check_enable)
-            fields = search_handler_esquery.fields()
+            fields = self._get_fields_by_unify_query()
             fields = self.fields_to_string(fields=fields)
             self.fields_snapshot = fields
         except Exception as e:  # pylint: disable=broad-except
@@ -704,6 +908,196 @@ class LogIndexSet(SoftDeleteModel):
         fields["usable_reason"] = str(fields.get("usable_reason", ""))
         return fields
 
+    @staticmethod
+    def is_support_sql_and_grep(index_set_id, index_set_obj=None) -> bool:
+        index_set_obj = index_set_obj or LogIndexSet.objects.filter(index_set_id=index_set_id).first()
+
+        if not index_set_obj:
+            return False
+
+        if index_set_obj.support_doris and index_set_obj.doris_table_id:
+            return True
+
+        if index_set_obj.is_native_doris():
+            return True
+
+        return False
+
+    def is_native_doris(self) -> bool:
+        return self.check_is_native_doris(self)
+
+    @classmethod
+    def get_is_native_doris(cls, index_set_id: int):
+        index_set_obj = LogIndexSet.objects.filter(index_set_id=index_set_id).first()
+        if not index_set_obj:
+            return False
+        else:
+            return cls.check_is_native_doris(index_set_obj)
+
+    @staticmethod
+    def check_is_native_doris(index_set_obj):
+        from apps.log_databus.models import CollectorConfig
+
+        if index_set_obj.is_group:
+            child_index_set_ids = index_set_obj.get_child_index_set_ids()
+            collector_config_ids = [
+                collector_config_id
+                for collector_config_id in LogIndexSet.objects.filter(index_set_id__in=child_index_set_ids).values_list(
+                    "collector_config_id", flat=True
+                )
+                if collector_config_id
+            ]
+            if not child_index_set_ids or len(child_index_set_ids) != len(collector_config_ids):
+                return False
+            storage_cluster_types = set(
+                CollectorConfig.objects.filter(collector_config_id__in=collector_config_ids).values_list(
+                    "storage_cluster_type", flat=True
+                )
+            )
+            if {DORIS_CLUSTER_TYPE} == storage_cluster_types:
+                return True
+        else:
+            if not index_set_obj.collector_config_id:
+                return False
+            collector_config_obj = CollectorConfig.objects.filter(
+                collector_config_id=index_set_obj.collector_config_id
+            ).first()
+            if collector_config_obj and collector_config_obj.storage_cluster_type == DORIS_CLUSTER_TYPE:
+                return True
+        return False
+
+    @staticmethod
+    def batch_get_is_native_doris(index_set_ids: list) -> dict:
+        if not index_set_ids:
+            return {}
+
+        from apps.log_databus.models import CollectorConfig
+        from apps.log_search.constants import IndexSetDataType
+
+        index_set_id_to_storage_map = {}
+
+        index_set_infos = LogIndexSet.objects.filter(index_set_id__in=index_set_ids).values(
+            "index_set_id", "is_group", "collector_config_id"
+        )
+
+        index_set_group_ids = []
+        non_index_set_group_map = {}
+
+        for index_set_info in index_set_infos:
+            if index_set_info["is_group"]:
+                index_set_group_ids.append(index_set_info["index_set_id"])
+            else:
+                non_index_set_group_map[index_set_info["index_set_id"]] = index_set_info["collector_config_id"]
+
+        # 处理非索引组
+        non_index_set_group_cc_ids = [cc_id for cc_id in non_index_set_group_map.values() if cc_id]
+
+        cc_storage_map = {}
+
+        if non_index_set_group_cc_ids:
+            cc_storage_map = dict(
+                CollectorConfig.objects.filter(collector_config_id__in=non_index_set_group_cc_ids).values_list(
+                    "collector_config_id", "storage_cluster_type"
+                )
+            )
+
+        for index_set_id, cc_id in non_index_set_group_map.items():
+            if not cc_id:
+                index_set_id_to_storage_map[index_set_id] = False
+            else:
+                index_set_id_to_storage_map[index_set_id] = cc_storage_map.get(cc_id) == DORIS_CLUSTER_TYPE
+
+        # 处理索引组
+        if index_set_group_ids:
+            index_set_data_infos = LogIndexSetData.objects.filter(
+                index_set_id__in=index_set_group_ids,
+                type=IndexSetDataType.INDEX_SET.value,
+            ).values("index_set_id", "result_table_id")
+
+            parent_is_id_to_child_is_ids_map = defaultdict(set)
+            all_child_is_ids = set()
+
+            for index_set_data_info in index_set_data_infos:
+                parent_is_id = index_set_data_info["index_set_id"]
+                child_is_id = int(index_set_data_info["result_table_id"])
+                parent_is_id_to_child_is_ids_map[parent_is_id].add(child_is_id)
+                all_child_is_ids.add(child_is_id)
+
+            if all_child_is_ids:
+                is_id_to_cc_id_map = dict(
+                    LogIndexSet.objects.filter(index_set_id__in=all_child_is_ids).values_list(
+                        "index_set_id", "collector_config_id"
+                    )
+                )
+
+                all_child_cc_ids = [cc_id for cc_id in is_id_to_cc_id_map.values() if cc_id]
+                child_cc_to_storage_map = {}
+
+                if all_child_cc_ids:
+                    child_cc_to_storage_map = dict(
+                        CollectorConfig.objects.filter(collector_config_id__in=all_child_cc_ids).values_list(
+                            "collector_config_id", "storage_cluster_type"
+                        )
+                    )
+
+                for index_set_group_id in index_set_group_ids:
+                    child_is_ids = parent_is_id_to_child_is_ids_map.get(index_set_group_id, set())
+
+                    if not child_is_ids:
+                        index_set_id_to_storage_map[index_set_group_id] = False
+                        continue
+
+                    child_cc_ids = [
+                        is_id_to_cc_id_map.get(child_is_id)
+                        for child_is_id in child_is_ids
+                        if is_id_to_cc_id_map.get(child_is_id)
+                    ]
+
+                    if len(child_is_ids) != len(child_cc_ids):
+                        index_set_id_to_storage_map[index_set_group_id] = False
+                        continue
+
+                    storage_types = {
+                        child_cc_to_storage_map.get(child_cc_id) for child_cc_id in child_cc_ids if child_cc_id
+                    }
+
+                    index_set_id_to_storage_map[index_set_group_id] = storage_types == {DORIS_CLUSTER_TYPE}
+            else:
+                for index_set_group_id in index_set_group_ids:
+                    index_set_id_to_storage_map[index_set_group_id] = False
+
+        return index_set_id_to_storage_map
+
+    @staticmethod
+    def get_default_sort_list(index_set_id, index_set_obj=None):
+        index_set_obj = index_set_obj or LogIndexSet.objects.filter(index_set_id=index_set_id).first()
+
+        default_sort_list = []
+
+        if index_set_obj:
+            time_field = None
+
+            if index_set_obj.scenario_id in [Scenario.BKDATA, Scenario.LOG]:
+                time_field = "dtEventTimeStamp"
+            elif index_set_obj.time_field:
+                time_field = index_set_obj.time_field
+            else:
+                # 遍历 index_set_data 取任意一个不为空的时间字段
+                time_fields = LogIndexSetData.objects.filter(index_set_id=index_set_id).values_list(
+                    "time_field", flat=True
+                )
+                for t_f in time_fields:
+                    if t_f:
+                        time_field = t_f
+
+            if time_field:
+                if index_set_obj.sort_fields:
+                    return [[field, "desc"] for field in index_set_obj.sort_fields]
+
+                default_sort_list = [[time_field, "desc"]]
+
+        return default_sort_list
+
     class Meta:
         ordering = ("-orders", "-index_set_id")
         verbose_name = _("索引集配置")
@@ -731,7 +1125,7 @@ class LogIndexSetData(SoftDeleteModel):
     index_id = models.AutoField(_("索引ID"), primary_key=True)
     index_set_id = models.IntegerField(_("索引集ID"), db_index=True)
     bk_biz_id = models.IntegerField(_("业务ID"), null=True, default=None)
-    result_table_id = models.CharField(_("结果表"), max_length=255)
+    result_table_id = models.CharField(_("结果表"), max_length=255, db_index=True)
     result_table_name = models.CharField(_("结果表名称"), max_length=255, null=True, default=None, blank=True)
     time_field = models.CharField(_("时间字段"), max_length=64, null=True, default=None, blank=True)
     apply_status = models.CharField(_("审核状态"), max_length=64, choices=Status.StatusChoices, default=Status.PENDING)
@@ -767,6 +1161,9 @@ class UserIndexSetConfig(SoftDeleteModel):
 
 
 class UserIndexSetSearchHistory(SoftDeleteModel):
+    created_by = models.CharField(_("创建者"), max_length=USERNAME_MAX_LENGTH, default="")
+    updated_by = models.CharField(_("修改者"), max_length=USERNAME_MAX_LENGTH, blank=True, default="")
+    deleted_by = models.CharField(_("删除者"), max_length=USERNAME_MAX_LENGTH, blank=True, null=True)
     index_set_id = models.IntegerField(_("索引集ID"), null=True, default=None)
     params = JsonField(_("检索条件"), null=True, default=None)
     search_type = models.CharField(_("检索类型"), max_length=32, default="default")
@@ -866,6 +1263,19 @@ class ResourceChange(OperateRecordModel):
         verbose_name_plural = _("23_资源变更任务")
 
 
+def build_favorite_scope_query(scope: dict[str, str] = None) -> Q:
+    """将收藏作用域转换为 JSONField 字面键精确匹配条件。"""
+    scope_query: Q = Q()
+    for key, value in (scope or {}).items():
+        scope_query &= Q(
+            KeyTransformExact(
+                KeyTransform(key, "scope"),
+                Value(value, output_field=models.JSONField()),
+            )
+        )
+    return scope_query
+
+
 class FavoriteSearch(SoftDeleteModel):
     """检索收藏记录"""
 
@@ -876,6 +1286,8 @@ class FavoriteSearch(SoftDeleteModel):
 
 
 class Favorite(OperateRecordModel):
+    created_by = models.CharField(_("创建者"), max_length=USERNAME_MAX_LENGTH, default="")
+    updated_by = models.CharField(_("修改者"), max_length=USERNAME_MAX_LENGTH, blank=True, default="")
     space_uid = models.CharField(_("空间唯一标识"), blank=True, default="", max_length=256, db_index=True)
     index_set_id = models.IntegerField(_("索引集ID"), null=True, default=None)
     name = models.CharField(_("收藏名称"), max_length=255)
@@ -913,6 +1325,7 @@ class Favorite(OperateRecordModel):
     table_id_conditions = models.JSONField(_("场景路由条件"), null=True, blank=True, default=None)
     # 场景化收藏专属：场景维度筛选值（可空），与前端 scene_filter_values 同结构。
     scene_filter_values = models.JSONField(_("场景维度筛选"), null=True, blank=True, default=None)
+    scope = models.JSONField(_("收藏作用域"), blank=True, default=dict)
 
     class Meta:
         verbose_name = _("检索收藏")
@@ -928,16 +1341,19 @@ class Favorite(OperateRecordModel):
         order_type: str = FavoriteListOrderType.NAME_ASC.value,
         public_group_ids: list = None,
         source_type: str = None,
+        scope: dict[str, str] = None,
     ):
         """获取用户所有能看到的收藏
 
         :param source_type: 可选过滤；不传则全返，传 "scene" 仅场景化、"index_set" 仅索引集。
+        :param scope: 可选作用域；仅过滤公开收藏，个人收藏不受影响。
         """
         source_app_code = get_request_app_code()
         favorites = []
         public_query = Q(space_uid=space_uid, visible_type=FavoriteVisibleType.PUBLIC.value)
         if public_group_ids:
             public_query &= Q(group_id__in=public_group_ids)
+        public_query &= build_favorite_scope_query(scope)
         qs = cls.objects.filter(
             Q(
                 space_uid=space_uid,
@@ -969,9 +1385,12 @@ class Favorite(OperateRecordModel):
                 index_set_id_list.extend(index_set_ids)
         index_set_id_list = list(set(index_set_id_list))
         active_index_set_id_dict = {
-            i["index_set_id"]: {"index_set_name": i["index_set_name"], "is_active": i["is_active"]}
+            i["index_set_id"]: {
+                "index_set_name": display_index_set_name(i["index_set_name"], i["collector_config_id"]),
+                "is_active": i["is_active"],
+            }
             for i in LogIndexSet.objects.filter(index_set_id__in=index_set_id_list).values(
-                "index_set_id", "index_set_name", "is_active"
+                "index_set_id", "index_set_name", "is_active", "collector_config_id"
             )
         }
         for fi in qs.all():
@@ -1017,6 +1436,8 @@ class Favorite(OperateRecordModel):
 class FavoriteGroup(OperateRecordModel):
     """收藏组"""
 
+    created_by = models.CharField(_("创建者"), max_length=USERNAME_MAX_LENGTH, default="")
+    updated_by = models.CharField(_("修改者"), max_length=USERNAME_MAX_LENGTH, blank=True, default="")
     name = models.CharField(_("收藏组名称"), max_length=64)
     group_type = models.CharField(_("收藏组类型"), max_length=64, choices=FavoriteGroupType.get_choices())
     space_uid = models.CharField(_("空间唯一标识"), blank=True, default="", max_length=256, db_index=True)
@@ -1030,6 +1451,7 @@ class FavoriteGroup(OperateRecordModel):
         default=FavoriteSourceType.INDEX_SET.value,
         db_index=True,
     )
+    scope = models.JSONField(_("收藏组作用域"), blank=True, default=dict)
 
     class Meta:
         verbose_name = _("检索收藏组")
@@ -1084,15 +1506,20 @@ class FavoriteGroup(OperateRecordModel):
 
     @classmethod
     def get_user_groups(
-        cls, space_uid: str, username: str, source_type: str = FavoriteSourceType.INDEX_SET.value
+        cls,
+        space_uid: str,
+        username: str,
+        source_type: str = FavoriteSourceType.INDEX_SET.value,
+        scope: dict[str, str] = None,
     ) -> list[dict[str, Any]]:
-        """获取用户所有能看到的组"""
+        """获取用户所有能看到的组。
+
+        私有组和未分组始终返回；公开组按传入 scope 的所有键值做包含匹配。
+        """
         groups = list()
         source_app_code = get_request_app_code()
         # Lazy create private/ungrouped per source_type, so scene 与 index_set 各有一套
-        private_group = cls.get_or_create_private_group(
-            space_uid=space_uid, username=username, source_type=source_type
-        )
+        private_group = cls.get_or_create_private_group(space_uid=space_uid, username=username, source_type=source_type)
         ungrouped_group = cls.get_or_create_ungrouped_group(space_uid=space_uid, source_type=source_type)
         public_groups = (
             cls.objects.filter(
@@ -1104,6 +1531,7 @@ class FavoriteGroup(OperateRecordModel):
             .order_by("created_at")
             .all()
         )
+        public_groups = public_groups.filter(build_favorite_scope_query(scope))
         # 组顺序, 先个人, 再公共, 最后未归类
         groups.append(model_to_dict(private_group))
         for gi in public_groups:
@@ -1189,28 +1617,36 @@ TAG_TYPE_CHOICES = (
 
 class IndexSetTag(models.Model):
     tag_id = models.AutoField(_("标签id"), primary_key=True)
+    space_uid = models.CharField(_("空间唯一标识"), blank=True, default="", max_length=240, db_index=True)
     name = models.CharField(_("标签名称"), max_length=255, db_index=True)
     value = models.CharField(_("标签值"), max_length=255, default="", blank=True)
     color = models.CharField(_("配色"), max_length=255, choices=TagColor.get_choices(), default=TagColor.GREEN.value)
     tag_type = models.CharField(
-        _("标签类型"), max_length=16, choices=TAG_TYPE_CHOICES, default=TAG_TYPE_USER, db_index=True,
+        _("标签类型"),
+        max_length=16,
+        choices=TAG_TYPE_CHOICES,
+        default=TAG_TYPE_USER,
+        db_index=True,
     )
 
     class Meta:
         verbose_name = _("标签表")
         verbose_name_plural = _("标签表")
-        unique_together = (("name", "value", "tag_type"),)
+        unique_together = (("space_uid", "name", "value", "tag_type"),)
 
     @classmethod
-    def get_tag_id(cls, name: str, value: str = "", tag_type: str = TAG_TYPE_USER) -> int:
-        tag, _created = cls.objects.get_or_create(name=name, value=value, tag_type=tag_type)
+    def get_tag_id(cls, name: str, value: str = "", tag_type: str = TAG_TYPE_USER, space_uid: str = "") -> int:
+        tag, _created = cls.objects.get_or_create(space_uid=space_uid, name=name, value=value, tag_type=tag_type)
         return tag.tag_id
 
     @classmethod
     def batch_get_tags(cls, tag_ids: set):
-        tags = cls.objects.filter(tag_id__in=tag_ids).values("name", "value", "color", "tag_id", "tag_type")
+        tags = cls.objects.filter(tag_id__in=tag_ids).values(
+            "space_uid", "name", "value", "color", "tag_id", "tag_type"
+        )
         return {
             str(tag["tag_id"]): {
+                "space_uid": tag["space_uid"],
                 "name": InnerTag.get_choice_label(tag["name"]),
                 "value": tag["value"],
                 "color": tag["color"],
@@ -1258,13 +1694,25 @@ class IndexSetTag(models.Model):
         return matched
 
     @classmethod
-    def get_dimension_values(cls, bk_biz_id: int, scene: str, dimension_key: str, filters=None) -> list:
+    def get_dimension_values(
+        cls, bk_biz_id: int, scene: str, dimension_key: str, filters=None, space_uids=None
+    ) -> list:
         """
         Query distinct dimension values for *dimension_key* across index sets
-        that belong to *bk_biz_id* and match *scene* + optional cascading *filters*.
+        that match *scene* + optional cascading *filters*.
+
+        By default only the space resolved from *bk_biz_id* is scanned.
+        Pass *space_uids* (typically IndexSetHandler.get_all_related_space_uids)
+        to include BKCC-related BCS/PaaS spaces as well.
 
         filters: list[dict] with field_name, value (list), op (eq/ne/req/nreq);
         legacy dict {key: value|[values]} is auto-converted to op=eq.
+
+        space_uids: optional explicit space list (current space + related spaces).
+        When omitted, only the space resolved from bk_biz_id is scanned so unit
+        tests stay independent of SpaceApi. The view layer should pass
+        IndexSetHandler.get_all_related_space_uids(...) so BCS/PaaS related
+        spaces are included.
         """
         scene_tag_id = cls.get_tag_id(name="scene", value=scene, tag_type=TAG_TYPE_SCENE)
         required_groups = [{str(scene_tag_id)}]
@@ -1286,12 +1734,13 @@ class IndexSetTag(models.Model):
             else:
                 excluded_tag_ids |= matched
 
-        # 必须按 bk_biz_id 解析出的完整 space_uid 精确匹配；
+        # 必须按完整 space_uid 精确匹配（space_uid__in 给定列表）；
         # 旧实现 space_uid__endswith=str(bk_biz_id) 会串业务
         # （如 bk_biz_id=2 会命中 bkcc__12 / bkcc__102），放大维度值数据范围泄漏。
-        space_uid = bk_biz_id_to_space_uid(bk_biz_id)
+        if space_uids is None:
+            space_uids = [bk_biz_id_to_space_uid(bk_biz_id)]
         index_sets = LogIndexSet.objects.filter(
-            space_uid=space_uid,
+            space_uid__in=space_uids,
             is_active=True,
         ).values_list("tag_ids", flat=True)
 
@@ -1326,6 +1775,8 @@ class AsyncTask(OperateRecordModel):
     导出任务状态表
     """
 
+    created_by = models.CharField(_("创建者"), max_length=USERNAME_MAX_LENGTH, default="")
+    updated_by = models.CharField(_("修改者"), max_length=USERNAME_MAX_LENGTH, blank=True, default="")
     request_param = models.JSONField(_("检索请求参数"))
     sorted_param = models.JSONField(_("异步导出排序字段"), null=True, blank=True)
     scenario_id = models.CharField(_("接入场景"), max_length=64, null=True, blank=True)
@@ -1353,10 +1804,103 @@ class AsyncTask(OperateRecordModel):
         _("索引集类型"), max_length=32, choices=IndexSetType.get_choices(), default=IndexSetType.SINGLE.value
     )
 
+    @classmethod
+    def check_running_count_by_user(cls, username: str, is_scene: bool = False):
+        running_status = [
+            ExportStatus.DOWNLOAD_LOG,
+            ExportStatus.EXPORT_PACKAGE,
+            ExportStatus.EXPORT_UPLOAD,
+        ]
+        qs = cls.objects.filter(created_by=username, export_type=ExportType.ASYNC)
+
+        if is_scene:
+            qs = qs.filter(scenario_id=ASYNC_EXPORT_SCENE_ID)
+        else:
+            qs = qs.exclude(scenario_id=ASYNC_EXPORT_SCENE_ID)
+
+        running_count = qs.filter(Q(export_status__in=running_status) | Q(export_status__isnull=True)).count()
+
+        export_job_qs = ExportJob.objects.filter(created_by=username, status__in=ExportJobStatus.ACTIVE)
+        if is_scene:
+            export_job_qs = export_job_qs.filter(search_type=ExportSearchType.SCENE)
+        else:
+            export_job_qs = export_job_qs.exclude(search_type=ExportSearchType.SCENE)
+        running_count += export_job_qs.count()
+        if running_count >= settings.MAX_CONCURRENT_EXPORT_TASKS:
+            raise ConcurrentExportLimitException(
+                ConcurrentExportLimitException.MESSAGE.format(limit_count=settings.MAX_CONCURRENT_EXPORT_TASKS)
+            )
+
+    @classmethod
+    def export_create_lock_key(cls, username: str, is_scene: bool = False) -> str:
+        """用户级导出创建锁的 key：新旧导出链路必须算出同一个 key 才能共用同一份用户额度。"""
+        task_group = ASYNC_EXPORT_SCENE_ID if is_scene else "default"
+        username_hash = hashlib.sha256(username.encode("utf-8")).hexdigest()[:32]
+        return f"async_export_create:{task_group}:{username_hash}"
+
+    @classmethod
+    @contextmanager
+    def export_create_lock(cls, username: str, is_scene: bool = False):
+        """
+        用户级导出创建锁：Redis 可用时在锁内复检并发数并创建任务，避免并发请求击穿限制；
+        Redis 禁用或连接异常时降级为非原子校验，极端并发下任务数可能短暂超过限制。
+        """
+        if not settings.USE_REDIS:
+            yield
+            return
+
+        lock_key = cls.export_create_lock_key(username, is_scene)
+        try:
+            lock = cache.lock(lock_key, timeout=30, blocking_timeout=5)
+            lock_acquired = lock.acquire()
+        except RedisError:
+            logger.exception(
+                "[AsyncTask.export_create_lock] Redis is unavailable, falling back to non-atomic validation, lock_key=%s",
+                lock_key,
+            )
+            yield
+            return
+
+        if not lock_acquired:
+            logger.warning("[AsyncTask.export_create_lock] failed to acquire lock, lock_key=%s", lock_key)
+            raise AsyncExportRequestBusyException()
+
+        try:
+            yield
+        finally:
+            try:
+                lock.release()
+            except RedisError:
+                logger.exception("[AsyncTask.export_create_lock] failed to release lock, lock_key=%s", lock_key)
+
+    @classmethod
+    def async_export_task_create_with_running_limit(cls, username: str, is_scene: bool = False, **task_params):
+        """校验并创建异步导出任务：在用户级创建锁内复检并发数，避免并发请求击穿限制。"""
+
+        def check_and_create_task():
+            cls.check_running_count_by_user(username, is_scene=is_scene)
+            task_params["created_by"] = username
+            task_params["export_type"] = ExportType.ASYNC
+            return cls.objects.create(**task_params)
+
+        with cls.export_create_lock(username, is_scene=is_scene):
+            with atomic():
+                return check_and_create_task()
+
     class Meta:
         db_table = "export_task"
         verbose_name = _("导出任务")
         verbose_name_plural = _("42_导出任务")
+        indexes = [
+            models.Index(
+                fields=[
+                    "created_by",
+                    "export_type",
+                    "export_status",
+                ],
+                name="export_task_user_run_idx",
+            ),
+        ]
 
 
 class EmailTemplate(OperateRecordModel):
@@ -1400,7 +1944,7 @@ class EmailTemplate(OperateRecordModel):
 
 
 class UserMetaConf(models.Model):
-    username = models.CharField(_("创建者"), max_length=32, default="")
+    username = models.CharField(_("创建者"), max_length=USERNAME_MAX_LENGTH, default="")
     conf = models.JSONField(_("用户meta配置"), default=dict)
     type = models.CharField(_("数据类型"), max_length=64)
 
@@ -1534,7 +2078,76 @@ class Space(SoftDeleteModel):
         return spaces
 
     @classmethod
-    def get_tenant_id(cls, space_uid: str = "", bk_biz_id: int = 0) -> str:
+    def get_spaces_by_bk_biz_ids(cls, bk_tenant_id: str, bk_biz_ids: list | set) -> list:
+        """按租户与 bk_biz_id 列表定向查询未删除空间，字段与 get_all_spaces 一致。"""
+        biz_ids = []
+        for biz_id in bk_biz_ids or []:
+            try:
+                biz_ids.append(int(biz_id))
+            except (TypeError, ValueError):
+                continue
+        if not biz_ids:
+            return []
+
+        placeholders = ", ".join(["%s"] * len(biz_ids))
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT id,
+                       space_type_id,
+                       space_type_name,
+                       space_id,
+                       space_name,
+                       space_uid,
+                       space_code,
+                       bk_biz_id,
+                       bk_tenant_id,
+                       JSON_EXTRACT(properties, '$.time_zone') AS time_zone
+                FROM log_search_space
+                WHERE bk_tenant_id = %s AND is_deleted = 0 AND bk_biz_id IN ({placeholders})
+                """,
+                (bk_tenant_id, *biz_ids),
+            )
+            columns = [col[0] for col in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    @classmethod
+    def get_spaces_page(
+        cls,
+        bk_tenant_id: str,
+        *,
+        offset: int,
+        limit: int,
+        keywords: list[str] | None = None,
+    ) -> tuple[list[dict], int]:
+        """按租户查询 IAM 回调所需的空间分页数据，并在数据库侧完成搜索。"""
+        offset = max(int(offset), 0)
+        limit = max(int(limit), 0)
+        queryset = cls.objects.filter(bk_tenant_id=bk_tenant_id).annotate(
+            bk_biz_id_text=Cast("bk_biz_id", output_field=models.CharField())
+        )
+
+        search_condition = Q()
+        for raw_keyword in keywords or []:
+            keyword = str(raw_keyword or "").strip()
+            if not keyword:
+                continue
+            search_condition |= (
+                Q(space_name__icontains=keyword)
+                | Q(space_type_name__icontains=keyword)
+                | Q(bk_biz_id_text__icontains=keyword)
+            )
+        if search_condition.children:
+            queryset = queryset.filter(search_condition)
+
+        count = queryset.count()
+        spaces = list(
+            queryset.order_by("id").values("bk_biz_id", "space_type_name", "space_name")[offset : offset + limit]
+        )
+        return spaces, count
+
+    @classmethod
+    def get_tenant_id(cls, space_uid: str = "", bk_biz_id: int = 0, is_need_default: bool = True) -> str | None:
         """
         获取空间的租户ID
         """
@@ -1543,12 +2156,16 @@ class Space(SoftDeleteModel):
         if space_uid:
             space = cls.objects.filter(space_uid=space_uid).first()
             if not space:
+                if not is_need_default:
+                    return None
                 return default_tenant_id
             return space.bk_tenant_id
 
         if bk_biz_id:
             space = cls.objects.filter(bk_biz_id=bk_biz_id).first()
             if not space:
+                if not is_need_default:
+                    return None
                 return default_tenant_id
             return space.bk_tenant_id
 
@@ -1687,7 +2304,7 @@ class UserIndexSetFieldsConfig(models.Model):
 
     index_set_id = models.IntegerField(_("索引集ID"), null=True, blank=True, db_index=True)
     config_id = models.IntegerField(_("索引集配置ID"), db_index=True)
-    username = models.CharField(_("用户名"), max_length=32, default="", db_index=True)
+    username = models.CharField(_("用户名"), max_length=USERNAME_MAX_LENGTH, default="", db_index=True)
     scope = models.CharField(_("范围"), max_length=16, default=SearchScopeEnum.DEFAULT.value, db_index=True)
     source_app_code = models.CharField(
         verbose_name=_("来源系统"), default=get_request_app_code, max_length=32, blank=True

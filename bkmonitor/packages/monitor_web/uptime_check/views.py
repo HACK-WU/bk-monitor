@@ -50,6 +50,7 @@ from bkmonitor.data_source import UnifyQuery, load_data_source
 from bkmonitor.iam import ActionEnum, Permission
 from bkmonitor.iam.drf import BusinessActionPermission
 from bkmonitor.utils.common_utils import host_key, safe_int
+from bkmonitor.utils.nodeman import host_queries
 from bkmonitor.utils.request import get_request_tenant_id
 from constants.data_source import DataSourceLabel, DataTypeLabel
 from core.drf_resource import api, resource
@@ -321,11 +322,14 @@ class UptimeCheckNodeViewSet(PermissionMixin, viewsets.ViewSet):
         return Response({"id": node_id, "result": _("删除成功")})
 
     @staticmethod
-    def _get_beat_version(bk_host_ids):
+    def _get_beat_version(bk_tenant_id: str, hosts):
         all_beat_version = {}
-        all_plugin = api.node_man.plugin_search(
-            {"page": 1, "pagesize": len(bk_host_ids), "conditions": [], "bk_host_id": bk_host_ids}
-        )["list"]
+        # 公共节点的主机属于其他业务，按主机所属业务查询
+        all_plugin = host_queries.beat_plugin_status(
+            bk_biz_ids=[host.bk_biz_id for host in hosts],
+            bk_host_ids=[host.bk_host_id for host in hosts],
+            bk_tenant_id=bk_tenant_id,
+        )
         for plugin in all_plugin:
             beat_plugin = list(filter(lambda x: x["name"] == "bkmonitorbeat", plugin["plugin_status"]))
             # 过滤后，只剩下bkmonitorbeat插件
@@ -385,7 +389,7 @@ class UptimeCheckNodeViewSet(PermissionMixin, viewsets.ViewSet):
         all_beat_version = {}
         if bk_host_ids:
             # 去节点管理拿拨测采集器的版本信息
-            all_beat_version = self._get_beat_version(bk_host_ids)
+            all_beat_version = self._get_beat_version(bk_tenant_id, hosts)
 
         # 获取采集器相关信息
         all_node_status = {}
@@ -521,7 +525,7 @@ class UptimeCheckTaskViewSet(PermissionMixin, viewsets.ViewSet):
     def get_permissions(self):
         """拨测任务权限控制"""
 
-        if self.action == "list":
+        if self.action in ("list", "query", "metrics"):
             return [BusinessActionPermission([ActionEnum.VIEW_BUSINESS, ActionEnum.VIEW_SYNTHETIC])]
         return super().get_permissions()
 
@@ -939,6 +943,16 @@ class UptimeCheckTaskViewSet(PermissionMixin, viewsets.ViewSet):
         )
         return Response({"count": len(tasks)})
 
+    @action(methods=["GET"], detail=False)
+    def query(self, request, *args, **kwargs):
+        """任务列表查询（分页/过滤，指标走 metrics 接口）"""
+        return Response(resource.uptime_check.uptime_check_task_query(request.query_params.dict()))
+
+    @action(methods=["POST"], detail=False)
+    def metrics(self, request, *args, **kwargs):
+        """批量查询任务可用率/响应时长/告警状态"""
+        return Response(resource.uptime_check.uptime_check_task_metrics(request.data))
+
     @action(methods=["POST"], detail=False)
     def test(self, request, *args, **kwargs):
         """
@@ -1064,6 +1078,12 @@ class UptimeCheckTaskViewSet(PermissionMixin, viewsets.ViewSet):
 class UptimeCheckGroupViewSet(PermissionMixin, viewsets.ViewSet):
     """拨测分组 ViewSet"""
 
+    def get_permissions(self):
+        """拨测分组权限控制：card 和 top_tasks 为只读查询，使用查看权限"""
+        if self.action in ("card", "top_tasks"):
+            return [BusinessActionPermission([ActionEnum.VIEW_BUSINESS, ActionEnum.VIEW_SYNTHETIC])]
+        return super().get_permissions()
+
     def create(self, request: Request):
         """创建分组"""
         bk_tenant_id = cast(str, get_request_tenant_id())
@@ -1151,6 +1171,16 @@ class UptimeCheckGroupViewSet(PermissionMixin, viewsets.ViewSet):
             group["tasks"] = [task_map[task_id] for task_id in task_ids if task_id in task_map]
 
         return Response(result)
+
+    @action(methods=["GET"], detail=False)
+    def card(self, request, *args, **kwargs):
+        """分组卡片数据（分组维度分页，TopN 走 top_tasks 接口）"""
+        return Response(resource.uptime_check.uptime_check_group_card(request.query_params.dict()))
+
+    @action(methods=["POST"], detail=False)
+    def top_tasks(self, request, *args, **kwargs):
+        """批量查询分组 TopN 最差任务"""
+        return Response(resource.uptime_check.uptime_check_group_top_tasks(request.data))
 
     @action(methods=["POST"], detail=True)
     def add_task(self, request, pk: int | str):

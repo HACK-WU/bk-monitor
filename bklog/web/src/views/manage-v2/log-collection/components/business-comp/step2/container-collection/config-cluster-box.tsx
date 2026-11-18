@@ -140,8 +140,6 @@ export default defineComponent({
       content: t('请先选择集群'),
       placement: 'top' as const,
     });
-    /** 集群列表 */
-    const clusterList = computed(() => props.clusterList);
     /** 操作符选择列表 */
     const operatorSelectList = ref<ISelectItem[]>([
       { id: '=', name: '=' },
@@ -214,7 +212,13 @@ export default defineComponent({
     const viewQueryParams = computed(() => {
       const type = props.isNode ? 'node' : 'pod';
       const config = props.config as IContainerConfigItem;
-      const { namespaces, annotation_selector, label_selector, container } = config;
+      const { namespaces, annotation_selector: annotationSelector, label_selector: labelSelector, container } = config;
+      const namespacesKey = config.noQuestParams.namespacesExclude === '!=' ? 'namespaces_exclude' : 'namespaces';
+      const containerKey = config.noQuestParams.containerExclude === '!=' ? 'container_name_exclude' : 'container_name';
+      const previewContainer: Record<string, string> = { ...container };
+      delete previewContainer.container_name;
+      delete previewContainer.container_name_exclude;
+      previewContainer[containerKey] = (config.containerNameList || []).join(',');
 
       /**
        * 格式化匹配表达式的值
@@ -228,15 +232,15 @@ export default defineComponent({
       };
 
       // 处理注解选择器
-      const matchAnnotations = (annotation_selector?.match_annotations || []).map(item => ({
+      const matchAnnotations = (annotationSelector?.match_annotations || []).map(item => ({
         ...item,
         value: formatValue(item),
       }));
 
       // 处理标签选择器：合并 match_labels 和 match_expressions
-      const labelMatchExpressions = label_selector?.match_labels
-        ? [...(label_selector.match_expressions || []), ...label_selector.match_labels]
-        : label_selector?.match_expressions || [];
+      const labelMatchExpressions = labelSelector?.match_labels
+        ? [...(labelSelector.match_expressions || []), ...labelSelector.match_labels]
+        : labelSelector?.match_expressions || [];
 
       const matchExpressions = labelMatchExpressions.map(item => ({
         ...item,
@@ -246,14 +250,14 @@ export default defineComponent({
       return {
         bcs_cluster_id: props.bcsClusterId,
         bk_biz_id: bkBizId.value,
-        namespaces: namespaces.length === 1 && namespaces[0] === '*' ? [] : namespaces,
+        [namespacesKey]: namespaces.length === 1 && namespaces[0] === '*' ? [] : namespaces,
         label_selector: {
           match_expressions: matchExpressions,
         },
         annotation_selector: {
           match_annotations: matchAnnotations,
         },
-        container: container || {},
+        container: previewContainer,
         type,
       };
     });
@@ -442,7 +446,7 @@ export default defineComponent({
     // ==================== Watch 监听 ====================
     watch(
       () => props.bcsClusterId,
-      (newVal) => {
+      newVal => {
         if (newVal && !props.isNode) {
           nextTick(() => {
             if (isShowAddScopeButton.value && rootRef.value) {
@@ -452,8 +456,6 @@ export default defineComponent({
         }
       },
     );
-
-
 
     /**
      * 监听节点模式变化
@@ -735,7 +737,7 @@ export default defineComponent({
             </bk-select>
             <bk-tag-input
               extCls='container-input'
-              value={(config.container.container_name || '').split(',').filter(Boolean)}
+              value={config.containerNameList || []}
               allowCreate
               freePaste
               hasDeleteIcon

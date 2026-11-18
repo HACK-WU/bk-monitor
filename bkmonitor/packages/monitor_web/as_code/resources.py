@@ -40,6 +40,7 @@ from bkmonitor.action.serializers import (
 )
 from bkmonitor.action.utils import get_assign_rule_related_resource_dict
 from bkmonitor.as_code.parse import import_code_config
+from bkmonitor.as_code.recording_rule import export_recording_rules
 from bkmonitor.as_code.parse_yaml import (
     ActionConfigParser,
     AssignGroupRuleParser,
@@ -100,6 +101,8 @@ class ImportConfigResource(Resource):
                 config_type = ""
                 if path.startswith("rule/") and not path[len("rule/") :].startswith("snippets/"):
                     config_type = "rule"
+                elif path.startswith("recording_rule/"):
+                    config_type = "recording_rule"
                 elif path.startswith("action/") and not path[len("action/") :].startswith("snippets/"):
                     config_type = "action"
                 elif path.startswith("notice/") and not path[len("notice/") :].startswith("snippets/"):
@@ -132,6 +135,9 @@ class ExportConfigResource(Resource):
         app = serializers.CharField(default=None, allow_blank=True, allow_null=True)
         action_ids = serializers.ListField(child=serializers.IntegerField(), allow_null=True, default=None)
         rule_ids = serializers.ListField(child=serializers.IntegerField(), allow_null=True, default=None)
+        recording_rule_ids = serializers.ListField(
+            child=serializers.IntegerField(min_value=1), allow_null=True, default=None
+        )
         notice_group_ids = serializers.ListField(child=serializers.IntegerField(), allow_null=True, default=None)
         assign_group_ids = serializers.ListField(child=serializers.IntegerField(), default=None, allow_null=True)
         dashboard_uids = serializers.ListField(child=serializers.CharField(), allow_null=True, default=None)
@@ -217,10 +223,10 @@ class ExportConfigResource(Resource):
         for user_group in all_user_groups:
             notice_group_ids[user_group.name] = user_group.pk
 
-        action_ids = {}
-        all_actions = ActionConfig.objects.filter(bk_biz_id__in=[bk_biz_id, 0]).only("id", "path", "name")
-        for action in all_actions:
-            action_ids[action.name] = action.pk
+        action_ids = cls._build_action_ids_by_config_ids(
+            bk_biz_id,
+            cls._get_strategy_action_config_ids(strategy_configs),
+        )
 
         # 转换为AsCode配置
         parser = StrategyConfigParser(
@@ -367,6 +373,48 @@ class ExportConfigResource(Resource):
             seen_user_ids.add(user_type_id)
             deduped_users.append(user)
         return deduped_users
+
+    @staticmethod
+    def _build_action_ids_by_config_ids(bk_biz_id: int, action_config_ids: Iterable[int]) -> dict[str, int]:
+        """
+        根据实际引用的处理套餐 ID 构造 AsCode 名称映射，避免导出策略时扫描业务下所有处理套餐。
+        """
+        action_config_ids = set(action_config_ids)
+        if not action_config_ids:
+            return {}
+
+        return {
+            name: action_id
+            for name, action_id in ActionConfig.objects.filter(
+                bk_biz_id__in=[bk_biz_id, 0],
+                id__in=action_config_ids,
+            ).values_list("name", "id")
+        }
+
+    @staticmethod
+    def _get_strategy_action_config_ids(strategy_configs: Iterable[dict[str, Any]]) -> set[int]:
+        """
+        从策略导出数据中提取实际引用的处理套餐 ID。
+        """
+        action_config_ids = set()
+        for config in strategy_configs:
+            for action_config in config.get("actions") or []:
+                if action_config.get("config_id"):
+                    action_config_ids.add(action_config["config_id"])
+        return action_config_ids
+
+    @staticmethod
+    def _get_assign_rule_action_config_ids(assign_group_configs: Iterable[dict[str, Any]]) -> set[int]:
+        """
+        从分派规则导出数据中提取实际引用的处理套餐 ID。
+        """
+        action_config_ids = set()
+        for config in assign_group_configs:
+            for rule in config.get("rules") or []:
+                for action in rule.get("actions") or []:
+                    if action.get("action_type") != "notice" and action.get("action_id"):
+                        action_config_ids.add(action["action_id"])
+        return action_config_ids
 
     @classmethod
     def export_duties(
@@ -533,10 +581,10 @@ class ExportConfigResource(Resource):
         for user_group in all_user_groups:
             notice_group_ids[user_group.name] = user_group.pk
 
-        action_ids = {}
-        all_actions = ActionConfig.objects.filter(bk_biz_id__in=[bk_biz_id, 0]).only("id", "path", "name")
-        for action in all_actions:
-            action_ids[action.name] = action.pk
+        action_ids = cls._build_action_ids_by_config_ids(
+            bk_biz_id,
+            cls._get_assign_rule_action_config_ids(groups_dict.values()),
+        )
 
         # 转换为AsCode配置
         parser = AssignGroupRuleParser(bk_biz_id=bk_biz_id, notice_group_ids=notice_group_ids, action_ids=action_ids)
@@ -545,6 +593,15 @@ class ExportConfigResource(Resource):
     def perform_request(self, params: dict):
         bk_biz_id = params["bk_biz_id"]
         configs = {
+            "recording_rule": {
+                (f"{folder}|{name}" if folder else name): content
+                for folder, name, content in export_recording_rules(
+                    bk_biz_id=bk_biz_id,
+                    recording_rule_ids=params.get("recording_rule_ids"),
+                    app=params["app"],
+                    lock_filename=params["lock_filename"],
+                )
+            },
             "rule": {
                 (f"{x[0]}|{x[1]}" if x[0] else x[1]): x[2]
                 for x in self.export_rules(
@@ -606,6 +663,9 @@ class ExportConfigFileResource(ExportConfigResource):
         app = serializers.CharField(default=None, allow_blank=True, allow_null=True)
         dashboard_for_external = serializers.BooleanField(label="仪表盘导出", default=False)
         rule_ids = serializers.ListField(child=serializers.IntegerField(), default=None, allow_null=True)
+        recording_rule_ids = serializers.ListField(
+            child=serializers.IntegerField(min_value=1), default=None, allow_null=True
+        )
         with_related_config = serializers.BooleanField(label="是否导出关联", default=False)
         lock_filename = serializers.BooleanField(label="锁定文件名", default=False)
         with_id = serializers.BooleanField(label="带上ID", default=False)
@@ -648,18 +708,23 @@ class ExportConfigFileResource(ExportConfigResource):
 
         # 默认导出全部配置，除非传入策略ID列表
         rule_ids = params.get("rule_ids")
+        recording_rule_ids = params.get("recording_rule_ids")
         notice_group_ids = None
         action_ids = None
         dashboard_uids = None
         assign_group_ids = None
         duty_rules = None
 
-        if rule_ids:
+        if rule_ids or recording_rule_ids:
             notice_group_ids = []
             action_ids = []
             dashboard_uids = []
             assign_group_ids = []
             duty_rules = []
+            if rule_ids and recording_rule_ids is None:
+                recording_rule_ids = []
+            if recording_rule_ids and rule_ids is None:
+                rule_ids = []
 
         # 查询关联配置
         if all([rule_ids, assign_group_ids, params.get("with_related_config")]):
@@ -685,6 +750,13 @@ class ExportConfigFileResource(ExportConfigResource):
                 )
 
         configs = {
+            "recording_rule": export_recording_rules(
+                bk_biz_id=bk_biz_id,
+                recording_rule_ids=recording_rule_ids,
+                app=app,
+                lock_filename=params["lock_filename"],
+                flatten_folders=True,
+            ),
             "rule": self.export_rules(
                 bk_biz_id=bk_biz_id,
                 rule_ids=rule_ids,
